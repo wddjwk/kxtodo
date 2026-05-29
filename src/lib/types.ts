@@ -1,110 +1,61 @@
-export type ListKind = "system" | "custom";
+export type NodeKind = "system" | "category" | "entry";
 
-export interface ListTheme {
-  accent: string;
-  background: string;
-  image?: string;
-  imageOpacity?: number;
-}
-
-export type ListNodeType = "category" | "entry";
-
-export interface TodoList {
+export type AppNode = {
   id: string;
-  parentId: string | null;
-  kind: ListKind;
-  nodeType: ListNodeType;
+  kind: NodeKind;
   name: string;
   icon: string;
-  collapsed: boolean;
-  shared: boolean;
-  order: number;
-  theme: ListTheme;
-}
+  parentId: string | null;
+  collapsed?: boolean;
+  createdAt: string;
+};
 
-export interface TodoStep {
+export type Task = {
   id: string;
-  title: string;
-  completed: boolean;
-}
-
-export interface TodoTask {
-  id: string;
-  listId: string;
+  nodeId: string;
   markdown: string;
   completed: boolean;
   important: boolean;
-  expanded: boolean;
-  steps: TodoStep[];
-  notes: string;
-  dueDate: string | null;
-  reminder: string | null;
-  repeat: string | null;
-  tags: string[];
+  myDay: boolean;
+  plannedDate?: string;
+  dueDate?: string;
+  expanded?: boolean;
+  editing?: boolean;
   createdAt: string;
-  updatedAt: string;
-}
+  updatedAt?: string;
+};
 
-export type TodoTaskPatch = Partial<
-  Pick<
-    TodoTask,
-    | "markdown"
-    | "completed"
-    | "important"
-    | "expanded"
-    | "steps"
-    | "notes"
-    | "dueDate"
-    | "reminder"
-    | "repeat"
-    | "tags"
-  >
->;
-
-export interface AppState {
-  schemaVersion: number;
-  selectedListId: string;
-  lists: TodoList[];
-  tasks: TodoTask[];
-  updatedAt: string;
-}
-
-export interface ShortcutBinding {
-  id: string;
-  label: string;
-  combo: string;
-}
-
-export interface CloudSyncSettings {
-  enabled: boolean;
-  provider: "none" | "webdav" | "s3" | "custom";
-  endpoint: string;
-  status: "not_configured" | "disabled" | "ready";
-}
-
-export interface ProfileSettings {
-  avatar: string;
-  name: string;
+export type ProfileSettings = {
+  displayName: string;
   email: string;
-}
+  avatar: string;
+};
 
-export interface AppSettings {
-  schemaVersion: number;
+export type Settings = {
   profile: ProfileSettings;
-  shortcuts: ShortcutBinding[];
-  globalShortcut: string;
-  sidebarWidth: number;
-  taskDensity: "comfortable" | "compact";
-  defaultListTheme: ListTheme;
-  cloudSync: CloudSyncSettings;
-}
+  shortcuts: {
+    newTask: string;
+    focusSearch: string;
+    toggleWindow: string;
+    openSettings: string;
+  };
+  cloud: {
+    provider: "none" | "webdav" | "s3" | "custom";
+    endpoint: string;
+    enabled: boolean;
+  };
+};
 
-export interface ExportPayload {
+export type ListBackground = {
+  color: string;
+  image?: string;
+  imageOpacity?: number;
+};
+
+export type AppState = {
   schemaVersion: number;
-  exportedAt: string;
-  scope: "all" | "list";
-  state?: AppState;
-  lists?: TodoList[];
-  tasks?: TodoTask[];
-  rootListId?: string;
-}
+  nodes: AppNode[];
+  tasks: Task[];
+  selectedNodeId: string;
+  backgrounds: Record<string, ListBackground>;
+};

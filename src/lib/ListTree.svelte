@@ -1,142 +1,126 @@
 <script lang="ts">
+  import { createEventDispatcher } from "svelte";
   import { ChevronDown, Folder } from "@lucide/svelte";
+  import type { AppNode } from "./types";
   import IconGlyph from "./IconGlyph.svelte";
-  import type { TodoList } from "./types";
 
-  export let lists: TodoList[] = [];
-  export let selectedId = "";
-  export let counts: Record<string, number> = {};
-  export let editingId: string | null = null;
-  export let renameDraft = "";
-  export let draggingId: string | null = null;
+  export let nodes: AppNode[] = [];
   export let parentId: string | null = null;
-  export let depth = 0;
-  export let onSelectEntry: (id: string) => void;
-  export let onToggleCategory: (id: string) => void;
-  export let onOpenMenu: (id: string, x: number, y: number) => void;
-  export let onRenameDraft: (value: string) => void;
-  export let onCommitRename: () => void;
-  export let onDragStartNode: (nodeId: string | null) => void;
-  export let onDropNode: (targetId: string) => void;
+  export let selectedNodeId = "";
+  export let counts: Record<string, number> = {};
+  export let level = 0;
+  export let renamingId: string | null = null;
+  export let renameDraft = "";
 
-  $: children = lists
-    .filter((list) => list.kind === "custom" && list.parentId === parentId)
-    .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+  const dispatch = createEventDispatcher<{
+    selectEntry: string;
+    toggleCategory: string;
+    renameInput: string;
+    renameCommit: string;
+    openMenu: { id: string; x: number; y: number };
+    dragStart: string;
+    dropNode: { id: string; targetId: string };
+  }>();
 
-  function childrenOf(id: string): TodoList[] {
-    return lists.filter((list) => list.kind === "custom" && list.parentId === id);
+  $: children = nodes.filter((node) => node.parentId === parentId && node.kind !== "system");
+
+  function rowStyle(levelValue: number): string {
+    return `padding-left: ${levelValue * 18 + 10}px;`;
   }
 
-  function rowClick(node: TodoList): void {
-    if (node.nodeType === "category") {
-      onToggleCategory(node.id);
-      return;
+  function handleClick(node: AppNode): void {
+    if (node.kind === "category") {
+      dispatch("toggleCategory", node.id);
+    } else {
+      dispatch("selectEntry", node.id);
     }
-    onSelectEntry(node.id);
   }
 
-  function openMenu(event: MouseEvent, node: TodoList): void {
+  function openMenu(event: MouseEvent, node: AppNode): void {
     event.preventDefault();
     event.stopPropagation();
-    onOpenMenu(node.id, event.clientX, event.clientY);
+    dispatch("openMenu", { id: node.id, x: event.clientX, y: event.clientY });
   }
 
-  function dragStart(event: DragEvent, node: TodoList): void {
-    event.dataTransfer?.setData("text/plain", node.id);
-    onDragStartNode(node.id);
-  }
-
-  function dragOver(event: DragEvent, node: TodoList): void {
-    if (node.nodeType === "category") {
-      event.preventDefault();
-    }
-  }
-
-  function drop(event: DragEvent, node: TodoList): void {
-    if (node.nodeType !== "category") {
+  function handleDrop(event: DragEvent, target: AppNode): void {
+    event.preventDefault();
+    event.stopPropagation();
+    if (target.kind !== "category") {
       return;
     }
-    event.preventDefault();
-    onDropNode(node.id);
-    onDragStartNode(null);
+    const id = event.dataTransfer?.getData("text/plain") || "";
+    if (!id || id === target.id) {
+      return;
+    }
+    dispatch("dropNode", { id, targetId: target.id });
   }
 </script>
 
 {#each children as node (node.id)}
-  {@const isCategory = node.nodeType === "category"}
-  {@const hasChildren = childrenOf(node.id).length > 0}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class:category={isCategory}
-    class:dragging={draggingId === node.id}
-    class:selected={selectedId === node.id}
+    class:selected={node.id === selectedNodeId}
+    class:category={node.kind === "category"}
     class="tree-row"
-    draggable="true"
-    style={`--depth: ${depth}`}
-    on:click={() => rowClick(node)}
+    style={rowStyle(level)}
+    draggable={node.kind !== "system"}
+    on:click={() => handleClick(node)}
     on:contextmenu={(event) => openMenu(event, node)}
-    on:dragstart={(event) => dragStart(event, node)}
-    on:dragend={() => onDragStartNode(null)}
-    on:dragover={(event) => dragOver(event, node)}
-    on:drop={(event) => drop(event, node)}
+    on:dragstart={(event) => {
+      event.dataTransfer?.setData("text/plain", node.id);
+      dispatch("dragStart", node.id);
+    }}
+    on:dragend={() => dispatch("dragStart", "")}
+    on:dragover={(event) => node.kind === "category" && event.preventDefault()}
+    on:drop={(event) => handleDrop(event, node)}
   >
     <span class="tree-icon">
-      {#if isCategory}
-        <Folder size={19} />
+      {#if node.kind === "category"}
+        <Folder size={18} />
       {:else}
-        <IconGlyph icon={node.icon} size={18} />
+        <IconGlyph icon={node.icon || "notebook"} size={18} />
       {/if}
     </span>
 
-    {#if editingId === node.id}
+    {#if renamingId === node.id}
+      <!-- svelte-ignore a11y_autofocus -->
       <input
         class="rename-input"
         value={renameDraft}
         autofocus
         on:click|stopPropagation
-        on:input={(event) => event.currentTarget instanceof HTMLInputElement && onRenameDraft(event.currentTarget.value)}
-        on:blur={onCommitRename}
-        on:keydown={(event) => {
-          if (event.key === "Enter" || event.key === "Escape") onCommitRename();
-        }}
+        on:input={(event) => dispatch("renameInput", event.currentTarget.value)}
+        on:blur={() => dispatch("renameCommit", node.id)}
+        on:keydown={(event) => event.key === "Enter" && dispatch("renameCommit", node.id)}
       />
     {:else}
       <span class="list-name">{node.name}</span>
     {/if}
 
-    {#if counts[node.id] > 0}
+    {#if counts[node.id]}
       <span class="count-pill">{counts[node.id]}</span>
     {/if}
-
-    {#if isCategory}
-      <button class="collapse-button" type="button" aria-label="折叠/展开" on:click|stopPropagation={() => onToggleCategory(node.id)}>
-        {#if node.collapsed}
-          <span class="chevron-right">›</span>
-        {:else}
-          <ChevronDown size={18} />
-        {/if}
+    {#if node.kind === "category"}
+      <button class="collapse-button" type="button" aria-label="折叠分类" on:click|stopPropagation={() => dispatch("toggleCategory", node.id)}>
+        <ChevronDown class={node.collapsed ? "collapsed" : ""} size={19} />
       </button>
     {/if}
   </div>
-
-  {#if isCategory && !node.collapsed && hasChildren}
+  {#if node.kind === "category" && !node.collapsed}
     <svelte:self
-      {lists}
-      {counts}
-      {editingId}
-      {renameDraft}
-      {draggingId}
+      {nodes}
       parentId={node.id}
-      depth={depth + 1}
-      {selectedId}
-      {onSelectEntry}
-      {onToggleCategory}
-      {onOpenMenu}
-      {onRenameDraft}
-      {onCommitRename}
-      {onDragStartNode}
-      {onDropNode}
+      {selectedNodeId}
+      {counts}
+      level={level + 1}
+      {renamingId}
+      {renameDraft}
+      on:selectEntry
+      on:toggleCategory
+      on:renameInput
+      on:renameCommit
+      on:openMenu
+      on:dragStart
+      on:dropNode
     />
   {/if}
 {/each}

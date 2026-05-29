@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import {
+    CalendarDays,
     Check,
     ChevronDown,
     Download,
@@ -9,55 +10,42 @@
     FilePlus2,
     FolderPlus,
     Image,
-    Minus,
+    Maximize2,
+    Minimize2,
     MoreHorizontal,
     Pencil,
     Plus,
     Search,
-    Settings,
-    Square,
+    Star,
+    Sun,
     Trash2,
     Upload,
     X
   } from "@lucide/svelte";
   import { exportData, loadSettings, loadState, registerGlobalShortcut, saveSettings, saveState } from "./lib/backend";
-  import { createId, defaultSettings, defaultState, normalizeState } from "./lib/defaults";
+  import {
+    createCategoryNode,
+    createEntryNode,
+    defaultBackground,
+    defaultSettings,
+    emptyState,
+    normalizeSettings,
+    normalizeState,
+    themePresets
+  } from "./lib/defaults";
   import IconGlyph from "./lib/IconGlyph.svelte";
   import IconPicker from "./lib/IconPicker.svelte";
   import ListTree from "./lib/ListTree.svelte";
   import TaskCard from "./lib/TaskCard.svelte";
   import { renderMarkdown } from "./lib/markdown";
-  import { matchesShortcut, shortcutLabel } from "./lib/shortcuts";
-  import { syncRoadmap } from "./lib/sync";
-  import type {
-    AppSettings,
-    AppState,
-    ExportPayload,
-    ListNodeType,
-    ShortcutBinding,
-    TodoList,
-    TodoTask,
-    TodoTaskPatch
-  } from "./lib/types";
+  import { matchesShortcut } from "./lib/shortcuts";
+  import type { AppNode, AppState, ListBackground, Settings, Task } from "./lib/types";
 
-  const defaultAccent = "#b64a30";
-  const themePresets = [
-    { name: "桃杏", accent: "#b64a30", background: "#fae9df" },
-    { name: "To Do 蓝", accent: "#2564cf", background: "#edf5ff" },
-    { name: "薄荷", accent: "#1f7a4d", background: "#edf7f0" },
-    { name: "丁香", accent: "#6d5bd0", background: "#f1efff" },
-    { name: "砂岩", accent: "#8a5a44", background: "#f6ede6" },
-    { name: "玫瑰", accent: "#c2416b", background: "#fff1f4" },
-    { name: "琥珀", accent: "#b7791f", background: "#fff8e6" },
-    { name: "青绿", accent: "#0f766e", background: "#e8f7f4" },
-    { name: "海盐", accent: "#34748f", background: "#eaf7fb" },
-    { name: "葡萄", accent: "#7c3aed", background: "#f4efff" },
-    { name: "石墨", accent: "#475569", background: "#eef1f4" },
-    { name: "夜灰", accent: "#d7dce2", background: "#202329" }
-  ];
+  const appVersion = "3.1.0";
+  const defaultAccent = "#2564cf";
 
-  let state: AppState = defaultState();
-  let settings: AppSettings = defaultSettings();
+  let state: AppState = emptyState();
+  let settings: Settings = clone(defaultSettings);
   let hydrated = false;
   let searchQuery = "";
   let newTaskDraft = "";
@@ -65,35 +53,45 @@
   let showSettings = false;
   let showListMenu = false;
   let showCompleted = true;
-  let editingListId: string | null = null;
+  let renamingId: string | null = null;
   let renameDraft = "";
   let iconPickerListId: string | null = null;
   let treeMenu: { id: string; x: number; y: number } | null = null;
+  let taskMenu: { taskId: string; x: number; y: number; showDate: boolean } | null = null;
   let draggingId: string | null = null;
   let backgroundLinkDraft = "";
+  let backgroundDraftNodeId = "";
+  let sidebarWidth = 320;
   let toast = "";
-  let saveTimer: number | undefined;
+  let stateSaveTimer: number | undefined;
+  let settingsSaveTimer: number | undefined;
+  let toastTimer: number | undefined;
   let searchInput: HTMLInputElement;
   let taskInput: HTMLTextAreaElement;
   let importInput: HTMLInputElement;
   let backgroundFileInput: HTMLInputElement;
   let avatarFileInput: HTMLInputElement;
 
-  $: selectedList = state.lists.find((list) => list.id === state.selectedListId) ?? state.lists[0];
-  $: selectedTheme = selectedList?.theme ?? settings.defaultListTheme;
-  $: customLists = state.lists.filter((list) => list.kind === "custom");
-  $: entryLists = customLists.filter((list) => list.nodeType === "entry");
-  $: systemLists = state.lists.filter((list) => list.kind === "system").sort((a, b) => a.order - b.order);
+  $: systemNodes = state.nodes.filter((node) => node.kind === "system");
+  $: firstEntry = state.nodes.find((node) => node.kind === "entry");
+  $: selectedNode = state.nodes.find((node) => node.id === state.selectedNodeId) ?? firstEntry ?? systemNodes[0];
+  $: selectedBackground = getBackground(selectedNode?.id, state.backgrounds);
+  $: accent = accentForNode(selectedNode);
+  $: mainStyle = buildMainStyle(selectedBackground, accent);
   $: listCounts = buildListCounts(state);
-  $: selectedIds = selectedList ? collectListIds(state.lists, selectedList.id) : new Set<string>();
-  $: isSearching = searchQuery.trim().length > 0;
-  $: visibleTasks = filterTasks(state.tasks, selectedList, selectedIds, searchQuery);
+  $: visibleTasks = buildVisibleTasks(state, selectedNode, searchQuery);
   $: incompleteTasks = visibleTasks.filter((task) => !task.completed);
   $: completedTasks = visibleTasks.filter((task) => task.completed);
-  $: completedCount = completedTasks.length;
-  $: mainStyle = buildMainStyle(selectedTheme.background, selectedTheme.image, selectedTheme.imageOpacity);
-  $: selectedIconPickerList = iconPickerListId ? state.lists.find((list) => list.id === iconPickerListId) : null;
-  $: treeMenuNode = treeMenu ? state.lists.find((list) => list.id === treeMenu?.id) : null;
+  $: isSearching = searchQuery.trim().length > 0;
+  $: selectedIconPickerList = iconPickerListId ? state.nodes.find((node) => node.id === iconPickerListId) : null;
+  $: treeMenuNode = treeMenu ? state.nodes.find((node) => node.id === treeMenu?.id) : null;
+  $: taskMenuTask = taskMenu ? state.tasks.find((task) => task.id === taskMenu?.taskId) : null;
+  $: avatarStyle = settings.profile.avatar ? `background-image: url("${escapeCssUrl(settings.profile.avatar)}");` : "";
+  $: avatarInitial = (settings.profile.displayName.trim().charAt(0) || "E").toUpperCase();
+  $: if ((selectedNode?.id ?? "") !== backgroundDraftNodeId) {
+    backgroundDraftNodeId = selectedNode?.id ?? "";
+    backgroundLinkDraft = selectedBackground.image ?? "";
+  }
 
   onMount(() => {
     void hydrate();
@@ -101,32 +99,8 @@
     return () => window.removeEventListener("keydown", handleShortcut);
   });
 
-  async function hydrate(): Promise<void> {
-    let shortcutToRegister = settings.globalShortcut;
-    try {
-      const [loadedState, loadedSettings] = await Promise.all([loadState(), loadSettings()]);
-      state = loadedState;
-      settings = loadedSettings;
-      shortcutToRegister = loadedSettings.globalShortcut;
-    } catch (error) {
-      showToast(`加载本地数据失败，已使用默认数据：${String(error)}`);
-    } finally {
-      hydrated = true;
-      await tickResizeComposer();
-    }
-
-    try {
-      await registerGlobalShortcut(shortcutToRegister);
-    } catch (error) {
-      showToast(`全局快捷键注册失败：${String(error)}`);
-    }
-  }
-
-  function closeOverlays(): void {
-    showListMenu = false;
-    treeMenu = null;
-    iconPickerListId = null;
-    showSettings = false;
+  function clone<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value)) as T;
   }
 
   function now(): string {
@@ -140,468 +114,393 @@
     return local.toISOString().slice(0, 10);
   }
 
-  function queueStateSave(): void {
-    if (!hydrated) {
-      return;
+  function createTaskId(): string {
+    if (crypto.randomUUID) {
+      return `task-${crypto.randomUUID().slice(0, 8)}`;
     }
-
-    window.clearTimeout(saveTimer);
-    saveTimer = window.setTimeout(() => {
-      saveState(state).catch((error) => showToast(`保存失败：${String(error)}`));
-    }, 180);
+    return `task-${Math.random().toString(36).slice(2, 10)}`;
   }
 
-  function commit(next: AppState): void {
-    state = { ...next, updatedAt: now() };
-    queueStateSave();
-  }
-
-  function commitSettings(next: AppSettings): void {
-    settings = next;
-    if (hydrated) {
-      saveSettings(settings).catch((error) => showToast(`保存设置失败：${String(error)}`));
-    }
-  }
-
-  function buildMainStyle(background: string, image?: string, imageOpacity = 0.28): string {
-    const safeImage = image?.trim().replace(/"/g, "%22");
-    return `--accent: ${selectedTheme.accent}; --bg-image: ${
-      safeImage ? `url("${safeImage}")` : "none"
-    }; --bg-opacity: ${safeImage ? imageOpacity : 0}; background-color: ${background};`;
-  }
-
-  function collectListIds(lists: TodoList[], rootId: string): Set<string> {
-    const ids = new Set([rootId]);
-    let changed = true;
-
-    while (changed) {
-      changed = false;
-      for (const list of lists) {
-        if (list.parentId && ids.has(list.parentId) && !ids.has(list.id)) {
-          ids.add(list.id);
-          changed = true;
-        }
-      }
-    }
-
-    return ids;
-  }
-
-  function buildListCounts(source: AppState): Record<string, number> {
-    const counts: Record<string, number> = {};
-    for (const list of source.lists) {
-      const ids = collectListIds(source.lists, list.id);
-      counts[list.id] = source.tasks.filter((task) => ids.has(task.listId) && !task.completed).length;
-    }
-    counts.favorite = source.tasks.filter((task) => task.important && !task.completed).length;
-    counts.planned = source.tasks.filter((task) => Boolean(task.dueDate) && !task.completed).length;
-    counts["my-day"] = source.tasks.filter((task) => isMyDayTask(task) && !task.completed).length;
-    return counts;
-  }
-
-  function filterTasks(tasks: TodoTask[], list: TodoList | undefined, ids: Set<string>, query: string): TodoTask[] {
-    const normalized = query.trim().toLowerCase();
-    return tasks.filter((task) => {
-      if (normalized) {
-        return `${task.markdown}\n${task.tags.join(" ")}`.toLowerCase().includes(normalized);
-      }
-
-      return (
-        !list ||
-        (list.id === "favorite" && task.important) ||
-        (list.id === "planned" && Boolean(task.dueDate)) ||
-        (list.id === "my-day" && isMyDayTask(task)) ||
-        (list.kind === "custom" && ids.has(task.listId))
-      );
-    });
-  }
-
-  function isMyDayTask(task: TodoTask): boolean {
-    return task.dueDate === "今天" || task.dueDate === todayIso();
-  }
-
-  function selectEntry(id: string): void {
-    const list = state.lists.find((item) => item.id === id);
-    if (!list || list.nodeType !== "entry") {
-      return;
-    }
-    selectedTaskId = null;
-    showListMenu = false;
-    treeMenu = null;
-    commit({ ...state, selectedListId: id });
-  }
-
-  function toggleCategory(id: string): void {
-    treeMenu = null;
-    commit({
-      ...state,
-      lists: state.lists.map((list) => (list.id === id ? { ...list, collapsed: !list.collapsed } : list))
-    });
-  }
-
-  function currentCategoryId(): string | null {
-    if (selectedList?.kind === "custom" && selectedList.nodeType === "category") {
-      return selectedList.id;
-    }
-    if (selectedList?.kind === "custom") {
-      return selectedList.parentId;
-    }
-    return null;
-  }
-
-  function addNode(parentId: string | null, nodeType: ListNodeType): void {
-    const id = createId(nodeType);
-    const parent = parentId ? state.lists.find((list) => list.id === parentId) : null;
-    const order = state.lists.filter((list) => list.parentId === parentId).length + 10;
-    const list: TodoList = {
-      id,
-      parentId,
-      kind: "custom",
-      nodeType,
-      name: nodeType === "category" ? "新建分类" : "新建条目",
-      icon: nodeType === "category" ? "folder" : "notebook",
-      collapsed: false,
-      shared: false,
-      order,
-      theme: parent?.theme ?? settings.defaultListTheme
-    };
-
-    editingListId = id;
-    renameDraft = list.name;
-    treeMenu = null;
-    commit({
-      ...state,
-      selectedListId: nodeType === "entry" ? id : state.selectedListId,
-      lists: state.lists.map((item) => (item.id === parentId ? { ...item, collapsed: false } : item)).concat(list)
-    });
-  }
-
-  function startRename(id: string): void {
-    const list = state.lists.find((item) => item.id === id);
-    if (!list || list.kind === "system") {
-      return;
-    }
-    editingListId = id;
-    renameDraft = list.name;
-    showListMenu = false;
-    treeMenu = null;
-  }
-
-  function commitRename(): void {
-    if (!editingListId) {
-      return;
-    }
-
-    const name = renameDraft.trim() || "未命名";
-    const id = editingListId;
-    editingListId = null;
-    commit({
-      ...state,
-      lists: state.lists.map((list) => (list.id === id ? { ...list, name } : list))
-    });
-  }
-
-  function deleteNode(id: string): void {
-    const list = state.lists.find((item) => item.id === id);
-    if (!list || list.kind === "system") {
-      return;
-    }
-
-    if (!window.confirm(`删除“${list.name}”及其子内容？`)) {
-      return;
-    }
-
-    const ids = collectListIds(state.lists, id);
-    const remainingLists = state.lists.filter((item) => !ids.has(item.id));
-    const fallback = remainingLists.find((item) => item.kind === "custom" && item.nodeType === "entry")?.id ?? "my-day";
-    treeMenu = null;
-    commit({
-      ...state,
-      selectedListId: ids.has(state.selectedListId) ? fallback : state.selectedListId,
-      lists: remainingLists,
-      tasks: state.tasks.filter((task) => !ids.has(task.listId))
-    });
-  }
-
-  function openTreeMenu(id: string, x: number, y: number): void {
-    showListMenu = false;
-    treeMenu = { id, x, y };
-  }
-
-  function canMoveNode(sourceId: string, targetId: string): boolean {
-    if (!sourceId || sourceId === targetId) {
-      return false;
-    }
-    const target = state.lists.find((list) => list.id === targetId);
-    if (!target || target.nodeType !== "category") {
-      return false;
-    }
-    return !collectListIds(state.lists, sourceId).has(targetId);
-  }
-
-  function dropNode(targetId: string): void {
-    if (!draggingId || !canMoveNode(draggingId, targetId)) {
-      draggingId = null;
-      return;
-    }
-
-    const order = state.lists.filter((list) => list.parentId === targetId).length + 10;
-    const sourceId = draggingId;
-    draggingId = null;
-    commit({
-      ...state,
-      lists: state.lists.map((list) => {
-        if (list.id === targetId) {
-          return { ...list, collapsed: false };
-        }
-        if (list.id === sourceId) {
-          return { ...list, parentId: targetId, order };
-        }
-        return list;
-      })
-    });
-  }
-
-  function pickIcon(icon: string): void {
-    if (!iconPickerListId) {
-      return;
-    }
-    const id = iconPickerListId;
-    iconPickerListId = null;
-    commit({
-      ...state,
-      lists: state.lists.map((list) => (list.id === id ? { ...list, icon } : list))
-    });
-  }
-
-  function createTask(): void {
-    const markdown = newTaskDraft.trim();
-    if (!markdown) {
-      return;
-    }
-
-    const fallbackList = entryLists[0]?.id ?? "quick-notes";
-    const targetListId = selectedList?.kind === "custom" && selectedList.nodeType === "entry" ? selectedList.id : fallbackList;
-    const task: TodoTask = {
-      id: createId("task"),
-      listId: targetListId,
-      markdown,
-      completed: false,
-      important: selectedList?.id === "favorite",
-      expanded: false,
-      steps: [],
-      notes: "",
-      dueDate: selectedList?.id === "my-day" ? todayIso() : null,
-      reminder: null,
-      repeat: null,
-      tags: [],
-      createdAt: now(),
-      updatedAt: now()
-    };
-
-    selectedTaskId = task.id;
-    newTaskDraft = "";
-    commit({ ...state, selectedListId: targetListId, tasks: [task, ...state.tasks] });
-    void tickResizeComposer();
-  }
-
-  function updateTask(id: string, patch: TodoTaskPatch): void {
-    commit({
-      ...state,
-      tasks: state.tasks.map((task) => (task.id === id ? { ...task, ...patch, updatedAt: now() } : task))
-    });
-  }
-
-  function selectTask(id: string): void {
-    selectedTaskId = id;
-    updateTask(id, { expanded: !state.tasks.find((task) => task.id === id)?.expanded });
-  }
-
-  function applyTheme(accent: string, background: string): void {
-    if (!selectedList) {
-      return;
-    }
-
-    commit({
-      ...state,
-      lists: state.lists.map((list) =>
-        list.id === selectedList.id ? { ...list, theme: { ...list.theme, accent, background } } : list
-      )
-    });
-  }
-
-  function updateBackgroundImage(image?: string): void {
-    if (!selectedList) {
-      return;
-    }
-
-    commit({
-      ...state,
-      lists: state.lists.map((list) =>
-        list.id === selectedList.id ? { ...list, theme: { ...list.theme, image } } : list
-      )
-    });
-  }
-
-  function updateBackgroundOpacity(event: Event): void {
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLInputElement) || !selectedList) {
-      return;
-    }
-    const imageOpacity = Number(target.value) / 100;
-    commit({
-      ...state,
-      lists: state.lists.map((list) =>
-        list.id === selectedList.id ? { ...list, theme: { ...list.theme, imageOpacity } } : list
-      )
-    });
-  }
-
-  function updateBackgroundLink(event: Event): void {
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLInputElement)) {
-      return;
-    }
-    backgroundLinkDraft = target.value;
-    updateBackgroundImage(backgroundLinkDraft.trim() || undefined);
-  }
-
-  async function uploadBackgroundImage(event: Event): Promise<void> {
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLInputElement) || !target.files?.[0]) {
-      return;
-    }
-    updateBackgroundImage(await fileToDataUrl(target.files[0]));
-    target.value = "";
-  }
-
-  async function uploadAvatar(event: Event): Promise<void> {
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLInputElement) || !target.files?.[0]) {
-      return;
-    }
-    updateProfile("avatar", await fileToDataUrl(target.files[0]));
-    target.value = "";
-  }
-
-  async function fileToDataUrl(file: File): Promise<string> {
-    return new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result));
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(file);
-    });
-  }
-
-  function openListMenu(): void {
-    treeMenu = null;
-    showListMenu = !showListMenu;
-    backgroundLinkDraft = selectedTheme.image ?? "";
-  }
-
-  async function exportCurrentList(): Promise<void> {
-    const path = await exportData({ scope: "list", listId: selectedList?.id, state });
-    if (path !== "cancelled") {
-      showToast(`已导出当前条目/分类：${path}`);
-    }
-  }
-
-  async function exportAll(): Promise<void> {
-    const path = await exportData({ scope: "all", state });
-    if (path !== "cancelled") {
-      showToast(`已导出全部数据：${path}`);
-    }
-  }
-
-  async function importFromFile(event: Event): Promise<void> {
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLInputElement) || !target.files?.[0]) {
-      return;
-    }
-
-    const text = await target.files[0].text();
-    const payload = JSON.parse(text) as ExportPayload;
-
-    if (payload.state) {
-      commit(normalizeState(payload.state));
-      showToast("已导入完整数据");
-    } else if (payload.lists && payload.tasks) {
-      const existingListIds = new Set(state.lists.map((list) => list.id));
-      const existingTaskIds = new Set(state.tasks.map((task) => task.id));
-      commit({
-        ...state,
-        selectedListId: payload.rootListId ?? state.selectedListId,
-        lists: [...state.lists, ...payload.lists.filter((list) => !existingListIds.has(list.id))],
-        tasks: [...state.tasks, ...payload.tasks.filter((task) => !existingTaskIds.has(task.id))]
-      });
-      showToast("已导入分类/条目数据");
-    } else {
-      showToast("无法识别导入文件");
-    }
-
-    target.value = "";
-  }
-
-  function updateShortcut(binding: ShortcutBinding, event: Event): void {
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLInputElement)) {
-      return;
-    }
-
-    commitSettings({
-      ...settings,
-      shortcuts: settings.shortcuts.map((shortcut) =>
-        shortcut.id === binding.id ? { ...shortcut, combo: target.value.trim() } : shortcut
-      )
-    });
-  }
-
-  function updateProfile(field: "avatar" | "name" | "email", value: string): void {
-    commitSettings({
-      ...settings,
-      profile: { ...settings.profile, [field]: value }
-    });
-  }
-
-  async function updateGlobalShortcut(event: Event): Promise<void> {
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLInputElement)) {
-      return;
-    }
-
-    const globalShortcut = target.value.trim() || defaultSettings().globalShortcut;
-    commitSettings({ ...settings, globalShortcut });
+  async function hydrate(): Promise<void> {
+    let loadedSettings = settings;
     try {
-      await registerGlobalShortcut(globalShortcut);
-      showToast(`全局唤起快捷键已注册：${globalShortcut}`);
+      const [storedState, storedSettings] = await Promise.all([loadState(), loadSettings()]);
+      state = normalizeState(storedState);
+      settings = normalizeSettings(storedSettings);
+      loadedSettings = settings;
+    } catch (error) {
+      showToast(`加载本地数据失败，已使用默认数据：${String(error)}`);
+    } finally {
+      hydrated = true;
+      await tick();
+      resizeComposer();
+    }
+
+    try {
+      await registerGlobalShortcut(loadedSettings.shortcuts.toggleWindow);
     } catch (error) {
       showToast(`全局快捷键注册失败：${String(error)}`);
     }
   }
 
-  function setDensity(taskDensity: AppSettings["taskDensity"]): void {
-    commitSettings({ ...settings, taskDensity });
+  function queueStateSave(): void {
+    if (!hydrated) {
+      return;
+    }
+    window.clearTimeout(stateSaveTimer);
+    stateSaveTimer = window.setTimeout(() => {
+      saveState(state).catch((error) => showToast(`保存失败：${String(error)}`));
+    }, 180);
   }
 
-  function setSidebarWidth(width: number): void {
-    commitSettings({ ...settings, sidebarWidth: Math.min(520, Math.max(240, Math.round(width))) });
+  function queueSettingsSave(): void {
+    if (!hydrated) {
+      return;
+    }
+    window.clearTimeout(settingsSaveTimer);
+    settingsSaveTimer = window.setTimeout(() => {
+      saveSettings(settings).catch((error) => showToast(`保存设置失败：${String(error)}`));
+    }, 180);
   }
 
-  function startSidebarResize(event: MouseEvent): void {
-    const startX = event.clientX;
-    const startWidth = settings.sidebarWidth;
+  function commit(next: AppState): void {
+    state = next;
+    queueStateSave();
+  }
 
-    function onMove(moveEvent: MouseEvent): void {
-      setSidebarWidth(startWidth + moveEvent.clientX - startX);
+  function commitSettings(next: Settings): void {
+    settings = next;
+    queueSettingsSave();
+  }
+
+  function showToast(message: string): void {
+    toast = message;
+    window.clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => {
+      toast = "";
+    }, 3200);
+  }
+
+  function closeOverlays(): void {
+    showListMenu = false;
+    treeMenu = null;
+    taskMenu = null;
+    iconPickerListId = null;
+    showSettings = false;
+  }
+
+  function getBackground(nodeId?: string, backgrounds: Record<string, ListBackground> = state.backgrounds): ListBackground {
+    return nodeId ? (backgrounds[nodeId] ?? defaultBackground) : defaultBackground;
+  }
+
+  function accentForNode(node?: AppNode): string {
+    if (!node) {
+      return defaultAccent;
     }
-
-    function onUp(): void {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+    if (node.id === "planned") {
+      return "#2564cf";
     }
+    if (node.id === "important") {
+      return "#9f5f00";
+    }
+    if (node.id === "my-day") {
+      return "#b64a30";
+    }
+    return defaultAccent;
+  }
 
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+  function escapeCssUrl(value: string): string {
+    return value.replace(/\\/g, "\\\\").replace(/"/g, "%22").replace(/\n/g, "");
+  }
+
+  function buildMainStyle(background: ListBackground, color: string): string {
+    const image = background.image ? `url("${escapeCssUrl(background.image)}")` : "none";
+    const opacity = background.image ? background.imageOpacity ?? defaultBackground.imageOpacity ?? 0.28 : 0;
+    return `--accent: ${color}; --bg-image: ${image}; --bg-opacity: ${opacity}; background: ${background.color};`;
+  }
+
+  function buildVisibleTasks(source: AppState, node: AppNode | undefined, queryValue: string): Task[] {
+    const query = queryValue.trim().toLowerCase();
+    if (query) {
+      return source.tasks.filter((task) => {
+        const taskNode = source.nodes.find((item) => item.id === task.nodeId);
+        return task.markdown.toLowerCase().includes(query) || taskNode?.name.toLowerCase().includes(query);
+      });
+    }
+    if (!node) {
+      return [];
+    }
+    return tasksForNode(node, source.tasks, source.nodes);
+  }
+
+  function tasksForNode(node: AppNode, tasks: Task[], nodes: AppNode[] = state.nodes): Task[] {
+    if (node.id === "my-day") {
+      return tasks.filter((task) => task.myDay);
+    }
+    if (node.id === "planned") {
+      return tasks.filter((task) => Boolean(task.dueDate || task.plannedDate));
+    }
+    if (node.id === "important") {
+      return tasks.filter((task) => task.important);
+    }
+    if (node.kind === "entry") {
+      return tasks.filter((task) => task.nodeId === node.id);
+    }
+    if (node.kind === "category") {
+      const ids = descendantEntryIds(node.id, nodes);
+      return tasks.filter((task) => ids.has(task.nodeId));
+    }
+    return [];
+  }
+
+  function descendantEntryIds(rootId: string, nodes: AppNode[] = state.nodes): Set<string> {
+    const ids = new Set<string>();
+    const visit = (parentId: string): void => {
+      for (const node of nodes.filter((item) => item.parentId === parentId)) {
+        if (node.kind === "entry") {
+          ids.add(node.id);
+        }
+        if (node.kind === "category") {
+          visit(node.id);
+        }
+      }
+    };
+    const root = nodes.find((node) => node.id === rootId);
+    if (root?.kind === "entry") {
+      ids.add(root.id);
+    } else {
+      visit(rootId);
+    }
+    return ids;
+  }
+
+  function nodeAndDescendantIds(rootId: string): Set<string> {
+    const ids = new Set<string>([rootId]);
+    const visit = (parentId: string): void => {
+      for (const node of state.nodes.filter((item) => item.parentId === parentId)) {
+        ids.add(node.id);
+        if (node.kind === "category") {
+          visit(node.id);
+        }
+      }
+    };
+    visit(rootId);
+    return ids;
+  }
+
+  function ancestorIds(nodeId: string): Set<string> {
+    const ids = new Set<string>();
+    let current = state.nodes.find((node) => node.id === nodeId);
+    while (current?.parentId) {
+      ids.add(current.parentId);
+      current = state.nodes.find((node) => node.id === current?.parentId);
+    }
+    return ids;
+  }
+
+  function buildListCounts(source: AppState): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const node of source.nodes) {
+      if (node.id === "my-day") {
+        counts[node.id] = source.tasks.filter((task) => !task.completed && task.myDay).length;
+      } else if (node.id === "planned") {
+        counts[node.id] = source.tasks.filter((task) => !task.completed && (task.dueDate || task.plannedDate)).length;
+      } else if (node.id === "important") {
+        counts[node.id] = source.tasks.filter((task) => !task.completed && task.important).length;
+      } else if (node.kind === "entry") {
+        counts[node.id] = source.tasks.filter((task) => !task.completed && task.nodeId === node.id).length;
+      } else if (node.kind === "category") {
+        const ids = descendantEntryIds(node.id, source.nodes);
+        counts[node.id] = source.tasks.filter((task) => !task.completed && ids.has(task.nodeId)).length;
+      }
+    }
+    return counts;
+  }
+
+  function selectNode(id: string): void {
+    commit({ ...state, selectedNodeId: id });
+    treeMenu = null;
+    taskMenu = null;
+  }
+
+  function toggleCategory(id: string): void {
+    commit({
+      ...state,
+      nodes: state.nodes.map((node) => (node.id === id ? { ...node, collapsed: !node.collapsed } : node))
+    });
+    treeMenu = null;
+  }
+
+  function toggleListMenu(): void {
+    showListMenu = !showListMenu;
+    taskMenu = null;
+  }
+
+  function handleListMenuKeydown(event: KeyboardEvent): void {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    event.preventDefault();
+    toggleListMenu();
+  }
+
+  function currentCategoryId(): string | null {
+    if (selectedNode?.kind === "entry") {
+      return selectedNode.parentId;
+    }
+    if (selectedNode?.kind === "category") {
+      return selectedNode.id;
+    }
+    return null;
+  }
+
+  function addNode(parentId: string | null, kind: "category" | "entry"): void {
+    const node = kind === "category" ? createCategoryNode("未命名分类", parentId) : createEntryNode("未命名条目", parentId);
+    const backgrounds = kind === "entry" ? { ...state.backgrounds, [node.id]: { ...defaultBackground } } : state.backgrounds;
+    const nodes = state.nodes.map((item) => (item.id === parentId ? { ...item, collapsed: false } : item));
+    commit({
+      ...state,
+      nodes: [...nodes, node],
+      selectedNodeId: kind === "entry" ? node.id : state.selectedNodeId,
+      backgrounds
+    });
+    renamingId = node.id;
+    renameDraft = node.name;
+    treeMenu = null;
+  }
+
+  function startRename(id: string): void {
+    const node = state.nodes.find((item) => item.id === id);
+    if (!node || node.kind === "system") {
+      return;
+    }
+    renamingId = id;
+    renameDraft = node.name;
+    treeMenu = null;
+    showListMenu = false;
+  }
+
+  function commitRename(id: string): void {
+    if (renamingId !== id) {
+      return;
+    }
+    const name = renameDraft.trim();
+    if (!name) {
+      showToast("名称不能为空");
+      return;
+    }
+    commit({
+      ...state,
+      nodes: state.nodes.map((node) => (node.id === id ? { ...node, name } : node))
+    });
+    renamingId = null;
+    renameDraft = "";
+  }
+
+  function deleteNode(id: string): void {
+    const node = state.nodes.find((item) => item.id === id);
+    if (!node || node.kind === "system") {
+      showToast("内置列表不能删除");
+      return;
+    }
+    const ids = nodeAndDescendantIds(id);
+    let nodes = state.nodes.filter((item) => !ids.has(item.id));
+    let backgrounds = Object.fromEntries(Object.entries(state.backgrounds).filter(([key]) => !ids.has(key)));
+    if (!nodes.some((item) => item.kind === "entry")) {
+      const inbox = createEntryNode("收集箱", null, "inbox");
+      nodes = [...nodes, inbox];
+      backgrounds = { ...backgrounds, [inbox.id]: { ...defaultBackground } };
+    }
+    const validNodeIds = new Set(nodes.map((item) => item.id));
+    const fallbackId = validNodeIds.has(state.selectedNodeId) ? state.selectedNodeId : nodes.find((item) => item.kind === "entry")?.id ?? "my-day";
+    commit({
+      ...state,
+      nodes,
+      tasks: state.tasks.filter((task) => validNodeIds.has(task.nodeId)),
+      selectedNodeId: fallbackId,
+      backgrounds
+    });
+    treeMenu = null;
+  }
+
+  function moveNode(id: string, targetId: string): void {
+    const source = state.nodes.find((node) => node.id === id);
+    const target = state.nodes.find((node) => node.id === targetId);
+    if (!source || !target || source.kind === "system" || target.kind !== "category") {
+      return;
+    }
+    if (source.id === target.id || nodeAndDescendantIds(source.id).has(target.id)) {
+      showToast("不能移动到自身或自己的子分类中");
+      return;
+    }
+    commit({
+      ...state,
+      nodes: state.nodes.map((node) => {
+        if (node.id === id) {
+          return { ...node, parentId: target.id };
+        }
+        if (node.id === target.id) {
+          return { ...node, collapsed: false };
+        }
+        return node;
+      })
+    });
+    draggingId = null;
+  }
+
+  function pickIcon(icon: string): void {
+    if (!selectedIconPickerList) {
+      return;
+    }
+    commit({
+      ...state,
+      nodes: state.nodes.map((node) => (node.id === selectedIconPickerList.id ? { ...node, icon } : node))
+    });
+    iconPickerListId = null;
+  }
+
+  function updateTask(taskId: string, updater: (task: Task) => Task): void {
+    commit({
+      ...state,
+      tasks: state.tasks.map((task) => (task.id === taskId ? { ...updater(task), updatedAt: now() } : task))
+    });
+  }
+
+  function addTaskFromDraft(): void {
+    const markdown = newTaskDraft.trim();
+    if (!markdown) {
+      return;
+    }
+    const targetNode = selectedNode?.kind === "entry" ? selectedNode : firstEntry;
+    if (!targetNode) {
+      showToast("请先创建一个条目");
+      return;
+    }
+    const timestamp = now();
+    const task: Task = {
+      id: createTaskId(),
+      nodeId: targetNode.id,
+      markdown,
+      completed: false,
+      important: selectedNode?.id === "important",
+      myDay: selectedNode?.id === "my-day",
+      plannedDate: selectedNode?.id === "planned" ? todayIso() : undefined,
+      dueDate: selectedNode?.id === "planned" ? todayIso() : undefined,
+      expanded: false,
+      editing: false,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+    commit({ ...state, tasks: [...state.tasks, task] });
+    newTaskDraft = "";
+    void tick().then(resizeComposer);
+  }
+
+  function handleComposerKeydown(event: KeyboardEvent): void {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      addTaskFromDraft();
+    }
   }
 
   function resizeComposer(): void {
@@ -612,123 +511,299 @@
     taskInput.style.height = `${Math.min(taskInput.scrollHeight, 180)}px`;
   }
 
-  async function tickResizeComposer(): Promise<void> {
-    await Promise.resolve();
-    resizeComposer();
+  function openTaskMenu(event: CustomEvent<{ id: string; x: number; y: number }>): void {
+    taskMenu = { taskId: event.detail.id, x: event.detail.x, y: event.detail.y, showDate: false };
+    showListMenu = false;
   }
 
-  function handleComposerKeydown(event: KeyboardEvent): void {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      createTask();
+  function setTaskDate(taskId: string, date: string): void {
+    updateTask(taskId, (task) => ({ ...task, dueDate: date || undefined, plannedDate: date || undefined }));
+    taskMenu = null;
+  }
+
+  function setBackground(patch: Partial<ListBackground>): void {
+    if (!selectedNode) {
+      return;
     }
+    commit({
+      ...state,
+      backgrounds: {
+        ...state.backgrounds,
+        [selectedNode.id]: {
+          ...getBackground(selectedNode.id),
+          ...patch
+        }
+      }
+    });
+  }
+
+  function updateBackgroundLink(event: Event): void {
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLInputElement)) {
+      return;
+    }
+    backgroundLinkDraft = target.value;
+    setBackground({ image: target.value.trim() || undefined });
+  }
+
+  function updateBackgroundOpacity(event: Event): void {
+    const target = event.currentTarget;
+    if (target instanceof HTMLInputElement) {
+      setBackground({ imageOpacity: Number(target.value) / 100 });
+    }
+  }
+
+  function applyTheme(color: string): void {
+    setBackground({ color });
+  }
+
+  async function fileToDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error ?? new Error("读取文件失败"));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function uploadBackgroundImage(event: Event): Promise<void> {
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLInputElement) || !target.files?.[0]) {
+      return;
+    }
+    try {
+      const dataUrl = await fileToDataUrl(target.files[0]);
+      backgroundLinkDraft = dataUrl;
+      setBackground({ image: dataUrl });
+    } catch (error) {
+      showToast(`背景图片读取失败：${String(error)}`);
+    } finally {
+      target.value = "";
+    }
+  }
+
+  async function uploadAvatar(event: Event): Promise<void> {
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLInputElement) || !target.files?.[0]) {
+      return;
+    }
+    try {
+      const avatar = await fileToDataUrl(target.files[0]);
+      commitSettings({ ...settings, profile: { ...settings.profile, avatar } });
+    } catch (error) {
+      showToast(`头像读取失败：${String(error)}`);
+    } finally {
+      target.value = "";
+    }
+  }
+
+  function exportStateForNode(node: AppNode): AppState {
+    const tasks = tasksForNode(node, state.tasks);
+    const nodeIds = new Set<string>();
+    if (node.kind === "category") {
+      for (const id of nodeAndDescendantIds(node.id)) {
+        nodeIds.add(id);
+      }
+    } else if (node.kind === "entry") {
+      nodeIds.add(node.id);
+      for (const id of ancestorIds(node.id)) {
+        nodeIds.add(id);
+      }
+    } else {
+      nodeIds.add(node.id);
+      for (const task of tasks) {
+        nodeIds.add(task.nodeId);
+        for (const id of ancestorIds(task.nodeId)) {
+          nodeIds.add(id);
+        }
+      }
+    }
+    const exportedNodes = state.nodes.filter((item) => item.kind === "system" || nodeIds.has(item.id));
+    return {
+      schemaVersion: state.schemaVersion,
+      nodes: exportedNodes,
+      tasks,
+      selectedNodeId: node.id,
+      backgrounds: Object.fromEntries(exportedNodes.map((item) => [item.id, getBackground(item.id)]))
+    };
+  }
+
+  function safeFileName(name: string): string {
+    return name.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-").slice(0, 80) || "todo-note";
+  }
+
+  async function exportCurrentList(): Promise<void> {
+    if (!selectedNode) {
+      return;
+    }
+    const payload = {
+      version: appVersion,
+      exportedAt: now(),
+      scope: "node",
+      nodeId: selectedNode.id,
+      state: exportStateForNode(selectedNode)
+    };
+    await exportData(payload, `${safeFileName(selectedNode.name)}-${appVersion}.json`);
+    showListMenu = false;
+    showToast("导出完成");
+  }
+
+  async function exportAll(): Promise<void> {
+    const payload = {
+      version: appVersion,
+      exportedAt: now(),
+      scope: "all",
+      state,
+      settings
+    };
+    await exportData(payload, `todo-note-${appVersion}-all.json`);
+    showListMenu = false;
+    showToast("全部数据已导出");
+  }
+
+  async function importFromFile(event: Event): Promise<void> {
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLInputElement) || !target.files?.[0]) {
+      return;
+    }
+    try {
+      const payload = JSON.parse(await target.files[0].text()) as { state?: unknown; settings?: unknown };
+      commit(normalizeState(payload.state ?? payload));
+      if (payload.settings) {
+        commitSettings(normalizeSettings(payload.settings));
+      }
+      showToast("导入完成");
+    } catch (error) {
+      showToast(`导入失败：${String(error)}`);
+    } finally {
+      target.value = "";
+      showListMenu = false;
+    }
+  }
+
+  function updateProfile(field: keyof Settings["profile"], value: string): void {
+    commitSettings({
+      ...settings,
+      profile: {
+        ...settings.profile,
+        [field]: value
+      }
+    });
+  }
+
+  function updateShortcut(field: keyof Settings["shortcuts"], value: string): void {
+    const next = {
+      ...settings,
+      shortcuts: {
+        ...settings.shortcuts,
+        [field]: value
+      }
+    };
+    commitSettings(next);
+    if (field === "toggleWindow") {
+      registerGlobalShortcut(value).catch((error) => showToast(`全局快捷键注册失败：${String(error)}`));
+    }
+  }
+
+  function updateCloudEndpoint(value: string): void {
+    commitSettings({ ...settings, cloud: { ...settings.cloud, endpoint: value } });
+  }
+
+  function updateCloudProvider(value: Settings["cloud"]["provider"]): void {
+    commitSettings({ ...settings, cloud: { ...settings.cloud, provider: value } });
   }
 
   function handleShortcut(event: KeyboardEvent): void {
-    const target = event.target;
-    const isTyping =
-      target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
-
-    for (const shortcut of settings.shortcuts) {
-      if (!matchesShortcut(event, shortcut)) {
-        continue;
-      }
-
-      if (isTyping && shortcut.id !== "search") {
-        return;
-      }
-
+    if (matchesShortcut(event, settings.shortcuts.focusSearch)) {
       event.preventDefault();
-      if (shortcut.id === "new-task") {
-        taskInput?.focus();
-      } else if (shortcut.id === "new-category") {
-        addNode(null, "category");
-      } else if (shortcut.id === "new-child-category") {
-        addNode(currentCategoryId(), "category");
-      } else if (shortcut.id === "search") {
-        searchInput?.focus();
-      } else if (shortcut.id === "toggle-settings") {
-        showSettings = !showSettings;
-      } else if (shortcut.id === "export-list") {
-        void exportCurrentList();
-      } else if (shortcut.id === "export-all") {
-        void exportAll();
-      }
-      return;
+      searchInput?.focus();
+    } else if (matchesShortcut(event, settings.shortcuts.newTask)) {
+      event.preventDefault();
+      taskInput?.focus();
+    } else if (matchesShortcut(event, settings.shortcuts.openSettings)) {
+      event.preventDefault();
+      showSettings = !showSettings;
+      showListMenu = false;
     }
   }
 
-  function avatarStyle(): string {
-    const avatar = settings.profile.avatar;
-    return avatar.startsWith("data:image") || avatar.startsWith("http") ? `background-image: url("${avatar}")` : "";
+  function startSidebarResize(event: MouseEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const startWidth = sidebarWidth;
+    const onMove = (moveEvent: MouseEvent): void => {
+      sidebarWidth = Math.min(520, Math.max(250, startWidth + moveEvent.clientX - startX));
+    };
+    const onUp = (): void => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
   }
 
-  function avatarText(): string {
-    const avatar = settings.profile.avatar;
-    return avatar.startsWith("data:image") || avatar.startsWith("http") ? "" : avatar || "示";
+  async function minimizeWindow(): Promise<void> {
+    try {
+      await getCurrentWindow().minimize();
+    } catch (error) {
+      showToast(`最小化失败：${String(error)}`);
+    }
   }
 
-  function showToast(message: string): void {
-    toast = message;
-    window.setTimeout(() => {
-      if (toast === message) {
-        toast = "";
-      }
-    }, 2800);
+  async function toggleMaximizeWindow(): Promise<void> {
+    try {
+      await getCurrentWindow().toggleMaximize();
+    } catch (error) {
+      showToast(`切换最大化失败：${String(error)}`);
+    }
   }
 
-  function minimize(): void {
-    void getCurrentWindow().minimize();
-  }
-
-  function maximize(): void {
-    void getCurrentWindow().toggleMaximize();
-  }
-
-  function closeWindow(): void {
-    void getCurrentWindow().close();
+  async function closeWindow(): Promise<void> {
+    try {
+      await getCurrentWindow().close();
+    } catch (error) {
+      showToast(`关闭窗口失败：${String(error)}`);
+    }
   }
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="app-shell" on:click={closeOverlays}>
   <header class="titlebar" data-tauri-drag-region>
     <div class="window-title" data-tauri-drag-region>
-      <span class="app-glyph"><Check size={15} strokeWidth={3.2} /></span>
+      <span class="app-glyph"><Check size={15} /></span>
       <span>Todo Note</span>
     </div>
-    <div class="window-controls">
-      <button type="button" aria-label="最小化" on:click={minimize}><Minus size={15} /></button>
-      <button type="button" aria-label="最大化" on:click={maximize}><Square size={13} /></button>
-      <button type="button" aria-label="关闭" on:click={closeWindow}><X size={16} /></button>
+    <div class="window-controls" on:click|stopPropagation>
+      <button type="button" aria-label="最小化" on:click={minimizeWindow}><Minimize2 size={16} /></button>
+      <button type="button" aria-label="最大化" on:click={toggleMaximizeWindow}><Maximize2 size={16} /></button>
+      <button type="button" aria-label="关闭" on:click={closeWindow}><X size={17} /></button>
     </div>
   </header>
 
   <div class="layout">
-    <aside class="sidebar" style={`width: ${settings.sidebarWidth}px; min-width: ${settings.sidebarWidth}px`}>
-      <button class="profile-card" type="button" on:click|stopPropagation={() => (showSettings = !showSettings)}>
-        <span class="avatar" style={avatarStyle()}>{avatarText()}</span>
+    <aside class="sidebar" style={`width: ${sidebarWidth}px; min-width: ${sidebarWidth}px;`}>
+      <button class="profile-card" type="button" on:click|stopPropagation={() => { showSettings = !showSettings; showListMenu = false; }}>
+        <span class="avatar" style={avatarStyle}>{settings.profile.avatar ? "" : avatarInitial}</span>
         <span class="profile-text">
-          <strong>{settings.profile.name}</strong>
-          <span>{settings.profile.email}⌄</span>
+          <strong>{settings.profile.displayName}</strong>
+          <span>{settings.profile.email}</span>
         </span>
       </button>
 
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <label class="search-box" on:click|stopPropagation>
+      <label class="search-box">
+        <Search size={19} />
         <input bind:this={searchInput} bind:value={searchQuery} placeholder="搜索" />
-        <Search size={18} />
       </label>
 
-      <nav class="system-nav" aria-label="系统列表">
-        {#each systemLists as list (list.id)}
-          <button class:selected={state.selectedListId === list.id && !isSearching} class="nav-row system-row" type="button" on:click|stopPropagation={() => commit({ ...state, selectedListId: list.id })}>
+      <nav class="system-nav">
+        {#each systemNodes as node (node.id)}
+          <button class:selected={state.selectedNodeId === node.id && !isSearching} class="nav-row" type="button" on:click={() => selectNode(node.id)}>
             <span class="active-rail"></span>
-            <span class="system-icon"><IconGlyph icon={list.icon} size={22} /></span>
-            <span class="list-name">{list.name}</span>
-            {#if listCounts[list.id] > 0}
-              <span class="count-pill">{listCounts[list.id]}</span>
+            <span class="system-icon"><IconGlyph icon={node.icon} size={19} /></span>
+            <span class="list-name">{node.name}</span>
+            {#if listCounts[node.id]}
+              <span class="count-pill">{listCounts[node.id]}</span>
             {/if}
           </button>
         {/each}
@@ -736,37 +811,34 @@
 
       <div class="nav-divider"></div>
 
-      <nav class="custom-nav" aria-label="自定义分类">
+      <nav class="custom-nav">
         <ListTree
-          lists={state.lists}
-          selectedId={isSearching ? "" : state.selectedListId}
+          nodes={state.nodes}
+          selectedNodeId={state.selectedNodeId}
           counts={listCounts}
-          editingId={editingListId}
+          renamingId={renamingId}
           {renameDraft}
-          {draggingId}
-          onSelectEntry={selectEntry}
-          onToggleCategory={toggleCategory}
-          onOpenMenu={openTreeMenu}
-          onRenameDraft={(value) => (renameDraft = value)}
-          onCommitRename={commitRename}
-          onDragStartNode={(id) => (draggingId = id || null)}
-          onDropNode={dropNode}
+          on:selectEntry={(event) => selectNode(event.detail)}
+          on:toggleCategory={(event) => toggleCategory(event.detail)}
+          on:renameInput={(event) => (renameDraft = event.detail)}
+          on:renameCommit={(event) => commitRename(event.detail)}
+          on:openMenu={(event) => { treeMenu = event.detail; taskMenu = null; showListMenu = false; }}
+          on:dragStart={(event) => (draggingId = event.detail || null)}
+          on:dropNode={(event) => moveNode(event.detail.id, event.detail.targetId)}
         />
       </nav>
 
-      {#if treeMenuNode && treeMenu}
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <section class="tree-context-menu" style={`left: ${treeMenu.x}px; top: ${treeMenu.y}px`} on:click|stopPropagation>
-          {#if treeMenuNode.nodeType === "category"}
+      {#if treeMenu && treeMenuNode}
+        <section class="tree-context-menu" style={`left: ${treeMenu.x}px; top: ${treeMenu.y}px;`} on:click|stopPropagation>
+          {#if treeMenuNode.kind === "category"}
             <button type="button" on:click={() => addNode(treeMenuNode.id, "entry")}><FilePlus2 size={15} /> 创建条目</button>
             <button type="button" on:click={() => addNode(treeMenuNode.id, "category")}><FolderPlus size={15} /> 创建子分类</button>
           {/if}
-          <button type="button" on:click={() => startRename(treeMenuNode.id)}><Pencil size={15} /> 重命名</button>
-          {#if treeMenuNode.nodeType === "entry"}
-            <button type="button" on:click={() => (iconPickerListId = treeMenuNode.id)}><Settings size={15} /> 选择图标</button>
+          <button type="button" disabled={treeMenuNode.kind === "system"} on:click={() => startRename(treeMenuNode.id)}><Pencil size={15} /> 重命名</button>
+          {#if treeMenuNode.kind === "entry"}
+            <button type="button" on:click={() => (iconPickerListId = treeMenuNode.id)}><Star size={15} /> 选择图标</button>
           {/if}
-          <button class="danger" type="button" on:click={() => deleteNode(treeMenuNode.id)}><Trash2 size={15} /> 删除</button>
+          <button class="danger" type="button" disabled={treeMenuNode.kind === "system"} on:click={() => deleteNode(treeMenuNode.id)}><Trash2 size={15} /> 删除</button>
         </section>
       {/if}
 
@@ -795,31 +867,35 @@
             {#if isSearching}
               <Search size={34} />
             {:else}
-              <IconGlyph icon={selectedList?.nodeType === "category" ? "folder" : selectedList?.icon ?? "notebook"} size={34} />
+              <IconGlyph icon={selectedNode?.icon ?? "notebook"} size={34} />
             {/if}
           </span>
-          <h1>{isSearching ? `搜索结果：${searchQuery}` : selectedList?.name ?? "随手记"}</h1>
+          <h1>{isSearching ? `搜索结果：${searchQuery}` : selectedNode?.name ?? "随手记"}</h1>
         </div>
         <div class="header-actions" on:click|stopPropagation>
-          <button type="button" title="分类/条目菜单" on:click={openListMenu}><MoreHorizontal size={23} /></button>
+          <button
+            type="button"
+            title="分类/条目菜单"
+            on:mousedown|preventDefault|stopPropagation={toggleListMenu}
+            on:click|stopPropagation
+            on:keydown={handleListMenuKeydown}
+          ><MoreHorizontal size={23} /></button>
           {#if showListMenu}
-            <!-- svelte-ignore a11y_click_events_have_key_events -->
-            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
             <section class="list-menu">
-              <button type="button" disabled={selectedList?.kind === "system"} on:click={() => selectedList && startRename(selectedList.id)}>
+              <button type="button" disabled={!selectedNode || selectedNode.kind === "system"} on:click={() => selectedNode && startRename(selectedNode.id)}>
                 <Pencil size={15} /> 重命名
               </button>
-              <button type="button" on:click={exportCurrentList}><Upload size={15} /> 导出当前</button>
-              <button type="button" on:click={exportAll}><Upload size={15} /> 一键全部导出</button>
-              <button type="button" on:click={() => importInput.click()}><Download size={15} /> 导入 JSON</button>
+              <button type="button" on:click={exportCurrentList}><Download size={15} /> 导出当前</button>
+              <button type="button" on:click={exportAll}><Download size={15} /> 一键全部导出</button>
+              <button type="button" on:click={() => importInput.click()}><Upload size={15} /> 导入 JSON</button>
               <div class="menu-section-title">背景颜色</div>
               <div class="color-grid">
                 {#each themePresets as preset}
                   <button
                     type="button"
                     title={preset.name}
-                    style={`--swatch: ${preset.background}; --accent-color: ${preset.accent}`}
-                    on:click={() => applyTheme(preset.accent, preset.background)}
+                    style={`--swatch: ${preset.color}; --accent-color: ${preset.color}`}
+                    on:click={() => applyTheme(preset.color)}
                   ></button>
                 {/each}
               </div>
@@ -829,11 +905,11 @@
               </label>
               <label class="opacity-row">
                 图片透明度
-                <input type="range" min="0" max="80" value={Math.round((selectedTheme.imageOpacity ?? 0.28) * 100)} on:input={updateBackgroundOpacity} />
+                <input type="range" min="0" max="80" value={Math.round((selectedBackground.imageOpacity ?? 0.28) * 100)} on:input={updateBackgroundOpacity} />
               </label>
               <div class="menu-inline two">
                 <button type="button" on:click={() => backgroundFileInput.click()}><Image size={15} /> 上传图片</button>
-                <button type="button" on:click={() => updateBackgroundImage(undefined)}><Eraser size={15} /> 清除背景</button>
+                <button type="button" on:click={() => { backgroundLinkDraft = ""; setBackground({ image: undefined }); }}><Eraser size={15} /> 清除背景</button>
               </div>
             </section>
           {/if}
@@ -843,40 +919,44 @@
       <input bind:this={importInput} class="hidden-file" type="file" accept="application/json,.json" on:change={importFromFile} />
       <input bind:this={backgroundFileInput} class="hidden-file" type="file" accept="image/*" on:change={uploadBackgroundImage} />
 
-      <section class="task-list" class:compact={settings.taskDensity === "compact"}>
-        <section class="completed-section">
-          <button class="completed-toggle" type="button" on:click|stopPropagation={() => (showCompleted = !showCompleted)}>
-            {#if showCompleted}
-              <ChevronDown size={17} />
-            {:else}
-              <span class="chevron-placeholder">›</span>
-            {/if}
-            已完成 {completedCount}
-          </button>
-          {#if showCompleted}
-            {#each completedTasks as task (task.id)}
-              <TaskCard
-                {task}
-                selected={selectedTaskId === task.id}
-                accent={selectedTheme.accent ?? defaultAccent}
-                density={settings.taskDensity}
-                onSelect={selectTask}
-                onUpdate={updateTask}
-              />
-            {/each}
-          {/if}
-        </section>
+      <section class="task-list">
+        {#if isSearching}
+          <div class="search-results-caption">搜索结果会实时汇总所有条目中的 Markdown 卡片。</div>
+        {/if}
 
         {#each incompleteTasks as task (task.id)}
           <TaskCard
             {task}
-            selected={selectedTaskId === task.id}
-            accent={selectedTheme.accent ?? defaultAccent}
-            density={settings.taskDensity}
-            onSelect={selectTask}
-            onUpdate={updateTask}
+            selected={taskMenu?.taskId === task.id || selectedTaskId === task.id}
+            on:toggle={(event) => updateTask(event.detail, (item) => ({ ...item, completed: !item.completed }))}
+            on:expand={(event) => { selectedTaskId = event.detail; taskMenu = null; updateTask(event.detail, (item) => ({ ...item, expanded: !item.expanded })); }}
+            on:edit={(event) => { selectedTaskId = event.detail; taskMenu = null; updateTask(event.detail, (item) => ({ ...item, editing: true, expanded: true })); }}
+            on:commit={(event) => updateTask(event.detail.id, (item) => ({ ...item, markdown: event.detail.markdown, editing: false, expanded: true }))}
+            on:context={openTaskMenu}
           />
         {/each}
+
+        {#if completedTasks.length}
+          <section class="completed-section">
+            <button class="completed-toggle" type="button" on:click|stopPropagation={() => (showCompleted = !showCompleted)}>
+              <ChevronDown class={!showCompleted ? "collapsed" : ""} size={17} />
+              已完成 {completedTasks.length}
+            </button>
+            {#if showCompleted}
+              {#each completedTasks as task (task.id)}
+                <TaskCard
+                  {task}
+                  selected={taskMenu?.taskId === task.id || selectedTaskId === task.id}
+                  on:toggle={(event) => updateTask(event.detail, (item) => ({ ...item, completed: !item.completed }))}
+                  on:expand={(event) => { selectedTaskId = event.detail; taskMenu = null; updateTask(event.detail, (item) => ({ ...item, expanded: !item.expanded })); }}
+                  on:edit={(event) => { selectedTaskId = event.detail; taskMenu = null; updateTask(event.detail, (item) => ({ ...item, editing: true, expanded: true })); }}
+                  on:commit={(event) => updateTask(event.detail.id, (item) => ({ ...item, markdown: event.detail.markdown, editing: false, expanded: true }))}
+                  on:context={openTaskMenu}
+                />
+              {/each}
+            {/if}
+          </section>
+        {/if}
 
         {#if visibleTasks.length === 0}
           <div class="empty-state">
@@ -885,6 +965,26 @@
           </div>
         {/if}
       </section>
+
+      {#if taskMenu && taskMenuTask}
+        <div class="task-context-menu" style={`left: ${taskMenu.x}px; top: ${taskMenu.y}px;`} on:click|stopPropagation>
+          <button type="button" on:click={() => { updateTask(taskMenuTask.id, (task) => ({ ...task, myDay: !task.myDay })); taskMenu = null; }}>
+            <Sun size={16} /> {taskMenuTask.myDay ? "从我的一天中移除" : "添加到我的一天"}
+          </button>
+          <button type="button" on:click={() => taskMenu && (taskMenu = { ...taskMenu, showDate: !taskMenu.showDate })}>
+            <CalendarDays size={16} /> 添加日期
+          </button>
+          {#if taskMenu.showDate}
+            <input type="date" value={taskMenuTask.dueDate ?? ""} on:change={(event) => setTaskDate(taskMenuTask.id, event.currentTarget.value)} />
+          {/if}
+          <button type="button" on:click={() => { updateTask(taskMenuTask.id, (task) => ({ ...task, important: !task.important })); taskMenu = null; }}>
+            <Star size={16} /> {taskMenuTask.important ? "取消收藏" : "收藏"}
+          </button>
+          <button type="button" on:click={() => { updateTask(taskMenuTask.id, (task) => ({ ...task, editing: true, expanded: true })); taskMenu = null; }}>
+            <Pencil size={16} /> 编辑
+          </button>
+        </div>
+      {/if}
 
       <section class="add-task-bar" on:click|stopPropagation>
         <Plus size={24} />
@@ -908,8 +1008,6 @@
     </main>
 
     {#if showSettings}
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
       <aside class="settings-drawer" on:click|stopPropagation>
         <div class="drawer-header">
           <h2>设置</h2>
@@ -919,48 +1017,61 @@
         <section>
           <h3>个人资料</h3>
           <div class="avatar-setting">
-            <span class="avatar large" style={avatarStyle()}>{avatarText()}</span>
+            <span class="avatar large" style={avatarStyle}>{settings.profile.avatar ? "" : avatarInitial}</span>
             <button type="button" on:click={() => avatarFileInput.click()}>上传头像</button>
+            <input bind:this={avatarFileInput} class="hidden-file" type="file" accept="image/*" on:change={uploadAvatar} />
           </div>
-          <input bind:this={avatarFileInput} class="hidden-file" type="file" accept="image/*" on:change={uploadAvatar} />
-          <label class="settings-row">头像文字 <input value={settings.profile.avatar.startsWith("data:image") ? "" : settings.profile.avatar} maxlength="2" on:input={(event) => event.currentTarget instanceof HTMLInputElement && updateProfile("avatar", event.currentTarget.value)} /></label>
-          <label class="settings-row">名称 <input value={settings.profile.name} on:input={(event) => event.currentTarget instanceof HTMLInputElement && updateProfile("name", event.currentTarget.value)} /></label>
-          <label class="settings-row">邮箱 <input value={settings.profile.email} on:input={(event) => event.currentTarget instanceof HTMLInputElement && updateProfile("email", event.currentTarget.value)} /></label>
-        </section>
-
-        <section>
-          <h3>全局唤起</h3>
-          <label class="settings-row">Toggle 快捷键 <input value={settings.globalShortcut} on:change={updateGlobalShortcut} /></label>
-          <p class="muted">默认 Ctrl + Shift + Space。注册成功后可在系统内全局显示/隐藏窗口。</p>
+          <label class="settings-row">
+            名字
+            <input value={settings.profile.displayName} on:input={(event) => updateProfile("displayName", event.currentTarget.value)} />
+          </label>
+          <label class="settings-row">
+            邮箱
+            <input value={settings.profile.email} on:input={(event) => updateProfile("email", event.currentTarget.value)} />
+          </label>
         </section>
 
         <section>
           <h3>快捷键</h3>
-          {#each settings.shortcuts as shortcut (shortcut.id)}
-            <label class="shortcut-row">
-              <span>{shortcut.label}</span>
-              <input value={shortcut.combo} on:change={(event) => updateShortcut(shortcut, event)} />
-              <small>{shortcutLabel(shortcut.combo)}</small>
-            </label>
-          {/each}
-        </section>
-
-        <section>
-          <h3>显示</h3>
-          <div class="segmented">
-            <button class:active={settings.taskDensity === "comfortable"} type="button" on:click={() => setDensity("comfortable")}>舒适</button>
-            <button class:active={settings.taskDensity === "compact"} type="button" on:click={() => setDensity("compact")}>紧凑</button>
-          </div>
+          <label class="shortcut-row">
+            新建内容
+            <input value={settings.shortcuts.newTask} on:change={(event) => updateShortcut("newTask", event.currentTarget.value)} />
+            <small>聚焦下方输入框</small>
+          </label>
+          <label class="shortcut-row">
+            搜索
+            <input value={settings.shortcuts.focusSearch} on:change={(event) => updateShortcut("focusSearch", event.currentTarget.value)} />
+            <small>聚焦搜索框</small>
+          </label>
+          <label class="shortcut-row">
+            全局唤起
+            <input value={settings.shortcuts.toggleWindow} on:change={(event) => updateShortcut("toggleWindow", event.currentTarget.value)} />
+            <small>系统级显示/隐藏</small>
+          </label>
+          <label class="shortcut-row">
+            设置
+            <input value={settings.shortcuts.openSettings} on:change={(event) => updateShortcut("openSettings", event.currentTarget.value)} />
+            <small>打开或关闭设置</small>
+          </label>
         </section>
 
         <section>
           <h3>云同步预留</h3>
-          <p class="muted">本次不启用云同步，但数据模型和设置入口已预留。</p>
           <div class="sync-card">
-            <strong>当前状态：未配置</strong>
-            {#each syncRoadmap as item}
-              <span>• {item}</span>
-            {/each}
+            <label class="settings-row">
+              提供方
+              <select value={settings.cloud.provider} on:change={(event) => updateCloudProvider(event.currentTarget.value as Settings["cloud"]["provider"])}>
+                <option value="none">未启用</option>
+                <option value="webdav">WebDAV</option>
+                <option value="s3">S3</option>
+                <option value="custom">自定义 HTTP</option>
+              </select>
+            </label>
+            <label class="settings-row">
+              地址
+              <input value={settings.cloud.endpoint} placeholder="后续实现时使用" on:input={(event) => updateCloudEndpoint(event.currentTarget.value)} />
+            </label>
+            <p class="muted">当前版本只保留配置结构，不执行任何网络同步。</p>
           </div>
         </section>
       </aside>

@@ -1,146 +1,162 @@
 {
-  "schemaVersion": 3,
-  "exportedAt": "2026-05-29T00:29:30.913+08:00",
+  "version": "3.1.0",
+  "exportedAt": "2026-05-29T00:00:00.000Z",
   "scope": "all",
   "state": {
     "schemaVersion": 3,
-    "selectedListId": "quick-notes",
-    "lists": [
+    "nodes": [
       {
         "id": "my-day",
-        "parentId": null,
         "kind": "system",
-        "nodeType": "entry",
         "name": "我的一天",
         "icon": "sun",
-        "collapsed": false,
-        "shared": false,
-        "order": 0,
-        "theme": { "accent": "#2564cf", "background": "#f4f8ff", "imageOpacity": 0.28 }
+        "parentId": null,
+        "createdAt": "2026-05-29T00:00:00.000Z"
       },
       {
         "id": "planned",
-        "parentId": null,
         "kind": "system",
-        "nodeType": "entry",
         "name": "计划内",
         "icon": "calendar",
-        "collapsed": false,
-        "shared": false,
-        "order": 1,
-        "theme": { "accent": "#5b6f82", "background": "#f8fafc", "imageOpacity": 0.28 }
+        "parentId": null,
+        "createdAt": "2026-05-29T00:00:00.000Z"
       },
       {
-        "id": "favorite",
-        "parentId": null,
+        "id": "important",
         "kind": "system",
-        "nodeType": "entry",
         "name": "收藏",
         "icon": "star",
-        "collapsed": false,
-        "shared": false,
-        "order": 2,
-        "theme": { "accent": "#b64a30", "background": "#fff7ef", "imageOpacity": 0.28 }
+        "parentId": null,
+        "createdAt": "2026-05-29T00:00:00.000Z"
       },
       {
-        "id": "quick-notes",
-        "parentId": null,
-        "kind": "custom",
-        "nodeType": "entry",
-        "name": "随手记",
-        "icon": "notebook",
-        "collapsed": false,
-        "shared": false,
-        "order": 10,
-        "theme": { "accent": "#b64a30", "background": "#fae9df", "imageOpacity": 0.28 }
-      },
-      {
-        "id": "learning",
-        "parentId": null,
-        "kind": "custom",
-        "nodeType": "category",
-        "name": "学习资料",
+        "id": "cat-work",
+        "kind": "category",
+        "name": "工作",
         "icon": "folder",
+        "parentId": null,
         "collapsed": false,
-        "shared": false,
-        "order": 11,
-        "theme": { "accent": "#1f7a4d", "background": "#edf7f0", "imageOpacity": 0.28 }
+        "createdAt": "2026-05-29T00:00:00.000Z"
       },
       {
-        "id": "rust-notes",
-        "parentId": "learning",
-        "kind": "custom",
-        "nodeType": "entry",
+        "id": "entry-review",
+        "kind": "entry",
+        "name": "评审记录",
+        "icon": "notebook",
+        "parentId": "cat-work",
+        "createdAt": "2026-05-29T00:00:00.000Z"
+      },
+      {
+        "id": "entry-rust",
+        "kind": "entry",
         "name": "Rust 笔记",
         "icon": "code",
-        "collapsed": false,
-        "shared": false,
-        "order": 10,
-        "theme": { "accent": "#6d5bd0", "background": "#f1efff", "imageOpacity": 0.28 }
+        "parentId": "cat-work",
+        "createdAt": "2026-05-29T00:00:00.000Z"
       },
       {
-        "id": "ideas",
-        "parentId": "learning",
-        "kind": "custom",
-        "nodeType": "entry",
-        "name": "灵感收集",
-        "icon": "sparkles",
+        "id": "cat-life",
+        "kind": "category",
+        "name": "生活",
+        "icon": "folder",
+        "parentId": null,
         "collapsed": false,
-        "shared": false,
-        "order": 11,
-        "theme": { "accent": "#c2416b", "background": "#fff1f4", "imageOpacity": 0.28 }
+        "createdAt": "2026-05-29T00:00:00.000Z"
+      },
+      {
+        "id": "entry-ideas",
+        "kind": "entry",
+        "name": "灵感收集",
+        "icon": "lightbulb",
+        "parentId": "cat-life",
+        "createdAt": "2026-05-29T00:00:00.000Z"
       }
     ],
+    "selectedNodeId": "entry-rust",
+    "backgrounds": {
+      "entry-review": {
+        "color": "#f7efe8",
+        "imageOpacity": 0.28
+      },
+      "entry-rust": {
+        "color": "#f0edff",
+        "imageOpacity": 0.28
+      },
+      "entry-ideas": {
+        "color": "#eaf7ef",
+        "imageOpacity": 0.28
+      }
+    },
     "tasks": [
       {
-        "id": "task-markdown-demo",
-        "listId": "quick-notes",
-        "markdown": "# Markdown 卡片示例\n\n- 支持 **加粗**、*斜体*、==高亮==\n- 支持 [链接](https://example.com)、`inline code`、表格和任务列表\n\n| 功能 | 状态 |\n| --- | --- |\n| GitHub 风格渲染 | ✅ |\n| 点击标题折叠/展开 | ✅ |\n| 双击正文编辑 | ✅ |\n\n- [x] 默认折叠\n- [ ] 右键菜单操作",
+        "id": "task-rust-1",
+        "nodeId": "entry-rust",
+        "markdown": "# 所有权检查\n- [ ] 借用规则整理\n- [x] move 语义复盘\n\n**重点**：`String`、`Vec<T>` 默认移动所有权。\n\n==高亮== 和 [Rust Book](https://doc.rust-lang.org/book/) 链接都需要渲染。",
         "completed": false,
         "important": true,
+        "myDay": true,
+        "dueDate": "2026-06-01",
         "expanded": true,
-        "steps": [],
-        "notes": "",
-        "dueDate": "今天",
-        "reminder": null,
-        "repeat": null,
-        "tags": [],
-        "createdAt": "2026-05-29T00:29:30.913+08:00",
-        "updatedAt": "2026-05-29T00:29:30.913+08:00"
+        "editing": false,
+        "createdAt": "2026-05-29T00:00:00.000Z",
+        "updatedAt": "2026-05-29T00:00:00.000Z"
       },
       {
-        "id": "task-rust",
-        "listId": "rust-notes",
-        "markdown": "## Tauri 2 发布检查\n\n1. `npm run check`\n2. `cargo check --quiet`\n3. 运行打包脚本\n\n> Windows 优先，Linux/Android 后续保持扩展边界。",
+        "id": "task-rust-2",
+        "nodeId": "entry-rust",
+        "markdown": "普通第一行只作为折叠标题\n\n展开后才会按 GitHub Markdown 渲染，这行用于验证折叠逻辑。",
         "completed": false,
         "important": false,
+        "myDay": false,
+        "dueDate": "2026-06-03",
         "expanded": false,
-        "steps": [],
-        "notes": "",
-        "dueDate": null,
-        "reminder": null,
-        "repeat": null,
-        "tags": ["rust", "tauri"],
-        "createdAt": "2026-05-29T00:31:30.913+08:00",
-        "updatedAt": "2026-05-29T00:31:30.913+08:00"
+        "editing": false,
+        "createdAt": "2026-05-29T00:00:00.000Z",
+        "updatedAt": "2026-05-29T00:00:00.000Z"
       },
       {
-        "id": "task-idea",
-        "listId": "ideas",
-        "markdown": "给随手记增加一个可以后续接入云同步的 adapter 层。",
+        "id": "task-review-1",
+        "nodeId": "entry-review",
+        "markdown": "PR 复盘\n\n- [ ] 检查导出路径\n- [x] 统一右键菜单层级",
+        "completed": false,
+        "important": true,
+        "myDay": false,
+        "dueDate": "2026-05-30",
+        "expanded": false,
+        "editing": false,
+        "createdAt": "2026-05-29T00:00:00.000Z",
+        "updatedAt": "2026-05-29T00:00:00.000Z"
+      },
+      {
+        "id": "task-done-1",
+        "nodeId": "entry-ideas",
+        "markdown": "完成项示例\n\n- [x] 导入测试数据\n- [x] 截图验证",
         "completed": true,
         "important": false,
+        "myDay": false,
         "expanded": false,
-        "steps": [],
-        "notes": "",
-        "dueDate": null,
-        "reminder": null,
-        "repeat": null,
-        "tags": [],
-        "createdAt": "2026-05-29T00:32:30.913+08:00",
-        "updatedAt": "2026-05-29T00:32:30.913+08:00"
+        "editing": false,
+        "createdAt": "2026-05-29T00:00:00.000Z",
+        "updatedAt": "2026-05-29T00:00:00.000Z"
       }
-    ],
-    "updatedAt": "2026-05-29T00:33:30.913+08:00"
+    ]
+  },
+  "settings": {
+    "profile": {
+      "displayName": "Example User",
+      "email": "example@example.com",
+      "avatar": ""
+    },
+    "shortcuts": {
+      "newTask": "Ctrl+N",
+      "focusSearch": "Ctrl+F",
+      "toggleWindow": "Ctrl+Shift+Space",
+      "openSettings": "Ctrl+,"
+    },
+    "cloud": {
+      "provider": "none",
+      "endpoint": "",
+      "enabled": false
+    }
   }
 }

@@ -1,25 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{
-    collections::HashSet,
-    fs,
-    path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
-};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use std::{fs, path::PathBuf};
+use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
-
-#[derive(Debug, Deserialize)]
-struct ExportRequest {
-    scope: String,
-    #[serde(rename = "listId")]
-    list_id: Option<String>,
-    state: Value,
-    #[serde(rename = "outputPath")]
-    output_path: Option<String>,
-}
 
 fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     if let Ok(exe) = std::env::current_exe() {
@@ -61,99 +45,6 @@ fn write_json(path: PathBuf, value: Value) -> Result<(), String> {
     fs::write(path, raw).map_err(|error| error.to_string())
 }
 
-fn exported_at() -> String {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default();
-    format!("{seconds}")
-}
-
-fn value_id(value: &Value, key: &str) -> Option<String> {
-    value.get(key)?.as_str().map(ToOwned::to_owned)
-}
-
-fn descendant_ids(state: &Value, root_id: &str) -> HashSet<String> {
-    let mut ids = HashSet::new();
-    ids.insert(root_id.to_string());
-
-    let Some(lists) = state.get("lists").and_then(Value::as_array) else {
-        return ids;
-    };
-
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for list in lists {
-            let Some(id) = value_id(list, "id") else {
-                continue;
-            };
-            let Some(parent_id) = value_id(list, "parentId") else {
-                continue;
-            };
-            if ids.contains(&parent_id) && !ids.contains(&id) {
-                ids.insert(id);
-                changed = true;
-            }
-        }
-    }
-
-    ids
-}
-
-fn export_payload(request: &ExportRequest) -> Value {
-    if request.scope == "all" {
-        return json!({
-            "schemaVersion": 3,
-            "exportedAt": exported_at(),
-            "scope": "all",
-            "state": request.state
-        });
-    }
-
-    let root_id = request
-        .list_id
-        .clone()
-        .or_else(|| value_id(&request.state, "selectedListId"))
-        .unwrap_or_else(|| "quick-notes".to_string());
-    let ids = descendant_ids(&request.state, &root_id);
-
-    let lists = request
-        .state
-        .get("lists")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter(|item| value_id(item, "id").is_some_and(|id| ids.contains(&id)))
-                .cloned()
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    let tasks = request
-        .state
-        .get("tasks")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter(|item| value_id(item, "listId").is_some_and(|id| ids.contains(&id)))
-                .cloned()
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    json!({
-        "schemaVersion": 3,
-        "exportedAt": exported_at(),
-        "scope": "list",
-        "rootListId": root_id,
-        "lists": lists,
-        "tasks": tasks
-    })
-}
-
 #[tauri::command]
 fn load_state(app: AppHandle) -> Result<Value, String> {
     read_json(data_file(&app)?)
@@ -175,28 +66,9 @@ fn save_settings(app: AppHandle, settings: Value) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn export_data(app: AppHandle, request: ExportRequest) -> Result<String, String> {
-    let filename = if request.scope == "all" {
-        "todo-note-all-export.json".to_string()
-    } else {
-        format!(
-            "todo-note-{}-export.json",
-            request
-                .list_id
-                .clone()
-                .or_else(|| value_id(&request.state, "selectedListId"))
-                .unwrap_or_else(|| "list".to_string())
-        )
-    };
-    let output_path = request
-        .output_path
-        .clone()
-        .filter(|path| !path.trim().is_empty())
-        .map(PathBuf::from)
-        .unwrap_or(data_dir(&app)?.join(filename));
-
-    write_json(output_path.clone(), export_payload(&request))?;
-    Ok(output_path.to_string_lossy().to_string())
+fn export_data(payload: Value, path: String) -> Result<(), String> {
+    let output_path = PathBuf::from(path);
+    write_json(output_path, payload)
 }
 
 fn shortcut_from_string(raw: &str) -> Result<Shortcut, String> {
@@ -270,18 +142,18 @@ fn main() {
             register_global_shortcut
         ])
         .setup(|app| {
-            let webview = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
-                .title("Todo Note")
-                .inner_size(1180.0, 820.0)
-                .min_inner_size(940.0, 640.0)
-                .decorations(false)
-                .resizable(true)
-                .build()?;
-
-            let _ = webview.set_focus();
-            let _ = register_global_toggle(&app.handle(), "Ctrl+Shift+Space");
+            if let Some(webview) = app.get_webview_window("main") {
+                let _ = webview.show();
+                let _ = webview.set_focus();
+            }
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .expect("failed to run Todo Note");
 }

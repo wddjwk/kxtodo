@@ -1,38 +1,25 @@
-import type { ShortcutBinding } from "./types";
-
-const modifierAliases = new Map([
-  ["CTRL", "CONTROL"],
-  ["CONTROL", "CONTROL"],
-  ["CMD", "META"],
-  ["COMMAND", "META"],
-  ["OPTION", "ALT"]
-]);
-
-function normalizePart(part: string): string {
-  const upper = part.trim().toUpperCase();
-  return modifierAliases.get(upper) ?? upper;
-}
-
-export function matchesShortcut(event: KeyboardEvent, binding: ShortcutBinding): boolean {
-  const parts = binding.combo
+export function matchesShortcut(event: KeyboardEvent, shortcut: string): boolean {
+  const parts = shortcut
     .split("+")
-    .map(normalizePart)
+    .map((part) => part.trim().toLowerCase())
     .filter(Boolean);
-
-  const expectedKey = parts.find((part) => !["CONTROL", "SHIFT", "ALT", "META"].includes(part));
-
-  if (!expectedKey) {
+  const key = parts.find((part) => !["ctrl", "control", "cmd", "meta", "shift", "alt", "option"].includes(part));
+  if (!key) {
     return false;
   }
 
-  const pressedKey = event.key.length === 1 ? event.key.toUpperCase() : event.key.toUpperCase();
+  const ctrlExpected = parts.includes("ctrl") || parts.includes("control");
+  const metaExpected = parts.includes("cmd") || parts.includes("meta");
+  const shiftExpected = parts.includes("shift");
+  const altExpected = parts.includes("alt") || parts.includes("option");
+  const normalizedEventKey = event.key.length === 1 ? event.key.toLowerCase() : event.key.toLowerCase().replace("arrow", "");
 
   return (
-    Boolean(event.ctrlKey) === parts.includes("CONTROL") &&
-    Boolean(event.shiftKey) === parts.includes("SHIFT") &&
-    Boolean(event.altKey) === parts.includes("ALT") &&
-    Boolean(event.metaKey) === parts.includes("META") &&
-    pressedKey === expectedKey
+    event.ctrlKey === ctrlExpected &&
+    event.metaKey === metaExpected &&
+    event.shiftKey === shiftExpected &&
+    event.altKey === altExpected &&
+    normalizedEventKey === key
   );
 }
 

@@ -1,185 +1,129 @@
 <script lang="ts">
-  import { onDestroy, tick } from "svelte";
-  import { CalendarDays, Check, Pencil, Star, Sun } from "@lucide/svelte";
+  import { createEventDispatcher, tick } from "svelte";
+  import { Check, Pencil } from "@lucide/svelte";
   import { firstMarkdownLine, renderMarkdown } from "./markdown";
-  import type { TodoTask, TodoTaskPatch } from "./types";
+  import type { Task } from "./types";
 
-  export let task: TodoTask;
+  export let task: Task;
   export let selected = false;
-  export let accent = "#b64a30";
-  export let density: "comfortable" | "compact" = "comfortable";
-  export let onSelect: (id: string) => void;
-  export let onUpdate: (id: string, patch: TodoTaskPatch) => void;
 
-  let editing = false;
-  let showContextMenu = false;
-  let showDateInput = false;
-  let menuX = 0;
-  let menuY = 0;
-  let textarea: HTMLTextAreaElement;
+  const dispatch = createEventDispatcher<{
+    toggle: string;
+    expand: string;
+    edit: string;
+    commit: { id: string; markdown: string };
+    context: { id: string; x: number; y: number };
+  }>();
 
-  $: isMyDay = task.dueDate === "今天" || task.dueDate === todayIso();
-  $: titleHtml = renderMarkdown(firstMarkdownLine(task.markdown));
+  let draft = "";
+  let editingTaskId = "";
+  let editorEl: HTMLTextAreaElement;
+
+  $: title = firstMarkdownLine(task.markdown);
   $: fullHtml = renderMarkdown(task.markdown);
-
-  function handleWindowClick(): void {
-    showContextMenu = false;
-    if (editing) {
-      editing = false;
-    }
+  $: if (task.editing && editingTaskId !== task.id) {
+    draft = task.markdown;
+    editingTaskId = task.id;
+  }
+  $: if (!task.editing && editingTaskId === task.id) {
+    editingTaskId = "";
   }
 
-  window.addEventListener("click", handleWindowClick);
-  onDestroy(() => window.removeEventListener("click", handleWindowClick));
-
-  async function startEditing(): Promise<void> {
-    showContextMenu = false;
-    editing = true;
-    onUpdate(task.id, { expanded: true });
+  async function startEdit(): Promise<void> {
+    draft = task.markdown;
+    dispatch("edit", task.id);
     await tick();
     resizeEditor();
-    textarea?.focus();
+    editorEl?.focus();
   }
 
-  async function toggleEditing(): Promise<void> {
-    if (editing) {
-      editing = false;
+  function commitEdit(): void {
+    if (!task.editing) {
+      return;
+    }
+    dispatch("commit", { id: task.id, markdown: draft });
+  }
+
+  function toggleEdit(): void {
+    if (task.editing) {
+      commitEdit();
     } else {
-      await startEditing();
+      void startEdit();
     }
   }
 
-  function updateMarkdown(event: Event): void {
-    const target = event.currentTarget;
-    if (target instanceof HTMLTextAreaElement) {
-      onUpdate(task.id, { markdown: target.value });
-      resizeEditor();
+  function toggleExpand(event: MouseEvent): void {
+    if (task.editing) {
+      return;
     }
+    event.stopPropagation();
+    dispatch("expand", task.id);
+  }
+
+  function handleBodyDblClick(event: MouseEvent): void {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest("button, a, input, textarea")) {
+      return;
+    }
+    void startEdit();
+  }
+
+  function openContext(event: MouseEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
+    dispatch("context", { id: task.id, x: event.clientX, y: event.clientY });
   }
 
   function resizeEditor(): void {
-    if (!textarea) {
+    if (!editorEl) {
       return;
     }
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 420)}px`;
-  }
-
-  function toggleExpanded(): void {
-    if (editing) {
-      return;
-    }
-    showContextMenu = false;
-    onSelect(task.id);
-  }
-
-  function openMenu(event: MouseEvent): void {
-    event.preventDefault();
-    event.stopPropagation();
-    showContextMenu = true;
-    showDateInput = false;
-    menuX = event.clientX;
-    menuY = event.clientY;
-  }
-
-  function toggleMyDay(): void {
-    onUpdate(task.id, { dueDate: isMyDay ? null : todayIso() });
-    showContextMenu = false;
-  }
-
-  function toggleFavorite(): void {
-    onUpdate(task.id, { important: !task.important });
-    showContextMenu = false;
-  }
-
-  function updateDate(event: Event): void {
-    const target = event.currentTarget;
-    if (target instanceof HTMLInputElement) {
-      onUpdate(task.id, { dueDate: target.value || null });
-      showContextMenu = false;
-    }
-  }
-
-  function todayIso(): string {
-    const date = new Date();
-    const offset = date.getTimezoneOffset();
-    const local = new Date(date.getTime() - offset * 60_000);
-    return local.toISOString().slice(0, 10);
+    editorEl.style.height = "auto";
+    editorEl.style.height = `${Math.min(editorEl.scrollHeight, 420)}px`;
   }
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <article
   class:completed={task.completed}
+  class:compact={!task.expanded && !task.editing}
+  class:editing={task.editing}
   class:selected
-  class:expanded={task.expanded}
-  class:compact={density === "compact"}
-  class:editing
   class="task-card"
-  style={`--accent: ${accent}`}
-  on:click|stopPropagation
-  on:contextmenu={openMenu}
-  on:dblclick|stopPropagation={startEditing}
+  on:contextmenu={openContext}
 >
-  <button
-    class="task-check"
-    type="button"
-    aria-label="切换完成"
-    on:click|stopPropagation={() => onUpdate(task.id, { completed: !task.completed })}
-  >
+  <button class="task-check" type="button" aria-label="切换完成" on:click|stopPropagation={() => dispatch("toggle", task.id)}>
     {#if task.completed}
       <Check size={14} strokeWidth={3.2} />
     {/if}
   </button>
 
-  <div class="task-body">
-    {#if editing}
+  <section class="task-body" on:dblclick={handleBodyDblClick}>
+    {#if task.editing}
       <textarea
-        bind:this={textarea}
+        bind:this={editorEl}
+        bind:value={draft}
         class="markdown-editor"
         spellcheck="false"
-        value={task.markdown}
-        on:input={updateMarkdown}
-        on:click|stopPropagation
+        on:input={resizeEditor}
+        on:blur={commitEdit}
       ></textarea>
     {:else}
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="markdown-title-row markdown-body" on:click|stopPropagation={toggleExpanded}>
-        {@html titleHtml}
-      </div>
+      <div class="markdown-title-row" on:click={toggleExpand}>{title}</div>
       {#if task.expanded}
-        <div class="markdown-body markdown-content">
+        <div class="markdown-body markdown-content" on:click|stopPropagation>
           {@html fullHtml}
         </div>
       {/if}
     {/if}
-  </div>
+  </section>
 
-  <button class="edit-button" type="button" title="编辑 Markdown" on:click|stopPropagation={toggleEditing}>
+  {#if !task.expanded && task.dueDate}
+    <span class="task-due-date">{task.dueDate}</span>
+  {/if}
+
+  <button class="edit-button" type="button" title="编辑 Markdown" on:mousedown|preventDefault on:click|stopPropagation={toggleEdit}>
     <Pencil size={18} />
   </button>
-
-  {#if showContextMenu}
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="task-context-menu" style={`left: ${menuX}px; top: ${menuY}px`} on:click|stopPropagation>
-      <button type="button" on:click={toggleMyDay}>
-        <Sun size={16} /> {isMyDay ? "从我的一天中移除" : "添加到我的一天"}
-      </button>
-      <button type="button" on:click={() => (showDateInput = !showDateInput)}>
-        <CalendarDays size={16} /> 添加日期
-      </button>
-      {#if showDateInput}
-        <input type="date" value={task.dueDate ?? ""} on:change={updateDate} />
-      {/if}
-      <button type="button" on:click={toggleFavorite}>
-        <Star size={16} /> {task.important ? "取消收藏" : "收藏"}
-      </button>
-      <button type="button" on:click={startEditing}>
-        <Pencil size={16} /> 编辑
-      </button>
-    </div>
-  {/if}
 </article>

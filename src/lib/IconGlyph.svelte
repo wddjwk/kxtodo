@@ -19,6 +19,7 @@
     Home,
     Inbox,
     List,
+    Lightbulb,
     Lock,
     Music,
     Notebook,
@@ -58,6 +59,7 @@
     "home",
     "inbox",
     "list",
+    "lightbulb",
     "lock",
     "music",
     "notebook",
@@ -132,6 +134,8 @@
   <Music {size} {strokeWidth} />
 {:else if icon === "archive"}
   <Archive {size} {strokeWidth} />
+{:else if icon === "lightbulb"}
+  <Lightbulb {size} {strokeWidth} />
 {:else}
   <List {size} {strokeWidth} />
 {/if}

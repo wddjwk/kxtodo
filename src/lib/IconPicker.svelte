@@ -8,6 +8,7 @@
 
   const iconPresets = [
     "list",
+    "lightbulb",
     "notebook",
     "folder",
     "file",

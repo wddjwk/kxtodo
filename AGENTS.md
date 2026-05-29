@@ -16,7 +16,7 @@ Todo Note is a fast, local-first todo and quick-note app inspired by the product
 
 - **Rust + Tauri 2** for the desktop shell, persistence, import/export, and future native integrations.
 - **Svelte + TypeScript + Vite** for the UI.
-- **Markdown rendering** is live and sanitized in the client, supporting headings, emphasis, highlight syntax, links, lists, and inline code.
+- **Markdown rendering** uses GitHub-flavored Markdown styling in the client, supporting headings, emphasis, highlight syntax, links, lists, task lists, and inline code.
 
 ## Project layout
 
@@ -24,22 +24,22 @@ Todo Note is a fast, local-first todo and quick-note app inspired by the product
 - `src/lib/types.ts` defines the app data model shared by UI modules.
 - `src/lib/backend.ts` is the frontend bridge to Tauri commands, with browser-dev fallbacks.
 - `src/lib/markdown.ts` owns Markdown rendering and sanitization.
-- `src-tauri/src/main.rs` owns persistence, default data, export generation, and sync placeholders.
+- `src-tauri/src/main.rs` owns local JSON persistence, export file writing, window-state support, and the global toggle shortcut.
 - `scripts/package.ps1` builds a versioned release using local project dependencies.
 - `scripts/load-sample-data.ps1` loads non-production sample data for visual validation.
 - `test-data/sample-export.json` contains demo data used for screenshots and manual QA; do not move this into production defaults.
 
 ## Data model
 
-- `TodoList` represents both left-tree **categories** and **entries**. Categories use `nodeType: "category"`, folder icons, and only contain child categories/entries. Entries use `nodeType: "entry"` and own Markdown cards.
-- `TodoTask` belongs to an entry and stores Markdown content, completion state, favorite state, tags, and lightweight date metadata for My Day/planned views.
-- `AppSettings` stores editable profile information (including uploaded avatar data URLs), shortcut bindings, global toggle shortcut, UI density, sidebar width, default background, and disabled cloud-sync configuration.
+- `AppNode` represents left-tree nodes. Built-in system nodes are `my-day`, `planned`, and `important`; custom `category` nodes are folders that expand/collapse; custom `entry` nodes own Markdown cards.
+- `Task` belongs to an entry and stores Markdown content, completion state, My Day/favorite flags, lightweight date metadata, and transient expand/edit UI state.
+- `Settings` stores editable profile information (including uploaded avatar data URLs), local shortcut bindings, the global toggle shortcut, and disabled cloud-sync configuration.
 
 ## Maintenance workflow
 
 1. Install dependencies locally with `npm install`.
 2. Run the desktop app with `npm run desktop:dev`.
 3. Build the frontend with `npm run build`.
-4. Package a release with `.\scripts\package.ps1 -Version 3.0.0`.
+4. Package a release with `.\scripts\package.ps1 -Version 3.1.0`.
 5. Load screenshot QA data with `.\scripts\load-sample-data.ps1` when needed; production defaults must stay minimal.
 6. Keep new native features behind Tauri commands/plugins and keep sync integrations behind adapter-style boundaries.

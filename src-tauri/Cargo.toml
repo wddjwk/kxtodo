@@ -1,6 +1,6 @@
 [package]
 name = "todo-note"
-version = "3.0.0"
+version = "3.1.0"
 description = "A fast local-first todo and markdown note desktop app."
 authors = ["wddjwk"]
 license = ""
@@ -18,10 +18,3 @@ tauri = { version = "2", features = [] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-window-state = "2"
 tauri-plugin-dialog = "2"
-
-
-
-
-
-
-

@@ -38,6 +38,8 @@ if (!(Test-Path -LiteralPath (Join-Path $root "node_modules"))) {
 }
 
 npm run build
+$binaryPath = Join-Path $root "src-tauri\target\release\todo-note.exe"
+Remove-Item -LiteralPath $binaryPath -Force -ErrorAction SilentlyContinue
 npm run tauri -- build
 
 $effectiveVersion = if ($Version.Trim().Length -gt 0) {
@@ -47,7 +49,6 @@ $effectiveVersion = if ($Version.Trim().Length -gt 0) {
 }
 
 $releaseDir = Join-Path $root "release"
-$binaryPath = Join-Path $root "src-tauri\target\release\todo-note.exe"
 $releaseBinary = Join-Path $releaseDir "TodoNote-$effectiveVersion.exe"
 New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
 Copy-Item -LiteralPath $binaryPath -Destination $releaseBinary -Force
