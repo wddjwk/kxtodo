@@ -1,0 +1,146 @@
+{
+  "schemaVersion": 3,
+  "exportedAt": "2026-05-29T00:29:30.913+08:00",
+  "scope": "all",
+  "state": {
+    "schemaVersion": 3,
+    "selectedListId": "quick-notes",
+    "lists": [
+      {
+        "id": "my-day",
+        "parentId": null,
+        "kind": "system",
+        "nodeType": "entry",
+        "name": "我的一天",
+        "icon": "sun",
+        "collapsed": false,
+        "shared": false,
+        "order": 0,
+        "theme": { "accent": "#2564cf", "background": "#f4f8ff", "imageOpacity": 0.28 }
+      },
+      {
+        "id": "planned",
+        "parentId": null,
+        "kind": "system",
+        "nodeType": "entry",
+        "name": "计划内",
+        "icon": "calendar",
+        "collapsed": false,
+        "shared": false,
+        "order": 1,
+        "theme": { "accent": "#5b6f82", "background": "#f8fafc", "imageOpacity": 0.28 }
+      },
+      {
+        "id": "favorite",
+        "parentId": null,
+        "kind": "system",
+        "nodeType": "entry",
+        "name": "收藏",
+        "icon": "star",
+        "collapsed": false,
+        "shared": false,
+        "order": 2,
+        "theme": { "accent": "#b64a30", "background": "#fff7ef", "imageOpacity": 0.28 }
+      },
+      {
+        "id": "quick-notes",
+        "parentId": null,
+        "kind": "custom",
+        "nodeType": "entry",
+        "name": "随手记",
+        "icon": "notebook",
+        "collapsed": false,
+        "shared": false,
+        "order": 10,
+        "theme": { "accent": "#b64a30", "background": "#fae9df", "imageOpacity": 0.28 }
+      },
+      {
+        "id": "learning",
+        "parentId": null,
+        "kind": "custom",
+        "nodeType": "category",
+        "name": "学习资料",
+        "icon": "folder",
+        "collapsed": false,
+        "shared": false,
+        "order": 11,
+        "theme": { "accent": "#1f7a4d", "background": "#edf7f0", "imageOpacity": 0.28 }
+      },
+      {
+        "id": "rust-notes",
+        "parentId": "learning",
+        "kind": "custom",
+        "nodeType": "entry",
+        "name": "Rust 笔记",
+        "icon": "code",
+        "collapsed": false,
+        "shared": false,
+        "order": 10,
+        "theme": { "accent": "#6d5bd0", "background": "#f1efff", "imageOpacity": 0.28 }
+      },
+      {
+        "id": "ideas",
+        "parentId": "learning",
+        "kind": "custom",
+        "nodeType": "entry",
+        "name": "灵感收集",
+        "icon": "sparkles",
+        "collapsed": false,
+        "shared": false,
+        "order": 11,
+        "theme": { "accent": "#c2416b", "background": "#fff1f4", "imageOpacity": 0.28 }
+      }
+    ],
+    "tasks": [
+      {
+        "id": "task-markdown-demo",
+        "listId": "quick-notes",
+        "markdown": "# Markdown 卡片示例\n\n- 支持 **加粗**、*斜体*、==高亮==\n- 支持 [链接](https://example.com)、`inline code`、表格和任务列表\n\n| 功能 | 状态 |\n| --- | --- |\n| GitHub 风格渲染 | ✅ |\n| 点击标题折叠/展开 | ✅ |\n| 双击正文编辑 | ✅ |\n\n- [x] 默认折叠\n- [ ] 右键菜单操作",
+        "completed": false,
+        "important": true,
+        "expanded": true,
+        "steps": [],
+        "notes": "",
+        "dueDate": "今天",
+        "reminder": null,
+        "repeat": null,
+        "tags": [],
+        "createdAt": "2026-05-29T00:29:30.913+08:00",
+        "updatedAt": "2026-05-29T00:29:30.913+08:00"
+      },
+      {
+        "id": "task-rust",
+        "listId": "rust-notes",
+        "markdown": "## Tauri 2 发布检查\n\n1. `npm run check`\n2. `cargo check --quiet`\n3. 运行打包脚本\n\n> Windows 优先，Linux/Android 后续保持扩展边界。",
+        "completed": false,
+        "important": false,
+        "expanded": false,
+        "steps": [],
+        "notes": "",
+        "dueDate": null,
+        "reminder": null,
+        "repeat": null,
+        "tags": ["rust", "tauri"],
+        "createdAt": "2026-05-29T00:31:30.913+08:00",
+        "updatedAt": "2026-05-29T00:31:30.913+08:00"
+      },
+      {
+        "id": "task-idea",
+        "listId": "ideas",
+        "markdown": "给随手记增加一个可以后续接入云同步的 adapter 层。",
+        "completed": true,
+        "important": false,
+        "expanded": false,
+        "steps": [],
+        "notes": "",
+        "dueDate": null,
+        "reminder": null,
+        "repeat": null,
+        "tags": [],
+        "createdAt": "2026-05-29T00:32:30.913+08:00",
+        "updatedAt": "2026-05-29T00:32:30.913+08:00"
+      }
+    ],
+    "updatedAt": "2026-05-29T00:33:30.913+08:00"
+  }
+}
