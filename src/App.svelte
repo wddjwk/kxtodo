@@ -8,6 +8,7 @@
     Download,
     Eraser,
     FilePlus2,
+    FolderInput,
     FolderPlus,
     Image,
     Maximize2,
@@ -22,7 +23,19 @@
     Upload,
     X
   } from "@lucide/svelte";
-  import { exportData, loadSettings, loadState, openExternalUrl, registerGlobalShortcut, saveSettings, saveState } from "./lib/backend";
+  import {
+    exportData,
+    loadSettings,
+    loadState,
+    openExternalUrl,
+    registerGlobalShortcut,
+    saveSettings,
+    saveState,
+    setAutostart,
+    setCloseToTray,
+    setWebviewZoom,
+    isTauriRuntime
+  } from "./lib/backend";
   import {
     createCategoryNode,
     createEntryNode,
@@ -41,7 +54,7 @@
   import { matchesShortcut } from "./lib/shortcuts";
   import type { AppNode, AppState, ListBackground, Settings, Task } from "./lib/types";
 
-  const appVersion = "4.0.0";
+  const appVersion = "4.1.0";
   const defaultAccent = "#2564cf";
 
   let state: AppState = emptyState();
@@ -87,6 +100,10 @@
   $: isSearching = searchQuery.trim().length > 0;
   $: selectedIconPickerList = iconPickerListId ? state.nodes.find((node) => node.id === iconPickerListId) : null;
   $: treeMenuNode = treeMenu ? state.nodes.find((node) => node.id === treeMenu?.id) : null;
+  $: treeMoveTargets = treeMenuNode ? moveTargetOptions(treeMenuNode.id) : [];
+  $: selectedMoveTargets = selectedNode ? moveTargetOptions(selectedNode.id) : [];
+  $: treeMenuStyle = treeMenu ? buildMenuStyle(treeMenu.x, treeMenu.y, 248, treeMenuNode?.kind === "category" ? 300 : 252) : "";
+  $: taskMenuStyle = taskMenu ? buildMenuStyle(taskMenu.x, taskMenu.y, 230, taskMenu.showDate ? 230 : 188) : "";
   $: taskMenuTask = taskMenu ? state.tasks.find((task) => task.id === taskMenu?.taskId) : null;
   $: avatarStyle = settings.profile.avatar ? `background-image: url("${escapeCssUrl(settings.profile.avatar)}");` : "";
   $: avatarInitial = (settings.profile.displayName.trim().charAt(0) || "E").toUpperCase();
@@ -138,11 +155,15 @@
       resizeComposer();
     }
 
+    await syncNativeAppearance(loadedSettings);
+
     try {
       await registerGlobalShortcut(loadedSettings.shortcuts.toggleWindow);
     } catch (error) {
       showToast(`全局快捷键注册失败：${String(error)}`);
     }
+
+    await syncNativeLifecycle(loadedSettings);
   }
 
   function queueStateSave(): void {
@@ -171,8 +192,33 @@
   }
 
   function commitSettings(next: Settings): void {
+    const previousScale = uiScaleValue(settings.appearance.uiScale);
+    const nextScale = uiScaleValue(next.appearance.uiScale);
     settings = next;
     queueSettingsSave();
+    if (hydrated && previousScale !== nextScale) {
+      void syncNativeAppearance(next);
+    }
+  }
+
+  async function syncNativeLifecycle(nextSettings: Settings): Promise<void> {
+    try {
+      await setCloseToTray(nextSettings.lifecycle.closeToTray);
+      await setAutostart(nextSettings.lifecycle.launchAtStartup);
+    } catch (error) {
+      showToast(`系统设置同步失败：${String(error)}`);
+    }
+  }
+
+  async function syncNativeAppearance(nextSettings: Settings): Promise<void> {
+    if (!isTauriRuntime) {
+      return;
+    }
+    try {
+      await setWebviewZoom(uiScaleValue(nextSettings.appearance.uiScale));
+    } catch (error) {
+      showToast(`界面缩放同步失败：${String(error)}`);
+    }
   }
 
   function showToast(message: string): void {
@@ -238,16 +284,32 @@
   }
 
   function buildAppShellStyle(scaleValue: number): string {
-    const scale = Math.min(1.05, Math.max(0.82, scaleValue || defaultSettings.appearance.uiScale));
+    const scale = uiScaleValue(scaleValue);
     return [
       `--ui-scale: ${scale}`,
-      `--font-title: ${(36 * scale).toFixed(2)}px`,
-      `--font-list: ${(19 * scale).toFixed(2)}px`,
-      `--font-control: ${(18 * scale).toFixed(2)}px`,
-      `--font-task: ${(18 * scale).toFixed(2)}px`,
-      `--font-composer: ${(17 * scale).toFixed(2)}px`,
-      `--font-drawer-title: ${(24 * scale).toFixed(2)}px`
+      "--app-width: 100vw",
+      "--app-height: 100vh",
+      "--font-title: 36px",
+      "--font-list: 19px",
+      "--font-control: 18px",
+      "--font-task: 18px",
+      "--font-composer: 17px",
+      "--font-drawer-title: 24px"
     ].join("; ");
+  }
+
+  function uiScaleValue(scaleValue = settings.appearance.uiScale): number {
+    const staleScale = scaleValue === 0.72 || scaleValue === 0.86 || scaleValue === 0.92;
+    const normalizedScale = staleScale ? defaultSettings.appearance.uiScale : scaleValue;
+    return Math.min(1.05, Math.max(0.55, normalizedScale || defaultSettings.appearance.uiScale));
+  }
+
+  function buildMenuStyle(clientX: number, clientY: number, width: number, height: number): string {
+    const viewportWidth = typeof window === "undefined" ? 1200 : window.innerWidth;
+    const viewportHeight = typeof window === "undefined" ? 800 : window.innerHeight;
+    const left = Math.max(8, Math.min(clientX, viewportWidth - width - 10));
+    const top = Math.max(8, Math.min(clientY, viewportHeight - height - 10));
+    return `left: ${left}px; top: ${top}px;`;
   }
 
   function buildVisibleTasks(source: AppState, node: AppNode | undefined, queryValue: string): Task[] {
@@ -493,6 +555,74 @@
       nodes: nodes.map((node) => (position === "inside" && node.id === target.id ? { ...node, collapsed: false } : node))
     });
     draggingId = null;
+  }
+
+  function moveNodeToGroup(id: string, parentId: string | null): void {
+    const source = state.nodes.find((node) => node.id === id);
+    const nextParentId = parentId || null;
+    if (!source || source.kind === "system") {
+      return;
+    }
+    if (source.parentId === nextParentId) {
+      treeMenu = null;
+      showListMenu = false;
+      return;
+    }
+    const targetParent = nextParentId ? state.nodes.find((node) => node.id === nextParentId && node.kind === "category") : null;
+    if (nextParentId && !targetParent) {
+      showToast("目标分组不存在");
+      return;
+    }
+    if (source.kind === "category" && nextParentId && nodeAndDescendantIds(source.id).has(nextParentId)) {
+      showToast("不能移动到自身或自己的子分类中");
+      return;
+    }
+
+    const withoutSource = state.nodes.filter((node) => node.id !== id);
+    const sourceWithParent = { ...source, parentId: nextParentId };
+    let insertIndex = withoutSource.length;
+    if (nextParentId) {
+      const siblingIndexes = withoutSource
+        .map((node, index) => ({ node, index }))
+        .filter((item) => item.node.parentId === nextParentId)
+        .map((item) => item.index);
+      const parentIndex = withoutSource.findIndex((node) => node.id === nextParentId);
+      insertIndex = siblingIndexes.length ? Math.max(...siblingIndexes) + 1 : parentIndex >= 0 ? parentIndex + 1 : withoutSource.length;
+    }
+    const nodes = [...withoutSource];
+    nodes.splice(insertIndex, 0, sourceWithParent);
+    commit({
+      ...state,
+      nodes: nodes.map((node) => (nextParentId && node.id === nextParentId ? { ...node, collapsed: false } : node))
+    });
+    treeMenu = null;
+    showListMenu = false;
+    draggingId = null;
+  }
+
+  function moveTargetOptions(sourceId: string): Array<{ id: string; name: string }> {
+    const source = state.nodes.find((node) => node.id === sourceId);
+    if (!source || source.kind === "system") {
+      return [];
+    }
+    const excluded = source.kind === "category" ? nodeAndDescendantIds(source.id) : new Set<string>([source.id]);
+    return [
+      { id: "", name: "顶层" },
+      ...state.nodes
+        .filter((node) => node.kind === "category" && !excluded.has(node.id))
+        .map((node) => ({
+          id: node.id,
+          name: `${"　".repeat(ancestorIds(node.id).size)}${node.name}`
+        }))
+    ];
+  }
+
+  function handleMoveTargetChange(nodeId: string, event: Event): void {
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLSelectElement)) {
+      return;
+    }
+    moveNodeToGroup(nodeId, target.value || null);
   }
 
   function pickIcon(icon: string): void {
@@ -748,6 +878,26 @@
     });
   }
 
+  async function updateLifecycle<K extends keyof Settings["lifecycle"]>(field: K, value: Settings["lifecycle"][K]): Promise<void> {
+    try {
+      if (field === "closeToTray") {
+        await setCloseToTray(Boolean(value));
+      }
+      if (field === "launchAtStartup") {
+        await setAutostart(Boolean(value));
+      }
+      commitSettings({
+        ...settings,
+        lifecycle: {
+          ...settings.lifecycle,
+          [field]: value
+        }
+      });
+    } catch (error) {
+      showToast(`系统设置更新失败：${String(error)}`);
+    }
+  }
+
   function updateShortcut(field: keyof Settings["shortcuts"], value: string): void {
     const next = {
       ...settings,
@@ -797,6 +947,9 @@
     if (!(target instanceof Element)) {
       return;
     }
+    if (!target.closest(".tree-icon")) {
+      return;
+    }
     const row = target.closest<HTMLElement>(".tree-row[data-node-id]");
     if (!row) {
       return;
@@ -804,11 +957,6 @@
     const id = row.dataset.nodeId;
     const node = state.nodes.find((item) => item.id === id);
     if (!node || node.kind === "system") {
-      return;
-    }
-    const level = Number(row.dataset.level ?? "0");
-    const localX = event.clientX - row.getBoundingClientRect().left;
-    if (localX > level * 20 + 92) {
       return;
     }
     event.preventDefault();
@@ -929,13 +1077,27 @@
       </nav>
 
       {#if treeMenu && treeMenuNode}
-        <section class="tree-context-menu" style={`left: ${treeMenu.x}px; top: ${treeMenu.y}px;`} on:click|stopPropagation>
+        <section
+          class="tree-context-menu"
+          style={treeMenuStyle}
+          on:click|stopPropagation
+        >
           {#if treeMenuNode.kind === "category"}
             <button type="button" on:click={() => addNode(treeMenuNode.id, "entry")}><FilePlus2 size={15} /> 创建条目</button>
             <button type="button" on:click={() => addNode(treeMenuNode.id, "category")}><FolderPlus size={15} /> 创建子分类</button>
           {/if}
           <button type="button" disabled={treeMenuNode.kind === "system"} on:click={() => startRename(treeMenuNode.id)}><Pencil size={15} /> 重命名</button>
           <button type="button" disabled={treeMenuNode.kind === "system"} on:click={() => openIconPicker(treeMenuNode.id)}><Star size={15} /> 选择图标</button>
+          {#if treeMenuNode.kind !== "system"}
+            <label class="move-group-row">
+              <span><FolderInput size={15} /> 移动到分组</span>
+              <select value={treeMenuNode.parentId ?? ""} on:change={(event) => handleMoveTargetChange(treeMenuNode.id, event)}>
+                {#each treeMoveTargets as target}
+                  <option value={target.id}>{target.name}</option>
+                {/each}
+              </select>
+            </label>
+          {/if}
           <button class="danger" type="button" disabled={treeMenuNode.kind === "system"} on:click={() => deleteNode(treeMenuNode.id)}><Trash2 size={15} /> 删除</button>
         </section>
       {/if}
@@ -983,6 +1145,16 @@
               <button type="button" disabled={!selectedNode || selectedNode.kind === "system"} on:click={() => selectedNode && startRename(selectedNode.id)}>
                 <Pencil size={15} /> 重命名
               </button>
+              {#if selectedNode && selectedNode.kind !== "system"}
+                <label class="move-group-row">
+                  <span><FolderInput size={15} /> 移动到分组</span>
+                  <select value={selectedNode.parentId ?? ""} on:change={(event) => handleMoveTargetChange(selectedNode.id, event)}>
+                    {#each selectedMoveTargets as target}
+                      <option value={target.id}>{target.name}</option>
+                    {/each}
+                  </select>
+                </label>
+              {/if}
               <button type="button" on:click={exportCurrentList}><Download size={15} /> 导出当前</button>
               <button type="button" on:click={exportAll}><Download size={15} /> 一键全部导出</button>
               <button type="button" on:click={() => importInput.click()}><Upload size={15} /> 导入 JSON</button>
@@ -1065,7 +1237,11 @@
       </section>
 
       {#if taskMenu && taskMenuTask}
-        <div class="task-context-menu" style={`left: ${taskMenu.x}px; top: ${taskMenu.y}px;`} on:click|stopPropagation>
+        <div
+          class="task-context-menu"
+          style={taskMenuStyle}
+          on:click|stopPropagation
+        >
           <button type="button" on:click={() => { updateTask(taskMenuTask.id, (task) => ({ ...task, myDay: !task.myDay })); taskMenu = null; }}>
             <Sun size={16} /> {taskMenuTask.myDay ? "从我的一天中移除" : "添加到我的一天"}
           </button>
@@ -1134,9 +1310,11 @@
           <label class="settings-row">
             界面缩放
             <select value={settings.appearance.uiScale} on:change={(event) => updateAppearance("uiScale", Number(event.currentTarget.value))}>
-              <option value="0.86">更小 86%</option>
-              <option value="0.92">默认 92%</option>
-              <option value="0.98">舒适 98%</option>
+              <option value="0.55">极紧凑 55%</option>
+              <option value="0.62">默认 62%</option>
+              <option value="0.72">紧凑 72%</option>
+              <option value="0.85">稍大 85%</option>
+              <option value="1">舒适 100%</option>
               <option value="1.05">放大 105%</option>
             </select>
           </label>
@@ -1150,6 +1328,29 @@
               <option value="system">系统浏览器</option>
             </select>
           </label>
+        </section>
+
+        <section>
+          <h3>窗口与系统</h3>
+          <label class="settings-row">
+            关闭按钮
+            <select
+              value={settings.lifecycle.closeToTray ? "tray" : "exit"}
+              on:change={(event) => void updateLifecycle("closeToTray", event.currentTarget.value === "tray")}
+            >
+              <option value="tray">退到系统托盘</option>
+              <option value="exit">直接退出应用</option>
+            </select>
+          </label>
+          <label class="toggle-row">
+            <span>开机自启</span>
+            <input
+              type="checkbox"
+              checked={settings.lifecycle.launchAtStartup}
+              on:change={(event) => void updateLifecycle("launchAtStartup", event.currentTarget.checked)}
+            />
+          </label>
+          <p class="muted">托盘图标右键菜单可打开窗口或退出应用；再次启动程序会聚焦已运行窗口。</p>
         </section>
 
         <section>

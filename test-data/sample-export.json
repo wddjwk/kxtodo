@@ -1,5 +1,5 @@
 {
-  "version": "4.0.0",
+  "version": "4.1.0",
   "exportedAt": "2026-05-29T00:00:00.000Z",
   "scope": "all",
   "state": {
@@ -149,7 +149,11 @@
     },
     "appearance": {
       "linkOpenMode": "app",
-      "uiScale": 0.92
+      "uiScale": 0.62
+    },
+    "lifecycle": {
+      "closeToTray": true,
+      "launchAtStartup": false
     },
     "shortcuts": {
       "newTask": "Ctrl+N",

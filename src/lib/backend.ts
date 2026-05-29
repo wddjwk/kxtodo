@@ -83,6 +83,34 @@ export async function registerGlobalShortcut(shortcut: string): Promise<void> {
   await invoke("register_global_shortcut", { shortcut });
 }
 
+export async function setCloseToTray(enabled: boolean): Promise<void> {
+  if (!isTauriRuntime) {
+    return;
+  }
+  await invoke("set_close_to_tray", { enabled });
+}
+
+export async function setAutostart(enabled: boolean): Promise<void> {
+  if (!isTauriRuntime) {
+    return;
+  }
+  await invoke("set_autostart", { enabled });
+}
+
+export async function getAutostartEnabled(): Promise<boolean> {
+  if (!isTauriRuntime) {
+    return false;
+  }
+  return invoke<boolean>("get_autostart_enabled");
+}
+
+export async function setWebviewZoom(scale: number): Promise<void> {
+  if (!isTauriRuntime) {
+    return;
+  }
+  await invoke("set_webview_zoom", { scale });
+}
+
 export async function openExternalUrl(rawUrl: string): Promise<void> {
   const url = new URL(rawUrl, window.location.href);
   if (!["http:", "https:", "mailto:"].includes(url.protocol)) {

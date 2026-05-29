@@ -31,6 +31,30 @@
   text-align: left;
 }
 
+.move-group-row {
+  display: grid;
+  gap: 6px;
+  border-radius: 8px;
+  background: #f7f7f7;
+  padding: 8px 9px;
+  color: #333;
+  font-size: 14px;
+}
+
+.move-group-row span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.move-group-row select {
+  width: 100%;
+  border: 1px solid #dedede;
+  border-radius: 7px;
+  background: white;
+  padding: 6px 8px;
+}
+
 .tree-context-menu button:hover {
   background: #f2f4f7;
 }
@@ -111,16 +135,18 @@ button,
 }
 
 .app-shell {
-  --ui-scale: 0.92;
-  --font-title: 33.12px;
-  --font-list: 17.48px;
-  --font-control: 16.56px;
-  --font-task: 16.56px;
-  --font-composer: 15.64px;
-  --font-drawer-title: 22.08px;
+  --ui-scale: 0.62;
+  --app-width: 100vw;
+  --app-height: 100vh;
+  --font-title: 36px;
+  --font-list: 19px;
+  --font-control: 18px;
+  --font-task: 18px;
+  --font-composer: 17px;
+  --font-drawer-title: 24px;
 
-  width: 100vw;
-  height: 100vh;
+  width: var(--app-width);
+  height: var(--app-height);
   background: #f7f7f7;
 }
 
@@ -377,7 +403,7 @@ button,
   padding: 0 8px 0 calc(18px + var(--depth, 0) * 20px);
   border-radius: 4px;
   color: #292929;
-  cursor: default;
+  cursor: grab;
 }
 
 .tree-row:hover {
@@ -390,6 +416,7 @@ button,
 
 .tree-row.dragging {
   opacity: 0.55;
+  cursor: grabbing;
 }
 
 .tree-row.category {
@@ -1212,6 +1239,23 @@ h1 {
   gap: 10px;
   align-items: center;
   margin-bottom: 9px;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 9px;
+  border-radius: 8px;
+  background: #f7f7f7;
+  padding: 10px 12px;
+}
+
+.toggle-row input {
+  width: 18px;
+  height: 18px;
+  accent-color: #2564cf;
 }
 
 .shortcut-row {

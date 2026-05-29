@@ -1,9 +1,36 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde_json::{json, Value};
-use std::{fs, path::PathBuf, process::Command};
-use tauri::{AppHandle, Manager};
+use std::{
+    fs,
+    path::PathBuf,
+    process::Command,
+    sync::atomic::{AtomicBool, Ordering},
+};
+use tauri::{
+    image::Image,
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Manager, State,
+};
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+
+const DEFAULT_UI_SCALE: f64 = 0.62;
+
+struct LifecycleState {
+    close_to_tray: AtomicBool,
+    quitting: AtomicBool,
+}
+
+impl Default for LifecycleState {
+    fn default() -> Self {
+        Self {
+            close_to_tray: AtomicBool::new(true),
+            quitting: AtomicBool::new(false),
+        }
+    }
+}
 
 fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     if let Ok(exe) = std::env::current_exe() {
@@ -43,6 +70,22 @@ fn write_json(path: PathBuf, value: Value) -> Result<(), String> {
     ensure_parent(&path)?;
     let raw = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
     fs::write(path, raw).map_err(|error| error.to_string())
+}
+
+fn normalize_ui_scale(scale: Option<f64>) -> f64 {
+    let raw = scale.unwrap_or(DEFAULT_UI_SCALE);
+    if (raw - 0.72).abs() < 0.001 || (raw - 0.86).abs() < 0.001 || (raw - 0.92).abs() < 0.001 {
+        return DEFAULT_UI_SCALE;
+    }
+    raw.clamp(0.55, 1.05)
+}
+
+fn settings_ui_scale(app: &AppHandle) -> f64 {
+    let raw = settings_file(app)
+        .ok()
+        .and_then(|path| read_json(path).ok())
+        .and_then(|value| value.pointer("/appearance/uiScale").and_then(Value::as_f64));
+    normalize_ui_scale(raw)
 }
 
 #[tauri::command]
@@ -123,9 +166,111 @@ fn register_global_toggle(app: &AppHandle, raw: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+fn fallback_tray_icon() -> Image<'static> {
+    let mut rgba = vec![0_u8; 32 * 32 * 4];
+    for y in 0..32 {
+        for x in 0..32 {
+            let index = (y * 32 + x) * 4;
+            rgba[index] = 37;
+            rgba[index + 1] = 100;
+            rgba[index + 2] = 207;
+            rgba[index + 3] = 255;
+            if (10..=22).contains(&x) && (14..=18).contains(&y) && x >= y - 2 {
+                rgba[index] = 255;
+                rgba[index + 1] = 255;
+                rgba[index + 2] = 255;
+            }
+        }
+    }
+    Image::new_owned(rgba, 32, 32)
+}
+
+fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
+    let open = MenuItem::with_id(app, "tray_open", "打开 Todo Note", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "tray_quit", "退出", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &quit])?;
+    let icon = app
+        .default_window_icon()
+        .cloned()
+        .map(Image::to_owned)
+        .unwrap_or_else(fallback_tray_icon);
+
+    TrayIconBuilder::with_id("main-tray")
+        .tooltip("Todo Note")
+        .icon(icon)
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "tray_open" => show_main_window(app),
+            "tray_quit" => {
+                app.state::<LifecycleState>()
+                    .quitting
+                    .store(true, Ordering::SeqCst);
+                app.exit(0);
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| match event {
+            TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            }
+            | TrayIconEvent::DoubleClick {
+                button: MouseButton::Left,
+                ..
+            } => show_main_window(tray.app_handle()),
+            _ => {}
+        })
+        .build(app)?;
+
+    Ok(())
+}
+
 #[tauri::command]
 fn register_global_shortcut(app: AppHandle, shortcut: String) -> Result<(), String> {
     register_global_toggle(&app, &shortcut)
+}
+
+#[tauri::command]
+fn set_close_to_tray(state: State<LifecycleState>, enabled: bool) {
+    state.close_to_tray.store(enabled, Ordering::SeqCst);
+}
+
+#[tauri::command]
+fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
+    if enabled {
+        app.autolaunch().enable().map_err(|error| error.to_string())
+    } else {
+        app.autolaunch()
+            .disable()
+            .map_err(|error| error.to_string())
+    }
+}
+
+#[tauri::command]
+fn get_autostart_enabled(app: AppHandle) -> Result<bool, String> {
+    app.autolaunch()
+        .is_enabled()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_webview_zoom(app: AppHandle, scale: f64) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        window
+            .set_zoom(normalize_ui_scale(Some(scale)))
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -148,7 +293,9 @@ fn open_url(url: String) -> Result<(), String> {
 
     #[cfg(not(any(target_os = "windows", target_os = "macos", unix)))]
     {
-        return Err("Opening links in the system browser is not supported on this platform".to_string());
+        return Err(
+            "Opening links in the system browser is not supported on this platform".to_string(),
+        );
     }
 
     result.map(|_| ()).map_err(|error| error.to_string())
@@ -156,9 +303,17 @@ fn open_url(url: String) -> Result<(), String> {
 
 fn main() {
     tauri::Builder::default()
+        .manage(LifecycleState::default())
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }))
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec!["--from-autostart"]),
+        ))
         .invoke_handler(tauri::generate_handler![
             load_state,
             save_state,
@@ -166,17 +321,31 @@ fn main() {
             save_settings,
             export_data,
             register_global_shortcut,
+            set_close_to_tray,
+            set_autostart,
+            get_autostart_enabled,
+            set_webview_zoom,
             open_url
         ])
         .setup(|app| {
             if let Some(webview) = app.get_webview_window("main") {
-                let _ = webview.show();
-                let _ = webview.set_focus();
+                let _ = webview.set_zoom(settings_ui_scale(app.handle()));
             }
+            setup_tray(app)?;
+            show_main_window(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let lifecycle = window.state::<LifecycleState>();
+                if lifecycle.quitting.load(Ordering::SeqCst)
+                    || !lifecycle.close_to_tray.load(Ordering::SeqCst)
+                {
+                    lifecycle.quitting.store(true, Ordering::SeqCst);
+                    window.app_handle().exit(0);
+                    return;
+                }
+
                 api.prevent_close();
                 let _ = window.hide();
             }

@@ -38,7 +38,11 @@ export const defaultSettings: Settings = {
   },
   appearance: {
     linkOpenMode: "app",
-    uiScale: 0.92
+    uiScale: 0.62
+  },
+  lifecycle: {
+    closeToTray: true,
+    launchAtStartup: false
   },
   shortcuts: {
     newTask: "Ctrl+N",
@@ -213,8 +217,9 @@ export function normalizeSettings(raw: unknown): Settings {
   const source = raw as Partial<Settings> & {
     profile?: Partial<Settings["profile"]> & { name?: string };
     appearance?: Partial<Settings["appearance"]>;
+    lifecycle?: Partial<Settings["lifecycle"]>;
     behavior?: Partial<{ linkOpenMode: Settings["appearance"]["linkOpenMode"] }>;
-    display?: Partial<{ uiScale: number }>;
+    display?: Partial<{ uiScale: number; closeToTray: boolean; launchAtStartup: boolean }>;
     globalShortcut?: string;
     shortcuts?: Partial<Settings["shortcuts"]> | Array<{ id: string; combo: string }>;
     cloudSync?: Partial<Settings["cloud"]>;
@@ -229,6 +234,16 @@ export function normalizeSettings(raw: unknown): Settings {
     }
     return legacyShortcuts.find((shortcut) => shortcut.id === key)?.combo ?? fallback;
   };
+  const normalizeUiScale = (value: unknown): number | null => {
+    if (typeof value !== "number") {
+      return null;
+    }
+    if (Math.abs(value - 0.72) < 0.001 || Math.abs(value - 0.86) < 0.001 || Math.abs(value - 0.92) < 0.001) {
+      return defaultSettings.appearance.uiScale;
+    }
+    return Math.min(1.05, Math.max(0.55, value));
+  };
+  const storedUiScale = normalizeUiScale(source?.appearance?.uiScale) ?? normalizeUiScale(source?.display?.uiScale);
   return {
     profile: {
       displayName:
@@ -246,11 +261,21 @@ export function normalizeSettings(raw: unknown): Settings {
           ? "system"
           : defaultSettings.appearance.linkOpenMode,
       uiScale:
-        typeof source?.appearance?.uiScale === "number"
-          ? Math.min(1.05, Math.max(0.82, source.appearance.uiScale))
-          : typeof source?.display?.uiScale === "number"
-            ? Math.min(1.05, Math.max(0.82, source.display.uiScale))
-            : defaultSettings.appearance.uiScale
+        storedUiScale ?? defaultSettings.appearance.uiScale
+    },
+    lifecycle: {
+      closeToTray:
+        typeof source?.lifecycle?.closeToTray === "boolean"
+          ? source.lifecycle.closeToTray
+          : typeof source?.display?.closeToTray === "boolean"
+            ? source.display.closeToTray
+            : defaultSettings.lifecycle.closeToTray,
+      launchAtStartup:
+        typeof source?.lifecycle?.launchAtStartup === "boolean"
+          ? source.lifecycle.launchAtStartup
+          : typeof source?.display?.launchAtStartup === "boolean"
+            ? source.display.launchAtStartup
+            : defaultSettings.lifecycle.launchAtStartup
     },
     shortcuts: {
       newTask: shortcutValue("newTask", defaultSettings.shortcuts.newTask),

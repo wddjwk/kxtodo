@@ -30,6 +30,7 @@
   let dropTargetId: string | null = null;
   let dropPosition: DropPosition | null = null;
   let suppressNextClick = false;
+  let pointerDrag: { id: string; startX: number; startY: number; active: boolean } | null = null;
 
   $: children = nodes.filter((node) => node.parentId === parentId && node.kind !== "system");
 
@@ -38,16 +39,16 @@
   }
 
   function isIconZone(event: MouseEvent | PointerEvent, node: AppNode): boolean {
-    const row = event.currentTarget;
-    if (!(row instanceof HTMLElement) || node.kind === "system") {
+    const target = event.target;
+    if (!(target instanceof Element) || node.kind === "system") {
       return false;
     }
-    const localX = event.clientX - row.getBoundingClientRect().left;
-    return localX <= level * 20 + 92;
+    return Boolean(target.closest(".tree-icon"));
   }
 
   function handlePointerDown(event: PointerEvent, node: AppNode): void {
     if (!isIconZone(event, node)) {
+      startPointerDrag(event, node);
       return;
     }
     event.preventDefault();
@@ -95,13 +96,9 @@
     };
   }
 
-  function positionFromPointer(event: DragEvent, target: AppNode): DropPosition {
-    const row = event.currentTarget;
-    if (!(row instanceof HTMLElement)) {
-      return target.kind === "category" ? "inside" : "after";
-    }
+  function positionFromClientY(clientY: number, row: HTMLElement, target: AppNode): DropPosition {
     const rect = row.getBoundingClientRect();
-    const ratio = (event.clientY - rect.top) / Math.max(1, rect.height);
+    const ratio = (clientY - rect.top) / Math.max(1, rect.height);
     if (target.kind === "category") {
       if (ratio < 0.25) {
         return "before";
@@ -114,8 +111,68 @@
     return ratio < 0.5 ? "before" : "after";
   }
 
+  function positionFromPointer(event: DragEvent, target: AppNode): DropPosition {
+    const row = event.currentTarget;
+    if (!(row instanceof HTMLElement)) {
+      return target.kind === "category" ? "inside" : "after";
+    }
+    return positionFromClientY(event.clientY, row, target);
+  }
+
+  function startPointerDrag(event: PointerEvent, node: AppNode): void {
+    const target = event.target;
+    if (event.button !== 0 || node.kind === "system" || (target instanceof Element && target.closest("button, input"))) {
+      return;
+    }
+    pointerDrag = { id: node.id, startX: event.clientX, startY: event.clientY, active: false };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp, { once: true });
+  }
+
+  function handlePointerMove(event: PointerEvent): void {
+    if (!pointerDrag) {
+      return;
+    }
+    const distance = Math.hypot(event.clientX - pointerDrag.startX, event.clientY - pointerDrag.startY);
+    if (!pointerDrag.active) {
+      if (distance < 6) {
+        return;
+      }
+      pointerDrag.active = true;
+      suppressNextClick = true;
+      dispatch("dragStart", pointerDrag.id);
+    }
+
+    event.preventDefault();
+    const targetElement = document.elementFromPoint(event.clientX, event.clientY);
+    const row = targetElement?.closest<HTMLElement>(".tree-row[data-node-id]");
+    const targetId = row?.dataset.nodeId ?? "";
+    const target = nodes.find((node) => node.id === targetId);
+    if (!row || !target || target.kind === "system" || target.id === pointerDrag.id) {
+      clearDropTarget();
+      return;
+    }
+    dropTargetId = target.id;
+    dropPosition = positionFromClientY(event.clientY, row, target);
+  }
+
+  function handlePointerUp(): void {
+    if (pointerDrag?.active && dropTargetId && dropPosition && dropTargetId !== pointerDrag.id) {
+      dispatch("dropNode", { id: pointerDrag.id, targetId: dropTargetId, position: dropPosition });
+    }
+    cleanupPointerDrag();
+  }
+
+  function cleanupPointerDrag(): void {
+    window.removeEventListener("pointermove", handlePointerMove);
+    window.removeEventListener("pointerup", handlePointerUp);
+    pointerDrag = null;
+    clearDropTarget();
+    dispatch("dragStart", "");
+  }
+
   function handleDragOver(event: DragEvent, target: AppNode): void {
-    const id = event.dataTransfer?.getData("text/plain") || draggingId || "";
+    const id = event.dataTransfer?.getData("application/x-todo-node") || event.dataTransfer?.getData("text/plain") || draggingId || "";
     if (!id || id === target.id) {
       return;
     }
@@ -136,7 +193,7 @@
   function handleDrop(event: DragEvent, target: AppNode): void {
     event.preventDefault();
     event.stopPropagation();
-    const id = event.dataTransfer?.getData("text/plain") || "";
+    const id = event.dataTransfer?.getData("application/x-todo-node") || event.dataTransfer?.getData("text/plain") || draggingId || "";
     if (!id || id === target.id) {
       clearDropTarget();
       return;
@@ -158,17 +215,27 @@
     data-node-id={node.id}
     data-level={level}
     style={rowStyle(level)}
-    draggable={node.kind !== "system"}
+    draggable={false}
     on:pointerdown={(event) => handlePointerDown(event, node)}
     on:click={(event) => handleClick(event, node)}
     on:contextmenu={(event) => openMenu(event, node)}
     on:dragstart={(event) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest("button, input")) {
+        event.preventDefault();
+        return;
+      }
+      event.dataTransfer?.setData("application/x-todo-node", node.id);
       event.dataTransfer?.setData("text/plain", node.id);
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = "move";
+      }
       dispatch("dragStart", node.id);
     }}
     on:dragend={() => {
       clearDropTarget();
       dispatch("dragStart", "");
+      cleanupPointerDrag();
     }}
     on:dragover={(event) => handleDragOver(event, node)}
     on:dragleave={(event) => {

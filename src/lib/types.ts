@@ -37,6 +37,10 @@ export type Settings = {
     linkOpenMode: "app" | "system";
     uiScale: number;
   };
+  lifecycle: {
+    closeToTray: boolean;
+    launchAtStartup: boolean;
+  };
   shortcuts: {
     newTask: string;
     focusSearch: string;
