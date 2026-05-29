@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.svelte-kit/
+.vite/
+src-tauri/target/
+.cargo-home/
+todo-note-data/
+release/
+PixPin*.png
+npm-debug.log*
+*.log
