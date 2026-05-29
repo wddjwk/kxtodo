@@ -40,7 +40,7 @@ if (!(Test-Path -LiteralPath (Join-Path $root "node_modules"))) {
 npm run build
 $binaryPath = Join-Path $root "src-tauri\target\release\todo-note.exe"
 Remove-Item -LiteralPath $binaryPath -Force -ErrorAction SilentlyContinue
-npm run tauri -- build
+npm run tauri -- build --no-bundle
 
 $effectiveVersion = if ($Version.Trim().Length -gt 0) {
   $Version

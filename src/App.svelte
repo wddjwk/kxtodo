@@ -22,7 +22,7 @@
     Upload,
     X
   } from "@lucide/svelte";
-  import { exportData, loadSettings, loadState, registerGlobalShortcut, saveSettings, saveState } from "./lib/backend";
+  import { exportData, loadSettings, loadState, openExternalUrl, registerGlobalShortcut, saveSettings, saveState } from "./lib/backend";
   import {
     createCategoryNode,
     createEntryNode,
@@ -41,7 +41,7 @@
   import { matchesShortcut } from "./lib/shortcuts";
   import type { AppNode, AppState, ListBackground, Settings, Task } from "./lib/types";
 
-  const appVersion = "3.1.0";
+  const appVersion = "4.0.0";
   const defaultAccent = "#2564cf";
 
   let state: AppState = emptyState();
@@ -66,6 +66,7 @@
   let stateSaveTimer: number | undefined;
   let settingsSaveTimer: number | undefined;
   let toastTimer: number | undefined;
+  let ignoreOverlayCloseOnce = false;
   let searchInput: HTMLInputElement;
   let taskInput: HTMLTextAreaElement;
   let importInput: HTMLInputElement;
@@ -78,6 +79,7 @@
   $: selectedBackground = getBackground(selectedNode?.id, state.backgrounds);
   $: accent = accentForNode(selectedNode);
   $: mainStyle = buildMainStyle(selectedBackground, accent);
+  $: appShellStyle = buildAppShellStyle(settings.appearance.uiScale);
   $: listCounts = buildListCounts(state);
   $: visibleTasks = buildVisibleTasks(state, selectedNode, searchQuery);
   $: incompleteTasks = visibleTasks.filter((task) => !task.completed);
@@ -182,11 +184,27 @@
   }
 
   function closeOverlays(): void {
+    if (ignoreOverlayCloseOnce) {
+      ignoreOverlayCloseOnce = false;
+      return;
+    }
     showListMenu = false;
     treeMenu = null;
     taskMenu = null;
     iconPickerListId = null;
     showSettings = false;
+  }
+
+  function openIconPicker(id: string): void {
+    iconPickerListId = id;
+    treeMenu = null;
+    taskMenu = null;
+    showListMenu = false;
+    showSettings = false;
+    ignoreOverlayCloseOnce = true;
+    window.setTimeout(() => {
+      ignoreOverlayCloseOnce = false;
+    }, 250);
   }
 
   function getBackground(nodeId?: string, backgrounds: Record<string, ListBackground> = state.backgrounds): ListBackground {
@@ -217,6 +235,19 @@
     const image = background.image ? `url("${escapeCssUrl(background.image)}")` : "none";
     const opacity = background.image ? background.imageOpacity ?? defaultBackground.imageOpacity ?? 0.28 : 0;
     return `--accent: ${color}; --bg-image: ${image}; --bg-opacity: ${opacity}; background: ${background.color};`;
+  }
+
+  function buildAppShellStyle(scaleValue: number): string {
+    const scale = Math.min(1.05, Math.max(0.82, scaleValue || defaultSettings.appearance.uiScale));
+    return [
+      `--ui-scale: ${scale}`,
+      `--font-title: ${(36 * scale).toFixed(2)}px`,
+      `--font-list: ${(19 * scale).toFixed(2)}px`,
+      `--font-control: ${(18 * scale).toFixed(2)}px`,
+      `--font-task: ${(18 * scale).toFixed(2)}px`,
+      `--font-composer: ${(17 * scale).toFixed(2)}px`,
+      `--font-drawer-title: ${(24 * scale).toFixed(2)}px`
+    ].join("; ");
   }
 
   function buildVisibleTasks(source: AppState, node: AppNode | undefined, queryValue: string): Task[] {
@@ -318,9 +349,11 @@
   }
 
   function selectNode(id: string): void {
+    searchQuery = "";
     commit({ ...state, selectedNodeId: id });
     treeMenu = null;
     taskMenu = null;
+    iconPickerListId = null;
   }
 
   function toggleCategory(id: string): void {
@@ -329,6 +362,7 @@
       nodes: state.nodes.map((node) => (node.id === id ? { ...node, collapsed: !node.collapsed } : node))
     });
     treeMenu = null;
+    iconPickerListId = null;
   }
 
   function toggleListMenu(): void {
@@ -423,27 +457,40 @@
     treeMenu = null;
   }
 
-  function moveNode(id: string, targetId: string): void {
+  function moveNode(id: string, targetId: string, position: "before" | "after" | "inside"): void {
     const source = state.nodes.find((node) => node.id === id);
     const target = state.nodes.find((node) => node.id === targetId);
-    if (!source || !target || source.kind === "system" || target.kind !== "category") {
+    if (!source || !target || source.kind === "system" || target.kind === "system") {
       return;
     }
     if (source.id === target.id || nodeAndDescendantIds(source.id).has(target.id)) {
       showToast("不能移动到自身或自己的子分类中");
       return;
     }
+    if (position === "inside" && target.kind !== "category") {
+      return;
+    }
+    const nextParentId = position === "inside" ? target.id : target.parentId;
+    const sourceWithParent = { ...source, parentId: nextParentId };
+    const withoutSource = state.nodes.filter((node) => node.id !== id);
+    const targetIndex = withoutSource.findIndex((node) => node.id === target.id);
+    let insertIndex = withoutSource.length;
+    if (position === "before") {
+      insertIndex = targetIndex >= 0 ? targetIndex : withoutSource.length;
+    } else if (position === "after") {
+      insertIndex = targetIndex >= 0 ? targetIndex + 1 : withoutSource.length;
+    } else {
+      const childIndexes = withoutSource
+        .map((node, index) => ({ node, index }))
+        .filter((item) => item.node.parentId === target.id)
+        .map((item) => item.index);
+      insertIndex = childIndexes.length ? Math.max(...childIndexes) + 1 : targetIndex >= 0 ? targetIndex + 1 : withoutSource.length;
+    }
+    const nodes = [...withoutSource];
+    nodes.splice(insertIndex, 0, sourceWithParent);
     commit({
       ...state,
-      nodes: state.nodes.map((node) => {
-        if (node.id === id) {
-          return { ...node, parentId: target.id };
-        }
-        if (node.id === target.id) {
-          return { ...node, collapsed: false };
-        }
-        return node;
-      })
+      nodes: nodes.map((node) => (position === "inside" && node.id === target.id ? { ...node, collapsed: false } : node))
     });
     draggingId = null;
   }
@@ -691,6 +738,16 @@
     });
   }
 
+  function updateAppearance<K extends keyof Settings["appearance"]>(field: K, value: Settings["appearance"][K]): void {
+    commitSettings({
+      ...settings,
+      appearance: {
+        ...settings.appearance,
+        [field]: value
+      }
+    });
+  }
+
   function updateShortcut(field: keyof Settings["shortcuts"], value: string): void {
     const next = {
       ...settings,
@@ -724,6 +781,46 @@
       event.preventDefault();
       showSettings = !showSettings;
       showListMenu = false;
+    }
+  }
+
+  function handleTreePointerDownCapture(event: PointerEvent): void {
+    openIconPickerFromTreeEvent(event);
+  }
+
+  function handleTreeClickCapture(event: MouseEvent): void {
+    openIconPickerFromTreeEvent(event);
+  }
+
+  function openIconPickerFromTreeEvent(event: MouseEvent | PointerEvent): void {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    const row = target.closest<HTMLElement>(".tree-row[data-node-id]");
+    if (!row) {
+      return;
+    }
+    const id = row.dataset.nodeId;
+    const node = state.nodes.find((item) => item.id === id);
+    if (!node || node.kind === "system") {
+      return;
+    }
+    const level = Number(row.dataset.level ?? "0");
+    const localX = event.clientX - row.getBoundingClientRect().left;
+    if (localX > level * 20 + 92) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    openIconPicker(node.id);
+  }
+
+  async function openTaskLink(event: CustomEvent<string>): Promise<void> {
+    try {
+      await openExternalUrl(event.detail);
+    } catch (error) {
+      showToast(`打开链接失败：${String(error)}`);
     }
   }
 
@@ -768,7 +865,7 @@
   }
 </script>
 
-<div class="app-shell" on:click={closeOverlays}>
+<div class="app-shell" style={appShellStyle} on:click={closeOverlays}>
   <header class="titlebar" data-tauri-drag-region>
     <div class="window-title" data-tauri-drag-region>
       <span class="app-glyph"><Check size={15} /></span>
@@ -782,7 +879,7 @@
   </header>
 
   <div class="layout">
-    <aside class="sidebar" style={`width: ${sidebarWidth}px; min-width: ${sidebarWidth}px;`}>
+    <aside class="sidebar" style={`width: ${sidebarWidth}px; min-width: ${sidebarWidth}px;`} on:click|stopPropagation>
       <button class="profile-card" type="button" on:click|stopPropagation={() => { showSettings = !showSettings; showListMenu = false; }}>
         <span class="avatar" style={avatarStyle}>{settings.profile.avatar ? "" : avatarInitial}</span>
         <span class="profile-text">
@@ -811,7 +908,7 @@
 
       <div class="nav-divider"></div>
 
-      <nav class="custom-nav">
+      <nav class="custom-nav" on:pointerdown|capture={handleTreePointerDownCapture} on:click|capture={handleTreeClickCapture} on:click|stopPropagation>
         <ListTree
           nodes={state.nodes}
           selectedNodeId={state.selectedNodeId}
@@ -823,8 +920,11 @@
           on:renameInput={(event) => (renameDraft = event.detail)}
           on:renameCommit={(event) => commitRename(event.detail)}
           on:openMenu={(event) => { treeMenu = event.detail; taskMenu = null; showListMenu = false; }}
+          requestIconPicker={openIconPicker}
+          on:pickIcon={(event) => openIconPicker(event.detail)}
           on:dragStart={(event) => (draggingId = event.detail || null)}
-          on:dropNode={(event) => moveNode(event.detail.id, event.detail.targetId)}
+          on:dropNode={(event) => moveNode(event.detail.id, event.detail.targetId, event.detail.position)}
+          {draggingId}
         />
       </nav>
 
@@ -835,9 +935,7 @@
             <button type="button" on:click={() => addNode(treeMenuNode.id, "category")}><FolderPlus size={15} /> 创建子分类</button>
           {/if}
           <button type="button" disabled={treeMenuNode.kind === "system"} on:click={() => startRename(treeMenuNode.id)}><Pencil size={15} /> 重命名</button>
-          {#if treeMenuNode.kind === "entry"}
-            <button type="button" on:click={() => (iconPickerListId = treeMenuNode.id)}><Star size={15} /> 选择图标</button>
-          {/if}
+          <button type="button" disabled={treeMenuNode.kind === "system"} on:click={() => openIconPicker(treeMenuNode.id)}><Star size={15} /> 选择图标</button>
           <button class="danger" type="button" disabled={treeMenuNode.kind === "system"} on:click={() => deleteNode(treeMenuNode.id)}><Trash2 size={15} /> 删除</button>
         </section>
       {/if}
@@ -920,19 +1018,17 @@
       <input bind:this={backgroundFileInput} class="hidden-file" type="file" accept="image/*" on:change={uploadBackgroundImage} />
 
       <section class="task-list">
-        {#if isSearching}
-          <div class="search-results-caption">搜索结果会实时汇总所有条目中的 Markdown 卡片。</div>
-        {/if}
-
         {#each incompleteTasks as task (task.id)}
           <TaskCard
             {task}
             selected={taskMenu?.taskId === task.id || selectedTaskId === task.id}
+            linkOpenMode={settings.appearance.linkOpenMode}
             on:toggle={(event) => updateTask(event.detail, (item) => ({ ...item, completed: !item.completed }))}
             on:expand={(event) => { selectedTaskId = event.detail; taskMenu = null; updateTask(event.detail, (item) => ({ ...item, expanded: !item.expanded })); }}
             on:edit={(event) => { selectedTaskId = event.detail; taskMenu = null; updateTask(event.detail, (item) => ({ ...item, editing: true, expanded: true })); }}
             on:commit={(event) => updateTask(event.detail.id, (item) => ({ ...item, markdown: event.detail.markdown, editing: false, expanded: true }))}
             on:context={openTaskMenu}
+            on:openLink={openTaskLink}
           />
         {/each}
 
@@ -947,11 +1043,13 @@
                 <TaskCard
                   {task}
                   selected={taskMenu?.taskId === task.id || selectedTaskId === task.id}
+                  linkOpenMode={settings.appearance.linkOpenMode}
                   on:toggle={(event) => updateTask(event.detail, (item) => ({ ...item, completed: !item.completed }))}
                   on:expand={(event) => { selectedTaskId = event.detail; taskMenu = null; updateTask(event.detail, (item) => ({ ...item, expanded: !item.expanded })); }}
                   on:edit={(event) => { selectedTaskId = event.detail; taskMenu = null; updateTask(event.detail, (item) => ({ ...item, editing: true, expanded: true })); }}
                   on:commit={(event) => updateTask(event.detail.id, (item) => ({ ...item, markdown: event.detail.markdown, editing: false, expanded: true }))}
                   on:context={openTaskMenu}
+                  on:openLink={openTaskLink}
                 />
               {/each}
             {/if}
@@ -992,7 +1090,7 @@
           <textarea
             bind:this={taskInput}
             bind:value={newTaskDraft}
-            placeholder="添加 Markdown 内容"
+            placeholder="添加事项"
             spellcheck="false"
             rows="1"
             on:input={resizeComposer}
@@ -1028,6 +1126,29 @@
           <label class="settings-row">
             邮箱
             <input value={settings.profile.email} on:input={(event) => updateProfile("email", event.currentTarget.value)} />
+          </label>
+        </section>
+
+        <section>
+          <h3>显示与链接</h3>
+          <label class="settings-row">
+            界面缩放
+            <select value={settings.appearance.uiScale} on:change={(event) => updateAppearance("uiScale", Number(event.currentTarget.value))}>
+              <option value="0.86">更小 86%</option>
+              <option value="0.92">默认 92%</option>
+              <option value="0.98">舒适 98%</option>
+              <option value="1.05">放大 105%</option>
+            </select>
+          </label>
+          <label class="settings-row">
+            链接打开
+            <select
+              value={settings.appearance.linkOpenMode}
+              on:change={(event) => updateAppearance("linkOpenMode", event.currentTarget.value as Settings["appearance"]["linkOpenMode"])}
+            >
+              <option value="app">应用内打开</option>
+              <option value="system">系统浏览器</option>
+            </select>
           </label>
         </section>
 

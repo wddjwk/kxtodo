@@ -33,6 +33,10 @@ export type ProfileSettings = {
 
 export type Settings = {
   profile: ProfileSettings;
+  appearance: {
+    linkOpenMode: "app" | "system";
+    uiScale: number;
+  };
   shortcuts: {
     newTask: string;
     focusSearch: string;

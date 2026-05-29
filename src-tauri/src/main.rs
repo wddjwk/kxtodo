@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde_json::{json, Value};
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, process::Command};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
@@ -128,6 +128,32 @@ fn register_global_shortcut(app: AppHandle, shortcut: String) -> Result<(), Stri
     register_global_toggle(&app, &shortcut)
 }
 
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if !(url.starts_with("http://") || url.starts_with("https://") || url.starts_with("mailto:")) {
+        return Err("Unsupported link protocol".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    let result = Command::new("rundll32")
+        .arg("url.dll,FileProtocolHandler")
+        .arg(&url)
+        .spawn();
+
+    #[cfg(target_os = "macos")]
+    let result = Command::new("open").arg(&url).spawn();
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let result = Command::new("xdg-open").arg(&url).spawn();
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", unix)))]
+    {
+        return Err("Opening links in the system browser is not supported on this platform".to_string());
+    }
+
+    result.map(|_| ()).map_err(|error| error.to_string())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_window_state::Builder::default().build())
@@ -139,7 +165,8 @@ fn main() {
             load_settings,
             save_settings,
             export_data,
-            register_global_shortcut
+            register_global_shortcut,
+            open_url
         ])
         .setup(|app| {
             if let Some(webview) = app.get_webview_window("main") {

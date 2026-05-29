@@ -6,6 +6,7 @@
 
   export let task: Task;
   export let selected = false;
+  export let linkOpenMode: "app" | "system" = "app";
 
   const dispatch = createEventDispatcher<{
     toggle: string;
@@ -13,6 +14,7 @@
     edit: string;
     commit: { id: string; markdown: string };
     context: { id: string; x: number; y: number };
+    openLink: string;
   }>();
 
   let draft = "";
@@ -74,6 +76,19 @@
     dispatch("context", { id: task.id, x: event.clientX, y: event.clientY });
   }
 
+  function handleMarkdownClick(event: MouseEvent): void {
+    event.stopPropagation();
+    const target = event.target as HTMLElement | null;
+    const link = target?.closest("a[href]");
+    if (!(link instanceof HTMLAnchorElement)) {
+      return;
+    }
+    if (linkOpenMode === "system") {
+      event.preventDefault();
+      dispatch("openLink", link.href);
+    }
+  }
+
   function resizeEditor(): void {
     if (!editorEl) {
       return;
@@ -91,14 +106,32 @@
   class="task-card"
   on:contextmenu={openContext}
 >
-  <button class="task-check" type="button" aria-label="切换完成" on:click|stopPropagation={() => dispatch("toggle", task.id)}>
-    {#if task.completed}
-      <Check size={14} strokeWidth={3.2} />
-    {/if}
-  </button>
+  <div class="task-title-grid">
+    <button class="task-check" type="button" aria-label="切换完成" on:click|stopPropagation={() => dispatch("toggle", task.id)}>
+      {#if task.completed}
+        <Check size={14} strokeWidth={3.2} />
+      {/if}
+    </button>
 
-  <section class="task-body" on:dblclick={handleBodyDblClick}>
-    {#if task.editing}
+    <section class="task-body" on:dblclick={handleBodyDblClick}>
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="markdown-title-row" on:click={toggleExpand}>{title}</div>
+    </section>
+
+    {#if task.dueDate}
+      <span class="task-due-date">{task.dueDate}</span>
+    {:else}
+      <span class="task-due-spacer" aria-hidden="true"></span>
+    {/if}
+
+    <button class="edit-button" type="button" title="编辑 Markdown" on:mousedown|preventDefault on:click|stopPropagation={toggleEdit}>
+      <Pencil size={18} />
+    </button>
+  </div>
+
+  {#if task.editing}
+    <section class="task-detail task-editor-detail" on:dblclick={handleBodyDblClick}>
       <textarea
         bind:this={editorEl}
         bind:value={draft}
@@ -107,23 +140,10 @@
         on:input={resizeEditor}
         on:blur={commitEdit}
       ></textarea>
-    {:else}
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="markdown-title-row" on:click={toggleExpand}>{title}</div>
-      {#if task.expanded}
-        <div class="markdown-body markdown-content" on:click|stopPropagation>
-          {@html fullHtml}
-        </div>
-      {/if}
-    {/if}
-  </section>
-
-  {#if !task.expanded && task.dueDate}
-    <span class="task-due-date">{task.dueDate}</span>
+    </section>
+  {:else if task.expanded}
+    <div class="markdown-body markdown-content task-detail" on:click={handleMarkdownClick} on:dblclick={handleBodyDblClick}>
+      {@html fullHtml}
+    </div>
   {/if}
-
-  <button class="edit-button" type="button" title="编辑 Markdown" on:mousedown|preventDefault on:click|stopPropagation={toggleEdit}>
-    <Pencil size={18} />
-  </button>
 </article>

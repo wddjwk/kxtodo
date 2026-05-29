@@ -36,6 +36,10 @@ export const defaultSettings: Settings = {
     email: "example@example.com",
     avatar: ""
   },
+  appearance: {
+    linkOpenMode: "app",
+    uiScale: 0.92
+  },
   shortcuts: {
     newTask: "Ctrl+N",
     focusSearch: "Ctrl+F",
@@ -208,6 +212,9 @@ export function normalizeState(raw: unknown): AppState {
 export function normalizeSettings(raw: unknown): Settings {
   const source = raw as Partial<Settings> & {
     profile?: Partial<Settings["profile"]> & { name?: string };
+    appearance?: Partial<Settings["appearance"]>;
+    behavior?: Partial<{ linkOpenMode: Settings["appearance"]["linkOpenMode"] }>;
+    display?: Partial<{ uiScale: number }>;
     globalShortcut?: string;
     shortcuts?: Partial<Settings["shortcuts"]> | Array<{ id: string; combo: string }>;
     cloudSync?: Partial<Settings["cloud"]>;
@@ -232,6 +239,18 @@ export function normalizeSettings(raw: unknown): Settings {
             : defaultSettings.profile.displayName,
       email: typeof source?.profile?.email === "string" ? source.profile.email : defaultSettings.profile.email,
       avatar: typeof source?.profile?.avatar === "string" ? source.profile.avatar : defaultSettings.profile.avatar
+    },
+    appearance: {
+      linkOpenMode:
+        source?.appearance?.linkOpenMode === "system" || source?.behavior?.linkOpenMode === "system"
+          ? "system"
+          : defaultSettings.appearance.linkOpenMode,
+      uiScale:
+        typeof source?.appearance?.uiScale === "number"
+          ? Math.min(1.05, Math.max(0.82, source.appearance.uiScale))
+          : typeof source?.display?.uiScale === "number"
+            ? Math.min(1.05, Math.max(0.82, source.display.uiScale))
+            : defaultSettings.appearance.uiScale
     },
     shortcuts: {
       newTask: shortcutValue("newTask", defaultSettings.shortcuts.newTask),

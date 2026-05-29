@@ -82,3 +82,17 @@ export async function registerGlobalShortcut(shortcut: string): Promise<void> {
   }
   await invoke("register_global_shortcut", { shortcut });
 }
+
+export async function openExternalUrl(rawUrl: string): Promise<void> {
+  const url = new URL(rawUrl, window.location.href);
+  if (!["http:", "https:", "mailto:"].includes(url.protocol)) {
+    throw new Error(`Unsupported link protocol: ${url.protocol}`);
+  }
+
+  if (isTauriRuntime) {
+    await invoke("open_url", { url: url.href });
+    return;
+  }
+
+  window.open(url.href, "_blank", "noopener,noreferrer");
+}

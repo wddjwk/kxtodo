@@ -24,7 +24,7 @@ Todo Note is a fast, local-first todo and quick-note app inspired by the product
 - `src/lib/types.ts` defines the app data model shared by UI modules.
 - `src/lib/backend.ts` is the frontend bridge to Tauri commands, with browser-dev fallbacks.
 - `src/lib/markdown.ts` owns Markdown rendering and sanitization.
-- `src-tauri/src/main.rs` owns local JSON persistence, export file writing, window-state support, and the global toggle shortcut.
+- `src-tauri/src/main.rs` owns local JSON persistence, export file writing, window-state support, the global toggle shortcut, and system-browser link opening.
 - `scripts/package.ps1` builds a versioned release using local project dependencies.
 - `scripts/load-sample-data.ps1` loads non-production sample data for visual validation.
 - `test-data/sample-export.json` contains demo data used for screenshots and manual QA; do not move this into production defaults.
@@ -32,14 +32,15 @@ Todo Note is a fast, local-first todo and quick-note app inspired by the product
 ## Data model
 
 - `AppNode` represents left-tree nodes. Built-in system nodes are `my-day`, `planned`, and `important`; custom `category` nodes are folders that expand/collapse; custom `entry` nodes own Markdown cards.
-- `Task` belongs to an entry and stores Markdown content, completion state, My Day/favorite flags, lightweight date metadata, and transient expand/edit UI state.
-- `Settings` stores editable profile information (including uploaded avatar data URLs), local shortcut bindings, the global toggle shortcut, and disabled cloud-sync configuration.
+- `Task` belongs to an entry and stores Markdown content, completion state, My Day/favorite flags, lightweight date metadata, and transient expand/edit UI state. Collapsed cards show only the plain first line; expanded cards render Markdown below a stable title/action row.
+- `Settings` stores editable profile information (including uploaded avatar data URLs), display preferences (UI scale and link-opening mode), local shortcut bindings, the global toggle shortcut, and disabled cloud-sync configuration.
+- The left tree is ordered by the `nodes` array. Drag/drop should update both `parentId` and array position so classic reorder and reparent interactions stay predictable.
 
 ## Maintenance workflow
 
 1. Install dependencies locally with `npm install`.
 2. Run the desktop app with `npm run desktop:dev`.
 3. Build the frontend with `npm run build`.
-4. Package a release with `.\scripts\package.ps1 -Version 3.1.0`.
+4. Package a release with `.\scripts\package.ps1 -Version 4.0.0`.
 5. Load screenshot QA data with `.\scripts\load-sample-data.ps1` when needed; production defaults must stay minimal.
 6. Keep new native features behind Tauri commands/plugins and keep sync integrations behind adapter-style boundaries.
