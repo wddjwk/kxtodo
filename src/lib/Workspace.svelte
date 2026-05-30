@@ -1,15 +1,15 @@
 <script lang="ts">
   import { tick } from "svelte";
   import {
-    ArrowUpDown, CalendarDays, ChevronDown, ChevronsDown, ChevronsUp,
-    Download, Eraser, FolderInput, Image,
-    MoreHorizontal, Palette, PenLine, Plus, Search, Star, Sun, Trash2, Upload
+    ArrowUpDown, Calendar, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
+    ChevronsDown, ChevronsUp, Download, Eraser, FolderInput, Image,
+    Lightbulb, MoreHorizontal, Palette, PenLine, Plus, Search, Star, Sun, Trash2, Upload
   } from "@lucide/svelte";
   import {
     appState, appSettings, commit, commitSettings, showToast,
     searchQuery, selectedNode, visibleTasks, selectedBackground,
-    accent, isSearching, now, todayIso, createTaskId, safeFileName,
-    fileToDataUrl, APP_VERSION
+    accent, isSearching, now, todayIso, yesterdayIso, dateOnly,
+    createTaskId, safeFileName, fileToDataUrl, APP_VERSION
   } from "./stores";
   import { moveTargetOptions, nodeAndDescendantIds, exportStateForNode, getBackground } from "./nodes";
   import { buildMainStyle, buildMenuStyle, uiScaleValue } from "./styles";
@@ -36,6 +36,8 @@
   let showCompleted = true;
   let showListMenu = false;
   let showSortOptions = false;
+  let showSuggestions = false;
+  let showCalendar = false;
   let sortMode: SortMode = "created-desc";
   let allExpanded = false;
   let taskMenu: { taskId: string; x: number; y: number; showDate: boolean } | null = null;
@@ -46,10 +48,19 @@
   let backgroundFileInput: HTMLInputElement;
   let colorPickerInput: HTMLInputElement;
 
+  // Calendar state
+  let calViewMode: "month" | "week" = "month";
+  let calYear = new Date().getFullYear();
+  let calMonth = new Date().getMonth();
+  let calSelectedDate = todayIso();
+
   $: mainStyle = buildMainStyle($selectedBackground, $accent);
+  $: isMyDay = $selectedNode?.id === "my-day";
   $: sortedTasks = sortTasks($visibleTasks, sortMode);
   $: incompleteTasks = sortedTasks.filter((task) => !task.completed);
-  $: completedTasks = sortedTasks.filter((task) => task.completed);
+  $: completedTasks = isMyDay
+    ? sortedTasks.filter((task) => task.completed && dateOnly(task.completedAt) === todayIso())
+    : sortedTasks.filter((task) => task.completed);
   $: selectedMoveTargets = $selectedNode ? moveTargetOptions($selectedNode.id, $appState.nodes) : [];
   $: taskMenuStyle = taskMenu ? buildMenuStyle(taskMenu.x, taskMenu.y, 230, taskMenu.showDate ? 260 : 188, uiScaleValue($appSettings.appearance.uiScale)) : "";
   $: taskMenuTask = taskMenu ? $appState.tasks.find((task) => task.id === taskMenu?.taskId) : null;
@@ -58,14 +69,155 @@
     backgroundLinkDraft = $selectedBackground.image ?? "";
   }
 
+  // My Day suggestions
+  $: suggestedTasks = (() => {
+    if (!isMyDay) return [];
+    const today = todayIso();
+    const yesterday = yesterdayIso();
+    const candidates: Task[] = [];
+    const seen = new Set<string>();
+    for (const task of $appState.tasks) {
+      if (task.completed || task.myDay || seen.has(task.id)) continue;
+      const created = dateOnly(task.createdAt);
+      const due = dateOnly(task.dueDate);
+      if (created === today || created === yesterday || due === today) {
+        candidates.push(task);
+        seen.add(task.id);
+      }
+    }
+    if (candidates.length > 0) return candidates;
+    return $appState.tasks
+      .filter((t) => !t.completed && !t.myDay)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, 5);
+  })();
+
+  // Calendar: completed tasks by date
+  $: completedByDate = (() => {
+    const map: Record<string, Task[]> = {};
+    for (const task of $appState.tasks) {
+      if (!task.completed || !task.completedAt) continue;
+      const d = task.completedAt.slice(0, 10);
+      (map[d] ??= []).push(task);
+    }
+    return map;
+  })();
+
+  $: calSelectedTasks = completedByDate[calSelectedDate] ?? [];
+
+  const weekDayLabels = ["日", "一", "二", "三", "四", "五", "六"];
+
+  function formatMyDayDate(): string {
+    const d = new Date();
+    const weekDays = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
+    return `${d.getMonth() + 1}月${d.getDate()}日, ${weekDays[d.getDay()]}`;
+  }
+
+  function calMonthDays(): Array<{ date: string; day: number; current: boolean; hasTask: boolean }> {
+    const first = new Date(calYear, calMonth, 1);
+    const last = new Date(calYear, calMonth + 1, 0);
+    const startDow = first.getDay();
+    const totalDays = last.getDate();
+    const cells: Array<{ date: string; day: number; current: boolean; hasTask: boolean }> = [];
+    const prevLast = new Date(calYear, calMonth, 0);
+    for (let i = startDow - 1; i >= 0; i--) {
+      const dd = prevLast.getDate() - i;
+      const ds = fmtDateStr(calYear, calMonth - 1, dd);
+      cells.push({ date: ds, day: dd, current: false, hasTask: !!completedByDate[ds]?.length });
+    }
+    for (let dd = 1; dd <= totalDays; dd++) {
+      const ds = fmtDateStr(calYear, calMonth, dd);
+      cells.push({ date: ds, day: dd, current: true, hasTask: !!completedByDate[ds]?.length });
+    }
+    const rem = (7 - (cells.length % 7)) % 7;
+    for (let dd = 1; dd <= rem; dd++) {
+      const ds = fmtDateStr(calYear, calMonth + 1, dd);
+      cells.push({ date: ds, day: dd, current: false, hasTask: !!completedByDate[ds]?.length });
+    }
+    return cells;
+  }
+
+  function calWeekDays(): Array<{ date: string; day: number; hasTask: boolean }> {
+    const d = new Date(calSelectedDate + "T00:00:00");
+    const dow = d.getDay();
+    const start = new Date(d);
+    start.setDate(start.getDate() - dow);
+    const days: Array<{ date: string; day: number; hasTask: boolean }> = [];
+    for (let i = 0; i < 7; i++) {
+      const cur = new Date(start);
+      cur.setDate(cur.getDate() + i);
+      const ds = fmtDateStr(cur.getFullYear(), cur.getMonth(), cur.getDate());
+      days.push({ date: ds, day: cur.getDate(), hasTask: !!completedByDate[ds]?.length });
+    }
+    return days;
+  }
+
+  function fmtDateStr(y: number, m: number, d: number): string {
+    const dt = new Date(y, m, d);
+    return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+  }
+
+  function calPrev(): void { if (calMonth === 0) { calYear--; calMonth = 11; } else calMonth--; }
+  function calNext(): void { if (calMonth === 11) { calYear++; calMonth = 0; } else calMonth++; }
+
+  function collapsedLine(md: string): string {
+    const firstLine = md.split("\n")[0] ?? "";
+    return firstLine.replace(/^#+\s*/, "");
+  }
+
   export function closeOverlays(): void {
     showListMenu = false;
     showSortOptions = false;
+    showSuggestions = false;
+    showCalendar = false;
     taskMenu = null;
   }
 
   export function focusComposer(): void {
     taskInput?.focus();
+  }
+
+  function toggleCompletion(taskId: string): void {
+    updateTask(taskId, (task) => ({
+      ...task,
+      completed: !task.completed,
+      completedAt: !task.completed ? now() : undefined
+    }));
+  }
+
+  function addToMyDay(taskId: string): void {
+    updateTask(taskId, (task) => ({ ...task, myDay: true }));
+  }
+
+  function handleTaskSetDate(event: CustomEvent<{ id: string; date: string }>): void {
+    const dateVal = event.detail.date ? event.detail.date.slice(0, 10) : undefined;
+    const addMyDay = dateVal === todayIso();
+    updateTask(event.detail.id, (task) => ({
+      ...task,
+      dueDate: dateVal || undefined,
+      plannedDate: dateVal || undefined,
+      myDay: addMyDay ? true : task.myDay
+    }));
+  }
+
+  function toggleSuggestions(): void {
+    showSuggestions = !showSuggestions;
+    showCalendar = false;
+    showListMenu = false;
+    taskMenu = null;
+  }
+
+  function toggleCalendar(): void {
+    showCalendar = !showCalendar;
+    showSuggestions = false;
+    showListMenu = false;
+    taskMenu = null;
+    if (showCalendar) {
+      const d = new Date();
+      calYear = d.getFullYear();
+      calMonth = d.getMonth();
+      calSelectedDate = todayIso();
+    }
   }
 
   function sortTasks(tasks: Task[], mode: SortMode): Task[] {
@@ -113,11 +265,8 @@
     });
   }
 
-  function localDatetimeNow(): string {
-    const d = new Date();
-    const offset = d.getTimezoneOffset();
-    const local = new Date(d.getTime() - offset * 60_000);
-    return local.toISOString().slice(0, 16);
+  function defaultDateValue(): string {
+    return todayIso();
   }
 
   function updateTask(taskId: string, updater: (task: Task) => Task): void {
@@ -143,8 +292,6 @@
       completed: false,
       important: $selectedNode?.id === "important",
       myDay: $selectedNode?.id === "my-day",
-      plannedDate: $selectedNode?.id === "planned" ? todayIso() : undefined,
-      dueDate: $selectedNode?.id === "planned" ? todayIso() : undefined,
       expanded: false,
       editing: false,
       createdAt: timestamp,
@@ -174,7 +321,14 @@
   }
 
   function setTaskDate(taskId: string, date: string): void {
-    updateTask(taskId, (task) => ({ ...task, dueDate: date || undefined, plannedDate: date || undefined }));
+    const dateVal = date ? date.slice(0, 10) : undefined;
+    const addToMyDay = dateVal === todayIso();
+    updateTask(taskId, (task) => ({
+      ...task,
+      dueDate: dateVal || undefined,
+      plannedDate: dateVal || undefined,
+      myDay: addToMyDay ? true : task.myDay
+    }));
     taskMenu = null;
   }
 
@@ -298,6 +452,8 @@
   function toggleListMenu(): void {
     showListMenu = !showListMenu;
     showSortOptions = false;
+    showSuggestions = false;
+    showCalendar = false;
     taskMenu = null;
   }
 
@@ -371,6 +527,14 @@
       <h1>{$isSearching ? `搜索结果：${$searchQuery}` : $selectedNode?.name ?? "随手记"}</h1>
     </div>
     <div class="header-actions" on:click|stopPropagation>
+      {#if isMyDay}
+        <button type="button" title="完成日历" on:click|stopPropagation={toggleCalendar}>
+          <Calendar size={21} />
+        </button>
+        <button type="button" title="建议添加" on:click|stopPropagation={toggleSuggestions}>
+          <Lightbulb size={21} />
+        </button>
+      {/if}
       <button
         type="button"
         title={allExpanded ? "收起全部" : "展开全部"}
@@ -383,6 +547,77 @@
         on:click|stopPropagation
         on:keydown={handleListMenuKeydown}
       ><MoreHorizontal size={23} /></button>
+
+      {#if showSuggestions}
+        <section class="suggestion-panel" on:click|stopPropagation>
+          <div class="suggestion-panel-title">建议添加到我的一天</div>
+          {#if suggestedTasks.length === 0}
+            <div class="suggestion-empty">暂无建议</div>
+          {:else}
+            {#each suggestedTasks as task (task.id)}
+              <div class="suggestion-item">
+                <span class="suggestion-text">{collapsedLine(task.markdown)}</span>
+                <button class="suggestion-add" type="button" title="添加到我的一天" on:click|stopPropagation={() => addToMyDay(task.id)}>
+                  <Plus size={16} />
+                </button>
+              </div>
+            {/each}
+          {/if}
+        </section>
+      {/if}
+
+      {#if showCalendar}
+        <section class="calendar-panel" on:click|stopPropagation>
+          <div class="calendar-header">
+            <button type="button" on:click={calPrev}><ChevronLeft size={16} /></button>
+            <span>{calYear}年{calMonth + 1}月</span>
+            <button type="button" on:click={calNext}><ChevronRight size={16} /></button>
+          </div>
+          <div class="calendar-view-toggle">
+            <button type="button" class:active={calViewMode === "month"} on:click={() => (calViewMode = "month")}>月</button>
+            <button type="button" class:active={calViewMode === "week"} on:click={() => (calViewMode = "week")}>周</button>
+          </div>
+          <div class="calendar-grid">
+            {#each weekDayLabels as label}
+              <span class="day-header">{label}</span>
+            {/each}
+            {#if calViewMode === "month"}
+              {#each calMonthDays() as cell}
+                <button
+                  type="button"
+                  class="day-cell"
+                  class:other-month={!cell.current}
+                  class:today={cell.date === todayIso()}
+                  class:selected={cell.date === calSelectedDate}
+                  class:has-tasks={cell.hasTask}
+                  on:click={() => (calSelectedDate = cell.date)}
+                >{cell.day}</button>
+              {/each}
+            {:else}
+              {#each calWeekDays() as cell}
+                <button
+                  type="button"
+                  class="day-cell"
+                  class:today={cell.date === todayIso()}
+                  class:selected={cell.date === calSelectedDate}
+                  class:has-tasks={cell.hasTask}
+                  on:click={() => (calSelectedDate = cell.date)}
+                >{cell.day}</button>
+              {/each}
+            {/if}
+          </div>
+          <div class="calendar-tasks-title">
+            {(() => { const p = calSelectedDate.split("-").map(Number); return `${p[1]}月${p[2]}日 完成的任务`; })()}
+          </div>
+          {#if calSelectedTasks.length === 0}
+            <div class="calendar-no-tasks">无完成任务</div>
+          {:else}
+            {#each calSelectedTasks as task (task.id)}
+              <div class="calendar-task-item">{collapsedLine(task.markdown)}</div>
+            {/each}
+          {/if}
+        </section>
+      {/if}
       {#if showListMenu}
         <section class="list-menu">
           <button type="button" disabled={!$selectedNode || $selectedNode.kind === "system"} on:click={() => $selectedNode && startRename($selectedNode.id)}>
@@ -441,6 +676,10 @@
     </div>
   </section>
 
+  {#if isMyDay}
+    <p class="my-day-subtitle">{formatMyDayDate()}</p>
+  {/if}
+
   <input bind:this={importInput} class="hidden-file" type="file" accept="application/json,.json" on:change={importFromFile} />
   <input bind:this={backgroundFileInput} class="hidden-file" type="file" accept="image/*" on:change={uploadBackgroundImage} />
 
@@ -450,12 +689,13 @@
         {task}
         selected={taskMenu?.taskId === task.id || selectedTaskId === task.id}
         linkOpenMode={$appSettings.appearance.linkOpenMode}
-        on:toggle={(event) => updateTask(event.detail, (item) => ({ ...item, completed: !item.completed }))}
+        on:toggle={(event) => toggleCompletion(event.detail)}
         on:expand={(event) => { selectedTaskId = event.detail; taskMenu = null; updateTask(event.detail, (item) => ({ ...item, expanded: !item.expanded })); }}
         on:edit={(event) => { selectedTaskId = event.detail; taskMenu = null; updateTask(event.detail, (item) => ({ ...item, editing: true, expanded: true })); }}
         on:commit={(event) => updateTask(event.detail.id, (item) => ({ ...item, markdown: event.detail.markdown, editing: false, expanded: true }))}
         on:context={openTaskMenu}
         on:openLink={openTaskLink}
+        on:setDate={handleTaskSetDate}
       />
     {/each}
 
@@ -471,12 +711,13 @@
               {task}
               selected={taskMenu?.taskId === task.id || selectedTaskId === task.id}
               linkOpenMode={$appSettings.appearance.linkOpenMode}
-              on:toggle={(event) => updateTask(event.detail, (item) => ({ ...item, completed: !item.completed }))}
+              on:toggle={(event) => toggleCompletion(event.detail)}
               on:expand={(event) => { selectedTaskId = event.detail; taskMenu = null; updateTask(event.detail, (item) => ({ ...item, expanded: !item.expanded })); }}
               on:edit={(event) => { selectedTaskId = event.detail; taskMenu = null; updateTask(event.detail, (item) => ({ ...item, editing: true, expanded: true })); }}
               on:commit={(event) => updateTask(event.detail.id, (item) => ({ ...item, markdown: event.detail.markdown, editing: false, expanded: true }))}
               on:context={openTaskMenu}
               on:openLink={openTaskLink}
+              on:setDate={handleTaskSetDate}
             />
           {/each}
         {/if}
@@ -504,7 +745,7 @@
         <CalendarDays size={16} /> 添加日期
       </button>
       {#if taskMenu.showDate}
-        <input type="datetime-local" value={taskMenuTask.dueDate ?? localDatetimeNow()} on:change={(event) => setTaskDate(taskMenuTask.id, event.currentTarget.value)} />
+        <input type="date" value={taskMenuTask.dueDate?.slice(0, 10) ?? defaultDateValue()} on:change={(event) => setTaskDate(taskMenuTask.id, event.currentTarget.value)} />
       {/if}
       <button type="button" on:click={() => { updateTask(taskMenuTask.id, (task) => ({ ...task, important: !task.important })); taskMenu = null; }}>
         <Star size={16} /> {taskMenuTask.important ? "取消收藏" : "收藏"}

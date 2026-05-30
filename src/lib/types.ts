@@ -19,6 +19,7 @@ export type Task = {
   myDay: boolean;
   plannedDate?: string;
   dueDate?: string;
+  completedAt?: string;
   expanded?: boolean;
   editing?: boolean;
   createdAt: string;

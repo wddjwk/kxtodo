@@ -1,6 +1,6 @@
 [package]
 name = "todo-note"
-version = "6.1.0"
+version = "6.2.0"
 description = "A fast local-first todo and markdown note desktop app."
 authors = ["wddjwk"]
 license = ""

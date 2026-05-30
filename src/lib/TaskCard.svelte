@@ -15,11 +15,13 @@
     commit: { id: string; markdown: string };
     context: { id: string; x: number; y: number };
     openLink: string;
+    setDate: { id: string; date: string };
   }>();
 
   let draft = "";
   let editingTaskId = "";
   let editorEl: HTMLTextAreaElement;
+  let dateInput: HTMLInputElement;
 
   $: collapsedHtml = renderInlineMarkdown(collapsedMarkdownLine(task.markdown));
   $: fullHtml = renderMarkdown(task.markdown);
@@ -33,13 +35,19 @@
   }
 
   function formatDate(dateStr: string): string {
-    if (dateStr.includes("T")) {
-      const [datePart, timePart] = dateStr.split("T");
-      const parts = datePart.split("-").map(Number);
-      return `${parts[1]}月${parts[2]}日 ${timePart}`;
-    }
-    const parts = dateStr.split("-").map(Number);
+    const parts = dateStr.slice(0, 10).split("-").map(Number);
     return `${parts[1]}月${parts[2]}日`;
+  }
+
+  function openDatePicker(): void {
+    if (!dateInput) return;
+    dateInput.value = task.dueDate?.slice(0, 10) ?? "";
+    dateInput.showPicker?.();
+  }
+
+  function handleDateChange(): void {
+    if (!dateInput) return;
+    dispatch("setDate", { id: task.id, date: dateInput.value });
   }
 
   async function startEdit(): Promise<void> {
@@ -93,6 +101,8 @@
     if (task.editing || target?.closest("button, input, textarea")) {
       return;
     }
+    event.preventDefault();
+    window.getSelection()?.removeAllRanges();
     toggleExpand(event);
   }
 
@@ -163,7 +173,8 @@
     </section>
 
     {#if !task.expanded && !task.editing && task.dueDate}
-      <span class="task-due-date">{formattedDate}</span>
+      <button class="task-due-date" type="button" on:click|stopPropagation={openDatePicker}>{formattedDate}</button>
+      <input bind:this={dateInput} class="task-date-hidden" type="date" on:change={handleDateChange} />
     {:else}
       <span class="task-due-spacer" aria-hidden="true"></span>
     {/if}

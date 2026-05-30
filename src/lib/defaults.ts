@@ -159,6 +159,7 @@ function normalizeTask(raw: unknown, fallbackNodeId: string): Task | null {
     myDay: Boolean(source.myDay),
     plannedDate: typeof source.plannedDate === "string" ? source.plannedDate : undefined,
     dueDate: typeof source.dueDate === "string" ? source.dueDate : undefined,
+    completedAt: typeof source.completedAt === "string" ? source.completedAt : source.completed ? (typeof source.updatedAt === "string" ? source.updatedAt : now()) : undefined,
     expanded: Boolean(source.expanded),
     editing: Boolean(source.editing),
     createdAt: typeof source.createdAt === "string" ? source.createdAt : now(),

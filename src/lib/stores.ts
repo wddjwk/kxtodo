@@ -9,7 +9,7 @@ import {
 import { buildListCounts, buildVisibleTasks, getBackground } from "./nodes";
 import { accentForNode, uiScaleValue } from "./styles";
 
-export const APP_VERSION = "6.1.0";
+export const APP_VERSION = "6.2.0";
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -24,6 +24,18 @@ export function todayIso(): string {
   const offset = date.getTimezoneOffset();
   const local = new Date(date.getTime() - offset * 60_000);
   return local.toISOString().slice(0, 10);
+}
+
+export function yesterdayIso(): string {
+  const date = new Date();
+  date.setDate(date.getDate() - 1);
+  const offset = date.getTimezoneOffset();
+  const local = new Date(date.getTime() - offset * 60_000);
+  return local.toISOString().slice(0, 10);
+}
+
+export function dateOnly(value?: string): string | undefined {
+  return value?.slice(0, 10) || undefined;
 }
 
 export function createTaskId(): string {
