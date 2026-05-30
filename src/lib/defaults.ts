@@ -16,19 +16,17 @@ export const defaultBackground: ListBackground = {
 };
 
 export const themePresets = [
-  { name: "左侧白", color: "#fafafa" },
-  { name: "暖杏", color: "#f7efe8" },
-  { name: "To Do 蓝", color: "#e8f1ff" },
-  { name: "薄荷", color: "#eaf7ef" },
-  { name: "丁香", color: "#f0edff" },
-  { name: "玫瑰", color: "#fff0f4" },
-  { name: "石墨", color: "#edf1f6" },
-  { name: "沙丘", color: "#f7eadc" },
-  { name: "海盐", color: "#e8f7fb" },
-  { name: "青柠", color: "#eef9dc" },
-  { name: "莓果", color: "#f9e4f2" },
-  { name: "深夜", color: "#242936" },
-  { name: "纸张", color: "#faf7f1" }
+  { name: "白瓷",   color: "#fafaf8" },
+  { name: "日出",   color: "#f5e6d8" },
+  { name: "睡莲",   color: "#e4ede6" },
+  { name: "晨雾",   color: "#dfe8ef" },
+  { name: "干草垛", color: "#f0e4cc" },
+  { name: "教堂",   color: "#e8e2ed" },
+  { name: "花园",   color: "#f2e2e5" },
+  { name: "拱桥",   color: "#daeee8" },
+  { name: "鸢尾",   color: "#ddd8ea" },
+  { name: "麦田",   color: "#ece8d4" },
+  { name: "夜色",   color: "#2a2d38" }
 ];
 
 export const defaultSettings: Settings = {

@@ -1,8 +1,9 @@
 <script lang="ts">
   import { tick } from "svelte";
   import {
-    CalendarDays, ChevronDown, Download, Eraser, FolderInput, Image,
-    MoreHorizontal, Pencil, Plus, Search, Star, Sun, Trash2, Upload
+    ArrowUpDown, CalendarDays, ChevronDown, ChevronsDown, ChevronsUp,
+    Download, Eraser, FolderInput, Image,
+    MoreHorizontal, Palette, PenLine, Plus, Search, Star, Sun, Trash2, Upload
   } from "@lucide/svelte";
   import {
     appState, appSettings, commit, commitSettings, showToast,
@@ -18,22 +19,39 @@
   import TaskCard from "./TaskCard.svelte";
   import type { AppNode, AppState, ListBackground, Settings, Task } from "./types";
 
+  type SortMode = "created-desc" | "created-asc" | "alpha-asc" | "alpha-desc" | "due-asc" | "due-desc" | "importance";
+
+  const sortLabels: Record<SortMode, string> = {
+    "created-desc": "创建时间 ↓ 最新",
+    "created-asc": "创建时间 ↑ 最早",
+    "alpha-asc": "字母顺序 A → Z",
+    "alpha-desc": "字母顺序 Z → A",
+    "due-asc": "截止时间 ↑ 最近",
+    "due-desc": "截止时间 ↓ 最远",
+    "importance": "重要性优先"
+  };
+
   let newTaskDraft = "";
   let selectedTaskId: string | null = null;
   let showCompleted = true;
   let showListMenu = false;
+  let showSortOptions = false;
+  let sortMode: SortMode = "created-desc";
+  let allExpanded = false;
   let taskMenu: { taskId: string; x: number; y: number; showDate: boolean } | null = null;
   let backgroundLinkDraft = "";
   let backgroundDraftNodeId = "";
   let taskInput: HTMLTextAreaElement;
   let importInput: HTMLInputElement;
   let backgroundFileInput: HTMLInputElement;
+  let colorPickerInput: HTMLInputElement;
 
   $: mainStyle = buildMainStyle($selectedBackground, $accent);
-  $: incompleteTasks = $visibleTasks.filter((task) => !task.completed);
-  $: completedTasks = $visibleTasks.filter((task) => task.completed);
+  $: sortedTasks = sortTasks($visibleTasks, sortMode);
+  $: incompleteTasks = sortedTasks.filter((task) => !task.completed);
+  $: completedTasks = sortedTasks.filter((task) => task.completed);
   $: selectedMoveTargets = $selectedNode ? moveTargetOptions($selectedNode.id, $appState.nodes) : [];
-  $: taskMenuStyle = taskMenu ? buildMenuStyle(taskMenu.x, taskMenu.y, 230, taskMenu.showDate ? 230 : 188, uiScaleValue($appSettings.appearance.uiScale)) : "";
+  $: taskMenuStyle = taskMenu ? buildMenuStyle(taskMenu.x, taskMenu.y, 230, taskMenu.showDate ? 260 : 188, uiScaleValue($appSettings.appearance.uiScale)) : "";
   $: taskMenuTask = taskMenu ? $appState.tasks.find((task) => task.id === taskMenu?.taskId) : null;
   $: if (($selectedNode?.id ?? "") !== backgroundDraftNodeId) {
     backgroundDraftNodeId = $selectedNode?.id ?? "";
@@ -42,11 +60,64 @@
 
   export function closeOverlays(): void {
     showListMenu = false;
+    showSortOptions = false;
     taskMenu = null;
   }
 
   export function focusComposer(): void {
     taskInput?.focus();
+  }
+
+  function sortTasks(tasks: Task[], mode: SortMode): Task[] {
+    return [...tasks].sort((a, b) => {
+      switch (mode) {
+        case "created-desc": return b.createdAt.localeCompare(a.createdAt);
+        case "created-asc": return a.createdAt.localeCompare(b.createdAt);
+        case "alpha-asc": return a.markdown.localeCompare(b.markdown, "zh");
+        case "alpha-desc": return b.markdown.localeCompare(a.markdown, "zh");
+        case "due-asc": {
+          if (!a.dueDate && !b.dueDate) return 0;
+          if (!a.dueDate) return 1;
+          if (!b.dueDate) return -1;
+          return a.dueDate.localeCompare(b.dueDate);
+        }
+        case "due-desc": {
+          if (!a.dueDate && !b.dueDate) return 0;
+          if (!a.dueDate) return 1;
+          if (!b.dueDate) return -1;
+          return b.dueDate.localeCompare(a.dueDate);
+        }
+        case "importance": return (b.important ? 1 : 0) - (a.important ? 1 : 0);
+        default: return 0;
+      }
+    });
+  }
+
+  function setSortMode(mode: SortMode): void {
+    sortMode = mode;
+    showSortOptions = false;
+  }
+
+  function toggleExpandAll(): void {
+    allExpanded = !allExpanded;
+    const expandTarget = allExpanded;
+    const visibleIds = new Set($visibleTasks.map((t) => t.id));
+    commit({
+      ...$appState,
+      tasks: $appState.tasks.map((task) => {
+        if (!visibleIds.has(task.id)) return task;
+        // Skip single-line tasks when expanding
+        if (expandTarget && !task.markdown.includes("\n")) return task;
+        return { ...task, expanded: expandTarget, editing: false };
+      })
+    });
+  }
+
+  function localDatetimeNow(): string {
+    const d = new Date();
+    const offset = d.getTimezoneOffset();
+    const local = new Date(d.getTime() - offset * 60_000);
+    return local.toISOString().slice(0, 16);
   }
 
   function updateTask(taskId: string, updater: (task: Task) => Task): void {
@@ -139,6 +210,32 @@
     setBackground({ color });
   }
 
+  function handleColorPick(event: Event): void {
+    const target = event.currentTarget;
+    if (target instanceof HTMLInputElement) {
+      applyTheme(target.value);
+    }
+  }
+
+  function openColorPicker(): void {
+    colorPickerInput?.click();
+  }
+
+  async function pickColorFromScreen(): Promise<void> {
+    try {
+      const EyeDropperCtor = (window as unknown as Record<string, unknown>).EyeDropper as { new(): { open(): Promise<{ sRGBHex: string }> } } | undefined;
+      if (!EyeDropperCtor) {
+        showToast("当前环境不支持取色器");
+        return;
+      }
+      const dropper = new EyeDropperCtor();
+      const result = await dropper.open();
+      applyTheme(result.sRGBHex);
+    } catch {
+      // User cancelled
+    }
+  }
+
   async function uploadBackgroundImage(event: Event): Promise<void> {
     const target = event.currentTarget;
     if (!(target instanceof HTMLInputElement) || !target.files?.[0]) return;
@@ -200,6 +297,7 @@
 
   function toggleListMenu(): void {
     showListMenu = !showListMenu;
+    showSortOptions = false;
     taskMenu = null;
   }
 
@@ -210,7 +308,6 @@
   }
 
   function startRename(id: string): void {
-    // Delegate to sidebar for rename — not implemented here as rename is sidebar-owned
     showListMenu = false;
   }
 
@@ -276,6 +373,11 @@
     <div class="header-actions" on:click|stopPropagation>
       <button
         type="button"
+        title={allExpanded ? "收起全部" : "展开全部"}
+        on:click|stopPropagation={toggleExpandAll}
+      >{#if allExpanded}<ChevronsUp size={21} />{:else}<ChevronsDown size={21} />{/if}</button>
+      <button
+        type="button"
         title="分类/条目菜单"
         on:mousedown|preventDefault|stopPropagation={toggleListMenu}
         on:click|stopPropagation
@@ -284,7 +386,7 @@
       {#if showListMenu}
         <section class="list-menu">
           <button type="button" disabled={!$selectedNode || $selectedNode.kind === "system"} on:click={() => $selectedNode && startRename($selectedNode.id)}>
-            <Pencil size={15} /> 重命名
+            <PenLine size={15} /> 重命名
           </button>
           {#if $selectedNode && $selectedNode.kind !== "system"}
             <label class="move-group-row">
@@ -295,6 +397,16 @@
                 {/each}
               </select>
             </label>
+          {/if}
+          <button type="button" on:click={() => showSortOptions = !showSortOptions}>
+            <ArrowUpDown size={15} /> 排序方式
+          </button>
+          {#if showSortOptions}
+            <div class="sort-submenu">
+              {#each Object.entries(sortLabels) as [mode, label]}
+                <button type="button" class:active={sortMode === mode} on:click={() => setSortMode(mode)}>{label}</button>
+              {/each}
+            </div>
           {/if}
           <button type="button" on:click={exportCurrentList}><Upload size={15} /> 导出当前</button>
           <button type="button" on:click={exportAll}><Upload size={15} /> 一键全部导出</button>
@@ -309,7 +421,9 @@
                 on:click={() => applyTheme(preset.color)}
               ></button>
             {/each}
+            <button type="button" class="palette-button" title="自定义颜色" on:click={openColorPicker}></button>
           </div>
+          <input bind:this={colorPickerInput} class="hidden-file" type="color" value={$selectedBackground.color} on:input={handleColorPick} />
           <label class="background-link">
             背景图片链接
             <input value={backgroundLinkDraft} placeholder="https://..." on:input={updateBackgroundLink} />
@@ -390,13 +504,13 @@
         <CalendarDays size={16} /> 添加日期
       </button>
       {#if taskMenu.showDate}
-        <input type="date" value={taskMenuTask.dueDate ?? ""} on:change={(event) => setTaskDate(taskMenuTask.id, event.currentTarget.value)} />
+        <input type="datetime-local" value={taskMenuTask.dueDate ?? localDatetimeNow()} on:change={(event) => setTaskDate(taskMenuTask.id, event.currentTarget.value)} />
       {/if}
       <button type="button" on:click={() => { updateTask(taskMenuTask.id, (task) => ({ ...task, important: !task.important })); taskMenu = null; }}>
         <Star size={16} /> {taskMenuTask.important ? "取消收藏" : "收藏"}
       </button>
       <button type="button" on:click={() => { updateTask(taskMenuTask.id, (task) => ({ ...task, editing: true, expanded: true })); taskMenu = null; }}>
-        <Pencil size={16} /> 编辑
+        <PenLine size={16} /> 编辑
       </button>
     </div>
   {/if}

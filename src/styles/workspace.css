@@ -7,6 +7,7 @@
   flex: 1;
   flex-direction: column;
   padding: 44px 56px 54px 56px;
+  border-radius: 12px 0 0 0;
   color: #292929;
   transition: background 160ms ease;
   overflow: hidden;
@@ -102,12 +103,12 @@ h1 {
   z-index: 2000;
   display: grid;
   width: 300px;
-  gap: 7px;
-  border: 1px solid rgb(0 0 0 / 8%);
-  border-radius: 12px;
+  gap: 4px;
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
   background: white;
-  padding: 12px;
-  box-shadow: 0 18px 60px rgb(0 0 0 / 16%);
+  padding: 7px;
+  box-shadow: 0 16px 50px rgb(0 0 0 / 16%);
 }
 
 .list-menu button {
@@ -116,14 +117,14 @@ h1 {
   gap: 8px;
   min-height: 34px;
   border: 0;
-  border-radius: 8px;
-  background: #f7f7f7;
-  padding: 7px 10px;
+  border-radius: 7px;
+  background: transparent;
+  padding: 8px 10px;
   text-align: left;
 }
 
 .list-menu button:hover {
-  background: #eeeeee;
+  background: #f2f4f7;
 }
 
 .menu-section-title {
@@ -140,9 +141,24 @@ h1 {
 
 .color-grid button {
   height: 30px;
-  border: 2px solid var(--accent-color);
+  border: 2px solid var(--accent-color, transparent);
   border-radius: 999px;
   background: var(--swatch);
+  transition: box-shadow 120ms ease;
+}
+
+.color-grid button:hover {
+  box-shadow: 0 0 0 2px #2564cf;
+}
+
+.color-grid .palette-button {
+  border: 1px solid #e0e0e0;
+  background: conic-gradient(from 0deg, #ff6b6b, #ffd93d, #6bcb77, #4d96ff, #9b59b6, #ff6b6b);
+  cursor: pointer;
+}
+
+.color-grid .palette-button:hover {
+  box-shadow: 0 0 0 2px #2564cf;
 }
 
 .background-link {
@@ -240,8 +256,7 @@ h1 {
   width: 24px;
   height: 24px;
   place-items: center;
-  align-self: start;
-  margin-top: 1px;
+  align-self: center;
   border: 2px solid var(--accent);
   border-radius: 50%;
   background: transparent;
@@ -312,13 +327,13 @@ h1 {
 
 .task-due-date {
   grid-column: 3;
-  align-self: start;
+  align-self: center;
   justify-self: end;
-  padding: 5px 7px;
+  padding: 5px 8px;
   border-radius: 6px;
   color: #6f4d2f;
   background: rgb(255 255 255 / 65%);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.2;
   white-space: nowrap;
 }
@@ -453,7 +468,7 @@ h1 {
   border: 0;
   border-radius: 7px;
   background: transparent;
-  padding: 8px 9px;
+  padding: 8px 10px;
   text-align: left;
 }
 
@@ -461,7 +476,8 @@ h1 {
   background: #f2f4f7;
 }
 
-.task-context-menu input {
+.task-context-menu input[type="date"],
+.task-context-menu input[type="datetime-local"] {
   margin: 2px 6px 7px;
   border: 1px solid #dedede;
   border-radius: 7px;
@@ -554,4 +570,36 @@ h1 {
   font-size: var(--font-composer);
   line-height: 1.55;
   padding: 8px 0 0;
+}
+
+/* Sort submenu */
+.sort-submenu {
+  display: grid;
+  gap: 2px;
+  padding: 4px 4px;
+  border-radius: 8px;
+  background: #f8f8fa;
+}
+
+.sort-submenu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  padding: 6px 10px;
+  text-align: left;
+  font-size: 13px;
+}
+
+.sort-submenu button:hover {
+  background: #eeeef2;
+}
+
+.sort-submenu button.active {
+  background: #e3eaff;
+  color: #2564cf;
+  font-weight: 600;
 }

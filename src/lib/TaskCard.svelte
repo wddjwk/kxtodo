@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher, tick } from "svelte";
-  import { Check, ChevronUp, Pencil } from "@lucide/svelte";
+  import { Check, ChevronUp, PenLine } from "@lucide/svelte";
   import { collapsedMarkdownLine, renderInlineMarkdown, renderMarkdown } from "./markdown";
   import type { Task } from "./types";
 
@@ -23,12 +23,23 @@
 
   $: collapsedHtml = renderInlineMarkdown(collapsedMarkdownLine(task.markdown));
   $: fullHtml = renderMarkdown(task.markdown);
+  $: formattedDate = task.dueDate ? formatDate(task.dueDate) : "";
   $: if (task.editing && editingTaskId !== task.id) {
     draft = task.markdown;
     editingTaskId = task.id;
   }
   $: if (!task.editing && editingTaskId === task.id) {
     editingTaskId = "";
+  }
+
+  function formatDate(dateStr: string): string {
+    if (dateStr.includes("T")) {
+      const [datePart, timePart] = dateStr.split("T");
+      const parts = datePart.split("-").map(Number);
+      return `${parts[1]}月${parts[2]}日 ${timePart}`;
+    }
+    const parts = dateStr.split("-").map(Number);
+    return `${parts[1]}月${parts[2]}日`;
   }
 
   async function startEdit(): Promise<void> {
@@ -152,13 +163,13 @@
     </section>
 
     {#if !task.expanded && !task.editing && task.dueDate}
-      <span class="task-due-date">{task.dueDate}</span>
+      <span class="task-due-date">{formattedDate}</span>
     {:else}
       <span class="task-due-spacer" aria-hidden="true"></span>
     {/if}
 
     <button class="edit-button" type="button" title="编辑 Markdown" on:mousedown|preventDefault|stopPropagation={toggleEdit} on:click|preventDefault|stopPropagation>
-      <Pencil size={18} />
+      <PenLine size={18} />
     </button>
 
     {#if task.expanded && !task.editing}

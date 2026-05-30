@@ -78,14 +78,14 @@ button,
 
   width: var(--app-width);
   height: var(--app-height);
-  background: #f7f7f7;
+  background: #f0f0f0;
   transform: scale(var(--ui-scale));
   transform-origin: top left;
 }
 
 .layout {
   display: flex;
-  height: calc(100% - 44px);
+  height: calc(100% - 36px);
   min-height: 0;
 }
 
