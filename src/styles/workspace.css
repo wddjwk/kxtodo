@@ -1,0 +1,557 @@
+/* workspace.css — workspace, header, tasks, markdown, menus, composer */
+
+.workspace {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  padding: 44px 56px 54px 56px;
+  color: #292929;
+  transition: background 160ms ease;
+  overflow: hidden;
+}
+
+.workspace::before {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-image: var(--bg-image);
+  background-position: center;
+  background-size: cover;
+  content: "";
+  opacity: var(--bg-opacity);
+  pointer-events: none;
+}
+
+.workspace > * {
+  position: relative;
+  z-index: 1;
+}
+
+.list-header {
+  position: relative;
+  z-index: 20;
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  justify-content: space-between;
+  min-width: 0;
+  padding-right: 54px;
+  margin-bottom: 28px;
+}
+
+.list-header > div:first-child {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 20px;
+}
+
+.header-icon {
+  display: grid;
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  place-items: center;
+  color: var(--accent);
+}
+
+h1 {
+  min-width: 0;
+  overflow: hidden;
+  margin: 0;
+  color: var(--accent);
+  flex: 1 1 auto;
+  font-size: var(--font-title);
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-actions {
+  position: absolute;
+  top: 2px;
+  right: 0;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 16px;
+  z-index: 1001;
+}
+
+.header-actions > button {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: rgb(255 255 255 / 70%);
+  color: var(--accent);
+}
+
+/* List menu */
+.list-menu {
+  position: absolute;
+  top: 42px;
+  right: 0;
+  z-index: 2000;
+  display: grid;
+  width: 300px;
+  gap: 7px;
+  border: 1px solid rgb(0 0 0 / 8%);
+  border-radius: 12px;
+  background: white;
+  padding: 12px;
+  box-shadow: 0 18px 60px rgb(0 0 0 / 16%);
+}
+
+.list-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  border: 0;
+  border-radius: 8px;
+  background: #f7f7f7;
+  padding: 7px 10px;
+  text-align: left;
+}
+
+.list-menu button:hover {
+  background: #eeeeee;
+}
+
+.menu-section-title {
+  margin-top: 3px;
+  color: #666;
+  font-size: 13px;
+}
+
+.color-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+}
+
+.color-grid button {
+  height: 30px;
+  border: 2px solid var(--accent-color);
+  border-radius: 999px;
+  background: var(--swatch);
+}
+
+.background-link {
+  display: grid;
+  gap: 5px;
+  color: #666;
+  font-size: 13px;
+}
+
+.background-link input {
+  border: 1px solid #dedede;
+  border-radius: 7px;
+  padding: 7px 9px;
+}
+
+.menu-inline {
+  display: grid;
+  grid-template-columns: 1fr 1fr 0.75fr;
+  gap: 6px;
+}
+
+.menu-inline.two {
+  grid-template-columns: 1fr 1fr;
+}
+
+.opacity-row {
+  display: grid;
+  gap: 5px;
+  color: #666;
+  font-size: 13px;
+}
+
+.opacity-row input {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+/* Task list */
+.task-list {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* Task card */
+.task-card {
+  position: relative;
+  max-width: 100%;
+  overflow: hidden;
+  margin-bottom: 7px;
+  padding: 17px 16px;
+  border: 1px solid rgb(0 0 0 / 3%);
+  border-radius: 6px;
+  background: rgb(255 255 255 / 84%);
+  box-shadow: 0 1px 1px rgb(0 0 0 / 2%);
+}
+
+.task-card.compact {
+  min-height: 60px;
+  padding-top: 13px;
+  padding-bottom: 13px;
+}
+
+.task-title-grid {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.task-card.compact .task-title-grid {
+  grid-template-columns: 34px minmax(0, 1fr) max-content 34px;
+}
+
+.task-card.expanded .task-title-grid,
+.task-card.editing .task-title-grid {
+  grid-template-columns: 34px minmax(0, 1fr);
+}
+
+.task-card:hover,
+.task-card.selected {
+  background: white;
+  box-shadow: 0 8px 24px rgb(110 61 42 / 9%);
+}
+
+.task-card.editing {
+  background: #fffdfb;
+}
+
+.task-check {
+  display: grid;
+  grid-column: 1;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  align-self: start;
+  margin-top: 1px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  background: transparent;
+  color: white;
+  padding: 0;
+}
+
+.task-card.completed .task-check {
+  background: var(--accent);
+}
+
+.task-card.completed .markdown-title-row,
+.task-card.completed .markdown-content {
+  color: #6f6f6f;
+  text-decoration: line-through;
+}
+
+.task-body {
+  grid-column: 2;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.task-card.expanded .task-body,
+.task-card.editing .task-body {
+  padding-right: 44px;
+}
+
+/* Markdown rendering */
+.markdown-title-row,
+.markdown-content {
+  color: #242424;
+  font-size: var(--markdown-font-size);
+  line-height: 1.52;
+}
+
+.markdown-title-row {
+  display: block;
+  max-height: 34px;
+  overflow: hidden;
+  cursor: default;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.markdown-title-row :where(strong, em, mark, code, a, span) {
+  display: inline;
+}
+
+.markdown-title-row code {
+  white-space: nowrap;
+}
+
+.markdown-content {
+  max-width: 100%;
+  overflow-x: hidden;
+  user-select: text;
+}
+
+.markdown-body {
+  background: transparent;
+  font-size: var(--markdown-font-size);
+}
+
+.markdown-body :where(h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, pre, table) {
+  margin-top: 0;
+}
+
+.task-due-date {
+  grid-column: 3;
+  align-self: start;
+  justify-self: end;
+  padding: 5px 7px;
+  border-radius: 6px;
+  color: #6f4d2f;
+  background: rgb(255 255 255 / 65%);
+  font-size: 13px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.task-due-spacer {
+  grid-column: 3;
+  width: 0;
+  min-width: 0;
+}
+
+.task-card.expanded .task-due-spacer,
+.task-card.editing .task-due-spacer {
+  display: none;
+}
+
+.markdown-body h1 {
+  color: #24292f;
+  font-size: 1.12em;
+  line-height: 1.25;
+}
+
+.markdown-body a {
+  color: #0969da;
+}
+
+.markdown-body mark {
+  border-radius: 3px;
+  background: #fff09a;
+  padding: 0 3px;
+}
+
+.markdown-body input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin-right: 8px;
+  accent-color: var(--accent);
+}
+
+.markdown-body pre code.hljs {
+  border-radius: 6px;
+  background: #f6f8fa;
+}
+
+.markdown-body pre {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.markdown-editor {
+  width: 100%;
+  min-height: 116px;
+  max-height: 420px;
+  resize: none;
+  border: 1px solid #d8dfe8;
+  border-radius: 8px;
+  outline: none;
+  background: #fbfdff;
+  padding: 12px;
+  color: #24292f;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: var(--editor-font-size);
+  line-height: 1.55;
+}
+
+.edit-button {
+  display: grid;
+  grid-column: 4;
+  position: relative;
+  z-index: 3;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  align-self: start;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #6b7280;
+}
+
+.task-card.expanded .edit-button,
+.task-card.editing .edit-button {
+  position: absolute;
+  top: 17px;
+  right: 16px;
+  grid-column: auto;
+}
+
+/* Task card collapse button (different from sidebar collapse button) */
+.workspace .collapse-button {
+  display: grid;
+  position: absolute;
+  right: 16px;
+  bottom: 12px;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  align-self: end;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #6b7280;
+}
+
+.workspace .collapse-button:hover {
+  background: #f0f0f0;
+  color: var(--accent);
+}
+
+.edit-button:hover {
+  background: #f0f0f0;
+  color: var(--accent);
+}
+
+/* Task context menu */
+.task-context-menu {
+  position: fixed;
+  z-index: 1001;
+  display: grid;
+  min-width: 210px;
+  gap: 4px;
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
+  background: white;
+  padding: 7px;
+  box-shadow: 0 16px 50px rgb(0 0 0 / 16%);
+}
+
+.task-context-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  padding: 8px 9px;
+  text-align: left;
+}
+
+.task-context-menu button:hover {
+  background: #f2f4f7;
+}
+
+.task-context-menu input {
+  margin: 2px 6px 7px;
+  border: 1px solid #dedede;
+  border-radius: 7px;
+  padding: 6px;
+}
+
+.search-results-caption {
+  margin: 0 0 10px;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 62%);
+  color: #606060;
+  padding: 8px 12px;
+  font-size: 14px;
+}
+
+/* Completed section */
+.completed-section {
+  margin-top: 8px;
+}
+
+.completed-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 4px 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: rgb(255 255 255 / 70%);
+  color: var(--accent);
+  padding: 7px 12px;
+  font-size: var(--font-control);
+}
+
+.chevron-placeholder {
+  font-size: 22px;
+  line-height: 0;
+}
+
+/* Empty state */
+.empty-state {
+  display: grid;
+  place-items: center;
+  min-height: 220px;
+  border: 1px dashed rgb(0 0 0 / 14%);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 45%);
+  color: rgb(0 0 0 / 48%);
+  text-align: center;
+}
+
+.empty-state strong {
+  display: block;
+  color: #333;
+  font-size: calc(var(--font-control) + 4px);
+}
+
+/* Composer / add-task bar */
+.add-task-bar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  margin-top: 8px;
+  padding: 12px 14px;
+  border: 1px solid rgb(0 0 0 / 8%);
+  border-radius: 6px;
+  background: rgb(255 255 255 / 82%);
+  box-shadow: 0 10px 30px rgb(90 55 42 / 9%);
+}
+
+.add-task-bar > svg {
+  margin-top: 0;
+}
+
+.composer-main {
+  min-width: 0;
+}
+
+.add-task-bar textarea {
+  width: 100%;
+  min-height: 34px;
+  max-height: 180px;
+  resize: none;
+  overflow: hidden;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #24292f;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: var(--font-composer);
+  line-height: 1.55;
+  padding: 8px 0 0;
+}

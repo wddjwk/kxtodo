@@ -1,0 +1,56 @@
+/* titlebar.css — titlebar + window controls */
+
+.titlebar {
+  position: relative;
+  display: flex;
+  height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  padding-left: 20px;
+  background: #fbfbfb;
+  border-bottom: 1px solid #ececec;
+}
+
+.window-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #202020;
+  font-size: 15px;
+}
+
+.app-glyph {
+  display: grid;
+  width: 21px;
+  height: 21px;
+  place-items: center;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #1d7dda, #58b5ff);
+  color: white;
+}
+
+.window-controls {
+  display: flex;
+  height: 44px;
+}
+
+.window-controls button {
+  display: grid;
+  width: 46px;
+  height: 44px;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: #333;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.window-controls button:hover {
+  background: #e9e9e9;
+}
+
+.window-controls button:last-child:hover {
+  color: white;
+  background: #d93025;
+}
