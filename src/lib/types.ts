@@ -36,6 +36,9 @@ export type Settings = {
   appearance: {
     linkOpenMode: "app" | "system";
     uiScale: number;
+    uiFontSize: number;
+    markdownFontSize: number;
+    editorFontSize: number;
   };
   lifecycle: {
     closeToTray: boolean;

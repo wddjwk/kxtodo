@@ -1,5 +1,5 @@
 {
-  "version": "4.1.0",
+  "version": "5.0.0",
   "exportedAt": "2026-05-29T00:00:00.000Z",
   "scope": "all",
   "state": {
@@ -91,7 +91,7 @@
       {
         "id": "task-rust-1",
         "nodeId": "entry-rust",
-        "markdown": "# 所有权检查\n- [ ] 借用规则整理\n- [x] move 语义复盘\n\n**重点**：`String`、`Vec<T>` 默认移动所有权。\n\n==高亮== 和 [Rust Book](https://doc.rust-lang.org/book/) 链接都需要渲染。",
+        "markdown": "# 所有权检查\n- [ ] 借用规则整理\n- [x] move 语义复盘\n\n**重点**：`String`、`Vec<T>` 默认移动所有权。\n\n```rust\nfn main() {\n    let note = String::from(\"todo\");\n    println!(\"{note}\");\n}\n```\n\n==高亮== 和 [Rust Book](https://doc.rust-lang.org/book/) 链接都需要渲染。",
         "completed": false,
         "important": true,
         "myDay": true,
@@ -149,7 +149,10 @@
     },
     "appearance": {
       "linkOpenMode": "app",
-      "uiScale": 0.62
+      "uiScale": 0.75,
+      "uiFontSize": 18,
+      "markdownFontSize": 20,
+      "editorFontSize": 20
     },
     "lifecycle": {
       "closeToTray": true,

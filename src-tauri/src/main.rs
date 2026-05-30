@@ -16,7 +16,7 @@ use tauri::{
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
-const DEFAULT_UI_SCALE: f64 = 0.62;
+const DEFAULT_UI_SCALE: f64 = 0.75;
 
 struct LifecycleState {
     close_to_tray: AtomicBool,
@@ -74,18 +74,14 @@ fn write_json(path: PathBuf, value: Value) -> Result<(), String> {
 
 fn normalize_ui_scale(scale: Option<f64>) -> f64 {
     let raw = scale.unwrap_or(DEFAULT_UI_SCALE);
-    if (raw - 0.72).abs() < 0.001 || (raw - 0.86).abs() < 0.001 || (raw - 0.92).abs() < 0.001 {
+    if (raw - 0.62).abs() < 0.001
+        || (raw - 0.72).abs() < 0.001
+        || (raw - 0.86).abs() < 0.001
+        || (raw - 0.92).abs() < 0.001
+    {
         return DEFAULT_UI_SCALE;
     }
-    raw.clamp(0.55, 1.05)
-}
-
-fn settings_ui_scale(app: &AppHandle) -> f64 {
-    let raw = settings_file(app)
-        .ok()
-        .and_then(|path| read_json(path).ok())
-        .and_then(|value| value.pointer("/appearance/uiScale").and_then(Value::as_f64));
-    normalize_ui_scale(raw)
+    raw.clamp(0.5, 1.5)
 }
 
 #[tauri::command]
@@ -265,10 +261,9 @@ fn get_autostart_enabled(app: AppHandle) -> Result<bool, String> {
 
 #[tauri::command]
 fn set_webview_zoom(app: AppHandle, scale: f64) -> Result<(), String> {
+    let _ = normalize_ui_scale(Some(scale));
     if let Some(window) = app.get_webview_window("main") {
-        window
-            .set_zoom(normalize_ui_scale(Some(scale)))
-            .map_err(|error| error.to_string())?;
+        window.set_zoom(1.0).map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -329,7 +324,7 @@ fn main() {
         ])
         .setup(|app| {
             if let Some(webview) = app.get_webview_window("main") {
-                let _ = webview.set_zoom(settings_ui_scale(app.handle()));
+                let _ = webview.set_zoom(1.0);
             }
             setup_tray(app)?;
             show_main_window(app.handle());

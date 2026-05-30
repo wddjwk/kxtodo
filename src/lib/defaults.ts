@@ -16,6 +16,7 @@ export const defaultBackground: ListBackground = {
 };
 
 export const themePresets = [
+  { name: "左侧白", color: "#fafafa" },
   { name: "暖杏", color: "#f7efe8" },
   { name: "To Do 蓝", color: "#e8f1ff" },
   { name: "薄荷", color: "#eaf7ef" },
@@ -38,7 +39,10 @@ export const defaultSettings: Settings = {
   },
   appearance: {
     linkOpenMode: "app",
-    uiScale: 0.62
+    uiScale: 0.75,
+    uiFontSize: 18,
+    markdownFontSize: 20,
+    editorFontSize: 20
   },
   lifecycle: {
     closeToTray: true,
@@ -238,11 +242,13 @@ export function normalizeSettings(raw: unknown): Settings {
     if (typeof value !== "number") {
       return null;
     }
-    if (Math.abs(value - 0.72) < 0.001 || Math.abs(value - 0.86) < 0.001 || Math.abs(value - 0.92) < 0.001) {
+    if (Math.abs(value - 0.62) < 0.001 || Math.abs(value - 0.72) < 0.001 || Math.abs(value - 0.86) < 0.001 || Math.abs(value - 0.92) < 0.001) {
       return defaultSettings.appearance.uiScale;
     }
-    return Math.min(1.05, Math.max(0.55, value));
+    return Math.min(1.5, Math.max(0.5, value));
   };
+  const normalizeFontSize = (value: unknown, fallback: number, min = 14, max = 24): number =>
+    typeof value === "number" ? Math.min(max, Math.max(min, Math.round(value))) : fallback;
   const storedUiScale = normalizeUiScale(source?.appearance?.uiScale) ?? normalizeUiScale(source?.display?.uiScale);
   return {
     profile: {
@@ -261,7 +267,10 @@ export function normalizeSettings(raw: unknown): Settings {
           ? "system"
           : defaultSettings.appearance.linkOpenMode,
       uiScale:
-        storedUiScale ?? defaultSettings.appearance.uiScale
+        storedUiScale ?? defaultSettings.appearance.uiScale,
+      uiFontSize: normalizeFontSize(source?.appearance?.uiFontSize, defaultSettings.appearance.uiFontSize, 14, 22),
+      markdownFontSize: normalizeFontSize(source?.appearance?.markdownFontSize, defaultSettings.appearance.markdownFontSize, 14, 26),
+      editorFontSize: normalizeFontSize(source?.appearance?.editorFontSize, defaultSettings.appearance.editorFontSize, 14, 26)
     },
     lifecycle: {
       closeToTray:

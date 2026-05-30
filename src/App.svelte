@@ -11,12 +11,12 @@
     FolderInput,
     FolderPlus,
     Image,
-    Maximize2,
-    Minimize2,
+    Minus,
     MoreHorizontal,
     Pencil,
     Plus,
     Search,
+    Square,
     Star,
     Sun,
     Trash2,
@@ -54,7 +54,7 @@
   import { matchesShortcut } from "./lib/shortcuts";
   import type { AppNode, AppState, ListBackground, Settings, Task } from "./lib/types";
 
-  const appVersion = "4.1.0";
+  const appVersion = "5.0.0";
   const defaultAccent = "#2564cf";
 
   let state: AppState = emptyState();
@@ -85,6 +85,7 @@
   let importInput: HTMLInputElement;
   let backgroundFileInput: HTMLInputElement;
   let avatarFileInput: HTMLInputElement;
+  let settingsDrawerStyle = "";
 
   $: systemNodes = state.nodes.filter((node) => node.kind === "system");
   $: firstEntry = state.nodes.find((node) => node.kind === "entry");
@@ -92,7 +93,9 @@
   $: selectedBackground = getBackground(selectedNode?.id, state.backgrounds);
   $: accent = accentForNode(selectedNode);
   $: mainStyle = buildMainStyle(selectedBackground, accent);
-  $: appShellStyle = buildAppShellStyle(settings.appearance.uiScale);
+  $: appShellStyle = buildAppShellStyle(settings.appearance);
+  $: windowControlsStyle = buildWindowControlsStyle(settings.appearance);
+  $: settingsDrawerStyle = buildSettingsDrawerStyle(settings.appearance);
   $: listCounts = buildListCounts(state);
   $: visibleTasks = buildVisibleTasks(state, selectedNode, searchQuery);
   $: incompleteTasks = visibleTasks.filter((task) => !task.completed);
@@ -283,32 +286,80 @@
     return `--accent: ${color}; --bg-image: ${image}; --bg-opacity: ${opacity}; background: ${background.color};`;
   }
 
-  function buildAppShellStyle(scaleValue: number): string {
-    const scale = uiScaleValue(scaleValue);
+  function fontSizeValue(value: number, fallback: number, min: number, max: number): number {
+    return Math.min(max, Math.max(min, Math.round(value || fallback)));
+  }
+
+  function buildAppShellStyle(appearance: Settings["appearance"]): string {
+    const scale = uiScaleValue(appearance.uiScale);
+    const uiFontSize = fontSizeValue(appearance.uiFontSize, defaultSettings.appearance.uiFontSize, 14, 22);
+    const markdownFontSize = fontSizeValue(appearance.markdownFontSize, defaultSettings.appearance.markdownFontSize, 14, 26);
+    const editorFontSize = fontSizeValue(appearance.editorFontSize, defaultSettings.appearance.editorFontSize, 14, 26);
     return [
       `--ui-scale: ${scale}`,
-      "--app-width: 100vw",
-      "--app-height: 100vh",
-      "--font-title: 36px",
-      "--font-list: 19px",
-      "--font-control: 18px",
-      "--font-task: 18px",
-      "--font-composer: 17px",
-      "--font-drawer-title: 24px"
+      `--ui-font-size: ${uiFontSize}px`,
+      `--markdown-font-size: ${markdownFontSize}px`,
+      `--editor-font-size: ${editorFontSize}px`,
+      `--app-width: ${100 / scale}vw`,
+      `--app-height: ${100 / scale}vh`,
+      `--font-title: ${uiFontSize + 18}px`,
+      `--font-list: ${uiFontSize + 1}px`,
+      `--font-control: ${uiFontSize}px`,
+      `--font-task: ${markdownFontSize}px`,
+      `--font-composer: ${markdownFontSize}px`,
+      `--font-drawer-title: ${uiFontSize + 6}px`
+    ].join("; ");
+  }
+
+  function buildWindowControlsStyle(appearance: Settings["appearance"]): string {
+    return "";
+  }
+
+  function buildSettingsDrawerStyle(appearance: Settings["appearance"]): string {
+    const scale = uiScaleValue(appearance.uiScale);
+    const viewportWidth = typeof window === "undefined" ? 1280 : window.innerWidth;
+    const viewportHeight = typeof window === "undefined" ? 820 : window.innerHeight;
+    const drawerWidth = 380;
+    const titlebarHeight = 52;
+    return [
+      `left: ${(viewportWidth - drawerWidth) / scale}px`,
+      `top: ${titlebarHeight / scale}px`,
+      `width: ${drawerWidth / scale}px`,
+      `height: ${(viewportHeight - titlebarHeight) / scale}px`,
+      `--ui-scale: ${scale}`,
+      `--ui-font-size: ${fontSizeValue(appearance.uiFontSize, defaultSettings.appearance.uiFontSize, 14, 22)}px`,
+      `--markdown-font-size: ${fontSizeValue(appearance.markdownFontSize, defaultSettings.appearance.markdownFontSize, 14, 26)}px`,
+      `--editor-font-size: ${fontSizeValue(appearance.editorFontSize, defaultSettings.appearance.editorFontSize, 14, 26)}px`
     ].join("; ");
   }
 
   function uiScaleValue(scaleValue = settings.appearance.uiScale): number {
-    const staleScale = scaleValue === 0.72 || scaleValue === 0.86 || scaleValue === 0.92;
+    const staleScale = scaleValue === 0.62 || scaleValue === 0.72 || scaleValue === 0.86 || scaleValue === 0.92;
     const normalizedScale = staleScale ? defaultSettings.appearance.uiScale : scaleValue;
-    return Math.min(1.05, Math.max(0.55, normalizedScale || defaultSettings.appearance.uiScale));
+    return Math.min(1.5, Math.max(0.5, normalizedScale || defaultSettings.appearance.uiScale));
+  }
+
+  function scalePercentValue(scaleValue = settings.appearance.uiScale): number {
+    return Math.round(uiScaleValue(scaleValue) * 100);
+  }
+
+  function clampNumber(value: number, fallback: number, min: number, max: number): number {
+    if (!Number.isFinite(value)) {
+      return fallback;
+    }
+    return Math.min(max, Math.max(min, Math.round(value)));
+  }
+
+  function isNumberInRange(value: number, min: number, max: number): boolean {
+    return Number.isFinite(value) && value >= min && value <= max;
   }
 
   function buildMenuStyle(clientX: number, clientY: number, width: number, height: number): string {
-    const viewportWidth = typeof window === "undefined" ? 1200 : window.innerWidth;
-    const viewportHeight = typeof window === "undefined" ? 800 : window.innerHeight;
-    const left = Math.max(8, Math.min(clientX, viewportWidth - width - 10));
-    const top = Math.max(8, Math.min(clientY, viewportHeight - height - 10));
+    const scale = uiScaleValue();
+    const viewportWidth = typeof window === "undefined" ? 1200 : window.innerWidth / scale;
+    const viewportHeight = typeof window === "undefined" ? 800 : window.innerHeight / scale;
+    const left = Math.max(8, Math.min(clientX / scale, viewportWidth - width - 10));
+    const top = Math.max(8, Math.min(clientY / scale, viewportHeight - height - 10));
     return `left: ${left}px; top: ${top}px;`;
   }
 
@@ -878,6 +929,30 @@
     });
   }
 
+  function updateScalePercent(value: number): void {
+    if (isNumberInRange(value, 50, 150)) {
+      updateAppearance("uiScale", Math.round(value) / 100);
+    }
+  }
+
+  function commitScalePercent(value: number): void {
+    const nextPercent = clampNumber(value, scalePercentValue(), 50, 150);
+    updateAppearance("uiScale", nextPercent / 100);
+  }
+
+  function updateAppearanceFont(field: "uiFontSize" | "markdownFontSize" | "editorFontSize", value: number): void {
+    const max = field === "uiFontSize" ? 22 : 26;
+    if (isNumberInRange(value, 14, max)) {
+      updateAppearance(field, Math.round(value));
+    }
+  }
+
+  function commitAppearanceFont(field: "uiFontSize" | "markdownFontSize" | "editorFontSize", value: number): void {
+    const fallback = defaultSettings.appearance[field];
+    const nextSize = clampNumber(value, fallback, 14, field === "uiFontSize" ? 22 : 26);
+    updateAppearance(field, nextSize);
+  }
+
   async function updateLifecycle<K extends keyof Settings["lifecycle"]>(field: K, value: Settings["lifecycle"][K]): Promise<void> {
     try {
       if (field === "closeToTray") {
@@ -975,10 +1050,11 @@
   function startSidebarResize(event: MouseEvent): void {
     event.preventDefault();
     event.stopPropagation();
-    const startX = event.clientX;
+    const scale = uiScaleValue();
+    const startX = event.clientX / scale;
     const startWidth = sidebarWidth;
     const onMove = (moveEvent: MouseEvent): void => {
-      sidebarWidth = Math.min(520, Math.max(250, startWidth + moveEvent.clientX - startX));
+      sidebarWidth = Math.min(520, Math.max(250, startWidth + moveEvent.clientX / scale - startX));
     };
     const onUp = (): void => {
       window.removeEventListener("mousemove", onMove);
@@ -1018,11 +1094,6 @@
     <div class="window-title" data-tauri-drag-region>
       <span class="app-glyph"><Check size={15} /></span>
       <span>Todo Note</span>
-    </div>
-    <div class="window-controls" on:click|stopPropagation>
-      <button type="button" aria-label="最小化" on:click={minimizeWindow}><Minimize2 size={16} /></button>
-      <button type="button" aria-label="最大化" on:click={toggleMaximizeWindow}><Maximize2 size={16} /></button>
-      <button type="button" aria-label="关闭" on:click={closeWindow}><X size={17} /></button>
     </div>
   </header>
 
@@ -1155,9 +1226,9 @@
                   </select>
                 </label>
               {/if}
-              <button type="button" on:click={exportCurrentList}><Download size={15} /> 导出当前</button>
-              <button type="button" on:click={exportAll}><Download size={15} /> 一键全部导出</button>
-              <button type="button" on:click={() => importInput.click()}><Upload size={15} /> 导入 JSON</button>
+              <button type="button" on:click={exportCurrentList}><Upload size={15} /> 导出当前</button>
+              <button type="button" on:click={exportAll}><Upload size={15} /> 一键全部导出</button>
+              <button type="button" on:click={() => importInput.click()}><Download size={15} /> 导入 JSON</button>
               <div class="menu-section-title">背景颜色</div>
               <div class="color-grid">
                 {#each themePresets as preset}
@@ -1184,6 +1255,7 @@
             </section>
           {/if}
         </div>
+
       </section>
 
       <input bind:this={importInput} class="hidden-file" type="file" accept="application/json,.json" on:change={importFromFile} />
@@ -1278,11 +1350,12 @@
             </div>
           {/if}
         </div>
+
       </section>
     </main>
 
     {#if showSettings}
-      <aside class="settings-drawer" on:click|stopPropagation>
+      <aside class="settings-drawer" style={settingsDrawerStyle} on:click|stopPropagation>
         <div class="drawer-header">
           <h2>设置</h2>
           <button type="button" on:click={() => (showSettings = false)}>×</button>
@@ -1307,27 +1380,81 @@
 
         <section>
           <h3>显示与链接</h3>
-          <label class="settings-row">
-            界面缩放
-            <select value={settings.appearance.uiScale} on:change={(event) => updateAppearance("uiScale", Number(event.currentTarget.value))}>
-              <option value="0.55">极紧凑 55%</option>
-              <option value="0.62">默认 62%</option>
-              <option value="0.72">紧凑 72%</option>
-              <option value="0.85">稍大 85%</option>
-              <option value="1">舒适 100%</option>
-              <option value="1.05">放大 105%</option>
-            </select>
-          </label>
-          <label class="settings-row">
-            链接打开
+          <div class="settings-row number-row">
+            <span>界面缩放</span>
+            <span class="number-control">
+              <input
+                aria-label="界面缩放"
+                type="number"
+                min="50"
+                max="150"
+                step="1"
+                value={scalePercentValue(settings.appearance.uiScale)}
+                on:input={(event) => updateScalePercent(event.currentTarget.valueAsNumber)}
+                on:change={(event) => commitScalePercent(event.currentTarget.valueAsNumber)}
+              />
+              <span>%</span>
+            </span>
+          </div>
+          <div class="settings-row number-row">
+            <span>UI 字号</span>
+            <span class="number-control">
+              <input
+                aria-label="UI 字号"
+                type="number"
+                min="14"
+                max="22"
+                step="1"
+                value={settings.appearance.uiFontSize}
+                on:input={(event) => updateAppearanceFont("uiFontSize", event.currentTarget.valueAsNumber)}
+                on:change={(event) => commitAppearanceFont("uiFontSize", event.currentTarget.valueAsNumber)}
+              />
+              <span>px</span>
+            </span>
+          </div>
+          <div class="settings-row number-row">
+            <span>Markdown 字号</span>
+            <span class="number-control">
+              <input
+                aria-label="Markdown 字号"
+                type="number"
+                min="14"
+                max="26"
+                step="1"
+                value={settings.appearance.markdownFontSize}
+                on:input={(event) => updateAppearanceFont("markdownFontSize", event.currentTarget.valueAsNumber)}
+                on:change={(event) => commitAppearanceFont("markdownFontSize", event.currentTarget.valueAsNumber)}
+              />
+              <span>px</span>
+            </span>
+          </div>
+          <div class="settings-row number-row">
+            <span>编辑器字号</span>
+            <span class="number-control">
+              <input
+                aria-label="编辑器字号"
+                type="number"
+                min="14"
+                max="26"
+                step="1"
+                value={settings.appearance.editorFontSize}
+                on:input={(event) => updateAppearanceFont("editorFontSize", event.currentTarget.valueAsNumber)}
+                on:change={(event) => commitAppearanceFont("editorFontSize", event.currentTarget.valueAsNumber)}
+              />
+              <span>px</span>
+            </span>
+          </div>
+          <div class="settings-row">
+            <span>链接打开</span>
             <select
+              aria-label="链接打开"
               value={settings.appearance.linkOpenMode}
               on:change={(event) => updateAppearance("linkOpenMode", event.currentTarget.value as Settings["appearance"]["linkOpenMode"])}
             >
               <option value="app">应用内打开</option>
               <option value="system">系统浏览器</option>
             </select>
-          </label>
+          </div>
         </section>
 
         <section>
@@ -1403,4 +1530,10 @@
   {#if toast}
     <div class="toast">{toast}</div>
   {/if}
+</div>
+
+<div class="window-controls" style={windowControlsStyle} on:click|stopPropagation>
+  <button type="button" aria-label="最小化" on:click={minimizeWindow}><Minus size={16} /></button>
+  <button type="button" aria-label="最大化" on:click={toggleMaximizeWindow}><Square size={15} /></button>
+  <button type="button" aria-label="关闭" on:click={closeWindow}><X size={17} /></button>
 </div>

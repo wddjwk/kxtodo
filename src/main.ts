@@ -1,6 +1,7 @@
 import { mount } from "svelte";
 import App from "./App.svelte";
 import "github-markdown-css/github-markdown-light.css";
+import "highlight.js/styles/github.css";
 import "./app.css";
 
 const target = document.getElementById("app");

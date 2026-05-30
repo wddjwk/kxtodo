@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher, tick } from "svelte";
-  import { Check, Pencil } from "@lucide/svelte";
-  import { firstMarkdownLine, renderMarkdown } from "./markdown";
+  import { Check, ChevronUp, Pencil } from "@lucide/svelte";
+  import { collapsedMarkdownLine, renderInlineMarkdown, renderMarkdown } from "./markdown";
   import type { Task } from "./types";
 
   export let task: Task;
@@ -21,7 +21,7 @@
   let editingTaskId = "";
   let editorEl: HTMLTextAreaElement;
 
-  $: title = firstMarkdownLine(task.markdown);
+  $: collapsedHtml = renderInlineMarkdown(collapsedMarkdownLine(task.markdown));
   $: fullHtml = renderMarkdown(task.markdown);
   $: if (task.editing && editingTaskId !== task.id) {
     draft = task.markdown;
@@ -54,20 +54,35 @@
     }
   }
 
-  function toggleExpand(event: MouseEvent): void {
+  function handleEditZoneMouseDown(event: MouseEvent): void {
+    if (event.button !== 0) {
+      return;
+    }
+    const card = event.currentTarget as HTMLElement;
+    const rect = card.getBoundingClientRect();
+    const inEditZone = event.clientX >= rect.right - 58 && event.clientY <= rect.top + 58;
+    if (!inEditZone) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    toggleEdit();
+  }
+
+  function toggleExpand(event?: MouseEvent): void {
     if (task.editing) {
       return;
     }
-    event.stopPropagation();
+    event?.stopPropagation();
     dispatch("expand", task.id);
   }
 
   function handleBodyDblClick(event: MouseEvent): void {
     const target = event.target as HTMLElement | null;
-    if (target?.closest("button, a, input, textarea")) {
+    if (task.editing || target?.closest("button, input, textarea")) {
       return;
     }
-    void startEdit();
+    toggleExpand(event);
   }
 
   function openContext(event: MouseEvent): void {
@@ -101,9 +116,11 @@
 <article
   class:completed={task.completed}
   class:compact={!task.expanded && !task.editing}
+  class:expanded={task.expanded && !task.editing}
   class:editing={task.editing}
   class:selected
   class="task-card"
+  on:mousedown|capture={handleEditZoneMouseDown}
   on:contextmenu={openContext}
 >
   <div class="task-title-grid">
@@ -114,36 +131,41 @@
     </button>
 
     <section class="task-body" on:dblclick={handleBodyDblClick}>
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="markdown-title-row" on:click={toggleExpand}>{title}</div>
+      {#if task.editing}
+        <textarea
+          bind:this={editorEl}
+          bind:value={draft}
+          class="markdown-editor"
+          spellcheck="false"
+          on:input={resizeEditor}
+          on:blur={commitEdit}
+        ></textarea>
+      {:else if task.expanded}
+        <div class="markdown-body markdown-content" on:click={handleMarkdownClick} on:dblclick={handleBodyDblClick}>
+          {@html fullHtml}
+        </div>
+      {:else}
+        <div class="markdown-body markdown-title-row">
+          {@html collapsedHtml}
+        </div>
+      {/if}
     </section>
 
-    {#if task.dueDate}
+    {#if !task.expanded && !task.editing && task.dueDate}
       <span class="task-due-date">{task.dueDate}</span>
     {:else}
       <span class="task-due-spacer" aria-hidden="true"></span>
     {/if}
 
-    <button class="edit-button" type="button" title="编辑 Markdown" on:mousedown|preventDefault on:click|stopPropagation={toggleEdit}>
+    <button class="edit-button" type="button" title="编辑 Markdown" on:mousedown|preventDefault|stopPropagation={toggleEdit} on:click|preventDefault|stopPropagation>
       <Pencil size={18} />
     </button>
+
+    {#if task.expanded && !task.editing}
+      <button class="collapse-button" type="button" title="收起卡片" on:click|stopPropagation={toggleExpand}>
+        <ChevronUp size={18} />
+      </button>
+    {/if}
   </div>
 
-  {#if task.editing}
-    <section class="task-detail task-editor-detail" on:dblclick={handleBodyDblClick}>
-      <textarea
-        bind:this={editorEl}
-        bind:value={draft}
-        class="markdown-editor"
-        spellcheck="false"
-        on:input={resizeEditor}
-        on:blur={commitEdit}
-      ></textarea>
-    </section>
-  {:else if task.expanded}
-    <div class="markdown-body markdown-content task-detail" on:click={handleMarkdownClick} on:dblclick={handleBodyDblClick}>
-      {@html fullHtml}
-    </div>
-  {/if}
 </article>
