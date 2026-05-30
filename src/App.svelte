@@ -54,7 +54,7 @@
   import { matchesShortcut } from "./lib/shortcuts";
   import type { AppNode, AppState, ListBackground, Settings, Task } from "./lib/types";
 
-  const appVersion = "5.1.0";
+  const appVersion = "5.2.0";
   const defaultAccent = "#2564cf";
 
   let state: AppState = emptyState();
@@ -1350,11 +1350,6 @@
             on:input={resizeComposer}
             on:keydown={handleComposerKeydown}
           ></textarea>
-          {#if newTaskDraft.trim() && newTaskDraft.includes("\n")}
-            <div class="markdown-body composer-preview">
-              {@html renderMarkdown(newTaskDraft)}
-            </div>
-          {/if}
         </div>
 
       </section>

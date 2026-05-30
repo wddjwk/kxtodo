@@ -271,13 +271,12 @@
       <span class="list-name">{node.name}</span>
     {/if}
 
-    {#if counts[node.id]}
-      <span class="count-pill">{counts[node.id]}</span>
-    {/if}
     {#if node.kind === "category"}
       <button class="collapse-button" type="button" aria-label="折叠分类" on:click|stopPropagation={() => dispatch("toggleCategory", node.id)}>
         <ChevronDown class={node.collapsed ? "collapsed" : ""} size={19} />
       </button>
+    {:else if counts[node.id]}
+      <span class="count-pill">{counts[node.id]}</span>
     {/if}
   </div>
   {#if node.kind === "category" && !node.collapsed}

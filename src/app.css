@@ -223,6 +223,7 @@ button,
   padding: 18px 6px 0;
   background: linear-gradient(90deg, #fafafa 0%, #f6f6f6 100%);
   border-right: 1px solid #eeeeee;
+  user-select: none;
 }
 
 .resize-handle {
@@ -404,7 +405,7 @@ button,
   padding: 0 8px 0 calc(18px + var(--depth, 0) * 20px);
   border-radius: 4px;
   color: #292929;
-  cursor: grab;
+  cursor: default;
 }
 
 .tree-row:hover {
@@ -1243,10 +1244,6 @@ h1 {
   box-shadow: 0 10px 30px rgb(90 55 42 / 9%);
 }
 
-.add-task-bar:has(.composer-preview) {
-  align-items: start;
-}
-
 .composer-main {
   min-width: 0;
 }
@@ -1256,6 +1253,7 @@ h1 {
   min-height: 34px;
   max-height: 180px;
   resize: none;
+  overflow: hidden;
   border: 0;
   outline: none;
   background: transparent;
@@ -1264,15 +1262,6 @@ h1 {
   font-size: var(--font-composer);
   line-height: 1.55;
   padding: 8px 0 0;
-}
-
-.composer-preview {
-  max-height: 150px;
-  overflow: auto;
-  margin-top: 8px;
-  border-top: 1px solid rgb(0 0 0 / 8%);
-  padding-top: 8px;
-  font-size: var(--markdown-font-size);
 }
 
 .settings-drawer {
