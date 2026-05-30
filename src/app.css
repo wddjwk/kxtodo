@@ -185,13 +185,8 @@ button,
 }
 
 .window-controls {
-  position: fixed;
-  top: 0;
-  right: 0;
-  z-index: 10000;
   display: flex;
   height: 44px;
-  background: transparent;
 }
 
 .window-controls button {
@@ -201,6 +196,7 @@ button,
   place-items: center;
   border: 0;
   background: transparent;
+  color: #333;
   font-size: 16px;
   line-height: 1;
 }
@@ -475,7 +471,6 @@ button,
   width: 30px;
   min-width: 30px;
   height: 30px;
-  margin-left: auto;
   place-items: center;
   border: 0;
   border-radius: 4px;
@@ -561,6 +556,7 @@ button,
   display: inline-grid;
   min-width: 24px;
   height: 24px;
+  flex-shrink: 0;
   place-items: center;
   padding: 0 7px;
   border-radius: 999px;
@@ -689,7 +685,7 @@ button,
   min-width: 0;
   flex: 1;
   flex-direction: column;
-  padding: 44px 220px 54px 56px;
+  padding: 44px 56px 54px 56px;
   color: #292929;
   transition: background 160ms ease;
   overflow: hidden;
@@ -870,7 +866,6 @@ h1 {
   min-height: 0;
   flex: 1;
   overflow-y: auto;
-  padding-right: 160px;
 }
 
 .task-card {

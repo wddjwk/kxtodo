@@ -54,7 +54,7 @@
   import { matchesShortcut } from "./lib/shortcuts";
   import type { AppNode, AppState, ListBackground, Settings, Task } from "./lib/types";
 
-  const appVersion = "5.0.0";
+  const appVersion = "5.1.0";
   const defaultAccent = "#2564cf";
 
   let state: AppState = emptyState();
@@ -94,7 +94,6 @@
   $: accent = accentForNode(selectedNode);
   $: mainStyle = buildMainStyle(selectedBackground, accent);
   $: appShellStyle = buildAppShellStyle(settings.appearance);
-  $: windowControlsStyle = buildWindowControlsStyle(settings.appearance);
   $: settingsDrawerStyle = buildSettingsDrawerStyle(settings.appearance);
   $: listCounts = buildListCounts(state);
   $: visibleTasks = buildVisibleTasks(state, selectedNode, searchQuery);
@@ -207,9 +206,15 @@
   async function syncNativeLifecycle(nextSettings: Settings): Promise<void> {
     try {
       await setCloseToTray(nextSettings.lifecycle.closeToTray);
-      await setAutostart(nextSettings.lifecycle.launchAtStartup);
     } catch (error) {
       showToast(`系统设置同步失败：${String(error)}`);
+    }
+    try {
+      await setAutostart(nextSettings.lifecycle.launchAtStartup);
+    } catch (error) {
+      if (nextSettings.lifecycle.launchAtStartup) {
+        showToast(`开机自启设置失败：${String(error)}`);
+      }
     }
   }
 
@@ -309,10 +314,6 @@
       `--font-composer: ${markdownFontSize}px`,
       `--font-drawer-title: ${uiFontSize + 6}px`
     ].join("; ");
-  }
-
-  function buildWindowControlsStyle(appearance: Settings["appearance"]): string {
-    return "";
   }
 
   function buildSettingsDrawerStyle(appearance: Settings["appearance"]): string {
@@ -1095,6 +1096,11 @@
       <span class="app-glyph"><Check size={15} /></span>
       <span>Todo Note</span>
     </div>
+    <div class="window-controls" on:click|stopPropagation>
+      <button type="button" aria-label="最小化" on:click={minimizeWindow}><Minus size={16} /></button>
+      <button type="button" aria-label="最大化" on:click={toggleMaximizeWindow}><Square size={14} /></button>
+      <button type="button" aria-label="关闭" on:click={closeWindow}><X size={16} /></button>
+    </div>
   </header>
 
   <div class="layout">
@@ -1530,10 +1536,4 @@
   {#if toast}
     <div class="toast">{toast}</div>
   {/if}
-</div>
-
-<div class="window-controls" style={windowControlsStyle} on:click|stopPropagation>
-  <button type="button" aria-label="最小化" on:click={minimizeWindow}><Minus size={16} /></button>
-  <button type="button" aria-label="最大化" on:click={toggleMaximizeWindow}><Square size={15} /></button>
-  <button type="button" aria-label="关闭" on:click={closeWindow}><X size={17} /></button>
 </div>
