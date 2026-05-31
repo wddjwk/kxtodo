@@ -10,6 +10,7 @@
   import {
     setCloseToTray, setAutostart, registerGlobalShortcut
   } from "./backend";
+  import Dropdown from "./Dropdown.svelte";
   import type { Settings } from "./types";
 
   let avatarFileInput: HTMLInputElement;
@@ -195,29 +196,32 @@
     </div>
     <div class="settings-row">
       <span>链接打开</span>
-      <select
-        aria-label="链接打开"
+      <Dropdown
+        ariaLabel="链接打开"
         value={$appSettings.appearance.linkOpenMode}
-        on:change={(event) => updateAppearance("linkOpenMode", event.currentTarget.value as Settings["appearance"]["linkOpenMode"])}
-      >
-        <option value="app">应用内打开</option>
-        <option value="system">系统浏览器</option>
-      </select>
+        options={[
+          { value: "app", label: "应用内打开" },
+          { value: "system", label: "系统浏览器" }
+        ]}
+        on:change={(event) => updateAppearance("linkOpenMode", event.detail as Settings["appearance"]["linkOpenMode"])}
+      />
     </div>
   </section>
 
   <section>
     <h3>窗口与系统</h3>
-    <label class="settings-row">
-      关闭按钮
-      <select
+    <div class="settings-row">
+      <span>关闭按钮</span>
+      <Dropdown
+        ariaLabel="关闭按钮"
         value={$appSettings.lifecycle.closeToTray ? "tray" : "exit"}
-        on:change={(event) => void updateLifecycle("closeToTray", event.currentTarget.value === "tray")}
-      >
-        <option value="tray">退到系统托盘</option>
-        <option value="exit">直接退出应用</option>
-      </select>
-    </label>
+        options={[
+          { value: "tray", label: "退到系统托盘" },
+          { value: "exit", label: "直接退出应用" }
+        ]}
+        on:change={(event) => void updateLifecycle("closeToTray", event.detail === "tray")}
+      />
+    </div>
     <label class="toggle-row">
       <span>开机自启</span>
       <input
@@ -258,12 +262,16 @@
     <div class="sync-card">
       <label class="settings-row">
         提供方
-        <select value={$appSettings.cloud.provider} on:change={(event) => updateCloudProvider(event.currentTarget.value as Settings["cloud"]["provider"])}>
-          <option value="none">未启用</option>
-          <option value="webdav">WebDAV</option>
-          <option value="s3">S3</option>
-          <option value="custom">自定义 HTTP</option>
-        </select>
+        <Dropdown
+          value={$appSettings.cloud.provider}
+          options={[
+            { value: "none", label: "未启用" },
+            { value: "webdav", label: "WebDAV" },
+            { value: "s3", label: "S3" },
+            { value: "custom", label: "自定义 HTTP" }
+          ]}
+          on:change={(event) => updateCloudProvider(event.detail as Settings["cloud"]["provider"])}
+        />
       </label>
       <label class="settings-row">
         地址

@@ -14,9 +14,13 @@
   import { moveTargetOptions, nodeAndDescendantIds, exportStateForNode, getBackground } from "./nodes";
   import { buildMainStyle, buildMenuStyle, uiScaleValue } from "./styles";
   import { normalizeState, normalizeSettings, defaultBackground, themePresets } from "./defaults";
-  import { exportData, openExternalUrl } from "./backend";
+  import { exportData, openExternalUrl, isTauriRuntime, saveBackgroundImage, deleteBackgroundImage } from "./backend";
+  import {
+    imageCache, resolveImageSrc, isLocalImageRef, localImageRef, localImageFilename, primeImageCache
+  } from "./images";
   import IconGlyph from "./IconGlyph.svelte";
   import TaskCard from "./TaskCard.svelte";
+  import DatePicker from "./DatePicker.svelte";
   import type { AppNode, AppState, ListBackground, Settings, Task } from "./types";
 
   type SortMode = "created-desc" | "created-asc" | "alpha-asc" | "alpha-desc" | "due-asc" | "due-desc" | "importance";
@@ -52,21 +56,28 @@
   let calViewMode: "month" | "week" = "month";
   let calYear = new Date().getFullYear();
   let calMonth = new Date().getMonth();
-  let calSelectedDate = todayIso();
+  // The date whose completed tasks are mirrored in the main area (history view).
+  // Always resets to today when leaving / re-entering My Day.
+  let myDayViewDate = todayIso();
 
-  $: mainStyle = buildMainStyle($selectedBackground, $accent);
+  $: resolvedBgImage = resolveImageSrc($selectedBackground.image, $imageCache);
+  $: mainStyle = buildMainStyle($selectedBackground, $accent, resolvedBgImage);
   $: isMyDay = $selectedNode?.id === "my-day";
+  $: if (!isMyDay && myDayViewDate !== todayIso()) myDayViewDate = todayIso();
+  $: isMyDayHistory = isMyDay && myDayViewDate !== todayIso();
   $: sortedTasks = sortTasks($visibleTasks, sortMode);
-  $: incompleteTasks = sortedTasks.filter((task) => !task.completed);
+  $: incompleteTasks = isMyDayHistory ? [] : sortedTasks.filter((task) => !task.completed);
   $: completedTasks = isMyDay
-    ? sortedTasks.filter((task) => task.completed && dateOnly(task.completedAt) === todayIso())
+    ? (isMyDayHistory
+        ? sortTasks(completedByDate[myDayViewDate] ?? [], sortMode)
+        : sortedTasks.filter((task) => task.completed && dateOnly(task.completedAt) === todayIso()))
     : sortedTasks.filter((task) => task.completed);
   $: selectedMoveTargets = $selectedNode ? moveTargetOptions($selectedNode.id, $appState.nodes) : [];
   $: taskMenuStyle = taskMenu ? buildMenuStyle(taskMenu.x, taskMenu.y, 230, taskMenu.showDate ? 260 : 188, uiScaleValue($appSettings.appearance.uiScale)) : "";
   $: taskMenuTask = taskMenu ? $appState.tasks.find((task) => task.id === taskMenu?.taskId) : null;
   $: if (($selectedNode?.id ?? "") !== backgroundDraftNodeId) {
     backgroundDraftNodeId = $selectedNode?.id ?? "";
-    backgroundLinkDraft = $selectedBackground.image ?? "";
+    backgroundLinkDraft = isLocalImageRef($selectedBackground.image) ? "" : ($selectedBackground.image ?? "");
   }
 
   // My Day suggestions
@@ -103,12 +114,33 @@
     return map;
   })();
 
-  $: calSelectedTasks = completedByDate[calSelectedDate] ?? [];
+  $: calSelectedTasks = completedByDate[myDayViewDate] ?? [];
+
+  // Week view: a summary of the whole week's completed tasks grouped by day.
+  $: weekSummary = (() => {
+    const d = new Date(myDayViewDate + "T00:00:00");
+    const start = new Date(d);
+    start.setDate(start.getDate() - d.getDay());
+    const days: Array<{ date: string; label: string; tasks: Task[] }> = [];
+    for (let i = 0; i < 7; i++) {
+      const cur = new Date(start);
+      cur.setDate(cur.getDate() + i);
+      const ds = fmtDateStr(cur.getFullYear(), cur.getMonth(), cur.getDate());
+      days.push({
+        date: ds,
+        label: `${cur.getMonth() + 1}月${cur.getDate()}日 周${weekDayLabels[cur.getDay()]}`,
+        tasks: completedByDate[ds] ?? []
+      });
+    }
+    return days;
+  })();
+
+  $: weekSummaryTotal = weekSummary.reduce((sum, day) => sum + day.tasks.length, 0);
 
   const weekDayLabels = ["日", "一", "二", "三", "四", "五", "六"];
 
-  function formatMyDayDate(): string {
-    const d = new Date();
+  function formatMyDayDate(dateStr: string): string {
+    const d = new Date(dateStr + "T00:00:00");
     const weekDays = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
     return `${d.getMonth() + 1}月${d.getDate()}日, ${weekDays[d.getDay()]}`;
   }
@@ -137,19 +169,13 @@
     return cells;
   }
 
-  function calWeekDays(): Array<{ date: string; day: number; hasTask: boolean }> {
-    const d = new Date(calSelectedDate + "T00:00:00");
-    const dow = d.getDay();
+  function calWeekRange(): string {
+    const d = new Date(myDayViewDate + "T00:00:00");
     const start = new Date(d);
-    start.setDate(start.getDate() - dow);
-    const days: Array<{ date: string; day: number; hasTask: boolean }> = [];
-    for (let i = 0; i < 7; i++) {
-      const cur = new Date(start);
-      cur.setDate(cur.getDate() + i);
-      const ds = fmtDateStr(cur.getFullYear(), cur.getMonth(), cur.getDate());
-      days.push({ date: ds, day: cur.getDate(), hasTask: !!completedByDate[ds]?.length });
-    }
-    return days;
+    start.setDate(start.getDate() - d.getDay());
+    const end = new Date(start);
+    end.setDate(end.getDate() + 6);
+    return `${start.getMonth() + 1}月${start.getDate()}日 – ${end.getMonth() + 1}月${end.getDate()}日`;
   }
 
   function fmtDateStr(y: number, m: number, d: number): string {
@@ -216,7 +242,6 @@
       const d = new Date();
       calYear = d.getFullYear();
       calMonth = d.getMonth();
-      calSelectedDate = todayIso();
     }
   }
 
@@ -263,10 +288,6 @@
         return { ...task, expanded: expandTarget, editing: false };
       })
     });
-  }
-
-  function defaultDateValue(): string {
-    return todayIso();
   }
 
   function updateTask(taskId: string, updater: (task: Task) => Task): void {
@@ -349,8 +370,11 @@
   function updateBackgroundLink(event: Event): void {
     const target = event.currentTarget;
     if (!(target instanceof HTMLInputElement)) return;
+    const previous = $selectedBackground.image;
     backgroundLinkDraft = target.value;
-    setBackground({ image: target.value.trim() || undefined });
+    const next = target.value.trim() || undefined;
+    setBackground({ image: next });
+    if (isLocalImageRef(previous) && previous !== next) void deleteBackgroundImage(localImageFilename(previous));
   }
 
   function updateBackgroundOpacity(event: Event): void {
@@ -394,14 +418,29 @@
     const target = event.currentTarget;
     if (!(target instanceof HTMLInputElement) || !target.files?.[0]) return;
     try {
+      const previous = $selectedBackground.image;
       const dataUrl = await fileToDataUrl(target.files[0]);
-      backgroundLinkDraft = dataUrl;
-      setBackground({ image: dataUrl });
+      if (isTauriRuntime) {
+        const filename = await saveBackgroundImage(dataUrl);
+        primeImageCache(filename, dataUrl);
+        setBackground({ image: localImageRef(filename) });
+      } else {
+        setBackground({ image: dataUrl });
+      }
+      backgroundLinkDraft = "";
+      if (isLocalImageRef(previous)) void deleteBackgroundImage(localImageFilename(previous));
     } catch (error) {
       showToast(`背景图片读取失败：${String(error)}`);
     } finally {
       target.value = "";
     }
+  }
+
+  function clearBackground(): void {
+    const previous = $selectedBackground.image;
+    backgroundLinkDraft = "";
+    setBackground({ image: undefined });
+    if (isLocalImageRef(previous)) void deleteBackgroundImage(localImageFilename(previous));
   }
 
   async function exportCurrentList(): Promise<void> {
@@ -426,7 +465,7 @@
       state: $appState,
       settings: $appSettings
     };
-    await exportData(payload, `todo-note-${APP_VERSION}-all.json`);
+    await exportData(payload, `kxtodo-${APP_VERSION}-all.json`);
     showListMenu = false;
     showToast("全部数据已导出");
   }
@@ -524,7 +563,7 @@
           <IconGlyph icon={$selectedNode?.icon ?? "notebook"} size={34} />
         {/if}
       </span>
-      <h1>{$isSearching ? `搜索结果：${$searchQuery}` : $selectedNode?.name ?? "随手记"}</h1>
+      <h1>{$isSearching ? `搜索结果：${$searchQuery}` : $selectedNode?.name ?? "KXToDo"}</h1>
     </div>
     <div class="header-actions" on:click|stopPropagation>
       {#if isMyDay}
@@ -577,44 +616,50 @@
             <button type="button" class:active={calViewMode === "month"} on:click={() => (calViewMode = "month")}>月</button>
             <button type="button" class:active={calViewMode === "week"} on:click={() => (calViewMode = "week")}>周</button>
           </div>
-          <div class="calendar-grid">
-            {#each weekDayLabels as label}
-              <span class="day-header">{label}</span>
-            {/each}
-            {#if calViewMode === "month"}
+          {#if calViewMode === "month"}
+            <div class="calendar-grid">
+              {#each weekDayLabels as label}
+                <span class="day-header">{label}</span>
+              {/each}
               {#each calMonthDays() as cell}
                 <button
                   type="button"
                   class="day-cell"
                   class:other-month={!cell.current}
                   class:today={cell.date === todayIso()}
-                  class:selected={cell.date === calSelectedDate}
+                  class:selected={cell.date === myDayViewDate}
                   class:has-tasks={cell.hasTask}
-                  on:click={() => (calSelectedDate = cell.date)}
+                  on:click={() => (myDayViewDate = cell.date)}
                 >{cell.day}</button>
               {/each}
+            </div>
+            <div class="calendar-tasks-title">
+              {(() => { const p = myDayViewDate.split("-").map(Number); return `${p[1]}月${p[2]}日 完成的任务`; })()}
+            </div>
+            {#if calSelectedTasks.length === 0}
+              <div class="calendar-no-tasks">无完成任务</div>
             {:else}
-              {#each calWeekDays() as cell}
-                <button
-                  type="button"
-                  class="day-cell"
-                  class:today={cell.date === todayIso()}
-                  class:selected={cell.date === calSelectedDate}
-                  class:has-tasks={cell.hasTask}
-                  on:click={() => (calSelectedDate = cell.date)}
-                >{cell.day}</button>
+              {#each calSelectedTasks as task (task.id)}
+                <div class="calendar-task-item">{collapsedLine(task.markdown)}</div>
               {/each}
             {/if}
-          </div>
-          <div class="calendar-tasks-title">
-            {(() => { const p = calSelectedDate.split("-").map(Number); return `${p[1]}月${p[2]}日 完成的任务`; })()}
-          </div>
-          {#if calSelectedTasks.length === 0}
-            <div class="calendar-no-tasks">无完成任务</div>
           {:else}
-            {#each calSelectedTasks as task (task.id)}
-              <div class="calendar-task-item">{collapsedLine(task.markdown)}</div>
-            {/each}
+            <div class="calendar-tasks-title">
+              {calWeekRange()} · 共 {weekSummaryTotal} 项
+            </div>
+            <div class="week-summary">
+              {#each weekSummary as day (day.date)}
+                <div class="week-summary-day" class:active={day.date === myDayViewDate}>
+                  <button type="button" class="week-summary-head" class:is-today={day.date === todayIso()} on:click={() => (myDayViewDate = day.date)}>
+                    <span>{day.label}</span>
+                    <span class="week-summary-count">{day.tasks.length}</span>
+                  </button>
+                  {#each day.tasks as task (task.id)}
+                    <div class="calendar-task-item">{collapsedLine(task.markdown)}</div>
+                  {/each}
+                </div>
+              {/each}
+            </div>
           {/if}
         </section>
       {/if}
@@ -639,7 +684,7 @@
           {#if showSortOptions}
             <div class="sort-submenu">
               {#each Object.entries(sortLabels) as [mode, label]}
-                <button type="button" class:active={sortMode === mode} on:click={() => setSortMode(mode)}>{label}</button>
+                <button type="button" class:active={sortMode === mode} on:click={() => setSortMode(mode as SortMode)}>{label}</button>
               {/each}
             </div>
           {/if}
@@ -669,7 +714,7 @@
           </label>
           <div class="menu-inline two">
             <button type="button" on:click={() => backgroundFileInput.click()}><Image size={15} /> 上传图片</button>
-            <button type="button" on:click={() => { backgroundLinkDraft = ""; setBackground({ image: undefined }); }}><Eraser size={15} /> 清除背景</button>
+            <button type="button" on:click={clearBackground}><Eraser size={15} /> 清除背景</button>
           </div>
         </section>
       {/if}
@@ -677,7 +722,12 @@
   </section>
 
   {#if isMyDay}
-    <p class="my-day-subtitle">{formatMyDayDate()}</p>
+    <p class="my-day-subtitle">
+      {formatMyDayDate(myDayViewDate)}
+      {#if isMyDayHistory}
+        <button type="button" class="my-day-back" on:click={() => (myDayViewDate = todayIso())}>返回今天</button>
+      {/if}
+    </p>
   {/if}
 
   <input bind:this={importInput} class="hidden-file" type="file" accept="application/json,.json" on:change={importFromFile} />
@@ -724,10 +774,12 @@
       </section>
     {/if}
 
-    {#if $visibleTasks.length === 0}
+    {#if incompleteTasks.length === 0 && completedTasks.length === 0}
       <div class="empty-state">
-        <strong>{$isSearching ? "没有搜索结果" : "这个条目还没有内容"}</strong>
-        <span>在下方输入 Markdown，按 Enter 添加；Shift + Enter 换行。</span>
+        <strong>{$isSearching ? "没有搜索结果" : (isMyDayHistory ? "这一天没有完成任何事项" : "这个条目还没有内容")}</strong>
+        {#if !isMyDayHistory}
+          <span>在下方输入 Markdown，按 Enter 添加；Shift + Enter 换行。</span>
+        {/if}
       </div>
     {/if}
   </section>
@@ -745,7 +797,13 @@
         <CalendarDays size={16} /> 添加日期
       </button>
       {#if taskMenu.showDate}
-        <input type="date" value={taskMenuTask.dueDate?.slice(0, 10) ?? defaultDateValue()} on:change={(event) => setTaskDate(taskMenuTask.id, event.currentTarget.value)} />
+        <div class="task-menu-date">
+          <DatePicker
+            value={taskMenuTask.dueDate?.slice(0, 10) ?? ""}
+            on:select={(event) => setTaskDate(taskMenuTask.id, event.detail)}
+            on:clear={() => setTaskDate(taskMenuTask.id, "")}
+          />
+        </div>
       {/if}
       <button type="button" on:click={() => { updateTask(taskMenuTask.id, (task) => ({ ...task, important: !task.important })); taskMenu = null; }}>
         <Star size={16} /> {taskMenuTask.important ? "取消收藏" : "收藏"}
@@ -756,18 +814,20 @@
     </div>
   {/if}
 
-  <section class="add-task-bar" on:click|stopPropagation>
-    <Plus size={24} />
-    <div class="composer-main">
-      <textarea
-        bind:this={taskInput}
-        bind:value={newTaskDraft}
-        placeholder="添加事项"
-        spellcheck="false"
-        rows="1"
-        on:input={resizeComposer}
-        on:keydown={handleComposerKeydown}
-      ></textarea>
-    </div>
-  </section>
+  {#if !isMyDayHistory}
+    <section class="add-task-bar" on:click|stopPropagation>
+      <Plus size={24} />
+      <div class="composer-main">
+        <textarea
+          bind:this={taskInput}
+          bind:value={newTaskDraft}
+          placeholder="添加事项"
+          spellcheck="false"
+          rows="1"
+          on:input={resizeComposer}
+          on:keydown={handleComposerKeydown}
+        ></textarea>
+      </div>
+    </section>
+  {/if}
 </main>

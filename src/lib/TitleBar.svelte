@@ -1,7 +1,8 @@
 <script lang="ts">
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { Check, Minus, Square, X } from "@lucide/svelte";
+  import { Minus, Square, X } from "@lucide/svelte";
   import { showToast } from "./stores";
+  import logoUrl from "../../logo.png";
 
   async function minimizeWindow(): Promise<void> {
     try {
@@ -30,8 +31,8 @@
 
 <header class="titlebar" data-tauri-drag-region>
   <div class="window-title" data-tauri-drag-region>
-    <span class="app-glyph"><Check size={15} /></span>
-    <span>Todo Note</span>
+    <img class="app-glyph" src={logoUrl} alt="KXToDo" draggable="false" />
+    <span>KXToDo</span>
   </div>
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->

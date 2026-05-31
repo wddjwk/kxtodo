@@ -37,6 +37,21 @@ if (!(Test-Path -LiteralPath (Join-Path $root "node_modules"))) {
   npm install
 }
 
+# Regenerate app icons from logo.png so swapping logo.png + repackaging just works.
+# Best-effort: requires Python with Pillow. If unavailable, the committed icons are used.
+$logoPath = Join-Path $root "logo.png"
+if (Test-Path -LiteralPath $logoPath) {
+  $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+  if ($pythonCmd) {
+    & $pythonCmd.Source (Join-Path $root "scripts\make-icon.py")
+    if ($LASTEXITCODE -ne 0) {
+      Write-Warning "Icon regeneration skipped (Pillow not available). Using committed icons."
+    }
+  } else {
+    Write-Warning "Python not found; skipping icon regeneration. Using committed icons."
+  }
+}
+
 npm run build
 $binaryPath = Join-Path $root "src-tauri\target\release\todo-note.exe"
 Remove-Item -LiteralPath $binaryPath -Force -ErrorAction SilentlyContinue
@@ -49,7 +64,7 @@ $effectiveVersion = if ($Version.Trim().Length -gt 0) {
 }
 
 $releaseDir = Join-Path $root "release"
-$releaseBinary = Join-Path $releaseDir "TodoNote-$effectiveVersion.exe"
+$releaseBinary = Join-Path $releaseDir "KXToDo-$effectiveVersion.exe"
 New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
 Copy-Item -LiteralPath $binaryPath -Destination $releaseBinary -Force
 Write-Host "Built binary: $releaseBinary"

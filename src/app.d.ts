@@ -9,3 +9,8 @@ declare namespace svelteHTML {
     };
   }
 }
+
+declare module "*.png" {
+  const src: string;
+  export default src;
+}

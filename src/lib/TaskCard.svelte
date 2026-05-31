@@ -2,6 +2,7 @@
   import { createEventDispatcher, tick } from "svelte";
   import { Check, ChevronUp, PenLine } from "@lucide/svelte";
   import { collapsedMarkdownLine, renderInlineMarkdown, renderMarkdown } from "./markdown";
+  import DatePicker from "./DatePicker.svelte";
   import type { Task } from "./types";
 
   export let task: Task;
@@ -21,7 +22,7 @@
   let draft = "";
   let editingTaskId = "";
   let editorEl: HTMLTextAreaElement;
-  let dateInput: HTMLInputElement;
+  let showPicker = false;
 
   $: collapsedHtml = renderInlineMarkdown(collapsedMarkdownLine(task.markdown));
   $: fullHtml = renderMarkdown(task.markdown);
@@ -39,15 +40,18 @@
     return `${parts[1]}月${parts[2]}日`;
   }
 
-  function openDatePicker(): void {
-    if (!dateInput) return;
-    dateInput.value = task.dueDate?.slice(0, 10) ?? "";
-    dateInput.showPicker?.();
+  function toggleDatePicker(): void {
+    showPicker = !showPicker;
   }
 
-  function handleDateChange(): void {
-    if (!dateInput) return;
-    dispatch("setDate", { id: task.id, date: dateInput.value });
+  function handlePick(date: string): void {
+    showPicker = false;
+    dispatch("setDate", { id: task.id, date });
+  }
+
+  function handleClearDate(): void {
+    showPicker = false;
+    dispatch("setDate", { id: task.id, date: "" });
   }
 
   async function startEdit(): Promise<void> {
@@ -134,6 +138,8 @@
   }
 </script>
 
+<svelte:window on:click={() => (showPicker = false)} />
+
 <article
   class:completed={task.completed}
   class:compact={!task.expanded && !task.editing}
@@ -173,8 +179,14 @@
     </section>
 
     {#if !task.expanded && !task.editing && task.dueDate}
-      <button class="task-due-date" type="button" on:click|stopPropagation={openDatePicker}>{formattedDate}</button>
-      <input bind:this={dateInput} class="task-date-hidden" type="date" on:change={handleDateChange} />
+      <div class="task-due-wrap">
+        <button class="task-due-date" type="button" on:click|stopPropagation={toggleDatePicker}>{formattedDate}</button>
+        {#if showPicker}
+          <div class="task-date-popover">
+            <DatePicker value={task.dueDate?.slice(0, 10) ?? ""} on:select={(e) => handlePick(e.detail)} on:clear={handleClearDate} />
+          </div>
+        {/if}
+      </div>
     {:else}
       <span class="task-due-spacer" aria-hidden="true"></span>
     {/if}

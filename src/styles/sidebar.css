@@ -26,6 +26,7 @@
 .profile-card {
   display: flex;
   width: calc(100% - 12px);
+  flex-shrink: 0;
   align-items: center;
   gap: 13px;
   min-height: 62px;
@@ -111,6 +112,7 @@
 .search-box {
   display: flex;
   height: 42px;
+  flex-shrink: 0;
   align-items: center;
   gap: 8px;
   margin: 0 18px 16px;
@@ -137,10 +139,15 @@
   gap: 2px;
 }
 
+.system-nav {
+  flex-shrink: 0;
+}
+
 .custom-nav {
+  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding-bottom: 78px;
+  padding-bottom: 8px;
 }
 
 .nav-row {
@@ -205,7 +212,7 @@
 }
 
 .tree-row.category {
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .tree-icon {
@@ -379,20 +386,19 @@
 
 .nav-divider {
   height: 1px;
+  flex-shrink: 0;
   margin: 9px 0;
   background: #d1d1d1;
 }
 
 .sidebar-footer {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
+  flex-shrink: 0;
   display: flex;
   height: 56px;
   align-items: center;
   justify-content: space-between;
   padding: 0 16px;
+  border-top: 1px solid #e0e0e0;
   background: transparent;
 }
 

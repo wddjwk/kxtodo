@@ -58,7 +58,7 @@ export async function exportData(payload: unknown, defaultName: string): Promise
   if (isTauriRuntime) {
     const filePath = await save({
       defaultPath: defaultName,
-      filters: [{ name: "Todo Note JSON", extensions: ["json"] }]
+      filters: [{ name: "KXToDo JSON", extensions: ["json"] }]
     });
     if (!filePath) {
       return;
@@ -74,6 +74,27 @@ export async function exportData(payload: unknown, defaultName: string): Promise
   link.download = defaultName;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+export async function saveBackgroundImage(dataUrl: string): Promise<string> {
+  if (isTauriRuntime) {
+    return invoke<string>("save_background_image", { dataUrl });
+  }
+  return dataUrl;
+}
+
+export async function loadBackgroundImage(filename: string): Promise<string> {
+  if (!isTauriRuntime) {
+    return filename;
+  }
+  return invoke<string>("load_background_image", { filename });
+}
+
+export async function deleteBackgroundImage(filename: string): Promise<void> {
+  if (!isTauriRuntime) {
+    return;
+  }
+  await invoke("delete_background_image", { filename });
 }
 
 export async function registerGlobalShortcut(shortcut: string): Promise<void> {

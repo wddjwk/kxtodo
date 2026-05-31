@@ -85,9 +85,10 @@ export function buildSettingsDrawerStyle(appearance: Settings["appearance"]): st
   ].join("; ");
 }
 
-export function buildMainStyle(background: ListBackground, accentColor: string): string {
-  const image = background.image ? `url("${escapeCssUrl(background.image)}")` : "none";
-  const opacity = background.image ? background.imageOpacity ?? defaultBackground.imageOpacity ?? 0.28 : 0;
+export function buildMainStyle(background: ListBackground, accentColor: string, resolvedImage = ""): string {
+  const source = resolvedImage || (background.image && !background.image.startsWith("img:") ? background.image : "");
+  const image = source ? `url("${escapeCssUrl(source)}")` : "none";
+  const opacity = source ? background.imageOpacity ?? defaultBackground.imageOpacity ?? 0.28 : 0;
   return `--accent: ${accentColor}; --bg-image: ${image}; --bg-opacity: ${opacity}; background: ${background.color};`;
 }
 

@@ -196,11 +196,13 @@ h1 {
   accent-color: var(--accent);
 }
 
-/* Task list */
+/* Task list — scrollbar sits against the window's right edge, not the cards */
 .task-list {
   min-height: 0;
   flex: 1;
   overflow-y: auto;
+  margin-right: -56px;
+  padding-right: 44px;
 }
 
 /* Task card */
@@ -332,8 +334,14 @@ h1 {
   margin-top: 0;
 }
 
-.task-due-date {
+.task-due-wrap {
   grid-column: 3;
+  align-self: center;
+  justify-self: end;
+  position: relative;
+}
+
+.task-due-date {
   align-self: center;
   justify-self: end;
   padding: 5px 8px;
@@ -351,12 +359,11 @@ h1 {
   background: rgb(255 255 255 / 90%);
 }
 
-.task-date-hidden {
+.task-date-popover {
   position: absolute;
-  width: 0;
-  height: 0;
-  opacity: 0;
-  pointer-events: none;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 2200;
 }
 
 .task-due-spacer {
@@ -859,4 +866,193 @@ h1 {
   color: #bbb;
   text-align: center;
   font-size: 13px;
+}
+
+/* Week summary */
+.week-summary {
+  display: grid;
+  gap: 10px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.week-summary-day {
+  display: grid;
+  gap: 2px;
+}
+
+.week-summary-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 6px;
+  background: #f3f3f5;
+  color: #555;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.week-summary-head:hover {
+  background: #ececf0;
+}
+
+.week-summary-head.is-today {
+  color: var(--accent);
+}
+
+.week-summary-day.active .week-summary-head {
+  background: color-mix(in srgb, var(--accent) 16%, #ffffff);
+  color: var(--accent);
+}
+
+.week-summary-count {
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.08);
+  text-align: center;
+  font-size: 11px;
+}
+
+.my-day-back {
+  margin-left: 10px;
+  padding: 2px 10px;
+  border: none;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 16%, #ffffff);
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.my-day-back:hover {
+  background: color-mix(in srgb, var(--accent) 26%, #ffffff);
+}
+
+/* Custom date picker popover */
+.date-picker {
+  width: 248px;
+  padding: 10px;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 1px solid #ececec;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.16);
+}
+
+.date-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #444;
+}
+
+.date-picker-header button {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #666;
+  cursor: pointer;
+}
+
+.date-picker-header button:hover {
+  background: #f2f4f7;
+}
+
+.date-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.date-picker-grid .dp-head {
+  text-align: center;
+  font-size: 11.5px;
+  color: #999;
+  padding: 3px 0;
+}
+
+.date-picker-grid .dp-cell {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 12.5px;
+  color: #333;
+  cursor: pointer;
+}
+
+.date-picker-grid .dp-cell:hover {
+  background: #f2f4f7;
+}
+
+.date-picker-grid .dp-cell.other-month {
+  color: #ccc;
+}
+
+.date-picker-grid .dp-cell.today {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.date-picker-grid .dp-cell.selected {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.date-picker-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.date-picker-actions button {
+  flex: 1;
+  padding: 6px 0;
+  border: 0;
+  border-radius: 7px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.date-picker-actions .dp-today {
+  background: var(--accent);
+  color: #fff;
+}
+
+.date-picker-actions .dp-today:hover {
+  filter: brightness(1.05);
+}
+
+.date-picker-actions .dp-clear {
+  background: #f2f4f7;
+  color: #666;
+}
+
+.date-picker-actions .dp-clear:hover {
+  background: #e8eaee;
+}
+
+.task-menu-date {
+  padding: 4px;
+}
+
+.task-menu-date .date-picker {
+  box-shadow: none;
+  border: none;
+  padding: 4px 0 0;
+  width: 232px;
 }

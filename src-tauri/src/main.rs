@@ -1,11 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use base64::Engine;
 use serde_json::{json, Value};
 use std::{
     fs,
     path::PathBuf,
     process::Command,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use tauri::{
     image::Image,
@@ -40,6 +41,18 @@ fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     }
 
     app.path().app_data_dir().map_err(|error| error.to_string())
+}
+
+fn ensure_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = data_dir(app)?;
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    Ok(dir)
+}
+
+fn images_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = data_dir(app)?.join("images");
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    Ok(dir)
 }
 
 fn data_file(app: &AppHandle) -> Result<PathBuf, String> {
@@ -108,6 +121,89 @@ fn save_settings(app: AppHandle, settings: Value) -> Result<(), String> {
 fn export_data(payload: Value, path: String) -> Result<(), String> {
     let output_path = PathBuf::from(path);
     write_json(output_path, payload)
+}
+
+static IMAGE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn safe_image_name(filename: &str) -> Result<(), String> {
+    if filename.is_empty()
+        || filename.contains('/')
+        || filename.contains('\\')
+        || filename.contains("..")
+    {
+        return Err("Invalid image filename".to_string());
+    }
+    Ok(())
+}
+
+fn extension_for_mime(meta: &str) -> &'static str {
+    if meta.contains("image/jpeg") || meta.contains("image/jpg") {
+        "jpg"
+    } else if meta.contains("image/gif") {
+        "gif"
+    } else if meta.contains("image/webp") {
+        "webp"
+    } else if meta.contains("image/bmp") {
+        "bmp"
+    } else if meta.contains("image/svg") {
+        "svg"
+    } else {
+        "png"
+    }
+}
+
+fn mime_for_extension(ext: &str) -> &'static str {
+    match ext {
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        _ => "image/png",
+    }
+}
+
+#[tauri::command]
+fn save_background_image(app: AppHandle, data_url: String) -> Result<String, String> {
+    let (meta, payload) = data_url
+        .split_once(',')
+        .ok_or_else(|| "Invalid image data".to_string())?;
+    let ext = extension_for_mime(meta);
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(payload.trim().as_bytes())
+        .map_err(|error| error.to_string())?;
+    let dir = images_dir(&app)?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_nanos())
+        .unwrap_or(0);
+    let counter = IMAGE_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let filename = format!("bg-{stamp}-{counter}.{ext}");
+    fs::write(dir.join(&filename), bytes).map_err(|error| error.to_string())?;
+    Ok(filename)
+}
+
+#[tauri::command]
+fn load_background_image(app: AppHandle, filename: String) -> Result<String, String> {
+    safe_image_name(&filename)?;
+    let path = images_dir(&app)?.join(&filename);
+    let bytes = fs::read(&path).map_err(|error| error.to_string())?;
+    let ext = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("png")
+        .to_lowercase();
+    let mime = mime_for_extension(&ext);
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(format!("data:{mime};base64,{encoded}"))
+}
+
+#[tauri::command]
+fn delete_background_image(app: AppHandle, filename: String) -> Result<(), String> {
+    safe_image_name(&filename)?;
+    let path = images_dir(&app)?.join(&filename);
+    let _ = fs::remove_file(path);
+    Ok(())
 }
 
 fn shortcut_from_string(raw: &str) -> Result<Shortcut, String> {
@@ -190,7 +286,7 @@ fn fallback_tray_icon() -> Image<'static> {
 }
 
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "tray_open", "打开 Todo Note", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "tray_open", "打开 KXToDo", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "tray_quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &quit])?;
     let icon = app
@@ -200,7 +296,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
         .unwrap_or_else(fallback_tray_icon);
 
     TrayIconBuilder::with_id("main-tray")
-        .tooltip("Todo Note")
+        .tooltip("KXToDo")
         .icon(icon)
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -315,6 +411,9 @@ fn main() {
             load_settings,
             save_settings,
             export_data,
+            save_background_image,
+            load_background_image,
+            delete_background_image,
             register_global_shortcut,
             set_close_to_tray,
             set_autostart,
@@ -323,6 +422,7 @@ fn main() {
             open_url
         ])
         .setup(|app| {
+            let _ = ensure_data_dir(app.handle());
             if let Some(webview) = app.get_webview_window("main") {
                 let _ = webview.set_zoom(1.0);
             }
@@ -346,5 +446,5 @@ fn main() {
             }
         })
         .run(tauri::generate_context!())
-        .expect("failed to run Todo Note");
+        .expect("failed to run KXToDo");
 }
