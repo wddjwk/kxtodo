@@ -15,7 +15,8 @@
   align-items: center;
   gap: 12px;
   color: #202020;
-  font-size: 14px;
+  font-size: 16px;
+  font-weight: 500;
 }
 
 .app-glyph {

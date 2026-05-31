@@ -1,9 +1,9 @@
 import { writable, get } from "svelte/store";
-import { loadBackgroundImage } from "./backend";
+import { backgroundImageUrl } from "./backend";
 
 const LOCAL_PREFIX = "img:";
 
-// filename -> resolved displayable data URL
+// filename -> resolved displayable URL (asset-protocol URL, not base64)
 export const imageCache = writable<Record<string, string>>({});
 
 const pending = new Set<string>();
@@ -21,8 +21,8 @@ export function localImageRef(filename: string): string {
 }
 
 /** Seed the cache immediately after an upload so the image renders without a round-trip. */
-export function primeImageCache(filename: string, dataUrl: string): void {
-  imageCache.update((map) => ({ ...map, [filename]: dataUrl }));
+export function primeImageCache(filename: string, url: string): void {
+  imageCache.update((map) => ({ ...map, [filename]: url }));
 }
 
 function ensureLoaded(filename: string): void {
@@ -30,8 +30,8 @@ function ensureLoaded(filename: string): void {
     return;
   }
   pending.add(filename);
-  loadBackgroundImage(filename)
-    .then((dataUrl) => imageCache.update((map) => ({ ...map, [filename]: dataUrl })))
+  backgroundImageUrl(filename)
+    .then((url) => imageCache.update((map) => ({ ...map, [filename]: url })))
     .catch(() => {
       /* missing image file; leave unresolved */
     })
@@ -40,8 +40,9 @@ function ensureLoaded(filename: string): void {
 
 /**
  * Resolve a background image reference to a displayable URL.
- * Local refs (`img:<file>`) are loaded lazily; pass the current cache (from the
- * imageCache store) so this stays reactive. Returns "" while a local image loads.
+ * Local refs (`img:<file>`) are served from disk via the asset protocol (no base64);
+ * pass the current cache (from the imageCache store) so this stays reactive.
+ * Returns "" while a local image resolves.
  */
 export function resolveImageSrc(ref: string | undefined, cache: Record<string, string>): string {
   if (!ref) {

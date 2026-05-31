@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { save, open } from "@tauri-apps/plugin-dialog";
 import { defaultSettings, emptyState, normalizeSettings, normalizeState } from "./defaults";
 import type { AppState, Settings } from "./types";
 
@@ -95,6 +95,30 @@ export async function deleteBackgroundImage(filename: string): Promise<void> {
     return;
   }
   await invoke("delete_background_image", { filename });
+}
+
+/** Open a native file picker for an image; returns the chosen path or null. */
+export async function pickImageFile(): Promise<string | null> {
+  if (!isTauriRuntime) {
+    return null;
+  }
+  const selected = await open({
+    multiple: false,
+    directory: false,
+    filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"] }]
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
+/** Copy a picked image into the data dir (no base64) and return its filename. */
+export async function importBackgroundImage(srcPath: string): Promise<string> {
+  return invoke<string>("import_background_image", { srcPath });
+}
+
+/** Resolve a stored background image filename to a webview-displayable URL (asset protocol, no base64). */
+export async function backgroundImageUrl(filename: string): Promise<string> {
+  const path = await invoke<string>("background_image_path", { filename });
+  return convertFileSrc(path);
 }
 
 export async function registerGlobalShortcut(shortcut: string): Promise<void> {

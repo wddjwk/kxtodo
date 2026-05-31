@@ -206,6 +206,46 @@ fn delete_background_image(app: AppHandle, filename: String) -> Result<(), Strin
     Ok(())
 }
 
+fn extension_for_path(path: &str) -> String {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_lowercase())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "png".to_string())
+}
+
+/// Copy a picked image file into the images dir without any base64 round-trip.
+/// Returns the stored filename. Works for arbitrarily large images.
+#[tauri::command]
+fn import_background_image(app: AppHandle, src_path: String) -> Result<String, String> {
+    let src = std::path::Path::new(&src_path);
+    if !src.is_file() {
+        return Err("File not found".to_string());
+    }
+    let ext = extension_for_path(&src_path);
+    let dir = images_dir(&app)?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_nanos())
+        .unwrap_or(0);
+    let counter = IMAGE_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let filename = format!("bg-{stamp}-{counter}.{ext}");
+    fs::copy(src, dir.join(&filename)).map_err(|error| error.to_string())?;
+    Ok(filename)
+}
+
+/// Absolute filesystem path of a stored background image, for `convertFileSrc`.
+#[tauri::command]
+fn background_image_path(app: AppHandle, filename: String) -> Result<String, String> {
+    safe_image_name(&filename)?;
+    let path = images_dir(&app)?.join(&filename);
+    if !path.is_file() {
+        return Err("File not found".to_string());
+    }
+    Ok(path.to_string_lossy().to_string())
+}
+
 fn shortcut_from_string(raw: &str) -> Result<Shortcut, String> {
     let mut modifiers = Modifiers::empty();
     let mut code: Option<Code> = None;
@@ -414,6 +454,8 @@ fn main() {
             save_background_image,
             load_background_image,
             delete_background_image,
+            import_background_image,
+            background_image_path,
             register_global_shortcut,
             set_close_to_tray,
             set_autostart,

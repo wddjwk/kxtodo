@@ -14,7 +14,7 @@
   import { moveTargetOptions, nodeAndDescendantIds, exportStateForNode, getBackground } from "./nodes";
   import { buildMainStyle, buildMenuStyle, uiScaleValue } from "./styles";
   import { normalizeState, normalizeSettings, defaultBackground, themePresets } from "./defaults";
-  import { exportData, openExternalUrl, isTauriRuntime, saveBackgroundImage, deleteBackgroundImage } from "./backend";
+  import { exportData, openExternalUrl, isTauriRuntime, deleteBackgroundImage, pickImageFile, importBackgroundImage, backgroundImageUrl } from "./backend";
   import {
     imageCache, resolveImageSrc, isLocalImageRef, localImageRef, localImageFilename, primeImageCache
   } from "./images";
@@ -414,21 +414,33 @@
     }
   }
 
+  async function pickBackgroundImage(): Promise<void> {
+    if (!isTauriRuntime) {
+      backgroundFileInput.click();
+      return;
+    }
+    try {
+      const path = await pickImageFile();
+      if (!path) return;
+      const previous = $selectedBackground.image;
+      const filename = await importBackgroundImage(path);
+      const url = await backgroundImageUrl(filename);
+      primeImageCache(filename, url);
+      setBackground({ image: localImageRef(filename) });
+      backgroundLinkDraft = "";
+      if (isLocalImageRef(previous)) void deleteBackgroundImage(localImageFilename(previous));
+    } catch (error) {
+      showToast(`背景图片读取失败：${String(error)}`);
+    }
+  }
+
   async function uploadBackgroundImage(event: Event): Promise<void> {
     const target = event.currentTarget;
     if (!(target instanceof HTMLInputElement) || !target.files?.[0]) return;
     try {
-      const previous = $selectedBackground.image;
       const dataUrl = await fileToDataUrl(target.files[0]);
-      if (isTauriRuntime) {
-        const filename = await saveBackgroundImage(dataUrl);
-        primeImageCache(filename, dataUrl);
-        setBackground({ image: localImageRef(filename) });
-      } else {
-        setBackground({ image: dataUrl });
-      }
+      setBackground({ image: dataUrl });
       backgroundLinkDraft = "";
-      if (isLocalImageRef(previous)) void deleteBackgroundImage(localImageFilename(previous));
     } catch (error) {
       showToast(`背景图片读取失败：${String(error)}`);
     } finally {
@@ -713,7 +725,7 @@
             <input type="range" min="0" max="80" value={Math.round(($selectedBackground.imageOpacity ?? 0.28) * 100)} on:input={updateBackgroundOpacity} />
           </label>
           <div class="menu-inline two">
-            <button type="button" on:click={() => backgroundFileInput.click()}><Image size={15} /> 上传图片</button>
+            <button type="button" on:click={pickBackgroundImage}><Image size={15} /> 上传图片</button>
             <button type="button" on:click={clearBackground}><Eraser size={15} /> 清除背景</button>
           </div>
         </section>
