@@ -454,30 +454,6 @@
   color: #b3261e;
 }
 
-.move-group-row {
-  display: grid;
-  gap: 6px;
-  border-radius: 8px;
-  background: #f7f7f7;
-  padding: 8px 9px;
-  color: #333;
-  font-size: 14px;
-}
-
-.move-group-row span {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.move-group-row select {
-  width: 100%;
-  border: 1px solid #dedede;
-  border-radius: 7px;
-  background: white;
-  padding: 6px 8px;
-}
-
 /* Icon picker */
 .icon-picker-panel {
   position: absolute;

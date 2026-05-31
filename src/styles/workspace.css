@@ -201,8 +201,9 @@ h1 {
   min-height: 0;
   flex: 1;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   margin-right: -56px;
-  padding-right: 56px;
+  padding-right: 51px;
 }
 
 /* Task card */
@@ -601,7 +602,8 @@ h1 {
 }
 
 /* Sort submenu */
-.sort-submenu {
+.sort-submenu,
+.menu-submenu {
   display: grid;
   gap: 2px;
   padding: 4px 4px;
@@ -609,7 +611,8 @@ h1 {
   background: #f8f8fa;
 }
 
-.sort-submenu button {
+.sort-submenu button,
+.menu-submenu button {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -622,11 +625,13 @@ h1 {
   font-size: 13px;
 }
 
-.sort-submenu button:hover {
+.sort-submenu button:hover,
+.menu-submenu button:hover {
   background: #eeeef2;
 }
 
-.sort-submenu button.active {
+.sort-submenu button.active,
+.menu-submenu button.active {
   background: #e3eaff;
   color: #2564cf;
   font-weight: 600;
@@ -1031,21 +1036,23 @@ h1 {
 
 .date-picker-actions .dp-today {
   background: transparent;
-  color: var(--accent);
+  color: #555;
   font-weight: 600;
 }
 
 .date-picker-actions .dp-today:hover {
-  background: #f2f4f7;
+  background: transparent;
+  color: var(--accent);
 }
 
 .date-picker-actions .dp-clear {
   background: transparent;
-  color: #666;
+  color: #888;
 }
 
 .date-picker-actions .dp-clear:hover {
-  background: #f2f4f7;
+  background: transparent;
+  color: #d0493b;
 }
 
 .task-menu-date {

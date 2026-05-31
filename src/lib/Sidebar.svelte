@@ -27,6 +27,7 @@
   let renameDraft = "";
   let iconPickerListId: string | null = null;
   let treeMenu: { id: string; x: number; y: number } | null = null;
+  let showTreeMove = false;
   let draggingId: string | null = null;
   let ignoreOverlayCloseOnce = false;
 
@@ -214,12 +215,6 @@
     draggingId = null;
   }
 
-  function handleMoveTargetChange(nodeId: string, event: Event): void {
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLSelectElement)) return;
-    moveNodeToGroup(nodeId, target.value || null);
-  }
-
   function openIconPicker(id: string): void {
     iconPickerListId = id;
     treeMenu = null;
@@ -322,7 +317,7 @@
       on:toggleCategory={(e) => toggleCategory(e.detail)}
       on:renameInput={(e) => (renameDraft = e.detail)}
       on:renameCommit={(e) => commitRename(e.detail)}
-      on:openMenu={(e) => { treeMenu = e.detail; }}
+      on:openMenu={(e) => { treeMenu = e.detail; showTreeMove = false; }}
       requestIconPicker={openIconPicker}
       on:pickIcon={(e) => openIconPicker(e.detail)}
       on:dragStart={(e) => (draggingId = e.detail || null)}
@@ -340,14 +335,20 @@
       <button type="button" disabled={treeMenuNode.kind === "system"} on:click={() => startRename(treeMenuNode.id)}><Pencil size={15} /> 重命名</button>
       <button type="button" disabled={treeMenuNode.kind === "system"} on:click={() => openIconPicker(treeMenuNode.id)}><Star size={15} /> 选择图标</button>
       {#if treeMenuNode.kind !== "system"}
-        <label class="move-group-row">
-          <span><FolderInput size={15} /> 移动到分组</span>
-          <select value={treeMenuNode.parentId ?? ""} on:change={(e) => handleMoveTargetChange(treeMenuNode.id, e)}>
+        <button type="button" class="has-submenu" on:click={() => (showTreeMove = !showTreeMove)}>
+          <FolderInput size={15} /> 移动到分组
+        </button>
+        {#if showTreeMove}
+          <div class="menu-submenu">
             {#each treeMoveTargets as target}
-              <option value={target.id}>{target.name}</option>
+              <button
+                type="button"
+                class:active={(treeMenuNode.parentId ?? "") === target.id}
+                on:click={() => moveNodeToGroup(treeMenuNode.id, target.id || null)}
+              >{target.name}</button>
             {/each}
-          </select>
-        </label>
+          </div>
+        {/if}
       {/if}
       <button class="danger" type="button" disabled={treeMenuNode.kind === "system"} on:click={() => deleteNode(treeMenuNode.id)}><Trash2 size={15} /> 删除</button>
     </section>

@@ -40,11 +40,14 @@
   let showCompleted = true;
   let showListMenu = false;
   let showSortOptions = false;
+  let showMoveOptions = false;
   let showSuggestions = false;
   let showCalendar = false;
   let sortMode: SortMode = "created-desc";
   let allExpanded = false;
   let taskMenu: { taskId: string; x: number; y: number; showDate: boolean } | null = null;
+  let taskMenuHeight = 0;
+  let taskMenuWidth = 0;
   let backgroundLinkDraft = "";
   let backgroundDraftNodeId = "";
   let taskInput: HTMLTextAreaElement;
@@ -73,7 +76,7 @@
         : sortedTasks.filter((task) => task.completed && dateOnly(task.completedAt) === todayIso()))
     : sortedTasks.filter((task) => task.completed);
   $: selectedMoveTargets = $selectedNode ? moveTargetOptions($selectedNode.id, $appState.nodes) : [];
-  $: taskMenuStyle = taskMenu ? buildMenuStyle(taskMenu.x, taskMenu.y, 230, taskMenu.showDate ? 260 : 188, uiScaleValue($appSettings.appearance.uiScale)) : "";
+  $: taskMenuStyle = taskMenu ? buildMenuStyle(taskMenu.x, taskMenu.y, taskMenuWidth || 264, taskMenuHeight || (taskMenu.showDate ? 520 : 188), uiScaleValue($appSettings.appearance.uiScale)) : "";
   $: taskMenuTask = taskMenu ? $appState.tasks.find((task) => task.id === taskMenu?.taskId) : null;
   $: if (($selectedNode?.id ?? "") !== backgroundDraftNodeId) {
     backgroundDraftNodeId = $selectedNode?.id ?? "";
@@ -194,6 +197,7 @@
   export function closeOverlays(): void {
     showListMenu = false;
     showSortOptions = false;
+    showMoveOptions = false;
     showSuggestions = false;
     showCalendar = false;
     taskMenu = null;
@@ -503,6 +507,7 @@
   function toggleListMenu(): void {
     showListMenu = !showListMenu;
     showSortOptions = false;
+    showMoveOptions = false;
     showSuggestions = false;
     showCalendar = false;
     taskMenu = null;
@@ -518,10 +523,7 @@
     showListMenu = false;
   }
 
-  function handleMoveTargetChange(nodeId: string, event: Event): void {
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLSelectElement)) return;
-    const parentId = target.value || null;
+  function moveNodeToGroup(nodeId: string, parentId: string | null): void {
     const source = $appState.nodes.find((n) => n.id === nodeId);
     if (!source || source.kind === "system" || source.parentId === parentId) {
       showListMenu = false;
@@ -681,14 +683,20 @@
             <PenLine size={15} /> 重命名
           </button>
           {#if $selectedNode && $selectedNode.kind !== "system"}
-            <label class="move-group-row">
-              <span><FolderInput size={15} /> 移动到分组</span>
-              <select value={$selectedNode.parentId ?? ""} on:change={(event) => handleMoveTargetChange($selectedNode.id, event)}>
+            <button type="button" class="has-submenu" on:click={() => showMoveOptions = !showMoveOptions}>
+              <FolderInput size={15} /> 移动到分组
+            </button>
+            {#if showMoveOptions}
+              <div class="menu-submenu">
                 {#each selectedMoveTargets as target}
-                  <option value={target.id}>{target.name}</option>
+                  <button
+                    type="button"
+                    class:active={($selectedNode.parentId ?? "") === target.id}
+                    on:click={() => { moveNodeToGroup($selectedNode.id, target.id || null); showMoveOptions = false; }}
+                  >{target.name}</button>
                 {/each}
-              </select>
-            </label>
+              </div>
+            {/if}
           {/if}
           <button type="button" on:click={() => showSortOptions = !showSortOptions}>
             <ArrowUpDown size={15} /> 排序方式
@@ -800,6 +808,8 @@
     <div
       class="task-context-menu"
       style={taskMenuStyle}
+      bind:clientHeight={taskMenuHeight}
+      bind:clientWidth={taskMenuWidth}
       on:click|stopPropagation
     >
       <button type="button" on:click={() => { updateTask(taskMenuTask.id, (task) => ({ ...task, myDay: !task.myDay })); taskMenu = null; }}>

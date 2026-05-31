@@ -83,7 +83,7 @@
     {/each}
   </div>
   <div class="date-picker-actions">
-    <button type="button" class="dp-today" on:click={goToday}>今天</button>
     <button type="button" class="dp-clear" on:click={() => dispatch("clear")}>清除</button>
+    <button type="button" class="dp-today" on:click={goToday}>今天</button>
   </div>
 </div>
