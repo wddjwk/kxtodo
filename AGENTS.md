@@ -7,15 +7,15 @@ Todo Note 是一款快速、本地优先的待办与快捷笔记桌面应用，�
 ## 核心原则
 
 - **本地优先 & 便携**：应用数据、设置、快捷键、导出文件存放在可执行文件同级目录下（目录可写时），开发环境有安全回退路径。
-- **单文件桌面应用**：当前主要目标为 Windows，但通过 Tauri 2 保留 Linux / Android 的可能性，不耦合 Windows 专有 API。
+- **跨平台桌面 + 移动**：当前主要目标为 Windows，自 v7.0.0 起通过 Tauri 2 mobile 支持 Android；保留 Linux / iOS 的可能性，不耦合 Windows 专有 API。
 - **快速启动**：前端保持精简，通过 Tauri 命令直接持久化 JSON，不引入后台服务。
 - **原创外观 + 熟悉的操作**：保持左导航/右卡片画布的经典布局和柔和卡片风格，不复制微软的专有资源或品牌。
 - **未来可同步**：同步功能作为适配器边界保留，不将云服务商绑定到任务模型中。
 
 ## 技术栈
 
-- **Rust + Tauri 2**：桌面壳、持久化、导入/导出、原生集成。
-- **Svelte 4 + TypeScript + Vite**：前端 UI。
+- **Rust + Tauri 2**：桌面壳、持久化、导入/导出、原生集成。前端为 `src-tauri/src/lib.rs` 中的 `run()`（`#[cfg_attr(mobile, tauri::mobile_entry_point)]`），`main.rs` 仅调用它；桌面专有插件（托盘、全局快捷键、窗口状态、单实例、开机自启）通过 `#[cfg(desktop)]` 和 `cfg(not(android/ios))` 目标依赖隔离，Android 不会编译它们。
+- **Svelte 4 + TypeScript + Vite**：前端 UI，桌面与移动共用同一套组件。
 - **Markdown 渲染**：客户端使用 GitHub 风格 Markdown 样式，支持标题、强调、高亮语法、链接、列表、任务列表、行内代码，以及 highlight.js 驱动的代码块（GitHub 浅色主题）。
 
 ## 架构（v6.0.0+）
@@ -46,13 +46,14 @@ Todo Note 是一款快速、本地优先的待办与快捷笔记桌面应用，�
 - **`IconPicker.svelte`**：图标/emoji 选择器浮层。
 
 ### CSS 架构
-样式拆分为 6 个全局 CSS 文件，在 `src/main.ts` 中按级联顺序导入：
+样式拆分为 7 个全局 CSS 文件，在 `src/main.ts` 中按级联顺序导入：
 - `src/styles/base.css`：根变量、重置、滚动条、app-shell、布局。
 - `src/styles/titlebar.css`：标题栏 + 窗口控制按钮。
 - `src/styles/sidebar.css`：侧边栏、个人资料、搜索、导航、树、图标选择器、右键菜单。
 - `src/styles/workspace.css`：工作区、列表头、任务卡片、Markdown、菜单、排序子菜单、添加事项栏。
 - `src/styles/settings.css`：设置抽屉。
 - `src/styles/shared.css`：浮动通知、工具类。
+- `src/styles/mobile.css`：Android/移动端堆叠布局（仅在 `.app-shell.mobile` 下生效，桌面无副作用）。
 
 **为什么使用全局 CSS 而非 Svelte 作用域 `<style>`**：Markdown 内容通过 `{@html}` 渲染，没有 Svelte 作用域属性，作用域样式无法触及 Markdown 元素。`.collapse-button` 在侧边栏（树分类）和工作区（任务卡片）中使用同一类名但不同样式，通过 `.sidebar .collapse-button` 和 `.workspace .collapse-button` 选择器区分。
 
@@ -62,7 +63,16 @@ Todo Note 是一款快速、本地优先的待办与快捷笔记桌面应用，�
 - `src/lib/backend.ts`：Tauri 命令桥接层，带浏览器开发模式回退。
 - `src/lib/markdown.ts`：Markdown 渲染与消毒。
 - `src/lib/shortcuts.ts`：键盘快捷键匹配。
+- `src/lib/platform.ts`：移动端检测（`isMobile`，基于 userAgent，保证 Windows 不受影响）与移动端导航状态（`mobileView`、`showMobileContent`、`showMobileList`，含 Android 硬件返回键 History 处理）。
 - `src/lib/sync.ts`：同步适配器接口（占位）。
+
+### 移动端（Android，v7.0.0+）
+- **交互模型**：参考 Microsoft To Do 的 Android 版。打开应用只显示分类区域（桌面版左侧栏）；点击条目后推入正文区（桌面版右侧栏），顶部出现返回按钮。
+- **检测**：`isMobile` 仅基于 `navigator.userAgent`（Android/iPhone/iPad）。Windows 桌面窗口有大尺寸最小宽度，永不命中，桌面体验保持不变。
+- **布局**：`App.svelte` 在 `.app-shell` 上加 `mobile` + `view-list`/`view-content` 类；`src/styles/mobile.css` 将侧边栏与工作区绝对定位铺满屏幕并切换显隐，移动端缩放固定为 1（`buildMobileShellStyle`），隐藏标题栏与宽度手柄，设置抽屉全屏。
+- **硬件返回键**：进入正文时 `history.pushState`，`popstate` 返回分类列表而非退出应用。
+- **Rust 隔离**：托盘、全局快捷键、窗口状态、单实例、开机自启、`set_webview_zoom` 等命令在 Android 上为 `#[cfg(not(desktop))]` 的空实现，前端 invoke 不会失败；`open_url` 在移动端走 `tauri-plugin-opener`；`data_dir` 在移动端回退到 `app_data_dir()`。
+- **已知限制**：移动端的文件导入/导出、背景图片选择依赖 `plugin-dialog` 的文件路径，在 Android 上可能静默失败（不崩溃），后续版本再做移动端专用文件流。
 
 ## 项目结构
 
@@ -76,7 +86,8 @@ src/
 │   ├── sidebar.css         # 侧边栏 + 树 + 图标选择器
 │   ├── workspace.css       # 任务 + Markdown + 菜单
 │   ├── settings.css        # 设置抽屉
-│   └── shared.css          # 浮动通知
+│   ├── shared.css          # 浮动通知
+│   └── mobile.css          # 移动端堆叠布局
 ├── lib/
 │   ├── stores.ts           # 集中式状态 + 持久化
 │   ├── nodes.ts            # 纯树查询函数
@@ -95,9 +106,13 @@ src/
 │   ├── backend.ts          # Tauri 桥接
 │   ├── markdown.ts         # Markdown 渲染
 │   ├── shortcuts.ts        # 快捷键匹配
+│   ├── platform.ts         # 移动端检测 + 移动导航状态
 │   └── sync.ts             # 同步适配器（占位）
 src-tauri/
-└── src/main.rs             # Rust 后端
+├── src/
+│   ├── main.rs             # 二进制入口，调用 lib 的 run()
+│   └── lib.rs              # Rust 后端核心（desktop/mobile cfg 隔离）
+└── gen/android/            # Tauri 生成的 Android Gradle 工程（首次 `tauri android init` 创建）
 ```
 
 ## 数据模型
@@ -127,11 +142,32 @@ src-tauri/
 ## 维护工作流
 
 1. 安装依赖：`npm install`
-2. 开发运行：`npm run desktop:dev`
-3. 前端构建：`npm run build`
-4. 打包发布：`.\scripts\package.ps1 -Version 6.2.0`
-5. 加载截图测试数据：`.\scripts\load-sample-data.ps1`（生产默认数据保持最小化）
-6. 新原生功能放在 Tauri 命令/插件后面，同步集成放在适配器边界后面。
+2. 桌面开发运行：`npm run desktop:dev`
+3. Android 开发运行：`npm run android:dev`（需 ANDROID_HOME / NDK，连接设备或模拟器）
+4. 前端构建：`npm run build`
+5. 一键打包发布（Windows + Android）：`.\scripts\package.ps1 -Version 7.0.0`
+   - 仅 Windows：`.\scripts\package.ps1 -Version 7.0.0 -Targets windows`
+   - 仅 Android：`.\scripts\package.ps1 -Version 7.0.0 -Targets android`
+   - 产物输出到 `release/`：`KXToDo-<版本>.exe` 与 `KXToDo-<版本>.apk`
+6. 加载截图测试数据：`.\scripts\load-sample-data.ps1`（生产默认数据保持最小化）
+7. 新原生功能放在 Tauri 命令/插件后面（注意 desktop/mobile cfg 隔离），同步集成放在适配器边界后面。
+
+## v7.0.0 变更摘要
+
+### Android 支持（保持 Windows 体验不变）
+- Rust 后端从 `main.rs` 重构为 `lib.rs` 的 `run()`（`#[cfg_attr(mobile, tauri::mobile_entry_point)]`），`main.rs` 仅调用它。
+- `Cargo.toml` 新增 `[lib]`（`staticlib`/`cdylib`/`rlib`）；托盘、全局快捷键、窗口状态、单实例、开机自启移到 `cfg(not(android/ios))` 目标依赖，Android 改用 `tauri-plugin-opener`。
+- 所有桌面专有逻辑用 `#[cfg(desktop)]` 隔离；相关命令在移动端提供空实现，前端 invoke 不报错。`data_dir` 在移动端回退到 `app_data_dir()`。
+- 新增 `src/lib/platform.ts`（`isMobile`、`mobileView`）与 `src/styles/mobile.css`。
+
+### Android 交互（对齐 Microsoft To Do 移动版）
+- 打开仅显示分类区域；点击条目推入正文区，顶部返回按钮回到分类列表。
+- 移动端缩放固定为 1、铺满屏幕，隐藏标题栏与宽度手柄，设置抽屉全屏。
+- Android 硬件返回键经 History（pushState/popstate）返回分类列表而非退出应用。
+
+### 打包
+- `scripts/package.ps1` 支持 `-Targets all|windows|android`，一条命令产出 Windows exe + Android apk，并同步 `APP_VERSION`。
+- 首次 Android 打包会自动安装 Rust Android 目标并在缺失时执行 `tauri android init`。
 
 ## v6.2.0 变更摘要
 

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
   import {
-    ArrowUpDown, Calendar, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
+    ArrowLeft, ArrowUpDown, Calendar, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
     ChevronsDown, ChevronsUp, Download, Eraser, FolderInput, Image,
     Lightbulb, MoreHorizontal, Palette, PenLine, Plus, Search, Star, Sun, Trash2, Upload
   } from "@lucide/svelte";
@@ -21,6 +21,7 @@
   import IconGlyph from "./IconGlyph.svelte";
   import TaskCard from "./TaskCard.svelte";
   import DatePicker from "./DatePicker.svelte";
+  import { showMobileList } from "./platform";
   import type { AppNode, AppState, ListBackground, Settings, Task } from "./types";
 
   type SortMode = "created-desc" | "created-asc" | "alpha-asc" | "alpha-desc" | "due-asc" | "due-desc" | "importance";
@@ -570,6 +571,9 @@
 <main class="workspace" style={mainStyle}>
   <section class="list-header">
     <div>
+      <button class="mobile-back" type="button" aria-label="返回列表" on:click|stopPropagation={showMobileList}>
+        <ArrowLeft size={26} />
+      </button>
       <span class="header-icon">
         {#if $isSearching}
           <Search size={34} />

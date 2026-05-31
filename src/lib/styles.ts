@@ -67,6 +67,26 @@ export function buildAppShellStyle(appearance: Settings["appearance"]): string {
   ].join("; ");
 }
 
+export function buildMobileShellStyle(appearance: Settings["appearance"]): string {
+  const uiFontSize = fontSizeValue(appearance.uiFontSize, defaultSettings.appearance.uiFontSize, 14, 22);
+  const markdownFontSize = fontSizeValue(appearance.markdownFontSize, defaultSettings.appearance.markdownFontSize, 14, 26);
+  const editorFontSize = fontSizeValue(appearance.editorFontSize, defaultSettings.appearance.editorFontSize, 14, 26);
+  return [
+    `--ui-scale: 1`,
+    `--ui-font-size: ${uiFontSize}px`,
+    `--markdown-font-size: ${markdownFontSize}px`,
+    `--editor-font-size: ${editorFontSize}px`,
+    `--app-width: 100vw`,
+    `--app-height: 100vh`,
+    `--font-title: ${uiFontSize + 18}px`,
+    `--font-list: ${uiFontSize + 1}px`,
+    `--font-control: ${uiFontSize}px`,
+    `--font-task: ${markdownFontSize}px`,
+    `--font-composer: ${markdownFontSize}px`,
+    `--font-drawer-title: ${uiFontSize + 6}px`
+  ].join("; ");
+}
+
 export function buildSettingsDrawerStyle(appearance: Settings["appearance"]): string {
   const scale = uiScaleValue(appearance.uiScale);
   const viewportWidth = typeof window === "undefined" ? 1280 : window.innerWidth;

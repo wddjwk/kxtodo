@@ -1,0 +1,111 @@
+/* mobile.css — Android / mobile stacked layout (Microsoft To-Do style).
+   Desktop (Windows) is never given the `.mobile` class, so these rules are inert there. */
+
+.app-shell.mobile {
+  --app-width: 100vw;
+  --app-height: 100vh;
+}
+
+.app-shell.mobile .layout {
+  position: relative;
+  height: 100%;
+}
+
+.app-shell.mobile .titlebar {
+  display: none;
+}
+
+.app-shell.mobile .sidebar,
+.app-shell.mobile .workspace {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+}
+
+/* Phone-appropriate padding. The Activity runs edge-to-edge
+   (enableEdgeToEdge), so fold the status bar / navigation bar insets into the
+   container padding to keep content clear of the system bars. */
+.app-shell.mobile .sidebar {
+  padding:
+    calc(14px + env(safe-area-inset-top, 0px))
+    10px
+    calc(8px + env(safe-area-inset-bottom, 0px))
+    10px;
+}
+
+.app-shell.mobile .workspace {
+  padding:
+    calc(16px + env(safe-area-inset-top, 0px))
+    18px
+    calc(16px + env(safe-area-inset-bottom, 0px))
+    18px;
+}
+
+.app-shell.mobile .list-header {
+  padding-right: 0;
+  margin-bottom: 18px;
+}
+
+.app-shell.mobile.view-list .workspace {
+  display: none;
+}
+
+.app-shell.mobile.view-content .sidebar {
+  display: none;
+}
+
+.app-shell.mobile .resize-handle {
+  display: none;
+}
+
+/* The category list owns the whole screen, so let it round nothing and fill. */
+.app-shell.mobile .sidebar {
+  border-radius: 0;
+}
+
+.app-shell.mobile .workspace {
+  border-radius: 0;
+}
+
+/* Back button shown only on mobile content view. */
+.mobile-back {
+  display: none;
+}
+
+.app-shell.mobile .mobile-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 6px;
+  margin-right: 4px;
+  border-radius: 10px;
+  color: inherit;
+}
+
+.app-shell.mobile .mobile-back:hover {
+  background: rgb(0 0 0 / 6%);
+}
+
+/* Settings drawer becomes a full-screen sheet on mobile. */
+.app-shell.mobile .settings-drawer {
+  left: 0 !important;
+  top: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 0 !important;
+  padding:
+    calc(20px + env(safe-area-inset-top, 0px))
+    20px
+    calc(20px + env(safe-area-inset-bottom, 0px))
+    20px;
+}
+
+/* Larger touch targets for the sidebar footer actions. */
+.app-shell.mobile .sidebar-footer button {
+  min-height: 48px;
+}

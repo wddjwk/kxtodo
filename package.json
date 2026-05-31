@@ -1,6 +1,6 @@
 {
   "name": "todo-note-rs",
-  "version": "6.3.2",
+  "version": "7.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,6 +11,8 @@
     "tauri": "tauri",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
+    "android:dev": "tauri android dev",
+    "android:build": "tauri android build --apk",
     "package": "powershell -ExecutionPolicy Bypass -File .\\scripts\\package.ps1"
   },
   "dependencies": {
@@ -33,3 +35,4 @@
     "vite": "^6.1.0"
   }
 }
+

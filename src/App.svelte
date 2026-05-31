@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { matchesShortcut } from "./lib/shortcuts";
-  import { buildAppShellStyle } from "./lib/styles";
+  import { buildAppShellStyle, buildMobileShellStyle } from "./lib/styles";
   import {
     appSettings, showSettings, searchQuery,
     hydrate as hydrateStores
   } from "./lib/stores";
+  import { isMobile, mobileView } from "./lib/platform";
   import TitleBar from "./lib/TitleBar.svelte";
   import Toast from "./lib/Toast.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
@@ -15,7 +16,9 @@
   let sidebarRef: Sidebar;
   let workspaceRef: Workspace;
 
-  $: appShellStyle = buildAppShellStyle($appSettings.appearance);
+  $: appShellStyle = $isMobile
+    ? buildMobileShellStyle($appSettings.appearance)
+    : buildAppShellStyle($appSettings.appearance);
 
   onMount(() => {
     void hydrateStores();
@@ -46,8 +49,17 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="app-shell" style={appShellStyle} on:click={closeOverlays}>
-  <TitleBar />
+<div
+  class="app-shell"
+  class:mobile={$isMobile}
+  class:view-list={$isMobile && $mobileView === "list"}
+  class:view-content={$isMobile && $mobileView === "content"}
+  style={appShellStyle}
+  on:click={closeOverlays}
+>
+  {#if !$isMobile}
+    <TitleBar />
+  {/if}
 
   <div class="layout">
     <Sidebar bind:this={sidebarRef} />

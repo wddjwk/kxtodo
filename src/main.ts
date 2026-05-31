@@ -8,6 +8,7 @@ import "./styles/sidebar.css";
 import "./styles/workspace.css";
 import "./styles/settings.css";
 import "./styles/shared.css";
+import "./styles/mobile.css";
 
 const target = document.getElementById("app");
 

@@ -17,6 +17,7 @@
   import IconGlyph from "./IconGlyph.svelte";
   import IconPicker from "./IconPicker.svelte";
   import ListTree from "./ListTree.svelte";
+  import { showMobileContent } from "./platform";
   import type { AppNode } from "./types";
 
   const dispatch = createEventDispatcher<{ suppressClose: void }>();
@@ -64,6 +65,7 @@
     commit({ ...$appState, selectedNodeId: id });
     treeMenu = null;
     iconPickerListId = null;
+    showMobileContent();
   }
 
   function toggleCategory(id: string): void {
