@@ -1,6 +1,6 @@
 {
   "name": "todo-note-rs",
-  "version": "7.0.0",
+  "version": "7.0.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -35,4 +35,3 @@
     "vite": "^6.1.0"
   }
 }
-

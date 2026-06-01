@@ -16,6 +16,24 @@ val tauriProperties = Properties().apply {
 android {
     compileSdk = 36
     namespace = "com.wddjwk.kxtodo"
+    signingConfigs {
+        create("release") {
+            val envPath = System.getenv("TAURI_ANDROID_KEYSTORE_PATH")
+            if (envPath != null) {
+                // 从环境变量读取自定义 keystore（CI/CD 或生产签名）
+                storeFile = file(envPath)
+                storePassword = System.getenv("TAURI_ANDROID_KEYSTORE_PASSWORD") ?: ""
+                keyAlias = System.getenv("TAURI_ANDROID_KEY_ALIAS") ?: ""
+                keyPassword = System.getenv("TAURI_ANDROID_KEY_PASSWORD") ?: ""
+            } else {
+                // 回退到项目本地 keystore（由 package.ps1 自动生成）
+                storeFile = file("../keystore/release.jks")
+                storePassword = "kxtodo"
+                keyAlias = "kxtodo"
+                keyPassword = "kxtodo"
+            }
+        }
+    }
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
         applicationId = "com.wddjwk.kxtodo"
@@ -38,6 +56,7 @@ android {
         }
         getByName("release") {
             isMinifyEnabled = true
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }
                     .plus(getDefaultProguardFile("proguard-android-optimize.txt"))

@@ -131,6 +131,25 @@ try {
       if ($LASTEXITCODE -ne 0) { throw "tauri android init failed" }
     }
 
+    # Ensure Android signing keystore exists (auto-generate on first run).
+    $keystoreDir = Join-Path $root "src-tauri\gen\android\keystore"
+    $keystoreFile = Join-Path $keystoreDir "release.jks"
+    if (-not (Test-Path -LiteralPath $keystoreFile)) {
+      New-Item -ItemType Directory -Force -Path $keystoreDir | Out-Null
+      $keytool = Get-Command keytool -ErrorAction SilentlyContinue
+      if (-not $keytool) {
+        throw "keytool not found. Install the JDK and ensure JAVA_HOME or keytool is in PATH."
+      }
+      & $keytool.Source -genkey -v `
+        -keystore $keystoreFile `
+        -storepass kxtodo `
+        -alias kxtodo `
+        -keypass kxtodo `
+        -keyalg RSA -keysize 2048 -validity 10000 `
+        -dname "CN=KXToDo, O=KXToDo, C=CN" 2>&1 | Out-Null
+      Write-Host "Generated Android signing keystore: $keystoreFile" -ForegroundColor Green
+    }
+
     npx tauri android build --apk $verboseFlag
     if ($LASTEXITCODE -ne 0) { throw "Android build failed" }
 
