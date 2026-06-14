@@ -121,6 +121,46 @@ export async function backgroundImageUrl(filename: string): Promise<string> {
   return convertFileSrc(path);
 }
 
+/** Copy a picked file into the avatar directory. Returns stored filename. */
+export async function saveAvatarImage(srcPath: string): Promise<string> {
+  return invoke<string>("save_avatar_image", { srcPath });
+}
+
+/** Delete the avatar image file. */
+export async function deleteAvatarImage(filename: string): Promise<void> {
+  if (!isTauriRuntime) return;
+  await invoke("delete_avatar_image", { filename });
+}
+
+/** Resolve avatar filename to asset URL. */
+export async function avatarImageUrl(filename: string): Promise<string> {
+  const path = await invoke<string>("avatar_image_path", { filename });
+  return convertFileSrc(path);
+}
+
+/** Copy a picked file into img/<nodeId>/ for markdown. Returns stored filename. */
+export async function saveMdImage(srcPath: string, nodeId: string): Promise<string> {
+  return invoke<string>("save_md_image", { srcPath, nodeId });
+}
+
+/** Delete a single markdown image file. */
+export async function deleteMdImage(nodeId: string, filename: string): Promise<void> {
+  if (!isTauriRuntime) return;
+  await invoke("delete_md_image", { nodeId, filename });
+}
+
+/** Delete all markdown images for a node. */
+export async function deleteNodeImages(nodeId: string): Promise<void> {
+  if (!isTauriRuntime) return;
+  await invoke("delete_node_images", { nodeId });
+}
+
+/** Resolve markdown image filename to asset URL. */
+export async function mdImageUrl(nodeId: string, filename: string): Promise<string> {
+  const path = await invoke<string>("md_image_path", { nodeId, filename });
+  return convertFileSrc(path);
+}
+
 export async function registerGlobalShortcut(shortcut: string): Promise<void> {
   if (!isTauriRuntime) {
     return;

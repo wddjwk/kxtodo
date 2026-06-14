@@ -13,15 +13,16 @@
   } from "./stores";
   import { moveTargetOptions, nodeAndDescendantIds, exportStateForNode, getBackground } from "./nodes";
   import { buildMainStyle, buildMenuStyle, uiScaleValue } from "./styles";
-  import { normalizeState, normalizeSettings, defaultBackground, themePresets } from "./defaults";
-  import { exportData, openExternalUrl, isTauriRuntime, deleteBackgroundImage, pickImageFile, importBackgroundImage, backgroundImageUrl } from "./backend";
+  import { normalizeState, normalizeSettings, defaultBackground, themePresets, createEntryNode } from "./defaults";
+  import { exportData, openExternalUrl, isTauriRuntime, deleteBackgroundImage, pickImageFile, importBackgroundImage, backgroundImageUrl, deleteNodeImages, saveMdImage, mdImageUrl } from "./backend";
   import {
-    imageCache, resolveImageSrc, isLocalImageRef, localImageRef, localImageFilename, primeImageCache
+    imageCache, resolveImageSrc, isLocalImageRef, localImageRef, localImageFilename, primeImageCache,
+    mdImageCache, resolveMarkdownImages, primeMdImageCache
   } from "./images";
   import IconGlyph from "./IconGlyph.svelte";
   import TaskCard from "./TaskCard.svelte";
   import DatePicker from "./DatePicker.svelte";
-  import { showMobileList } from "./platform";
+  import { showMobileList, isMobile } from "./platform";
   import type { AppNode, AppState, ListBackground, Settings, Task } from "./types";
 
   type SortMode = "created-desc" | "created-asc" | "alpha-asc" | "alpha-desc" | "due-asc" | "due-desc" | "importance";
@@ -55,6 +56,7 @@
   let importInput: HTMLInputElement;
   let backgroundFileInput: HTMLInputElement;
   let colorPickerInput: HTMLInputElement;
+  let showMobileHeaderActions = false;
 
   // Calendar state
   let calViewMode: "month" | "week" = "month";
@@ -201,6 +203,7 @@
     showMoveOptions = false;
     showSuggestions = false;
     showCalendar = false;
+    showMobileHeaderActions = false;
     taskMenu = null;
   }
 
@@ -460,6 +463,42 @@
     if (isLocalImageRef(previous)) void deleteBackgroundImage(localImageFilename(previous));
   }
 
+  $: currentNodeId = $selectedNode?.id ?? "";
+
+  function deleteCurrentNode(): void {
+    if (!$selectedNode || $selectedNode.kind === "system") {
+      showToast("内置列表不能删除");
+      return;
+    }
+    const id = $selectedNode.id;
+    const ids = nodeAndDescendantIds(id, $appState.nodes);
+    for (const delId of ids) {
+      const bg = $appState.backgrounds[delId];
+      if (bg?.image && isLocalImageRef(bg.image)) {
+        void deleteBackgroundImage(localImageFilename(bg.image));
+      }
+      void deleteNodeImages(delId);
+    }
+    let nodes = $appState.nodes.filter((n) => !ids.has(n.id));
+    let backgrounds = Object.fromEntries(Object.entries($appState.backgrounds).filter(([key]) => !ids.has(key)));
+    if (!nodes.some((n) => n.kind === "entry")) {
+      const inbox = createEntryNode("收集箱", null, "inbox");
+      nodes = [...nodes, inbox];
+      backgrounds = { ...backgrounds, [inbox.id]: { ...defaultBackground } };
+    }
+    const validNodeIds = new Set(nodes.map((n) => n.id));
+    const fallbackId = nodes.find((n) => n.kind === "entry")?.id ?? "my-day";
+    commit({
+      ...$appState,
+      nodes,
+      tasks: $appState.tasks.filter((t) => validNodeIds.has(t.nodeId)),
+      selectedNodeId: fallbackId,
+      backgrounds
+    });
+    showListMenu = false;
+    showMobileList();
+  }
+
   async function exportCurrentList(): Promise<void> {
     if (!$selectedNode) return;
     const payload = {
@@ -581,9 +620,12 @@
           <IconGlyph icon={$selectedNode?.icon ?? "notebook"} size={34} />
         {/if}
       </span>
-      <h1>{$isSearching ? `搜索结果：${$searchQuery}` : $selectedNode?.name ?? "KXToDo"}</h1>
+      <h1
+        class:mobile-title-tap={$isMobile}
+        on:click|stopPropagation={() => { if ($isMobile) showMobileHeaderActions = !showMobileHeaderActions; }}
+      >{$isSearching ? `搜索结果：${$searchQuery}` : $selectedNode?.name ?? "KXToDo"}</h1>
     </div>
-    <div class="header-actions" on:click|stopPropagation>
+    <div class="header-actions" class:mobile-hidden={$isMobile && !showMobileHeaderActions} on:click|stopPropagation>
       {#if isMyDay}
         <button type="button" title="完成日历" on:click|stopPropagation={toggleCalendar}>
           <Calendar size={21} />
@@ -712,6 +754,11 @@
               {/each}
             </div>
           {/if}
+          {#if $selectedNode && $selectedNode.kind !== "system"}
+            <button class="danger" type="button" on:click={deleteCurrentNode}>
+              <Trash2 size={15} /> 删除当前条目
+            </button>
+          {/if}
           <button type="button" on:click={exportCurrentList}><Upload size={15} /> 导出当前</button>
           <button type="button" on:click={exportAll}><Upload size={15} /> 一键全部导出</button>
           <button type="button" on:click={() => importInput.click()}><Download size={15} /> 导入 JSON</button>
@@ -761,6 +808,7 @@
     {#each incompleteTasks as task (task.id)}
       <TaskCard
         {task}
+        nodeId={currentNodeId}
         selected={taskMenu?.taskId === task.id || selectedTaskId === task.id}
         linkOpenMode={$appSettings.appearance.linkOpenMode}
         on:toggle={(event) => toggleCompletion(event.detail)}
@@ -783,6 +831,7 @@
           {#each completedTasks as task (task.id)}
             <TaskCard
               {task}
+              nodeId={currentNodeId}
               selected={taskMenu?.taskId === task.id || selectedTaskId === task.id}
               linkOpenMode={$appSettings.appearance.linkOpenMode}
               on:toggle={(event) => toggleCompletion(event.detail)}

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
   import { ChevronDown } from "@lucide/svelte";
+  import { isMobile } from "./platform";
   import type { AppNode } from "./types";
   import IconGlyph from "./IconGlyph.svelte";
 
@@ -31,6 +32,8 @@
   let dropPosition: DropPosition | null = null;
   let suppressNextClick = false;
   let pointerDrag: { id: string; startX: number; startY: number; active: boolean } | null = null;
+  let longPressTimer: number | null = null;
+  let longPressFired = false;
 
   $: children = nodes.filter((node) => node.parentId === parentId && node.kind !== "system");
 
@@ -58,11 +61,12 @@
   }
 
   function handleClick(event: MouseEvent, node: AppNode): void {
-    if (suppressNextClick || isIconZone(event, node)) {
+    if (suppressNextClick || isIconZone(event, node) || longPressFired) {
       event.preventDefault();
       event.stopPropagation();
       suppressNextClick = false;
-      openIconPicker(node.id);
+      longPressFired = false;
+      if (isIconZone(event, node)) openIconPicker(node.id);
       return;
     }
     suppressNextClick = false;
@@ -77,6 +81,31 @@
     event.preventDefault();
     event.stopPropagation();
     dispatch("openMenu", { id: node.id, x: event.clientX, y: event.clientY });
+  }
+
+  function handleTouchStart(event: TouchEvent, node: AppNode): void {
+    if (!$isMobile) return;
+    longPressFired = false;
+    const touch = event.touches[0];
+    if (!touch) return;
+    const x = touch.clientX;
+    const y = touch.clientY;
+    longPressTimer = window.setTimeout(() => {
+      longPressFired = true;
+      suppressNextClick = true;
+      dispatch("openMenu", { id: node.id, x, y });
+    }, 500);
+  }
+
+  function handleTouchEnd(): void {
+    if (longPressTimer !== null) {
+      window.clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  }
+
+  function handleTouchMove(): void {
+    handleTouchEnd();
   }
 
   function openIconPicker(id: string): void {
@@ -219,6 +248,9 @@
     on:pointerdown={(event) => handlePointerDown(event, node)}
     on:click={(event) => handleClick(event, node)}
     on:contextmenu={(event) => openMenu(event, node)}
+    on:touchstart={(event) => handleTouchStart(event, node)}
+    on:touchend={handleTouchEnd}
+    on:touchmove={handleTouchMove}
     on:dragstart={(event) => {
       const target = event.target;
       if (target instanceof Element && target.closest("button, input")) {

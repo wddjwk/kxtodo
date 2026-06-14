@@ -127,6 +127,10 @@ h1 {
   background: #f2f4f7;
 }
 
+.list-menu .danger:hover {
+  color: #b3261e;
+}
+
 .menu-section-title {
   margin-top: 3px;
   color: #666;
@@ -474,6 +478,41 @@ h1 {
 .edit-button:hover {
   background: #f0f0f0;
   color: var(--accent);
+}
+
+.insert-image-button {
+  display: grid;
+  grid-column: 3;
+  position: relative;
+  z-index: 3;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  align-self: start;
+  margin-top: 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #999;
+  cursor: pointer;
+}
+
+.task-card.editing .insert-image-button {
+  position: absolute;
+  top: 17px;
+  right: 50px;
+  grid-column: auto;
+}
+
+.insert-image-button:hover {
+  background: #f0f0f0;
+  color: var(--accent);
+}
+
+.markdown-content img {
+  max-width: 100%;
+  border-radius: 6px;
+  margin: 8px 0;
 }
 
 /* Task context menu */

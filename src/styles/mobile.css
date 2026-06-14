@@ -109,3 +109,96 @@
 .app-shell.mobile .sidebar-footer button {
   min-height: 48px;
 }
+
+/* Smaller title font on mobile */
+.app-shell.mobile h1 {
+  font-size: 24px;
+}
+
+.app-shell.mobile .mobile-title-tap {
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: rgb(0 0 0 / 8%);
+  border-radius: 6px;
+  padding: 2px 6px;
+  margin: -2px -6px;
+}
+
+/* Hide header actions on mobile by default; show on title tap */
+.app-shell.mobile .header-actions.mobile-hidden {
+  display: none;
+}
+
+.app-shell.mobile .header-actions {
+  gap: 10px;
+}
+
+.app-shell.mobile .header-actions > button {
+  width: 32px;
+  height: 32px;
+}
+
+/* Context menu: more compact on mobile, near touch point */
+.app-shell.mobile .tree-context-menu {
+  min-width: 180px;
+  padding: 6px;
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgb(0 0 0 / 20%);
+}
+
+.app-shell.mobile .tree-context-menu button {
+  padding: 10px 12px;
+  font-size: 15px;
+  min-height: 44px;
+}
+
+/* Task context menu on mobile */
+.app-shell.mobile .task-context-menu {
+  min-width: 220px;
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgb(0 0 0 / 20%);
+}
+
+.app-shell.mobile .task-context-menu button {
+  padding: 10px 12px;
+  min-height: 44px;
+}
+
+/* Insert image button on mobile */
+.app-shell.mobile .insert-image-button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--accent);
+  opacity: 0.5;
+  cursor: pointer;
+}
+
+.app-shell.mobile .insert-image-button:hover {
+  opacity: 1;
+  background: rgb(0 0 0 / 6%);
+}
+
+/* My Day subtitle smaller on mobile */
+.app-shell.mobile .my-day-subtitle {
+  font-size: 12px;
+  margin: -14px 0 12px;
+  padding-left: 48px;
+}
+
+/* List menu on mobile */
+.app-shell.mobile .list-menu {
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+}
+
+/* Markdown images in task cards */
+.markdown-content img {
+  max-width: 100%;
+  border-radius: 6px;
+  margin: 8px 0;
+}

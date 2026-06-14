@@ -8,15 +8,18 @@
   } from "./styles";
   import { defaultSettings } from "./defaults";
   import {
-    setCloseToTray, setAutostart, registerGlobalShortcut
+    setCloseToTray, setAutostart, registerGlobalShortcut,
+    isTauriRuntime, pickImageFile, saveAvatarImage, avatarImageUrl
   } from "./backend";
+  import { avatarCache, resolveAvatarSrc } from "./images";
   import Dropdown from "./Dropdown.svelte";
   import type { Settings } from "./types";
 
   let avatarFileInput: HTMLInputElement;
 
   $: drawerStyle = buildSettingsDrawerStyle($appSettings.appearance);
-  $: avStyle = avatarStyle($appSettings.profile.avatar);
+  $: resolvedAvatar = resolveAvatarSrc($appSettings.profile.avatar, $avatarCache);
+  $: avStyle = avatarStyle(resolvedAvatar);
   $: avInitial = avatarInitial($appSettings.profile.displayName);
 
   function updateProfile(field: keyof Settings["profile"], value: string): void {
@@ -89,7 +92,24 @@
     commitSettings({ ...$appSettings, cloud: { ...$appSettings.cloud, provider: value } });
   }
 
-  async function uploadAvatar(event: Event): Promise<void> {
+  async function uploadAvatar(): Promise<void> {
+    if (!isTauriRuntime) {
+      avatarFileInput.click();
+      return;
+    }
+    try {
+      const srcPath = await pickImageFile();
+      if (!srcPath) return;
+      const filename = await saveAvatarImage(srcPath);
+      const url = await avatarImageUrl(filename);
+      avatarCache.update((map) => ({ ...map, [filename]: url }));
+      commitSettings({ ...$appSettings, profile: { ...$appSettings.profile, avatar: filename } });
+    } catch (error) {
+      showToast(`头像上传失败：${String(error)}`);
+    }
+  }
+
+  async function uploadAvatarFromInput(event: Event): Promise<void> {
     const target = event.currentTarget;
     if (!(target instanceof HTMLInputElement) || !target.files?.[0]) return;
     try {
@@ -115,8 +135,8 @@
     <h3>个人资料</h3>
     <div class="avatar-setting">
       <span class="avatar large" style={avStyle}>{$appSettings.profile.avatar ? "" : avInitial}</span>
-      <button type="button" on:click={() => avatarFileInput.click()}>上传头像</button>
-      <input bind:this={avatarFileInput} class="hidden-file" type="file" accept="image/*" on:change={uploadAvatar} />
+      <button type="button" on:click={uploadAvatar}>上传头像</button>
+      <input bind:this={avatarFileInput} class="hidden-file" type="file" accept="image/*" on:change={uploadAvatarFromInput} />
     </div>
     <label class="settings-row">
       名字

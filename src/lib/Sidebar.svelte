@@ -14,6 +14,8 @@
     createCategoryNode, createEntryNode, defaultBackground
   } from "./defaults";
   import { uiScaleValue, buildMenuStyle, avatarStyle, avatarInitial } from "./styles";
+  import { avatarCache, resolveAvatarSrc, isLocalImageRef, localImageFilename } from "./images";
+  import { deleteBackgroundImage, deleteNodeImages } from "./backend";
   import IconGlyph from "./IconGlyph.svelte";
   import IconPicker from "./IconPicker.svelte";
   import ListTree from "./ListTree.svelte";
@@ -36,7 +38,8 @@
   $: treeMoveTargets = treeMenuNode ? moveTargetOptions(treeMenuNode.id, $appState.nodes) : [];
   $: treeMenuStyle = treeMenu ? buildMenuStyle(treeMenu.x, treeMenu.y, 248, treeMenuNode?.kind === "category" ? 300 : 252, uiScaleValue($appSettings.appearance.uiScale)) : "";
   $: selectedIconPickerList = iconPickerListId ? $appState.nodes.find((n) => n.id === iconPickerListId) : null;
-  $: avStyle = avatarStyle($appSettings.profile.avatar);
+  $: resolvedAvatar = resolveAvatarSrc($appSettings.profile.avatar, $avatarCache);
+  $: avStyle = avatarStyle(resolvedAvatar);
   $: avInitial = avatarInitial($appSettings.profile.displayName);
 
   export function closeOverlays(): void {
@@ -129,6 +132,13 @@
       return;
     }
     const ids = nodeAndDescendantIds(id, $appState.nodes);
+    for (const delId of ids) {
+      const bg = $appState.backgrounds[delId];
+      if (bg?.image && isLocalImageRef(bg.image)) {
+        void deleteBackgroundImage(localImageFilename(bg.image));
+      }
+      void deleteNodeImages(delId);
+    }
     let nodes = $appState.nodes.filter((n) => !ids.has(n.id));
     let backgrounds = Object.fromEntries(Object.entries($appState.backgrounds).filter(([key]) => !ids.has(key)));
     if (!nodes.some((n) => n.kind === "entry")) {

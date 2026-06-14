@@ -69,7 +69,8 @@ export function renderMarkdown(markdown: string): string {
   const highlighted = highlightCodeBlocks(raw);
   return DOMPurify.sanitize(highlighted, {
     ADD_TAGS: ["mark"],
-    ADD_ATTR: ["target", "rel"]
+    ADD_ATTR: ["target", "rel", "src"],
+    ALLOW_UNKNOWN_PROTOCOLS: true
   });
 }
 
@@ -77,7 +78,8 @@ export function renderInlineMarkdown(markdown: string): string {
   const raw = marked.parseInline(applyHighlights(markdown || "未命名任务")) as string;
   return DOMPurify.sanitize(raw, {
     ADD_TAGS: ["mark"],
-    ADD_ATTR: ["target", "rel"]
+    ADD_ATTR: ["target", "rel"],
+    ALLOW_UNKNOWN_PROTOCOLS: true
   });
 }
 

@@ -1,5 +1,5 @@
 import { writable, get } from "svelte/store";
-import { backgroundImageUrl } from "./backend";
+import { backgroundImageUrl, avatarImageUrl, mdImageUrl } from "./backend";
 
 const LOCAL_PREFIX = "img:";
 
@@ -58,4 +58,77 @@ export function resolveImageSrc(ref: string | undefined, cache: Record<string, s
     return "";
   }
   return ref;
+}
+
+// -- Avatar resolution --
+
+const avatarPending = new Set<string>();
+
+export const avatarCache = writable<Record<string, string>>({});
+
+export function isAvatarFilename(ref?: string): ref is string {
+  if (!ref || ref.startsWith("data:") || ref.startsWith("http:") || ref.startsWith("https:")) return false;
+  return !ref.includes("/") && !ref.includes("\\");
+}
+
+function ensureAvatarLoaded(filename: string): void {
+  if (!filename || avatarPending.has(filename) || filename in get(avatarCache)) return;
+  avatarPending.add(filename);
+  avatarImageUrl(filename)
+    .then((url) => avatarCache.update((map) => ({ ...map, [filename]: url })))
+    .catch(() => {})
+    .finally(() => avatarPending.delete(filename));
+}
+
+export function resolveAvatarSrc(ref: string | undefined, cache: Record<string, string>): string {
+  if (!ref) return "";
+  if (ref.startsWith("data:") || ref.startsWith("http:") || ref.startsWith("https:")) return ref;
+  if (isAvatarFilename(ref)) {
+    const cached = cache[ref];
+    if (cached) return cached;
+    ensureAvatarLoaded(ref);
+    return "";
+  }
+  return ref;
+}
+
+// -- Markdown image resolution --
+
+const mdPending = new Set<string>();
+export const mdImageCache = writable<Record<string, string>>({});
+
+function mdCacheKey(nodeId: string, filename: string): string {
+  return `${nodeId}/${filename}`;
+}
+
+function ensureMdImageLoaded(nodeId: string, filename: string): void {
+  const key = mdCacheKey(nodeId, filename);
+  if (!filename || mdPending.has(key) || key in get(mdImageCache)) return;
+  mdPending.add(key);
+  mdImageUrl(nodeId, filename)
+    .then((url) => mdImageCache.update((map) => ({ ...map, [key]: url })))
+    .catch(() => {})
+    .finally(() => mdPending.delete(key));
+}
+
+export function primeMdImageCache(nodeId: string, filename: string, url: string): void {
+  const key = mdCacheKey(nodeId, filename);
+  mdImageCache.update((map) => ({ ...map, [key]: url }));
+}
+
+/**
+ * Resolve markdown ![](filename) references to asset-protocol URLs.
+ * Called with the raw markdown and the node ID to resolve local image references.
+ */
+export function resolveMarkdownImages(markdown: string, nodeId: string, cache: Record<string, string>): string {
+  return markdown.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, src) => {
+    if (!src || src.startsWith("http://") || src.startsWith("https://") || src.startsWith("data:")) {
+      return match;
+    }
+    const key = mdCacheKey(nodeId, src);
+    const cached = cache[key];
+    if (cached) return `![${alt}](${cached})`;
+    ensureMdImageLoaded(nodeId, src);
+    return `![${alt}](${src})`;
+  });
 }

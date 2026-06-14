@@ -64,6 +64,21 @@ fn images_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+fn avatar_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = data_dir(app)?.join("avatar");
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    Ok(dir)
+}
+
+fn md_images_dir(app: &AppHandle, node_id: &str) -> Result<PathBuf, String> {
+    if node_id.is_empty() || node_id.contains('/') || node_id.contains('\\') || node_id.contains("..") {
+        return Err("Invalid node id".to_string());
+    }
+    let dir = data_dir(app)?.join("img").join(node_id);
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    Ok(dir)
+}
+
 fn data_file(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(data_dir(app)?.join("data.json"))
 }
@@ -249,6 +264,98 @@ fn import_background_image(app: AppHandle, src_path: String) -> Result<String, S
 fn background_image_path(app: AppHandle, filename: String) -> Result<String, String> {
     safe_image_name(&filename)?;
     let path = images_dir(&app)?.join(&filename);
+    if !path.is_file() {
+        return Err("File not found".to_string());
+    }
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Copy a picked image into the avatar directory. Returns stored filename.
+#[tauri::command]
+fn save_avatar_image(app: AppHandle, src_path: String) -> Result<String, String> {
+    let src = std::path::Path::new(&src_path);
+    if !src.is_file() {
+        return Err("File not found".to_string());
+    }
+    let ext = extension_for_path(&src_path);
+    let dir = avatar_dir(&app)?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_nanos())
+        .unwrap_or(0);
+    let filename = format!("avatar-{stamp}.{ext}");
+    for entry in fs::read_dir(&dir).into_iter().flatten() {
+        if let Ok(entry) = entry {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+    fs::copy(src, dir.join(&filename)).map_err(|error| error.to_string())?;
+    Ok(filename)
+}
+
+/// Delete the avatar image file.
+#[tauri::command]
+fn delete_avatar_image(app: AppHandle, filename: String) -> Result<(), String> {
+    safe_image_name(&filename)?;
+    let path = avatar_dir(&app)?.join(&filename);
+    let _ = fs::remove_file(path);
+    Ok(())
+}
+
+/// Absolute path of a stored avatar image, for `convertFileSrc`.
+#[tauri::command]
+fn avatar_image_path(app: AppHandle, filename: String) -> Result<String, String> {
+    safe_image_name(&filename)?;
+    let path = avatar_dir(&app)?.join(&filename);
+    if !path.is_file() {
+        return Err("File not found".to_string());
+    }
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Copy a picked image into img/<node_id>/ for markdown embedding. Returns stored filename.
+#[tauri::command]
+fn save_md_image(app: AppHandle, src_path: String, node_id: String) -> Result<String, String> {
+    let src = std::path::Path::new(&src_path);
+    if !src.is_file() {
+        return Err("File not found".to_string());
+    }
+    let ext = extension_for_path(&src_path);
+    let dir = md_images_dir(&app, &node_id)?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_nanos())
+        .unwrap_or(0);
+    let counter = IMAGE_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let filename = format!("md-{stamp}-{counter}.{ext}");
+    fs::copy(src, dir.join(&filename)).map_err(|error| error.to_string())?;
+    Ok(filename)
+}
+
+/// Delete a single markdown image file.
+#[tauri::command]
+fn delete_md_image(app: AppHandle, node_id: String, filename: String) -> Result<(), String> {
+    safe_image_name(&filename)?;
+    let path = md_images_dir(&app, &node_id)?.join(&filename);
+    let _ = fs::remove_file(path);
+    Ok(())
+}
+
+/// Delete all markdown images for a node (called when entry is deleted).
+#[tauri::command]
+fn delete_node_images(app: AppHandle, node_id: String) -> Result<(), String> {
+    let dir = data_dir(&app)?.join("img").join(&node_id);
+    if dir.exists() {
+        let _ = fs::remove_dir_all(&dir);
+    }
+    Ok(())
+}
+
+/// Absolute path of a stored markdown image, for `convertFileSrc`.
+#[tauri::command]
+fn md_image_path(app: AppHandle, node_id: String, filename: String) -> Result<String, String> {
+    safe_image_name(&filename)?;
+    let path = md_images_dir(&app, &node_id)?.join(&filename);
     if !path.is_file() {
         return Err("File not found".to_string());
     }
@@ -524,6 +631,13 @@ pub fn run() {
             delete_background_image,
             import_background_image,
             background_image_path,
+            save_avatar_image,
+            delete_avatar_image,
+            avatar_image_path,
+            save_md_image,
+            delete_md_image,
+            delete_node_images,
+            md_image_path,
             register_global_shortcut,
             set_close_to_tray,
             set_autostart,

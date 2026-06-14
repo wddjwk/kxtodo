@@ -11,7 +11,7 @@ export const systemNodes: AppNode[] = [
 ];
 
 export const defaultBackground: ListBackground = {
-  color: "#f7efe8",
+  color: "#fafaf8",
   imageOpacity: 0.28
 };
 

@@ -1,11 +1,15 @@
 <script lang="ts">
   import { createEventDispatcher, tick } from "svelte";
-  import { Check, ChevronUp, PenLine } from "@lucide/svelte";
+  import { Check, ChevronUp, ImagePlus, PenLine } from "@lucide/svelte";
   import { collapsedMarkdownLine, renderInlineMarkdown, renderMarkdown } from "./markdown";
+  import { mdImageCache, resolveMarkdownImages, primeMdImageCache } from "./images";
+  import { isTauriRuntime, pickImageFile, saveMdImage, mdImageUrl } from "./backend";
+  import { showToast } from "./stores";
   import DatePicker from "./DatePicker.svelte";
   import type { Task } from "./types";
 
   export let task: Task;
+  export let nodeId = "";
   export let selected = false;
   export let linkOpenMode: "app" | "system" = "app";
 
@@ -24,8 +28,9 @@
   let editorEl: HTMLTextAreaElement;
   let showPicker = false;
 
+  $: resolvedMd = resolveMarkdownImages(task.markdown, nodeId, $mdImageCache);
   $: collapsedHtml = renderInlineMarkdown(collapsedMarkdownLine(task.markdown));
-  $: fullHtml = renderMarkdown(task.markdown);
+  $: fullHtml = renderMarkdown(resolvedMd);
   $: formattedDate = task.dueDate ? formatDate(task.dueDate) : "";
   $: if (task.editing && editingTaskId !== task.id) {
     draft = task.markdown;
@@ -33,6 +38,21 @@
   }
   $: if (!task.editing && editingTaskId === task.id) {
     editingTaskId = "";
+  }
+
+  async function insertImage(): Promise<void> {
+    if (!isTauriRuntime || !nodeId) return;
+    try {
+      const srcPath = await pickImageFile();
+      if (!srcPath) return;
+      const filename = await saveMdImage(srcPath, nodeId);
+      const url = await mdImageUrl(nodeId, filename);
+      primeMdImageCache(nodeId, filename, url);
+      draft += `\n![](${filename})`;
+      dispatch("commit", { id: task.id, markdown: draft });
+    } catch (error) {
+      showToast(`图片插入失败：${String(error)}`);
+    }
   }
 
   function formatDate(dateStr: string): string {
@@ -189,6 +209,12 @@
       </div>
     {:else}
       <span class="task-due-spacer" aria-hidden="true"></span>
+    {/if}
+
+    {#if task.editing && isTauriRuntime && nodeId}
+      <button class="insert-image-button" type="button" title="插入图片" on:mousedown|preventDefault|stopPropagation={insertImage} on:click|preventDefault|stopPropagation>
+        <ImagePlus size={18} />
+      </button>
     {/if}
 
     <button class="edit-button" type="button" title="编辑 Markdown" on:mousedown|preventDefault|stopPropagation={toggleEdit} on:click|preventDefault|stopPropagation>
