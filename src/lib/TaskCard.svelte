@@ -3,7 +3,7 @@
   import { Check, ChevronUp, ImagePlus, PenLine } from "@lucide/svelte";
   import { collapsedMarkdownLine, renderInlineMarkdown, renderMarkdown } from "./markdown";
   import { mdImageCache, resolveMarkdownImages, primeMdImageCache } from "./images";
-  import { isTauriRuntime, pickImageFile, saveMdImage, mdImageUrl } from "./backend";
+  import { isTauriRuntime, pickImageFile, saveMdImage, mdImageUrl, saveMdImageFromDataUrl } from "./backend";
   import { showToast } from "./stores";
   import DatePicker from "./DatePicker.svelte";
   import type { Task } from "./types";
@@ -52,6 +52,37 @@
       dispatch("commit", { id: task.id, markdown: draft });
     } catch (error) {
       showToast(`图片插入失败：${String(error)}`);
+    }
+  }
+
+  async function handlePaste(event: ClipboardEvent): Promise<void> {
+    if (!isTauriRuntime || !nodeId) return;
+    const items = event.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith("image/")) {
+        event.preventDefault();
+        const blob = item.getAsFile();
+        if (!blob) return;
+        try {
+          const arrayBuffer = await blob.arrayBuffer();
+          const bytes = new Uint8Array(arrayBuffer);
+          let binary = "";
+          for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+          const dataUrl = `data:${item.type};base64,${btoa(binary)}`;
+          const savedFilename = await saveMdImageFromDataUrl(dataUrl, nodeId);
+          const url = await mdImageUrl(nodeId, savedFilename);
+          primeMdImageCache(nodeId, savedFilename, url);
+          const cursorPos = editorEl?.selectionStart ?? draft.length;
+          const before = draft.slice(0, cursorPos);
+          const after = draft.slice(cursorPos);
+          draft = `${before}\n![](${savedFilename})\n${after}`;
+          resizeEditor();
+        } catch (error) {
+          showToast(`图片粘贴失败：${String(error)}`);
+        }
+        return;
+      }
     }
   }
 
@@ -185,6 +216,7 @@
           class="markdown-editor"
           spellcheck="false"
           on:input={resizeEditor}
+          on:paste={handlePaste}
           on:blur={commitEdit}
         ></textarea>
       {:else if task.expanded}

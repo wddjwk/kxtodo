@@ -161,6 +161,11 @@ export async function mdImageUrl(nodeId: string, filename: string): Promise<stri
   return convertFileSrc(path);
 }
 
+/** Save a base64 data URL as a markdown image (for clipboard paste). Returns stored filename. */
+export async function saveMdImageFromDataUrl(dataUrl: string, nodeId: string): Promise<string> {
+  return invoke<string>("save_md_image_data", { dataUrl, nodeId });
+}
+
 export async function registerGlobalShortcut(shortcut: string): Promise<void> {
   if (!isTauriRuntime) {
     return;

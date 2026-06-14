@@ -362,6 +362,27 @@ fn md_image_path(app: AppHandle, node_id: String, filename: String) -> Result<St
     Ok(path.to_string_lossy().to_string())
 }
 
+/// Save a base64 data URL as a markdown image in img/<node_id>/. Returns stored filename.
+#[tauri::command]
+fn save_md_image_data(app: AppHandle, data_url: String, node_id: String) -> Result<String, String> {
+    let (meta, payload) = data_url
+        .split_once(',')
+        .ok_or_else(|| "Invalid image data".to_string())?;
+    let ext = extension_for_mime(meta);
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(payload.trim().as_bytes())
+        .map_err(|error| error.to_string())?;
+    let dir = md_images_dir(&app, &node_id)?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_nanos())
+        .unwrap_or(0);
+    let counter = IMAGE_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let filename = format!("md-{stamp}-{counter}.{ext}");
+    fs::write(dir.join(&filename), bytes).map_err(|error| error.to_string())?;
+    Ok(filename)
+}
+
 #[cfg(desktop)]
 fn shortcut_from_string(raw: &str) -> Result<Shortcut, String> {
     let mut modifiers = Modifiers::empty();
@@ -638,6 +659,7 @@ pub fn run() {
             delete_md_image,
             delete_node_images,
             md_image_path,
+            save_md_image_data,
             register_global_shortcut,
             set_close_to_tray,
             set_autostart,

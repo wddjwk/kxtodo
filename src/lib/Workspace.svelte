@@ -305,6 +305,14 @@
     });
   }
 
+  function deleteTask(taskId: string): void {
+    commit({
+      ...$appState,
+      tasks: $appState.tasks.filter((task) => task.id !== taskId)
+    });
+    taskMenu = null;
+  }
+
   function addTaskFromDraft(): void {
     const markdown = newTaskDraft.trim();
     if (!markdown) return;
@@ -885,6 +893,9 @@
       </button>
       <button type="button" on:click={() => { updateTask(taskMenuTask.id, (task) => ({ ...task, editing: true, expanded: true })); taskMenu = null; }}>
         <PenLine size={16} /> 编辑
+      </button>
+      <button class="danger" type="button" on:click={() => deleteTask(taskMenuTask.id)}>
+        <Trash2 size={16} /> 删除
       </button>
     </div>
   {/if}

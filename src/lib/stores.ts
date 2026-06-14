@@ -9,7 +9,7 @@ import {
 import { buildListCounts, buildVisibleTasks, getBackground } from "./nodes";
 import { accentForNode, uiScaleValue } from "./styles";
 
-export const APP_VERSION = "7.1.0";
+export const APP_VERSION = "7.1.1";
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -183,8 +183,8 @@ export async function hydrate(): Promise<void> {
     const normalizedSettings = normalizeSettings(storedSettings);
     appSettings.set(normalizedSettings);
     loadedSettings = normalizedSettings;
-  } catch (error) {
-    showToast(`加载本地数据失败，已使用默认数据：${String(error)}`);
+  } catch {
+    // First launch or corrupted data — silently use defaults
   } finally {
     isHydrated.set(true);
   }
