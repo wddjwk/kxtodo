@@ -7,12 +7,21 @@ export function escapeCssUrl(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, "%22").replace(/\n/g, "");
 }
 
-export function accentForNode(node?: AppNode): string {
+function isHexColor(value: unknown): value is string {
+  return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
+}
+
+export function defaultAccentForNode(node?: AppNode): string {
   if (!node) return DEFAULT_ACCENT;
   if (node.id === "planned") return "#2564cf";
   if (node.id === "important") return "#9f5f00";
   if (node.id === "my-day") return "#b64a30";
   return DEFAULT_ACCENT;
+}
+
+export function accentForNode(node?: AppNode, uiColors: Record<string, string> = {}): string {
+  const customColor = node ? uiColors[node.id] : undefined;
+  return isHexColor(customColor) ? customColor : defaultAccentForNode(node);
 }
 
 export function avatarStyle(avatar: string): string {

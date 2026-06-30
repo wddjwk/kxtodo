@@ -96,6 +96,10 @@ export function collapsedMarkdownLine(markdown: string): string {
   return firstMarkdownLine(markdown).replace(/^#{1,6}\s*/, "");
 }
 
+export function hasMultipleMarkdownLines(markdown: string): boolean {
+  return markdown.trim().split(/\r?\n/).length > 1;
+}
+
 export function markdownTitle(markdown: string): string {
   return collapsedMarkdownLine(markdown)
     .replace(/\*\*([^*]+)\*\*/g, "$1")

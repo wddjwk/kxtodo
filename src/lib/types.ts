@@ -32,6 +32,11 @@ export type ProfileSettings = {
   avatar: string;
 };
 
+export type ThemePreset = {
+  name: string;
+  color: string;
+};
+
 export type Settings = {
   profile: ProfileSettings;
   appearance: {
@@ -40,6 +45,8 @@ export type Settings = {
     uiFontSize: number;
     markdownFontSize: number;
     editorFontSize: number;
+    themePresets: ThemePreset[];
+    uiColors: Record<string, string>;
   };
   lifecycle: {
     closeToTray: boolean;

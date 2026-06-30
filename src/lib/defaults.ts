@@ -1,4 +1,4 @@
-import type { AppNode, AppState, ListBackground, Settings, Task } from "./types";
+import type { AppNode, AppState, ListBackground, Settings, Task, ThemePreset } from "./types";
 
 const now = () => new Date().toISOString();
 
@@ -11,22 +11,23 @@ export const systemNodes: AppNode[] = [
 ];
 
 export const defaultBackground: ListBackground = {
-  color: "#fafaf8",
+  color: "#f4f1ea",
   imageOpacity: 0.28
 };
 
-export const themePresets = [
-  { name: "白瓷",   color: "#fafaf8" },
-  { name: "日出",   color: "#f5e6d8" },
-  { name: "睡莲",   color: "#e4ede6" },
-  { name: "晨雾",   color: "#dfe8ef" },
-  { name: "干草垛", color: "#f0e4cc" },
-  { name: "教堂",   color: "#e8e2ed" },
-  { name: "花园",   color: "#f2e2e5" },
-  { name: "拱桥",   color: "#daeee8" },
-  { name: "鸢尾",   color: "#ddd8ea" },
-  { name: "麦田",   color: "#ece8d4" },
-  { name: "夜色",   color: "#2a2d38" }
+export const themePresets: ThemePreset[] = [
+  { name: "雾瓷",     color: "#f4f1ea" },
+  { name: "睡莲灰绿", color: "#dfe8df" },
+  { name: "晨雾蓝",   color: "#dbe4e6" },
+  { name: "粉霞",     color: "#ead9d5" },
+  { name: "鸢尾雾紫", color: "#ded8e6" },
+  { name: "亚麻麦秆", color: "#ece2ca" },
+  { name: "石英灰",   color: "#e3e0d8" },
+  { name: "鼠尾草",   color: "#d8dfd2" },
+  { name: "贵族蓝灰", color: "#cfd9df" },
+  { name: "陶土玫瑰", color: "#e5d4cb" },
+  { name: "胡桃绒",   color: "#d2c5b6" },
+  { name: "夜幕墨蓝", color: "#29313a" }
 ];
 
 export const defaultSettings: Settings = {
@@ -40,7 +41,9 @@ export const defaultSettings: Settings = {
     uiScale: 0.75,
     uiFontSize: 18,
     markdownFontSize: 20,
-    editorFontSize: 20
+    editorFontSize: 20,
+    themePresets: themePresets.map((preset) => ({ ...preset })),
+    uiColors: {}
   },
   lifecycle: {
     closeToTray: true,
@@ -248,6 +251,30 @@ export function normalizeSettings(raw: unknown): Settings {
   };
   const normalizeFontSize = (value: unknown, fallback: number, min = 14, max = 24): number =>
     typeof value === "number" ? Math.min(max, Math.max(min, Math.round(value))) : fallback;
+  const normalizeHexColor = (value: unknown, fallback: string): string =>
+    typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value.trim()) ? value.trim() : fallback;
+  const normalizeThemePresets = (value: unknown): ThemePreset[] => {
+    const presets = Array.isArray(value) ? value : [];
+    return themePresets.map((fallback, index) => {
+      const preset = presets[index] as Partial<ThemePreset> | undefined;
+      return {
+        name: typeof preset?.name === "string" && preset.name.trim() ? preset.name.trim().slice(0, 24) : fallback.name,
+        color: normalizeHexColor(preset?.color, fallback.color)
+      };
+    });
+  };
+  const normalizeUiColors = (value: unknown): Record<string, string> => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return {};
+    }
+    const colors: Record<string, string> = {};
+    for (const [nodeId, color] of Object.entries(value)) {
+      if (typeof nodeId === "string" && nodeId && typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color.trim())) {
+        colors[nodeId] = color.trim();
+      }
+    }
+    return colors;
+  };
   const storedUiScale = normalizeUiScale(source?.appearance?.uiScale) ?? normalizeUiScale(source?.display?.uiScale);
   return {
     profile: {
@@ -269,7 +296,9 @@ export function normalizeSettings(raw: unknown): Settings {
         storedUiScale ?? defaultSettings.appearance.uiScale,
       uiFontSize: normalizeFontSize(source?.appearance?.uiFontSize, defaultSettings.appearance.uiFontSize, 14, 22),
       markdownFontSize: normalizeFontSize(source?.appearance?.markdownFontSize, defaultSettings.appearance.markdownFontSize, 14, 26),
-      editorFontSize: normalizeFontSize(source?.appearance?.editorFontSize, defaultSettings.appearance.editorFontSize, 14, 26)
+      editorFontSize: normalizeFontSize(source?.appearance?.editorFontSize, defaultSettings.appearance.editorFontSize, 14, 26),
+      themePresets: normalizeThemePresets(source?.appearance?.themePresets),
+      uiColors: normalizeUiColors(source?.appearance?.uiColors)
     },
     lifecycle: {
       closeToTray:

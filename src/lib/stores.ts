@@ -9,7 +9,7 @@ import {
 import { buildListCounts, buildVisibleTasks, getBackground } from "./nodes";
 import { accentForNode, uiScaleValue } from "./styles";
 
-export const APP_VERSION = "7.1.2";
+export const APP_VERSION = "7.2.0";
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -109,7 +109,10 @@ export const selectedBackground = derived(
   ([$node, $s]) => getBackground($node?.id, $s.backgrounds)
 );
 
-export const accent = derived(selectedNode, ($node) => accentForNode($node));
+export const accent = derived(
+  [selectedNode, appSettings],
+  ([$node, $settings]) => accentForNode($node, $settings.appearance.uiColors)
+);
 
 export const isSearching = derived(searchQuery, ($q) => $q.trim().length > 0);
 

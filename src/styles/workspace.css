@@ -137,6 +137,51 @@ h1 {
   font-size: 13px;
 }
 
+.ui-color-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.ui-color-picker {
+  position: relative;
+  display: grid;
+  width: 38px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid #dedede;
+  border-radius: 999px;
+  background: var(--swatch);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.ui-color-picker span {
+  width: 100%;
+  height: 100%;
+  background: var(--swatch);
+}
+
+.ui-color-picker input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.ui-color-value {
+  overflow: hidden;
+  color: #666;
+  font-size: 13px;
+  text-overflow: ellipsis;
+}
+
+.ui-color-row > button {
+  min-height: 30px;
+  padding: 5px 9px;
+}
+
 .color-grid {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
@@ -155,6 +200,10 @@ h1 {
   box-shadow: 0 0 0 2px #2564cf;
 }
 
+.color-grid button.editing {
+  box-shadow: 0 0 0 2px var(--accent), 0 0 0 5px rgb(0 0 0 / 6%);
+}
+
 .color-grid .palette-button {
   border: 1px solid #e0e0e0;
   background: conic-gradient(from 0deg, #ff6b6b, #ffd93d, #6bcb77, #4d96ff, #9b59b6, #ff6b6b);
@@ -163,6 +212,47 @@ h1 {
 
 .color-grid .palette-button:hover {
   box-shadow: 0 0 0 2px #2564cf;
+}
+
+.preset-editor {
+  display: grid;
+  gap: 8px;
+  margin-top: 3px;
+  border: 1px solid #e8e2dc;
+  border-radius: 10px;
+  background: #fffdf9;
+  padding: 9px;
+}
+
+.preset-editor-title {
+  color: #5f5a52;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.preset-editor input {
+  min-width: 0;
+  border: 1px solid #dedede;
+  border-radius: 7px;
+  padding: 7px 9px;
+}
+
+.preset-color-line {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.preset-color-line input[type="color"] {
+  height: 34px;
+  padding: 2px;
+}
+
+.preset-editor-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
 }
 
 .background-link {
@@ -267,7 +357,7 @@ h1 {
   border: 2px solid var(--accent);
   border-radius: 50%;
   background: transparent;
-  color: white;
+  color: var(--accent);
   padding: 0;
 }
 
@@ -279,6 +369,7 @@ h1 {
 
 .task-card.completed .task-check {
   background: var(--accent);
+  color: white;
 }
 
 .task-card.completed .markdown-title-row,
@@ -499,8 +590,8 @@ h1 {
 
 .task-card.editing .insert-image-button {
   position: absolute;
-  top: 17px;
-  right: 50px;
+  top: 51px;
+  right: 16px;
   grid-column: auto;
 }
 

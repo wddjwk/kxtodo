@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher, tick } from "svelte";
-  import { Check, ChevronUp, ImagePlus, PenLine } from "@lucide/svelte";
-  import { collapsedMarkdownLine, renderInlineMarkdown, renderMarkdown } from "./markdown";
+  import { Check, ChevronUp, ImagePlus, PenLine, Plus } from "@lucide/svelte";
+  import { collapsedMarkdownLine, hasMultipleMarkdownLines, renderInlineMarkdown, renderMarkdown } from "./markdown";
   import { mdImageCache, resolveMarkdownImages, primeMdImageCache } from "./images";
   import { isTauriRuntime, pickImageFile, saveMdImage, mdImageUrl, saveMdImageFromDataUrl } from "./backend";
   import { showToast } from "./stores";
@@ -27,11 +27,14 @@
   let editingTaskId = "";
   let editorEl: HTMLTextAreaElement;
   let showPicker = false;
+  let suppressBlurCommit = false;
 
   $: resolvedMd = resolveMarkdownImages(task.markdown, nodeId, $mdImageCache);
   $: collapsedHtml = renderInlineMarkdown(collapsedMarkdownLine(task.markdown));
   $: fullHtml = renderMarkdown(resolvedMd);
   $: formattedDate = task.dueDate ? formatDate(task.dueDate) : "";
+  $: canExpand = hasMultipleMarkdownLines(task.markdown);
+  $: isExpanded = task.expanded && canExpand;
   $: if (task.editing && editingTaskId !== task.id) {
     draft = task.markdown;
     editingTaskId = task.id;
@@ -42,17 +45,35 @@
 
   async function insertImage(): Promise<void> {
     if (!isTauriRuntime || !nodeId) return;
+    suppressBlurCommit = true;
     try {
       const srcPath = await pickImageFile();
       if (!srcPath) return;
       const filename = await saveMdImage(srcPath, nodeId);
       const url = await mdImageUrl(nodeId, filename);
       primeMdImageCache(nodeId, filename, url);
-      draft += `\n![](${filename})`;
-      dispatch("commit", { id: task.id, markdown: draft });
+      await insertImageMarkdown(filename);
     } catch (error) {
       showToast(`图片插入失败：${String(error)}`);
+    } finally {
+      suppressBlurCommit = false;
+      await tick();
+      editorEl?.focus();
     }
+  }
+
+  async function insertImageMarkdown(filename: string): Promise<void> {
+    const cursorStart = editorEl?.selectionStart ?? draft.length;
+    const cursorEnd = editorEl?.selectionEnd ?? cursorStart;
+    const before = draft.slice(0, cursorStart);
+    const after = draft.slice(cursorEnd);
+    const inserted = `\n![](${filename})\n`;
+    draft = `${before}${inserted}${after}`;
+    await tick();
+    resizeEditor();
+    const nextCursor = before.length + inserted.length;
+    editorEl?.focus();
+    editorEl?.setSelectionRange(nextCursor, nextCursor);
   }
 
   async function handlePaste(event: ClipboardEvent): Promise<void> {
@@ -73,11 +94,7 @@
           const savedFilename = await saveMdImageFromDataUrl(dataUrl, nodeId);
           const url = await mdImageUrl(nodeId, savedFilename);
           primeMdImageCache(nodeId, savedFilename, url);
-          const cursorPos = editorEl?.selectionStart ?? draft.length;
-          const before = draft.slice(0, cursorPos);
-          const after = draft.slice(cursorPos);
-          draft = `${before}\n![](${savedFilename})\n${after}`;
-          resizeEditor();
+          await insertImageMarkdown(savedFilename);
         } catch (error) {
           showToast(`图片粘贴失败：${String(error)}`);
         }
@@ -114,6 +131,9 @@
   }
 
   function commitEdit(): void {
+    if (suppressBlurCommit) {
+      return;
+    }
     if (!task.editing) {
       return;
     }
@@ -132,6 +152,10 @@
     if (event.button !== 0) {
       return;
     }
+    const target = event.target as HTMLElement | null;
+    if (target?.closest("button, input, textarea")) {
+      return;
+    }
     const card = event.currentTarget as HTMLElement;
     const rect = card.getBoundingClientRect();
     const inEditZone = event.clientX >= rect.right - 58 && event.clientY <= rect.top + 58;
@@ -144,7 +168,7 @@
   }
 
   function toggleExpand(event?: MouseEvent): void {
-    if (task.editing) {
+    if (task.editing || !canExpand) {
       return;
     }
     event?.stopPropagation();
@@ -158,6 +182,9 @@
     }
     event.preventDefault();
     window.getSelection()?.removeAllRanges();
+    if (!canExpand) {
+      return;
+    }
     toggleExpand(event);
   }
 
@@ -193,9 +220,10 @@
 
 <article
   class:completed={task.completed}
-  class:compact={!task.expanded && !task.editing}
-  class:expanded={task.expanded && !task.editing}
+  class:compact={!isExpanded && !task.editing}
+  class:expanded={isExpanded && !task.editing}
   class:editing={task.editing}
+  class:multiline={canExpand}
   class:selected
   class="task-card"
   on:mousedown|capture={handleEditZoneMouseDown}
@@ -203,7 +231,9 @@
 >
   <div class="task-title-grid">
     <button class="task-check" type="button" aria-label="切换完成" on:click|stopPropagation={() => dispatch("toggle", task.id)}>
-      {#if task.completed}
+      {#if canExpand}
+        <Plus size={14} strokeWidth={3.1} />
+      {:else if task.completed}
         <Check size={14} strokeWidth={3.2} />
       {/if}
     </button>
@@ -219,7 +249,7 @@
           on:paste={handlePaste}
           on:blur={commitEdit}
         ></textarea>
-      {:else if task.expanded}
+      {:else if isExpanded}
         <div class="markdown-body markdown-content" on:click={handleMarkdownClick} on:dblclick={handleBodyDblClick}>
           {@html fullHtml}
         </div>
@@ -230,7 +260,7 @@
       {/if}
     </section>
 
-    {#if !task.expanded && !task.editing && task.dueDate}
+    {#if !isExpanded && !task.editing && task.dueDate}
       <div class="task-due-wrap">
         <button class="task-due-date" type="button" on:click|stopPropagation={toggleDatePicker}>{formattedDate}</button>
         {#if showPicker}
@@ -244,7 +274,13 @@
     {/if}
 
     {#if task.editing && isTauriRuntime && nodeId}
-      <button class="insert-image-button" type="button" title="插入图片" on:mousedown|preventDefault|stopPropagation={insertImage} on:click|preventDefault|stopPropagation>
+      <button
+        class="insert-image-button"
+        type="button"
+        title="插入图片"
+        on:mousedown|preventDefault|stopPropagation={() => undefined}
+        on:click|preventDefault|stopPropagation={insertImage}
+      >
         <ImagePlus size={18} />
       </button>
     {/if}
@@ -253,7 +289,7 @@
       <PenLine size={18} />
     </button>
 
-    {#if task.expanded && !task.editing}
+    {#if isExpanded && !task.editing}
       <button class="collapse-button" type="button" title="收起卡片" on:click|stopPropagation={toggleExpand}>
         <ChevronUp size={18} />
       </button>

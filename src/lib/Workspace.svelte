@@ -14,6 +14,7 @@
   import { moveTargetOptions, nodeAndDescendantIds, exportStateForNode, getBackground } from "./nodes";
   import { buildMainStyle, buildMenuStyle, uiScaleValue } from "./styles";
   import { normalizeState, normalizeSettings, defaultBackground, themePresets, createEntryNode } from "./defaults";
+  import { hasMultipleMarkdownLines } from "./markdown";
   import { exportData, openExternalUrl, isTauriRuntime, deleteBackgroundImage, pickImageFile, importBackgroundImage, backgroundImageUrl, deleteNodeImages, saveMdImageFromDataUrl, mdImageUrl } from "./backend";
   import {
     imageCache, resolveImageSrc, isLocalImageRef, localImageRef, localImageFilename, primeImageCache,
@@ -57,6 +58,9 @@
   let backgroundFileInput: HTMLInputElement;
   let colorPickerInput: HTMLInputElement;
   let showMobileHeaderActions = false;
+  let editingPresetIndex: number | null = null;
+  let presetNameDraft = "";
+  let presetColorDraft = "";
 
   // Calendar state
   let calViewMode: "month" | "week" = "month";
@@ -204,6 +208,7 @@
     showSuggestions = false;
     showCalendar = false;
     showMobileHeaderActions = false;
+    cancelPresetEdit();
     taskMenu = null;
   }
 
@@ -291,8 +296,9 @@
       ...$appState,
       tasks: $appState.tasks.map((task) => {
         if (!visibleIds.has(task.id)) return task;
-        // Skip single-line tasks when expanding
-        if (expandTarget && !task.markdown.includes("\n")) return task;
+        if (expandTarget && !hasMultipleMarkdownLines(task.markdown)) {
+          return { ...task, expanded: false, editing: false };
+        }
         return { ...task, expanded: expandTarget, editing: false };
       })
     });
@@ -303,6 +309,31 @@
       ...$appState,
       tasks: $appState.tasks.map((task) => (task.id === taskId ? { ...updater(task), updatedAt: now() } : task))
     });
+  }
+
+  function toggleTaskExpansion(taskId: string): void {
+    selectedTaskId = taskId;
+    taskMenu = null;
+    updateTask(taskId, (task) => (
+      hasMultipleMarkdownLines(task.markdown)
+        ? { ...task, expanded: !task.expanded }
+        : { ...task, expanded: false }
+    ));
+  }
+
+  function startTaskEditing(taskId: string): void {
+    selectedTaskId = taskId;
+    taskMenu = null;
+    updateTask(taskId, (task) => ({ ...task, editing: true, expanded: true }));
+  }
+
+  function commitTaskMarkdown(taskId: string, markdown: string): void {
+    updateTask(taskId, (task) => ({
+      ...task,
+      markdown,
+      editing: false,
+      expanded: hasMultipleMarkdownLines(markdown)
+    }));
   }
 
   function deleteTask(taskId: string): void {
@@ -439,6 +470,98 @@
 
   function applyTheme(color: string): void {
     setBackground({ color });
+  }
+
+  function currentThemePresets(): Settings["appearance"]["themePresets"] {
+    return $appSettings.appearance.themePresets.length
+      ? $appSettings.appearance.themePresets
+      : themePresets;
+  }
+
+  function beginPresetEdit(index: number): void {
+    const preset = currentThemePresets()[index];
+    if (!preset) return;
+    editingPresetIndex = index;
+    presetNameDraft = preset.name;
+    presetColorDraft = preset.color;
+  }
+
+  function cancelPresetEdit(): void {
+    editingPresetIndex = null;
+    presetNameDraft = "";
+    presetColorDraft = "";
+  }
+
+  function normalizeHexColor(value: string, fallback: string): string {
+    const color = value.trim();
+    return /^#[0-9a-f]{6}$/i.test(color) ? color : fallback;
+  }
+
+  function updatePresetName(event: Event): void {
+    const target = event.currentTarget;
+    if (target instanceof HTMLInputElement) {
+      presetNameDraft = target.value;
+    }
+  }
+
+  function updatePresetColor(event: Event): void {
+    const target = event.currentTarget;
+    if (target instanceof HTMLInputElement) {
+      presetColorDraft = target.value;
+    }
+  }
+
+  function savePresetEdit(): void {
+    if (editingPresetIndex === null) return;
+    const presets = currentThemePresets().map((preset) => ({ ...preset }));
+    const current = presets[editingPresetIndex];
+    if (!current) return;
+    presets[editingPresetIndex] = {
+      name: presetNameDraft.trim().slice(0, 24) || current.name,
+      color: normalizeHexColor(presetColorDraft, current.color)
+    };
+    commitSettings({
+      ...$appSettings,
+      appearance: {
+        ...$appSettings.appearance,
+        themePresets: presets
+      }
+    });
+    cancelPresetEdit();
+  }
+
+  function setUiColor(color: string): void {
+    if (!$selectedNode) return;
+    commitSettings({
+      ...$appSettings,
+      appearance: {
+        ...$appSettings.appearance,
+        uiColors: {
+          ...$appSettings.appearance.uiColors,
+          [$selectedNode.id]: color
+        }
+      }
+    });
+  }
+
+  function handleUiColorPick(event: Event): void {
+    const target = event.currentTarget;
+    if (target instanceof HTMLInputElement) {
+      setUiColor(target.value);
+    }
+  }
+
+  function resetUiColor(): void {
+    if (!$selectedNode) return;
+    const uiColors = { ...$appSettings.appearance.uiColors };
+    delete uiColors[$selectedNode.id];
+    commitSettings({
+      ...$appSettings,
+      appearance: {
+        ...$appSettings.appearance,
+        uiColors
+      }
+    });
   }
 
   function handleColorPick(event: Event): void {
@@ -591,6 +714,7 @@
     showListMenu = !showListMenu;
     showSortOptions = false;
     showMoveOptions = false;
+    cancelPresetEdit();
     showSuggestions = false;
     showCalendar = false;
     taskMenu = null;
@@ -805,18 +929,43 @@
           <button type="button" on:click={exportCurrentList}><Upload size={15} /> 导出当前</button>
           <button type="button" on:click={exportAll}><Upload size={15} /> 一键全部导出</button>
           <button type="button" on:click={() => importInput.click()}><Download size={15} /> 导入 JSON</button>
+          <div class="menu-section-title">UI颜色</div>
+          <div class="ui-color-row">
+            <label class="ui-color-picker" title="修改当前界面的标题和控件颜色">
+              <span style={`--swatch: ${$accent}`}></span>
+              <input type="color" value={$accent} on:input={handleUiColorPick} />
+            </label>
+            <span class="ui-color-value">{$accent}</span>
+            <button type="button" on:click={resetUiColor}>默认</button>
+          </div>
           <div class="menu-section-title">背景颜色</div>
           <div class="color-grid">
-            {#each themePresets as preset}
+            {#each currentThemePresets() as preset, index}
               <button
                 type="button"
-                title={preset.name}
+                title={`${preset.name}（右键编辑）`}
+                class:editing={editingPresetIndex === index}
                 style={`--swatch: ${preset.color}; --accent-color: ${preset.color}`}
                 on:click={() => applyTheme(preset.color)}
+                on:contextmenu|preventDefault|stopPropagation={() => beginPresetEdit(index)}
               ></button>
             {/each}
             <button type="button" class="palette-button" title="自定义颜色" on:click={openColorPicker}></button>
           </div>
+          {#if editingPresetIndex !== null}
+            <div class="preset-editor">
+              <div class="preset-editor-title">编辑预设颜色</div>
+              <input value={presetNameDraft} maxlength="24" placeholder="颜色名称" on:input={updatePresetName} />
+              <div class="preset-color-line">
+                <input type="color" value={presetColorDraft} on:input={updatePresetColor} />
+                <input value={presetColorDraft} placeholder="#dfe8df" on:input={updatePresetColor} />
+              </div>
+              <div class="preset-editor-actions">
+                <button type="button" on:click={savePresetEdit}>保存</button>
+                <button type="button" on:click={cancelPresetEdit}>取消</button>
+              </div>
+            </div>
+          {/if}
           <input bind:this={colorPickerInput} class="hidden-file" type="color" value={$selectedBackground.color} on:input={handleColorPick} />
           <label class="background-link">
             背景图片链接
@@ -855,9 +1004,9 @@
         selected={taskMenu?.taskId === task.id || selectedTaskId === task.id}
         linkOpenMode={$appSettings.appearance.linkOpenMode}
         on:toggle={(event) => toggleCompletion(event.detail)}
-        on:expand={(event) => { selectedTaskId = event.detail; taskMenu = null; updateTask(event.detail, (item) => ({ ...item, expanded: !item.expanded })); }}
-        on:edit={(event) => { selectedTaskId = event.detail; taskMenu = null; updateTask(event.detail, (item) => ({ ...item, editing: true, expanded: true })); }}
-        on:commit={(event) => updateTask(event.detail.id, (item) => ({ ...item, markdown: event.detail.markdown, editing: false, expanded: true }))}
+        on:expand={(event) => toggleTaskExpansion(event.detail)}
+        on:edit={(event) => startTaskEditing(event.detail)}
+        on:commit={(event) => commitTaskMarkdown(event.detail.id, event.detail.markdown)}
         on:context={openTaskMenu}
         on:openLink={openTaskLink}
         on:setDate={handleTaskSetDate}
@@ -878,9 +1027,9 @@
               selected={taskMenu?.taskId === task.id || selectedTaskId === task.id}
               linkOpenMode={$appSettings.appearance.linkOpenMode}
               on:toggle={(event) => toggleCompletion(event.detail)}
-              on:expand={(event) => { selectedTaskId = event.detail; taskMenu = null; updateTask(event.detail, (item) => ({ ...item, expanded: !item.expanded })); }}
-              on:edit={(event) => { selectedTaskId = event.detail; taskMenu = null; updateTask(event.detail, (item) => ({ ...item, editing: true, expanded: true })); }}
-              on:commit={(event) => updateTask(event.detail.id, (item) => ({ ...item, markdown: event.detail.markdown, editing: false, expanded: true }))}
+              on:expand={(event) => toggleTaskExpansion(event.detail)}
+              on:edit={(event) => startTaskEditing(event.detail)}
+              on:commit={(event) => commitTaskMarkdown(event.detail.id, event.detail.markdown)}
               on:context={openTaskMenu}
               on:openLink={openTaskLink}
               on:setDate={handleTaskSetDate}
@@ -926,7 +1075,7 @@
       <button type="button" on:click={() => { updateTask(taskMenuTask.id, (task) => ({ ...task, important: !task.important })); taskMenu = null; }}>
         <Star size={16} /> {taskMenuTask.important ? "取消收藏" : "收藏"}
       </button>
-      <button type="button" on:click={() => { updateTask(taskMenuTask.id, (task) => ({ ...task, editing: true, expanded: true })); taskMenu = null; }}>
+      <button type="button" on:click={() => startTaskEditing(taskMenuTask.id)}>
         <PenLine size={16} /> 编辑
       </button>
       <button class="danger" type="button" on:click={() => deleteTask(taskMenuTask.id)}>

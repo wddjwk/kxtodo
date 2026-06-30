@@ -6,6 +6,7 @@ src-tauri/target/
 .cargo-home/
 todo-note-data/
 release/
+src-tauri/gen/android/keystore/
 PixPin*.png
 npm-debug.log*
 *.log
