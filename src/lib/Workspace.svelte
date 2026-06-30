@@ -14,7 +14,7 @@
   import { moveTargetOptions, nodeAndDescendantIds, exportStateForNode, getBackground } from "./nodes";
   import { buildMainStyle, buildMenuStyle, uiScaleValue } from "./styles";
   import { normalizeState, normalizeSettings, defaultBackground, themePresets, createEntryNode } from "./defaults";
-  import { exportData, openExternalUrl, isTauriRuntime, deleteBackgroundImage, pickImageFile, importBackgroundImage, backgroundImageUrl, deleteNodeImages, saveMdImage, mdImageUrl } from "./backend";
+  import { exportData, openExternalUrl, isTauriRuntime, deleteBackgroundImage, pickImageFile, importBackgroundImage, backgroundImageUrl, deleteNodeImages, saveMdImageFromDataUrl, mdImageUrl } from "./backend";
   import {
     imageCache, resolveImageSrc, isLocalImageRef, localImageRef, localImageFilename, primeImageCache,
     mdImageCache, resolveMarkdownImages, primeMdImageCache
@@ -313,10 +313,14 @@
     taskMenu = null;
   }
 
+  function taskTargetNode(): AppNode | undefined {
+    return $selectedNode?.kind === "entry" ? $selectedNode : $appState.nodes.find((n) => n.kind === "entry");
+  }
+
   function addTaskFromDraft(): void {
     const markdown = newTaskDraft.trim();
     if (!markdown) return;
-    const targetNode = $selectedNode?.kind === "entry" ? $selectedNode : $appState.nodes.find((n) => n.kind === "entry");
+    const targetNode = taskTargetNode();
     if (!targetNode) {
       showToast("请先创建一个条目");
       return;
@@ -343,6 +347,39 @@
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       addTaskFromDraft();
+    }
+  }
+
+  async function handleComposerPaste(event: ClipboardEvent): Promise<void> {
+    if (!isTauriRuntime) return;
+    const items = event.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (!item.type.startsWith("image/")) continue;
+      event.preventDefault();
+      const targetNode = taskTargetNode();
+      if (!targetNode) {
+        showToast("请先创建一个条目");
+        return;
+      }
+      const file = item.getAsFile();
+      if (!file) return;
+      try {
+        const dataUrl = await fileToDataUrl(file);
+        const filename = await saveMdImageFromDataUrl(dataUrl, targetNode.id);
+        const url = await mdImageUrl(targetNode.id, filename);
+        primeMdImageCache(targetNode.id, filename, url);
+        const cursorStart = taskInput?.selectionStart ?? newTaskDraft.length;
+        const cursorEnd = taskInput?.selectionEnd ?? cursorStart;
+        const before = newTaskDraft.slice(0, cursorStart);
+        const after = newTaskDraft.slice(cursorEnd);
+        newTaskDraft = `${before}\n![](${filename})\n${after}`;
+        await tick();
+        resizeComposer();
+      } catch (error) {
+        showToast(`图片粘贴失败：${String(error)}`);
+      }
+      return;
     }
   }
 
@@ -470,8 +507,6 @@
     setBackground({ image: undefined });
     if (isLocalImageRef(previous)) void deleteBackgroundImage(localImageFilename(previous));
   }
-
-  $: currentNodeId = $selectedNode?.id ?? "";
 
   function deleteCurrentNode(): void {
     if (!$selectedNode || $selectedNode.kind === "system") {
@@ -816,7 +851,7 @@
     {#each incompleteTasks as task (task.id)}
       <TaskCard
         {task}
-        nodeId={currentNodeId}
+        nodeId={task.nodeId}
         selected={taskMenu?.taskId === task.id || selectedTaskId === task.id}
         linkOpenMode={$appSettings.appearance.linkOpenMode}
         on:toggle={(event) => toggleCompletion(event.detail)}
@@ -839,7 +874,7 @@
           {#each completedTasks as task (task.id)}
             <TaskCard
               {task}
-              nodeId={currentNodeId}
+              nodeId={task.nodeId}
               selected={taskMenu?.taskId === task.id || selectedTaskId === task.id}
               linkOpenMode={$appSettings.appearance.linkOpenMode}
               on:toggle={(event) => toggleCompletion(event.detail)}
@@ -912,6 +947,7 @@
           rows="1"
           on:input={resizeComposer}
           on:keydown={handleComposerKeydown}
+          on:paste={handleComposerPaste}
         ></textarea>
       </div>
     </section>

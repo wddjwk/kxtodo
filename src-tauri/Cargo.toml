@@ -1,6 +1,6 @@
 [package]
 name = "todo-note"
-version = "7.1.1"
+version = "7.1.2"
 description = "A fast local-first todo and markdown note desktop app."
 authors = ["wddjwk"]
 license = ""
@@ -31,6 +31,3 @@ tauri-plugin-autostart = "2"
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 tauri-plugin-opener = "2"
-
-
-

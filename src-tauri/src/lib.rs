@@ -22,6 +22,10 @@ use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 const DEFAULT_UI_SCALE: f64 = 0.75;
+const IMG_DIR: &str = "img";
+const AVATAR_DIR: &str = "avator";
+const BACKGROUND_DIR: &str = "background";
+const ENTRY_IMAGE_DIR: &str = "data";
 
 // Fields are only read by desktop-only tray / window-close handling.
 #[cfg_attr(not(desktop), allow(dead_code))]
@@ -58,23 +62,91 @@ fn ensure_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+fn move_dir_contents(src: PathBuf, dest: PathBuf) -> Result<(), String> {
+    if !src.exists() {
+        return Ok(());
+    }
+    fs::create_dir_all(&dest).map_err(|error| error.to_string())?;
+    for entry in fs::read_dir(&src).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let src_path = entry.path();
+        let dest_path = dest.join(entry.file_name());
+        if src_path.is_dir() {
+            move_dir_contents(src_path.clone(), dest_path)?;
+            let _ = fs::remove_dir(&src_path);
+        } else if !dest_path.exists() {
+            fs::rename(&src_path, &dest_path)
+                .or_else(|_| fs::copy(&src_path, &dest_path).map(|_| ()))
+                .map_err(|error| error.to_string())?;
+            let _ = fs::remove_file(&src_path);
+        }
+    }
+    let _ = fs::remove_dir(&src);
+    Ok(())
+}
+
+fn ensure_storage_layout(app: &AppHandle) -> Result<PathBuf, String> {
+    let root = ensure_data_dir(app)?;
+    fs::create_dir_all(root.join(IMG_DIR).join(AVATAR_DIR)).map_err(|error| error.to_string())?;
+    fs::create_dir_all(root.join(IMG_DIR).join(BACKGROUND_DIR))
+        .map_err(|error| error.to_string())?;
+    fs::create_dir_all(root.join(IMG_DIR).join(ENTRY_IMAGE_DIR))
+        .map_err(|error| error.to_string())?;
+
+    move_dir_contents(root.join("images"), root.join(IMG_DIR).join(BACKGROUND_DIR))?;
+    move_dir_contents(root.join("avatar"), root.join(IMG_DIR).join(AVATAR_DIR))?;
+    move_dir_contents(
+        root.join(IMG_DIR).join("avatar"),
+        root.join(IMG_DIR).join(AVATAR_DIR),
+    )?;
+
+    let legacy_img = root.join(IMG_DIR);
+    if legacy_img.is_dir() {
+        for entry in fs::read_dir(&legacy_img).map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            if matches!(
+                name.as_str(),
+                AVATAR_DIR | BACKGROUND_DIR | ENTRY_IMAGE_DIR | "avatar"
+            ) {
+                continue;
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                move_dir_contents(path, root.join(IMG_DIR).join(ENTRY_IMAGE_DIR).join(name))?;
+            }
+        }
+    }
+
+    Ok(root)
+}
+
 fn images_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = data_dir(app)?.join("images");
+    let dir = ensure_storage_layout(app)?
+        .join(IMG_DIR)
+        .join(BACKGROUND_DIR);
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     Ok(dir)
 }
 
 fn avatar_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = data_dir(app)?.join("avatar");
+    let dir = ensure_storage_layout(app)?.join(IMG_DIR).join(AVATAR_DIR);
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     Ok(dir)
 }
 
 fn md_images_dir(app: &AppHandle, node_id: &str) -> Result<PathBuf, String> {
-    if node_id.is_empty() || node_id.contains('/') || node_id.contains('\\') || node_id.contains("..") {
+    if node_id.is_empty()
+        || node_id.contains('/')
+        || node_id.contains('\\')
+        || node_id.contains("..")
+    {
         return Err("Invalid node id".to_string());
     }
-    let dir = data_dir(app)?.join("img").join(node_id);
+    let dir = ensure_storage_layout(app)?
+        .join(IMG_DIR)
+        .join(ENTRY_IMAGE_DIR)
+        .join(node_id);
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     Ok(dir)
 }
@@ -344,7 +416,17 @@ fn delete_md_image(app: AppHandle, node_id: String, filename: String) -> Result<
 /// Delete all markdown images for a node (called when entry is deleted).
 #[tauri::command]
 fn delete_node_images(app: AppHandle, node_id: String) -> Result<(), String> {
-    let dir = data_dir(&app)?.join("img").join(&node_id);
+    if node_id.is_empty()
+        || node_id.contains('/')
+        || node_id.contains('\\')
+        || node_id.contains("..")
+    {
+        return Err("Invalid node id".to_string());
+    }
+    let dir = ensure_storage_layout(&app)?
+        .join(IMG_DIR)
+        .join(ENTRY_IMAGE_DIR)
+        .join(&node_id);
     if dir.exists() {
         let _ = fs::remove_dir_all(&dir);
     }
@@ -668,7 +750,9 @@ pub fn run() {
             open_url
         ])
         .setup(|app| {
-            let _ = ensure_data_dir(app.handle());
+            ensure_storage_layout(app.handle()).map_err(|error| {
+                tauri::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, error))
+            })?;
             #[cfg(desktop)]
             {
                 if let Some(webview) = app.get_webview_window("main") {
