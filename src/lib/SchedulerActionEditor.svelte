@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Dropdown from "./Dropdown.svelte";
   import type { ScheduledTaskAction } from "./types";
 
   export let title = "执行动作";
@@ -17,6 +18,21 @@
     custom: "自定义"
   };
 
+  const actionTypeOptions: Array<{ value: ScheduledTaskAction["type"]; label: string }> = [
+    { value: "script", label: "脚本" },
+    { value: "executable", label: "可执行文件" }
+  ];
+
+  const languageOptions: Array<{ value: ScheduledTaskAction["language"]; label: string }> = Object.entries(languageLabels).map(([value, label]) => ({
+    value: value as ScheduledTaskAction["language"],
+    label
+  }));
+
+  const scriptModeOptions: Array<{ value: ScheduledTaskAction["scriptMode"]; label: string }> = [
+    { value: "inline", label: "直接输入代码" },
+    { value: "path", label: "文件路径" }
+  ];
+
   function textValue(event: Event): string {
     const target = event.currentTarget;
     return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement ? target.value : "";
@@ -28,19 +44,22 @@
   <div class="scheduler-form-grid">
     <label>
       <span>类型</span>
-      <select value={action.type} on:change={(event) => onType(textValue(event) as ScheduledTaskAction["type"])}>
-        <option value="script">脚本</option>
-        <option value="executable">可执行文件</option>
-      </select>
+      <Dropdown
+        value={action.type}
+        options={actionTypeOptions}
+        ariaLabel="动作类型"
+        on:change={(event) => onType(event.detail as ScheduledTaskAction["type"])}
+      />
     </label>
     {#if action.type === "script"}
       <label>
         <span>语言</span>
-        <select value={action.language} on:change={(event) => onLanguage(textValue(event) as ScheduledTaskAction["language"])}>
-          {#each Object.entries(languageLabels) as [language, label]}
-            <option value={language}>{label}</option>
-          {/each}
-        </select>
+        <Dropdown
+          value={action.language}
+          options={languageOptions}
+          ariaLabel="脚本语言"
+          on:change={(event) => onLanguage(event.detail as ScheduledTaskAction["language"])}
+        />
       </label>
     {/if}
   </div>
@@ -54,10 +73,12 @@
     <div class="scheduler-form-grid">
       <label>
         <span>脚本来源</span>
-        <select value={action.scriptMode} on:change={(event) => onPatch({ scriptMode: textValue(event) as ScheduledTaskAction["scriptMode"] })}>
-          <option value="inline">直接输入代码</option>
-          <option value="path">文件路径</option>
-        </select>
+        <Dropdown
+          value={action.scriptMode}
+          options={scriptModeOptions}
+          ariaLabel="脚本来源"
+          on:change={(event) => onPatch({ scriptMode: event.detail as ScheduledTaskAction["scriptMode"] })}
+        />
       </label>
       <label>
         <span>解释器（可覆盖默认值）</span>

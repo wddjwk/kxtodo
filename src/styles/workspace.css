@@ -473,6 +473,60 @@ h1 {
   background-color: #eeeef2;
 }
 
+.scheduler-editor .dropdown,
+.action-editor .dropdown,
+.condition-mode-select {
+  min-width: 0;
+}
+
+.scheduler-editor .dropdown-trigger,
+.action-editor .dropdown-trigger,
+.condition-mode-select .dropdown-trigger {
+  min-height: 42px;
+  border-color: #d9dfe7;
+  border-radius: 10px;
+  background: #fbfdff;
+  padding: 9px 10px;
+  color: #24292f;
+  font-size: 14px;
+}
+
+.scheduler-editor .dropdown-trigger:hover,
+.action-editor .dropdown-trigger:hover,
+.condition-mode-select .dropdown-trigger:hover {
+  border-color: #cbd3de;
+  background: #ffffff;
+}
+
+.scheduler-editor .dropdown-menu,
+.action-editor .dropdown-menu,
+.condition-mode-select .dropdown-menu {
+  right: auto;
+  min-width: 100%;
+  gap: 4px;
+  border: 1px solid #ececec;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 7px;
+  box-shadow: 0 16px 50px rgb(0 0 0 / 16%);
+}
+
+.scheduler-editor .dropdown-menu button,
+.action-editor .dropdown-menu button,
+.condition-mode-select .dropdown-menu button {
+  min-height: 34px;
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: #242424;
+  font-size: 14px;
+}
+
+.scheduler-editor .dropdown-menu button:hover,
+.action-editor .dropdown-menu button:hover,
+.condition-mode-select .dropdown-menu button:hover {
+  background: #f2f4f7;
+}
+
 .scheduler-editor textarea,
 .action-editor textarea {
   min-height: 128px;
@@ -684,12 +738,18 @@ h1 {
   white-space: nowrap;
 }
 
-.scheduler-status.good {
+.scheduler-status.idle,
+.scheduler-status.stopped {
+  background: #f1f4f8;
+  color: #64748b;
+}
+
+.scheduler-status.scheduled {
   background: #e8f5ed;
   color: #167544;
 }
 
-.scheduler-status.bad {
+.scheduler-status.running {
   background: #fff0ed;
   color: #b3261e;
 }
@@ -708,12 +768,14 @@ h1 {
   color: #6b7280;
 }
 
-.scheduler-power {
-  color: var(--accent);
+.scheduler-power.enabled {
+  color: #b3261e;
+  background: #fff0ed;
 }
 
-.scheduled-card.disabled .scheduler-power {
-  color: #9aa0a6;
+.scheduler-power.disabled {
+  color: #167544;
+  background: #e8f5ed;
 }
 
 .scheduler-delete:hover {
@@ -725,6 +787,16 @@ h1 {
 .scheduler-config-button:hover {
   background: #f0f0f0;
   color: var(--accent);
+}
+
+.scheduler-power.enabled:hover {
+  background: #ffe2dd;
+  color: #9f1c15;
+}
+
+.scheduler-power.disabled:hover {
+  background: #d9efe2;
+  color: #0f6c3d;
 }
 
 .scheduler-editor,
@@ -753,9 +825,9 @@ h1 {
 
 .condition-row {
   display: grid;
-  grid-template-columns: minmax(190px, 1fr) 120px minmax(0, 1.4fr);
-  gap: 9px;
-  align-items: end;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+  align-items: center;
 }
 
 .checkbox-line {
@@ -764,9 +836,27 @@ h1 {
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 8px !important;
+  min-height: 42px;
   color: rgb(0 0 0 / 62%);
   font-size: 13px;
   font-weight: 700;
+}
+
+.condition-mode-select {
+  align-self: stretch;
+}
+
+.condition-mode-select .dropdown,
+.condition-mode-select .dropdown-trigger {
+  height: 100%;
+}
+
+.condition-match-row {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+  min-width: 0;
 }
 
 .checkbox-line input {

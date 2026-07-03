@@ -10,6 +10,7 @@
     schedulerRuntimeKeys
   } from "./defaults";
   import { pickExecutableFile, resolveExecutorPaths } from "./backend";
+  import Dropdown from "./Dropdown.svelte";
   import SchedulerActionEditor from "./SchedulerActionEditor.svelte";
   import type {
     ScheduledTask,
@@ -36,20 +37,22 @@
     custom: "自定义"
   };
 
-  const triggerLabels: Record<ScheduledTaskTrigger["type"], string> = {
-    once: "指定时间触发一次",
-    interval: "每隔一定时间触发",
-    calendar: "按日历 / Cron 触发",
-    condition: "满足条件时触发"
-  };
+  const triggerOptions: Array<{ value: ScheduledTaskTrigger["type"]; label: string }> = [
+    { value: "once", label: "指定时间触发一次" },
+    { value: "interval", label: "每隔一定时间触发" },
+    { value: "calendar", label: "按日历 / Cron 触发" },
+    { value: "condition", label: "满足条件时触发" }
+  ];
 
-  const statusLabels: Record<ScheduledTask["lastStatus"], string> = {
-    idle: "待机",
-    running: "运行中",
-    success: "成功",
-    failed: "失败",
-    stopped: "已停止"
-  };
+  const actionTypeOptions: Array<{ value: ScheduledTaskAction["type"]; label: string }> = [
+    { value: "script", label: "执行脚本" },
+    { value: "executable", label: "执行可执行文件" }
+  ];
+
+  const conditionModeOptions: Array<{ value: SchedulerCondition["mode"]; label: string }> = [
+    { value: "contains", label: "包含文本" },
+    { value: "regex", label: "匹配正则" }
+  ];
 
   let showRuntimeSettings = false;
 
@@ -177,7 +180,7 @@
   }
 
   function finishEditing(taskId: string): void {
-    patchTask(taskId, { editing: false, expanded: true });
+    patchTask(taskId, { editing: false, expanded: false });
   }
 
   function toggleEditing(task: ScheduledTask): void {
@@ -294,6 +297,20 @@
     if (Number.isNaN(date.getTime())) return value;
     return `${date.getMonth() + 1}月${date.getDate()}日 ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
   }
+
+  function statusLabel(task: ScheduledTask): string {
+    if (task.lastStatus === "running") return "执行中";
+    if (task.enabled) return "调度中";
+    if (task.lastStatus === "stopped") return "已停止";
+    return "未启用";
+  }
+
+  function statusTone(task: ScheduledTask): "idle" | "scheduled" | "running" | "stopped" {
+    if (task.lastStatus === "running") return "running";
+    if (task.enabled) return "scheduled";
+    if (task.lastStatus === "stopped") return "stopped";
+    return "idle";
+  }
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -327,6 +344,7 @@
 
   <section class="scheduled-list">
     {#each scheduledTasks as task (task.id)}
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
       <article
         class="scheduled-card"
         class:compact={!task.expanded && !task.editing}
@@ -334,7 +352,7 @@
         class:editing={task.editing}
         class:disabled={!task.enabled}
         class:running={task.lastStatus === "running"}
-        on:dblclick|preventDefault={() => toggleExpanded(task)}
+        on:click={() => toggleExpanded(task)}
       >
         <div class="scheduled-card-head">
           <span class="scheduled-clock"><Clock3 size={20} /></span>
@@ -343,9 +361,9 @@
             <span>{describeTrigger(task)}</span>
           </button>
 
-          <span class="scheduler-status" class:bad={task.lastStatus === "failed"} class:good={task.lastStatus === "success"}>{statusLabels[task.lastStatus]}</span>
+          <span class={`scheduler-status ${statusTone(task)}`}>{statusLabel(task)}</span>
 
-          <button class="scheduler-power" type="button" title={task.enabled ? "暂停" : "启用"} on:click|stopPropagation={() => toggleEnabled(task)}>
+          <button class="scheduler-power" class:enabled={task.enabled} class:disabled={!task.enabled} type="button" title={task.enabled ? "停用" : "启用"} on:click|stopPropagation={() => toggleEnabled(task)}>
             <Power size={18} />
           </button>
 
@@ -359,7 +377,7 @@
         </div>
 
         {#if task.editing}
-          <div class="scheduled-card-panel scheduler-editor">
+          <div class="scheduled-card-panel scheduler-editor" on:click|stopPropagation>
             <label class="wide">
               <span>任务名称</span>
               <input value={task.name} on:input={(event) => patchTask(task.id, { name: textValue(event) || "未命名定时任务" })} />
@@ -368,18 +386,21 @@
             <div class="scheduler-form-grid">
               <label>
                 <span>触发类型</span>
-                <select value={task.trigger.type} on:change={(event) => setTriggerType(task.id, textValue(event) as ScheduledTaskTrigger["type"])}>
-                  {#each Object.entries(triggerLabels) as [type, label]}
-                    <option value={type}>{label}</option>
-                  {/each}
-                </select>
+                <Dropdown
+                  value={task.trigger.type}
+                  options={triggerOptions}
+                  ariaLabel="触发类型"
+                  on:change={(event) => setTriggerType(task.id, event.detail as ScheduledTaskTrigger["type"])}
+                />
               </label>
               <label>
                 <span>动作类型</span>
-                <select value={task.action.type} on:change={(event) => setActionType(task.id, textValue(event) as ScheduledTaskAction["type"])}>
-                  <option value="script">执行脚本</option>
-                  <option value="executable">执行可执行文件</option>
-                </select>
+                <Dropdown
+                  value={task.action.type}
+                  options={actionTypeOptions}
+                  ariaLabel="动作类型"
+                  on:change={(event) => setActionType(task.id, event.detail as ScheduledTaskAction["type"])}
+                />
               </label>
             </div>
 
@@ -404,11 +425,17 @@
                   <input type="checkbox" checked={task.trigger.stopCondition.enabled} on:change={(event) => patchStopCondition(task.id, { enabled: checkedValue(event) })} />
                   stdout 满足条件时终止
                 </label>
-                <select value={task.trigger.stopCondition.mode} on:change={(event) => patchStopCondition(task.id, { mode: textValue(event) as SchedulerCondition["mode"] })}>
-                  <option value="contains">包含文本</option>
-                  <option value="regex">匹配正则</option>
-                </select>
-                <input value={task.trigger.stopCondition.pattern} placeholder="例如 DONE 或 ^ok" on:input={(event) => patchStopCondition(task.id, { pattern: textValue(event) })} />
+                <div class="condition-match-row">
+                  <div class="condition-mode-select">
+                    <Dropdown
+                      value={task.trigger.stopCondition.mode}
+                      options={conditionModeOptions}
+                      ariaLabel="停止条件匹配方式"
+                      on:change={(event) => patchStopCondition(task.id, { mode: event.detail as SchedulerCondition["mode"] })}
+                    />
+                  </div>
+                  <input value={task.trigger.stopCondition.pattern} placeholder="例如 DONE 或 ^ok" on:input={(event) => patchStopCondition(task.id, { pattern: textValue(event) })} />
+                </div>
               </div>
             {:else if task.trigger.type === "calendar"}
               <label class="wide">
@@ -424,10 +451,12 @@
                 </label>
                 <label>
                   <span>条件判断</span>
-                  <select value={task.trigger.probeCondition.mode} on:change={(event) => patchProbeCondition(task.id, { mode: textValue(event) as SchedulerCondition["mode"] })}>
-                    <option value="contains">stdout 包含</option>
-                    <option value="regex">stdout 匹配正则</option>
-                  </select>
+                  <Dropdown
+                    value={task.trigger.probeCondition.mode}
+                    options={conditionModeOptions}
+                    ariaLabel="条件判断匹配方式"
+                    on:change={(event) => patchProbeCondition(task.id, { mode: event.detail as SchedulerCondition["mode"] })}
+                  />
                 </label>
               </div>
               <label class="wide">
@@ -452,7 +481,7 @@
             />
           </div>
         {:else if task.expanded}
-          <div class="scheduled-card-panel scheduled-expanded-body">
+          <div class="scheduled-card-panel scheduled-expanded-body" on:click|stopPropagation>
             <strong>{describeAction(task.action)}</strong>
             <div class="scheduled-meta-grid">
               <span>运行次数：{task.runCount}</span>
