@@ -1,15 +1,15 @@
 import { writable, derived, get } from "svelte/store";
-import type { AppState, AppNode, Settings } from "./types";
-import { defaultSettings, emptyState, normalizeState, normalizeSettings } from "./defaults";
+import type { AppState, AppNode, SchedulerState, Settings } from "./types";
+import { defaultSchedulerRuntimes, defaultSettings, emptyState, normalizeState, normalizeSettings, schedulerRuntimeKeys } from "./defaults";
 import {
-  loadState, saveState, loadSettings, saveSettings,
+  loadState, saveState, loadSettings, saveSettings, loadScheduler, saveScheduler,
   registerGlobalShortcut, setCloseToTray, setAutostart,
-  setWebviewZoom, isTauriRuntime
+  setWebviewZoom, isTauriRuntime, resolveExecutorPaths
 } from "./backend";
 import { buildListCounts, buildVisibleTasks, getBackground } from "./nodes";
 import { accentForNode, uiScaleValue } from "./styles";
 
-export const APP_VERSION = "7.2.0";
+export const APP_VERSION = "8.0.0";
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -122,6 +122,7 @@ export const isSearching = derived(searchQuery, ($q) => $q.trim().length > 0);
 
 let stateSaveTimer: number | undefined;
 let settingsSaveTimer: number | undefined;
+let schedulerSaveTimer: number | undefined;
 
 export function commit(next: AppState): void {
   appState.set(next);
@@ -129,6 +130,15 @@ export function commit(next: AppState): void {
   window.clearTimeout(stateSaveTimer);
   stateSaveTimer = window.setTimeout(() => {
     saveState(next).catch((error) => showToast(`保存失败：${String(error)}`));
+  }, 180);
+}
+
+export function commitScheduler(next: SchedulerState): void {
+  appState.update((state) => ({ ...state, scheduler: next }));
+  if (!get(isHydrated)) return;
+  window.clearTimeout(schedulerSaveTimer);
+  schedulerSaveTimer = window.setTimeout(() => {
+    saveScheduler(next).catch((error) => showToast(`保存定时任务失败：${String(error)}`));
   }, 180);
 }
 
@@ -181,8 +191,23 @@ async function syncNativeLifecycle(nextSettings: Settings): Promise<void> {
 export async function hydrate(): Promise<void> {
   let loadedSettings = clone(defaultSettings);
   try {
-    const [storedState, storedSettings] = await Promise.all([loadState(), loadSettings()]);
-    appState.set(normalizeState(storedState));
+    const [storedState, storedScheduler, storedSettings, resolvedExecutors] = await Promise.all([
+      loadState(),
+      loadScheduler(),
+      loadSettings(),
+      resolveExecutorPaths().catch(() => defaultSchedulerRuntimes)
+    ]);
+    const scheduler: SchedulerState = {
+      ...storedScheduler,
+      runtimes: schedulerRuntimeKeys.reduce((acc, key) => {
+        acc[key] = storedScheduler.runtimes[key] || resolvedExecutors[key] || "";
+        return acc;
+      }, { ...storedScheduler.runtimes })
+    };
+    appState.set({
+      ...normalizeState(storedState),
+      scheduler
+    });
     const normalizedSettings = normalizeSettings(storedSettings);
     appSettings.set(normalizedSettings);
     loadedSettings = normalizedSettings;

@@ -1,10 +1,11 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
-import { defaultSettings, emptyState, normalizeSettings, normalizeState } from "./defaults";
-import type { AppState, Settings } from "./types";
+import { defaultSettings, emptySchedulerState, emptyState, normalizeSchedulerState, normalizeSettings, normalizeState } from "./defaults";
+import type { AppState, ScheduledTaskAction, SchedulerRuntimePaths, SchedulerState, Settings } from "./types";
 
 const stateKey = "todo-note-state-v3";
 const settingsKey = "todo-note-settings-v3";
+const schedulerKey = "todo-note-scheduler-v8";
 
 export const isTauriRuntime = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -32,11 +33,12 @@ export async function loadState(): Promise<AppState> {
 }
 
 export async function saveState(state: AppState): Promise<void> {
+  const { scheduler: _scheduler, ...persistedState } = state;
   if (isTauriRuntime) {
-    await invoke("save_state", { state });
+    await invoke("save_state", { state: persistedState });
     return;
   }
-  localStorage.setItem(stateKey, JSON.stringify(state));
+  localStorage.setItem(stateKey, JSON.stringify(persistedState));
 }
 
 export async function loadSettings(): Promise<Settings> {
@@ -52,6 +54,42 @@ export async function saveSettings(settings: Settings): Promise<void> {
     return;
   }
   localStorage.setItem(settingsKey, JSON.stringify(settings));
+}
+
+export async function loadScheduler(): Promise<SchedulerState> {
+  if (isTauriRuntime) {
+    return normalizeSchedulerState(await invoke<unknown>("load_scheduler"));
+  }
+  return normalizeSchedulerState(readLocal(schedulerKey, emptySchedulerState()));
+}
+
+export async function saveScheduler(scheduler: SchedulerState): Promise<void> {
+  if (isTauriRuntime) {
+    await invoke("save_scheduler", { scheduler });
+    return;
+  }
+  localStorage.setItem(schedulerKey, JSON.stringify(scheduler));
+}
+
+export type ScheduledActionOutput = {
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+};
+
+export async function resolveExecutorPaths(): Promise<SchedulerRuntimePaths> {
+  const empty = emptySchedulerState().runtimes;
+  if (!isTauriRuntime) {
+    return empty;
+  }
+  return { ...empty, ...(await invoke<Partial<SchedulerRuntimePaths>>("resolve_executor_paths")) };
+}
+
+export async function runScheduledAction(action: ScheduledTaskAction, runtimes: SchedulerRuntimePaths): Promise<ScheduledActionOutput> {
+  if (!isTauriRuntime) {
+    throw new Error("浏览器预览模式不支持执行定时任务");
+  }
+  return invoke<ScheduledActionOutput>("run_scheduled_action", { action, runtimes });
 }
 
 export async function exportData(payload: unknown, defaultName: string): Promise<void> {

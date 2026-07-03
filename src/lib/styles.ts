@@ -16,6 +16,7 @@ export function defaultAccentForNode(node?: AppNode): string {
   if (node.id === "planned") return "#2564cf";
   if (node.id === "important") return "#9f5f00";
   if (node.id === "my-day") return "#b64a30";
+  if (node.id === "scheduled") return "#3f6b5a";
   return DEFAULT_ACCENT;
 }
 

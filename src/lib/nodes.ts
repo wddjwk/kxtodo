@@ -1,5 +1,5 @@
 import type { AppNode, AppState, ListBackground, Task } from "./types";
-import { defaultBackground } from "./defaults";
+import { defaultBackground, emptySchedulerState } from "./defaults";
 
 export function descendantEntryIds(rootId: string, nodes: AppNode[]): Set<string> {
   const ids = new Set<string>();
@@ -44,6 +44,7 @@ export function tasksForNode(node: AppNode, tasks: Task[], nodes: AppNode[]): Ta
   if (node.id === "my-day") return tasks.filter((task) => task.myDay);
   if (node.id === "planned") return tasks.filter((task) => Boolean(task.dueDate || task.plannedDate));
   if (node.id === "important") return tasks.filter((task) => task.important);
+  if (node.id === "scheduled") return [];
   if (node.kind === "entry") return tasks.filter((task) => task.nodeId === node.id);
   if (node.kind === "category") {
     const ids = descendantEntryIds(node.id, nodes);
@@ -61,6 +62,8 @@ export function buildListCounts(state: AppState): Record<string, number> {
       counts[node.id] = state.tasks.filter((task) => !task.completed && (task.dueDate || task.plannedDate)).length;
     } else if (node.id === "important") {
       counts[node.id] = state.tasks.filter((task) => !task.completed && task.important).length;
+    } else if (node.id === "scheduled") {
+      counts[node.id] = state.scheduler.tasks.length;
     } else if (node.kind === "entry") {
       counts[node.id] = state.tasks.filter((task) => !task.completed && task.nodeId === node.id).length;
     } else if (node.kind === "category") {
@@ -123,6 +126,7 @@ export function exportStateForNode(node: AppNode, state: AppState): AppState {
     nodes: exportedNodes,
     tasks,
     selectedNodeId: node.id,
-    backgrounds: Object.fromEntries(exportedNodes.map((item) => [item.id, getBackground(item.id, state.backgrounds)]))
+    backgrounds: Object.fromEntries(exportedNodes.map((item) => [item.id, getBackground(item.id, state.backgrounds)])),
+    scheduler: node.id === "scheduled" ? state.scheduler : emptySchedulerState()
   };
 }

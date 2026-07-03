@@ -10,6 +10,7 @@
     Camera,
     Car,
     CheckSquare,
+    Clock3,
     Code2,
     Cpu,
     FileText,
@@ -50,6 +51,7 @@
     "camera",
     "car",
     "check-square",
+    "clock",
     "code",
     "cpu",
     "file",
@@ -80,6 +82,8 @@
   <Sun {size} {strokeWidth} />
 {:else if icon === "calendar"}
   <CalendarDays {size} {strokeWidth} />
+{:else if icon === "clock"}
+  <Clock3 {size} {strokeWidth} />
 {:else if icon === "star"}
   <Star {size} {strokeWidth} />
 {:else if icon === "notebook"}

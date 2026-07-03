@@ -7,6 +7,7 @@
     hydrate as hydrateStores
   } from "./lib/stores";
   import { isMobile, mobileView } from "./lib/platform";
+  import { startSchedulerRuntime } from "./lib/scheduler";
   import TitleBar from "./lib/TitleBar.svelte";
   import Toast from "./lib/Toast.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
@@ -21,9 +22,15 @@
     : buildAppShellStyle($appSettings.appearance);
 
   onMount(() => {
-    void hydrateStores();
+    let stopScheduler: () => void = () => undefined;
+    void hydrateStores().then(() => {
+      stopScheduler = startSchedulerRuntime();
+    });
     window.addEventListener("keydown", handleShortcut);
-    return () => window.removeEventListener("keydown", handleShortcut);
+    return () => {
+      stopScheduler();
+      window.removeEventListener("keydown", handleShortcut);
+    };
   });
 
   function closeOverlays(): void {

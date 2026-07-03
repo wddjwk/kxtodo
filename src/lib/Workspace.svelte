@@ -6,7 +6,7 @@
     Lightbulb, MoreHorizontal, Palette, PenLine, Plus, Search, Star, Sun, Trash2, Upload
   } from "@lucide/svelte";
   import {
-    appState, appSettings, commit, commitSettings, showToast,
+    appState, appSettings, commit, commitScheduler, commitSettings, showToast,
     searchQuery, selectedNode, visibleTasks, selectedBackground,
     accent, isSearching, now, todayIso, yesterdayIso, dateOnly,
     createTaskId, safeFileName, fileToDataUrl, APP_VERSION
@@ -22,6 +22,7 @@
   } from "./images";
   import IconGlyph from "./IconGlyph.svelte";
   import TaskCard from "./TaskCard.svelte";
+  import ScheduledTasksView from "./ScheduledTasksView.svelte";
   import DatePicker from "./DatePicker.svelte";
   import { showMobileList, isMobile } from "./platform";
   import type { AppNode, AppState, ListBackground, Settings, Task } from "./types";
@@ -73,6 +74,7 @@
   $: resolvedBgImage = resolveImageSrc($selectedBackground.image, $imageCache);
   $: mainStyle = buildMainStyle($selectedBackground, $accent, resolvedBgImage);
   $: isMyDay = $selectedNode?.id === "my-day";
+  $: isScheduled = !$isSearching && $selectedNode?.id === "scheduled";
   $: if (!isMyDay && myDayViewDate !== todayIso()) myDayViewDate = todayIso();
   $: isMyDayHistory = isMyDay && myDayViewDate !== todayIso();
   $: sortedTasks = sortTasks($visibleTasks, sortMode);
@@ -697,7 +699,9 @@
     if (!(target instanceof HTMLInputElement) || !target.files?.[0]) return;
     try {
       const payload = JSON.parse(await target.files[0].text()) as { state?: unknown; settings?: unknown };
-      commit(normalizeState(payload.state ?? payload));
+      const normalizedState = normalizeState(payload.state ?? payload);
+      commit(normalizedState);
+      commitScheduler(normalizedState.scheduler);
       if (payload.settings) {
         commitSettings(normalizeSettings(payload.settings));
       }
@@ -793,28 +797,29 @@
       >{$isSearching ? `搜索结果：${$searchQuery}` : $selectedNode?.name ?? "KXToDo"}</h1>
     </div>
     <div class="header-actions" class:mobile-hidden={$isMobile && !showMobileHeaderActions} on:click|stopPropagation>
-      {#if isMyDay}
-        <button type="button" title="完成日历" on:click|stopPropagation={toggleCalendar}>
-          <Calendar size={21} />
-        </button>
-        <button type="button" title="建议添加" on:click|stopPropagation={toggleSuggestions}>
-          <Lightbulb size={21} />
-        </button>
-      {/if}
-      <button
-        type="button"
-        title={allExpanded ? "收起全部" : "展开全部"}
-        on:click|stopPropagation={toggleExpandAll}
-      >{#if allExpanded}<ChevronsUp size={21} />{:else}<ChevronsDown size={21} />{/if}</button>
-      <button
-        type="button"
-        title="分类/条目菜单"
-        on:mousedown|preventDefault|stopPropagation={toggleListMenu}
-        on:click|stopPropagation
-        on:keydown={handleListMenuKeydown}
-      ><MoreHorizontal size={23} /></button>
+      {#if !isScheduled}
+        {#if isMyDay}
+          <button type="button" title="完成日历" on:click|stopPropagation={toggleCalendar}>
+            <Calendar size={21} />
+          </button>
+          <button type="button" title="建议添加" on:click|stopPropagation={toggleSuggestions}>
+            <Lightbulb size={21} />
+          </button>
+        {/if}
+        <button
+          type="button"
+          title={allExpanded ? "收起全部" : "展开全部"}
+          on:click|stopPropagation={toggleExpandAll}
+        >{#if allExpanded}<ChevronsUp size={21} />{:else}<ChevronsDown size={21} />{/if}</button>
+        <button
+          type="button"
+          title="分类/条目菜单"
+          on:mousedown|preventDefault|stopPropagation={toggleListMenu}
+          on:click|stopPropagation
+          on:keydown={handleListMenuKeydown}
+        ><MoreHorizontal size={23} /></button>
 
-      {#if showSuggestions}
+        {#if showSuggestions}
         <section class="suggestion-panel" on:click|stopPropagation>
           <div class="suggestion-panel-title">建议添加到我的一天</div>
           {#if suggestedTasks.length === 0}
@@ -830,9 +835,9 @@
             {/each}
           {/if}
         </section>
-      {/if}
+        {/if}
 
-      {#if showCalendar}
+        {#if showCalendar}
         <section class="calendar-panel" on:click|stopPropagation>
           <div class="calendar-header">
             <button type="button" on:click={calPrev}><ChevronLeft size={16} /></button>
@@ -889,8 +894,8 @@
             </div>
           {/if}
         </section>
-      {/if}
-      {#if showListMenu}
+        {/if}
+        {#if showListMenu}
         <section class="list-menu">
           <button type="button" disabled={!$selectedNode || $selectedNode.kind === "system"} on:click={() => $selectedNode && startRename($selectedNode.id)}>
             <PenLine size={15} /> 重命名
@@ -980,10 +985,14 @@
             <button type="button" on:click={clearBackground}><Eraser size={15} /> 清除背景</button>
           </div>
         </section>
+        {/if}
       {/if}
     </div>
   </section>
 
+  {#if isScheduled}
+    <ScheduledTasksView />
+  {:else}
   {#if isMyDay}
     <p class="my-day-subtitle">
       {formatMyDayDate(myDayViewDate)}
@@ -1100,5 +1109,6 @@
         ></textarea>
       </div>
     </section>
+  {/if}
   {/if}
 </main>

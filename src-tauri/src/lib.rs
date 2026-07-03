@@ -1,6 +1,9 @@
 use base64::Engine;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
+    collections::HashMap,
+    env,
     fs,
     path::PathBuf,
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
@@ -159,6 +162,10 @@ fn settings_file(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(data_dir(app)?.join("settings.json"))
 }
 
+fn scheduler_file(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(data_dir(app)?.join("tasks.json"))
+}
+
 fn ensure_parent(path: &PathBuf) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -211,6 +218,338 @@ fn load_settings(app: AppHandle) -> Result<Value, String> {
 #[tauri::command]
 fn save_settings(app: AppHandle, settings: Value) -> Result<(), String> {
     write_json(settings_file(&app)?, settings)
+}
+
+#[tauri::command]
+fn load_scheduler(app: AppHandle) -> Result<Value, String> {
+    read_json(scheduler_file(&app)?)
+}
+
+#[tauri::command]
+fn save_scheduler(app: AppHandle, scheduler: Value) -> Result<(), String> {
+    write_json(scheduler_file(&app)?, scheduler)
+}
+
+#[cfg_attr(not(desktop), allow(dead_code))]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScheduledActionCommand {
+    #[serde(default, rename = "type")]
+    action_type: String,
+    #[serde(default)]
+    script_mode: String,
+    #[serde(default)]
+    language: String,
+    #[serde(default)]
+    interpreter: String,
+    #[serde(default)]
+    file_path: String,
+    #[serde(default)]
+    code: String,
+    #[serde(default)]
+    executable_path: String,
+    #[serde(default)]
+    arguments: String,
+    #[serde(default)]
+    working_directory: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScheduledActionOutput {
+    exit_code: Option<i32>,
+    stdout: String,
+    stderr: String,
+}
+
+#[cfg(target_os = "windows")]
+fn executable_candidates(name: &str) -> Vec<String> {
+    if std::path::Path::new(name).extension().is_some() {
+        return vec![name.to_string()];
+    }
+    let mut candidates = vec![name.to_string()];
+    let path_ext = env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".to_string());
+    for ext in path_ext.split(';').filter(|value| !value.trim().is_empty()) {
+        candidates.push(format!("{name}{}", ext.to_ascii_lowercase()));
+    }
+    candidates
+}
+
+#[cfg(not(target_os = "windows"))]
+fn executable_candidates(name: &str) -> Vec<String> {
+    vec![name.to_string()]
+}
+
+fn env_executable(env_names: &[&str]) -> Option<String> {
+    for name in env_names {
+        let Ok(raw) = env::var(name) else {
+            continue;
+        };
+        let value = raw.trim().to_string();
+        if value.is_empty() {
+            continue;
+        }
+        let path = PathBuf::from(&value);
+        if path.is_file() {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn find_executable(names: &[&str], env_names: &[&str]) -> String {
+    if let Some(value) = env_executable(env_names) {
+        return value;
+    }
+
+    let Some(paths) = env::var_os("PATH") else {
+        return String::new();
+    };
+    for dir in env::split_paths(&paths) {
+        for name in names {
+            for candidate in executable_candidates(name) {
+                let path = dir.join(candidate);
+                if path.is_file() {
+                    return path.to_string_lossy().to_string();
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+fn default_executor_paths() -> HashMap<String, String> {
+    let mut paths = HashMap::new();
+    paths.insert(
+        "python".to_string(),
+        find_executable(&["python", "python3", "py"], &["PYTHON", "PYTHON_EXECUTABLE"]),
+    );
+    paths.insert(
+        "node".to_string(),
+        find_executable(&["node"], &["NODE", "NODE_EXECUTABLE"]),
+    );
+    paths.insert(
+        "pwsh".to_string(),
+        find_executable(
+            &["pwsh", "powershell"],
+            &["PWSH", "POWERSHELL", "POWERSHELL_EXECUTABLE"],
+        ),
+    );
+    paths.insert(
+        "bash".to_string(),
+        find_executable(&["bash"], &["BASH", "BASH_EXECUTABLE"]),
+    );
+    paths.insert(
+        "make".to_string(),
+        find_executable(&["make", "mingw32-make"], &["MAKE", "MAKE_EXECUTABLE"]),
+    );
+    paths
+}
+
+#[tauri::command]
+fn resolve_executor_paths() -> HashMap<String, String> {
+    default_executor_paths()
+}
+
+#[cfg(desktop)]
+fn split_arguments(raw: &str) -> Result<Vec<String>, String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+    for ch in raw.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if !in_single => escaped = true,
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            ch if ch.is_whitespace() && !in_single && !in_double => {
+                if !current.is_empty() {
+                    args.push(current.clone());
+                    current.clear();
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+    if escaped {
+        current.push('\\');
+    }
+    if in_single || in_double {
+        return Err("Arguments contain an unclosed quote".to_string());
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    Ok(args)
+}
+
+#[cfg(desktop)]
+fn runtime_key_for_language(language: &str) -> Option<&'static str> {
+    match language {
+        "python" => Some("python"),
+        "javascript" => Some("node"),
+        "powershell" => Some("pwsh"),
+        "bash" => Some("bash"),
+        "makefile" => Some("make"),
+        _ => None,
+    }
+}
+
+#[cfg(desktop)]
+fn configured_interpreter(
+    action: &ScheduledActionCommand,
+    runtimes: &HashMap<String, String>,
+) -> String {
+    let custom = action.interpreter.trim();
+    if !custom.is_empty() {
+        return custom.to_string();
+    }
+    let Some(key) = runtime_key_for_language(action.language.as_str()) else {
+        return String::new();
+    };
+    let configured = runtimes.get(key).map(|value| value.trim()).unwrap_or("");
+    if !configured.is_empty() {
+        return configured.to_string();
+    }
+    default_executor_paths()
+        .get(key)
+        .cloned()
+        .unwrap_or_default()
+}
+
+#[cfg(desktop)]
+fn temp_makefile(app: &AppHandle, code: &str) -> Result<PathBuf, String> {
+    let dir = ensure_storage_layout(app)?.join("scheduler-temp");
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_nanos())
+        .unwrap_or(0);
+    let counter = IMAGE_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let path = dir.join(format!("Makefile-{stamp}-{counter}.mk"));
+    fs::write(&path, code).map_err(|error| error.to_string())?;
+    Ok(path)
+}
+
+#[cfg(desktop)]
+fn build_scheduled_command(
+    app: &AppHandle,
+    action: &ScheduledActionCommand,
+    runtimes: &HashMap<String, String>,
+) -> Result<(Command, Option<PathBuf>), String> {
+    let mut temp_file = None;
+    let action_args = split_arguments(action.arguments.trim())?;
+    let mut command = if action.action_type == "executable" {
+        let program = action.executable_path.trim();
+        if program.is_empty() {
+            return Err("Executable path is required".to_string());
+        }
+        let mut command = Command::new(program);
+        command.args(action_args);
+        command
+    } else {
+        let interpreter = configured_interpreter(action, runtimes);
+        if interpreter.trim().is_empty() {
+            return Err(format!("Interpreter for {} was not found", action.language));
+        }
+        let mut command = Command::new(interpreter.trim());
+        if action.script_mode == "path" {
+            let file_path = action.file_path.trim();
+            if file_path.is_empty() {
+                return Err("Script file path is required".to_string());
+            }
+            match action.language.as_str() {
+                "powershell" => {
+                    command.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", file_path]);
+                }
+                "makefile" => {
+                    command.args(["-f", file_path]);
+                }
+                _ => {
+                    command.arg(file_path);
+                }
+            }
+        } else {
+            let code = action.code.as_str();
+            if code.trim().is_empty() {
+                return Err("Inline script code is required".to_string());
+            }
+            match action.language.as_str() {
+                "python" => {
+                    command.args(["-c", code]);
+                }
+                "javascript" => {
+                    command.args(["-e", code]);
+                }
+                "powershell" => {
+                    command.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", code]);
+                }
+                "bash" => {
+                    command.args(["-lc", code]);
+                }
+                "makefile" => {
+                    let path = temp_makefile(app, code)?;
+                    command.arg("-f").arg(&path);
+                    temp_file = Some(path);
+                }
+                _ => {
+                    command.args(["-c", code]);
+                }
+            }
+        }
+        command.args(action_args);
+        command
+    };
+
+    let cwd = action.working_directory.trim();
+    if !cwd.is_empty() {
+        let path = PathBuf::from(cwd);
+        if !path.is_dir() {
+            return Err("Working directory does not exist".to_string());
+        }
+        command.current_dir(path);
+    }
+
+    Ok((command, temp_file))
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+async fn run_scheduled_action(
+    app: AppHandle,
+    action: ScheduledActionCommand,
+    runtimes: HashMap<String, String>,
+) -> Result<ScheduledActionOutput, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (mut command, temp_file) = build_scheduled_command(&app, &action, &runtimes)?;
+        let output = command.output().map_err(|error| error.to_string());
+        if let Some(path) = temp_file {
+            let _ = fs::remove_file(path);
+        }
+        let output = output?;
+        Ok(ScheduledActionOutput {
+            exit_code: output.status.code(),
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+async fn run_scheduled_action(
+    _action: ScheduledActionCommand,
+    _runtimes: HashMap<String, String>,
+) -> Result<ScheduledActionOutput, String> {
+    Err("Scheduled task execution is not supported on mobile".to_string())
 }
 
 #[tauri::command]
@@ -728,6 +1067,10 @@ pub fn run() {
             save_state,
             load_settings,
             save_settings,
+            load_scheduler,
+            save_scheduler,
+            resolve_executor_paths,
+            run_scheduled_action,
             export_data,
             save_background_image,
             load_background_image,

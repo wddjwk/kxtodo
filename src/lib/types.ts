@@ -71,10 +71,72 @@ export type ListBackground = {
   imageOpacity?: number;
 };
 
+export type SchedulerRuntimeKey = "python" | "node" | "pwsh" | "bash" | "make";
+
+export type SchedulerRuntimePaths = Record<SchedulerRuntimeKey, string>;
+
+export type SchedulerCondition = {
+  enabled: boolean;
+  mode: "contains" | "regex";
+  pattern: string;
+};
+
+export type SchedulerScriptLanguage = "python" | "javascript" | "powershell" | "bash" | "makefile" | "custom";
+
+export type ScheduledTaskAction = {
+  type: "script" | "executable";
+  scriptMode: "path" | "inline";
+  language: SchedulerScriptLanguage;
+  interpreter: string;
+  filePath: string;
+  code: string;
+  executablePath: string;
+  arguments: string;
+  workingDirectory: string;
+};
+
+export type ScheduledTaskTrigger = {
+  type: "once" | "interval" | "calendar" | "condition";
+  runAt: string;
+  everySeconds: number;
+  repeatCount: number;
+  cron: string;
+  stopCondition: SchedulerCondition;
+  probeAction: ScheduledTaskAction;
+  probeCondition: SchedulerCondition;
+};
+
+export type ScheduledTaskStatus = "idle" | "running" | "success" | "failed" | "stopped";
+
+export type ScheduledTask = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  expanded?: boolean;
+  editing?: boolean;
+  trigger: ScheduledTaskTrigger;
+  action: ScheduledTaskAction;
+  runCount: number;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  lastStatus: ScheduledTaskStatus;
+  lastExitCode?: number | null;
+  lastStdout?: string;
+  lastStderr?: string;
+  createdAt: string;
+  updatedAt?: string;
+};
+
+export type SchedulerState = {
+  runtimes: SchedulerRuntimePaths;
+  tasks: ScheduledTask[];
+};
+
 export type AppState = {
   schemaVersion: number;
   nodes: AppNode[];
   tasks: Task[];
   selectedNodeId: string;
   backgrounds: Record<string, ListBackground>;
+  scheduler: SchedulerState;
 };

@@ -1,13 +1,28 @@
-import type { AppNode, AppState, ListBackground, Settings, Task, ThemePreset } from "./types";
+import type {
+  AppNode,
+  AppState,
+  ListBackground,
+  ScheduledTask,
+  ScheduledTaskAction,
+  ScheduledTaskTrigger,
+  SchedulerCondition,
+  SchedulerRuntimeKey,
+  SchedulerRuntimePaths,
+  SchedulerState,
+  Settings,
+  Task,
+  ThemePreset
+} from "./types";
 
 const now = () => new Date().toISOString();
 
-export const schemaVersion = 3;
+export const schemaVersion = 4;
 
 export const systemNodes: AppNode[] = [
   { id: "my-day", kind: "system", name: "我的一天", icon: "sun", parentId: null, createdAt: now() },
   { id: "planned", kind: "system", name: "计划内", icon: "calendar", parentId: null, createdAt: now() },
-  { id: "important", kind: "system", name: "收藏", icon: "star", parentId: null, createdAt: now() }
+  { id: "important", kind: "system", name: "收藏", icon: "star", parentId: null, createdAt: now() },
+  { id: "scheduled", kind: "system", name: "定时任务", icon: "clock", parentId: null, createdAt: now() }
 ];
 
 export const defaultBackground: ListBackground = {
@@ -62,6 +77,59 @@ export const defaultSettings: Settings = {
   }
 };
 
+export const schedulerRuntimeKeys: SchedulerRuntimeKey[] = ["python", "node", "pwsh", "bash", "make"];
+
+export const defaultSchedulerRuntimes: SchedulerRuntimePaths = {
+  python: "",
+  node: "",
+  pwsh: "",
+  bash: "",
+  make: ""
+};
+
+export function defaultSchedulerCondition(enabled = false): SchedulerCondition {
+  return {
+    enabled,
+    mode: "contains",
+    pattern: ""
+  };
+}
+
+export function defaultScheduledTaskAction(language: ScheduledTaskAction["language"] = "python"): ScheduledTaskAction {
+  return {
+    type: "script",
+    scriptMode: "inline",
+    language,
+    interpreter: "",
+    filePath: "",
+    code: language === "python" ? "print(\"hello from KXToDo\")" : "",
+    executablePath: "",
+    arguments: "",
+    workingDirectory: ""
+  };
+}
+
+export function defaultScheduledTaskTrigger(type: ScheduledTaskTrigger["type"] = "once"): ScheduledTaskTrigger {
+  const runAt = new Date(Date.now() + 5 * 60_000).toISOString().slice(0, 16);
+  return {
+    type,
+    runAt,
+    everySeconds: type === "condition" ? 60 : 300,
+    repeatCount: type === "interval" ? 0 : 1,
+    cron: "0 9 * * *",
+    stopCondition: defaultSchedulerCondition(false),
+    probeAction: defaultScheduledTaskAction("python"),
+    probeCondition: defaultSchedulerCondition(true)
+  };
+}
+
+export function emptySchedulerState(): SchedulerState {
+  return {
+    runtimes: { ...defaultSchedulerRuntimes },
+    tasks: []
+  };
+}
+
 function createId(prefix: string): string {
   const random = globalThis.crypto?.randomUUID?.().slice(0, 8) ?? Math.random().toString(36).slice(2, 10);
   return `${prefix}-${random}`;
@@ -90,6 +158,23 @@ export function createCategoryNode(name = "未命名分类", parentId: string | 
   };
 }
 
+export function createScheduledTask(name = "新的定时任务"): ScheduledTask {
+  const timestamp = now();
+  return {
+    id: createId("schedule"),
+    name,
+    enabled: false,
+    expanded: true,
+    editing: true,
+    trigger: defaultScheduledTaskTrigger("once"),
+    action: defaultScheduledTaskAction("python"),
+    runCount: 0,
+    lastStatus: "idle",
+    createdAt: timestamp,
+    updatedAt: timestamp
+  };
+}
+
 export function emptyState(): AppState {
   const inbox = createEntryNode("收集箱", null, "inbox");
   return {
@@ -99,7 +184,8 @@ export function emptyState(): AppState {
     selectedNodeId: inbox.id,
     backgrounds: {
       [inbox.id]: { ...defaultBackground }
-    }
+    },
+    scheduler: emptySchedulerState()
   };
 }
 
@@ -170,6 +256,115 @@ function normalizeTask(raw: unknown, fallbackNodeId: string): Task | null {
   };
 }
 
+function normalizeSchedulerCondition(raw: unknown, fallbackEnabled = false): SchedulerCondition {
+  const source = raw as Partial<SchedulerCondition> | undefined;
+  return {
+    enabled: typeof source?.enabled === "boolean" ? source.enabled : fallbackEnabled,
+    mode: source?.mode === "regex" ? "regex" : "contains",
+    pattern: typeof source?.pattern === "string" ? source.pattern : ""
+  };
+}
+
+function normalizeScheduledAction(raw: unknown, fallbackLanguage: ScheduledTaskAction["language"] = "python"): ScheduledTaskAction {
+  const source = raw as Partial<ScheduledTaskAction> | undefined;
+  const language =
+    source?.language === "javascript" ||
+    source?.language === "powershell" ||
+    source?.language === "bash" ||
+    source?.language === "makefile" ||
+    source?.language === "custom" ||
+    source?.language === "python"
+      ? source.language
+      : fallbackLanguage;
+  return {
+    type: source?.type === "executable" ? "executable" : "script",
+    scriptMode: source?.scriptMode === "path" ? "path" : "inline",
+    language,
+    interpreter: typeof source?.interpreter === "string" ? source.interpreter : "",
+    filePath: typeof source?.filePath === "string" ? source.filePath : "",
+    code: typeof source?.code === "string" ? source.code : (language === "python" ? "print(\"hello from KXToDo\")" : ""),
+    executablePath: typeof source?.executablePath === "string" ? source.executablePath : "",
+    arguments: typeof source?.arguments === "string" ? source.arguments : "",
+    workingDirectory: typeof source?.workingDirectory === "string" ? source.workingDirectory : ""
+  };
+}
+
+function normalizePositiveInteger(value: unknown, fallback: number, min: number, max: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(max, Math.max(min, Math.round(value)))
+    : fallback;
+}
+
+function normalizeNonNegativeInteger(value: unknown, fallback: number, max: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(max, Math.max(0, Math.round(value)))
+    : fallback;
+}
+
+function normalizeScheduledTrigger(raw: unknown): ScheduledTaskTrigger {
+  const source = raw as Partial<ScheduledTaskTrigger> | undefined;
+  const type =
+    source?.type === "interval" || source?.type === "calendar" || source?.type === "condition" || source?.type === "once"
+      ? source.type
+      : "once";
+  const fallback = defaultScheduledTaskTrigger(type);
+  return {
+    type,
+    runAt: typeof source?.runAt === "string" && source.runAt ? source.runAt : fallback.runAt,
+    everySeconds: normalizePositiveInteger(source?.everySeconds, fallback.everySeconds, 1, 31_536_000),
+    repeatCount: normalizeNonNegativeInteger(source?.repeatCount, fallback.repeatCount, 1_000_000),
+    cron: typeof source?.cron === "string" && source.cron.trim() ? source.cron.trim() : fallback.cron,
+    stopCondition: normalizeSchedulerCondition(source?.stopCondition, false),
+    probeAction: normalizeScheduledAction(source?.probeAction, "python"),
+    probeCondition: normalizeSchedulerCondition(source?.probeCondition, true)
+  };
+}
+
+function normalizeScheduledTask(raw: unknown): ScheduledTask | null {
+  const source = raw as Partial<ScheduledTask> | undefined;
+  if (!source || typeof source !== "object") {
+    return null;
+  }
+  const name = typeof source.name === "string" && source.name.trim() ? source.name.trim() : "未命名定时任务";
+  return {
+    id: typeof source.id === "string" && source.id ? source.id : createId("schedule"),
+    name,
+    enabled: Boolean(source.enabled),
+    expanded: Boolean(source.expanded),
+    editing: Boolean(source.editing),
+    trigger: normalizeScheduledTrigger(source.trigger),
+    action: normalizeScheduledAction(source.action, "python"),
+    runCount: normalizeNonNegativeInteger(source.runCount, 0, 1_000_000),
+    lastRunAt: typeof source.lastRunAt === "string" ? source.lastRunAt : undefined,
+    nextRunAt: typeof source.nextRunAt === "string" ? source.nextRunAt : undefined,
+    lastStatus:
+      source.lastStatus === "running" || source.lastStatus === "success" || source.lastStatus === "failed" || source.lastStatus === "stopped"
+        ? source.lastStatus
+        : "idle",
+    lastExitCode: typeof source.lastExitCode === "number" || source.lastExitCode === null ? source.lastExitCode : undefined,
+    lastStdout: typeof source.lastStdout === "string" ? source.lastStdout : "",
+    lastStderr: typeof source.lastStderr === "string" ? source.lastStderr : "",
+    createdAt: typeof source.createdAt === "string" ? source.createdAt : now(),
+    updatedAt: typeof source.updatedAt === "string" ? source.updatedAt : now()
+  };
+}
+
+export function normalizeSchedulerState(raw: unknown): SchedulerState {
+  const source = raw as Partial<SchedulerState> | undefined;
+  const rawRuntimes = source?.runtimes as Partial<SchedulerRuntimePaths> | undefined;
+  const runtimes = schedulerRuntimeKeys.reduce((acc, key) => {
+    const stored = rawRuntimes?.[key];
+    acc[key] = typeof stored === "string" ? stored : "";
+    return acc;
+  }, { ...defaultSchedulerRuntimes });
+  return {
+    runtimes,
+    tasks: Array.isArray(source?.tasks)
+      ? source.tasks.map(normalizeScheduledTask).filter((task): task is ScheduledTask => task !== null)
+      : []
+  };
+}
+
 export function normalizeState(raw: unknown): AppState {
   const fallback = emptyState();
   const source = raw as Partial<AppState> & { lists?: unknown[]; selectedListId?: string };
@@ -215,7 +410,8 @@ export function normalizeState(raw: unknown): AppState {
     nodes: mergedNodes,
     tasks,
     selectedNodeId,
-    backgrounds
+    backgrounds,
+    scheduler: normalizeSchedulerState(source?.scheduler)
   };
 }
 
