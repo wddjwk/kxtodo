@@ -1,6 +1,6 @@
 <script lang="ts">
   import {
-    Check, ChevronUp, Clock3, FileCode2, PenLine, Play, Plus, Power, Settings, Trash2
+    Check, Clock3, FileCode2, FolderOpen, Plus, Power, Settings, Trash2
   } from "@lucide/svelte";
   import { appState, commitScheduler, now, showToast } from "./stores";
   import {
@@ -9,7 +9,7 @@
     defaultScheduledTaskTrigger,
     schedulerRuntimeKeys
   } from "./defaults";
-  import { resolveExecutorPaths, runScheduledAction } from "./backend";
+  import { pickExecutableFile, resolveExecutorPaths } from "./backend";
   import SchedulerActionEditor from "./SchedulerActionEditor.svelte";
   import type {
     ScheduledTask,
@@ -52,9 +52,16 @@
   };
 
   let showRuntimeSettings = false;
-  let manualRunningId: string | null = null;
 
   $: scheduledTasks = $appState.scheduler.tasks;
+
+  export function toggleRuntimeSettings(): void {
+    showRuntimeSettings = !showRuntimeSettings;
+  }
+
+  export function closeOverlays(): void {
+    showRuntimeSettings = false;
+  }
 
   function addScheduledTask(): void {
     const task = createScheduledTask(`定时任务 ${scheduledTasks.length + 1}`);
@@ -173,6 +180,14 @@
     patchTask(taskId, { editing: false, expanded: true });
   }
 
+  function toggleEditing(task: ScheduledTask): void {
+    if (task.editing) {
+      finishEditing(task.id);
+    } else {
+      startEditing(task.id);
+    }
+  }
+
   function deleteTask(taskId: string): void {
     commitScheduler({
       ...$appState.scheduler,
@@ -206,31 +221,23 @@
     }
   }
 
-  async function runNow(task: ScheduledTask): Promise<void> {
-    if (manualRunningId) {
-      return;
-    }
-    manualRunningId = task.id;
-    patchTask(task.id, { lastStatus: "running" });
+  async function browseRuntime(key: SchedulerRuntimeKey): Promise<void> {
     try {
-      const output = await runScheduledAction(task.action, $appState.scheduler.runtimes);
-      patchTask(task.id, {
-        runCount: task.runCount + 1,
-        lastRunAt: now(),
-        lastStatus: output.exitCode === 0 ? "success" : "failed",
-        lastExitCode: output.exitCode,
-        lastStdout: output.stdout,
-        lastStderr: output.stderr
-      });
+      const path = await pickExecutableFile();
+      if (path) {
+        updateRuntime(key, path);
+      }
     } catch (error) {
-      patchTask(task.id, {
-        lastStatus: "failed",
-        lastStderr: String(error)
-      });
-      showToast(`立即运行失败：${task.name}`);
-    } finally {
-      manualRunningId = null;
+      showToast(`选择执行器失败：${String(error)}`);
     }
+  }
+
+  function clearOutput(taskId: string): void {
+    patchTask(taskId, {
+      lastExitCode: undefined,
+      lastStdout: "",
+      lastStderr: ""
+    });
   }
 
   function textValue(event: Event): string {
@@ -292,27 +299,27 @@
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <section class="scheduler-panel" on:click|stopPropagation>
-  <div class="scheduler-toolbar">
-    <button class="scheduler-gear" type="button" title="执行器路径" on:click={() => (showRuntimeSettings = !showRuntimeSettings)}>
-      <Settings size={20} />
-    </button>
-    <div>
-      <strong>脚本执行器</strong>
-      <span>Python / PowerShell / Node / Bash / Makefile 的路径会保存到 tasks.json</span>
-    </div>
-  </div>
-
   {#if showRuntimeSettings}
     <section class="runtime-settings">
+      <div class="runtime-settings-title">
+        <strong>选择执行器</strong>
+        <span>留空时会继续使用环境变量 / PATH 中解析到的默认路径。</span>
+      </div>
       {#each schedulerRuntimeKeys as key}
-        <label>
-          <span>{runtimeLabels[key]}</span>
-          <input
-            value={$appState.scheduler.runtimes[key]}
-            placeholder={`自动解析 ${runtimeLabels[key]} 路径`}
-            on:input={(event) => updateRuntime(key, textValue(event))}
-          />
-        </label>
+        <div class="runtime-path-row">
+          <label>
+            <span>{runtimeLabels[key]}</span>
+            <input
+              value={$appState.scheduler.runtimes[key]}
+              placeholder={`自动解析 ${runtimeLabels[key]} 路径`}
+              on:input={(event) => updateRuntime(key, textValue(event))}
+            />
+          </label>
+          <button type="button" title="选择可执行文件" on:click={() => void browseRuntime(key)}>
+            <FolderOpen size={17} />
+            选择
+          </button>
+        </div>
       {/each}
       <button class="runtime-refresh" type="button" on:click={refreshRuntimes}>从环境变量刷新</button>
     </section>
@@ -329,158 +336,143 @@
         class:running={task.lastStatus === "running"}
         on:dblclick|preventDefault={() => toggleExpanded(task)}
       >
-        <div class="scheduled-title-grid">
+        <div class="scheduled-card-head">
           <span class="scheduled-clock"><Clock3 size={20} /></span>
-          <section class="scheduled-body">
-            {#if task.editing}
-              <div class="scheduler-editor">
-                <label class="wide">
-                  <span>任务名称</span>
-                  <input value={task.name} on:input={(event) => patchTask(task.id, { name: textValue(event) || "未命名定时任务" })} />
-                </label>
+          <button class="scheduled-title-row" type="button" on:click|stopPropagation={() => toggleExpanded(task)}>
+            <strong>{task.name}</strong>
+            <span>{describeTrigger(task)}</span>
+          </button>
 
-                <div class="scheduler-form-grid">
-                  <label>
-                    <span>触发类型</span>
-                    <select value={task.trigger.type} on:change={(event) => setTriggerType(task.id, textValue(event) as ScheduledTaskTrigger["type"])}>
-                      {#each Object.entries(triggerLabels) as [type, label]}
-                        <option value={type}>{label}</option>
-                      {/each}
-                    </select>
-                  </label>
-                  <label>
-                    <span>动作类型</span>
-                    <select value={task.action.type} on:change={(event) => setActionType(task.id, textValue(event) as ScheduledTaskAction["type"])}>
-                      <option value="script">执行脚本</option>
-                      <option value="executable">执行可执行文件</option>
-                    </select>
-                  </label>
-                </div>
-
-                {#if task.trigger.type === "once"}
-                  <label class="wide">
-                    <span>触发时间</span>
-                    <input type="datetime-local" value={task.trigger.runAt} on:input={(event) => patchTrigger(task.id, { runAt: textValue(event) })} />
-                  </label>
-                {:else if task.trigger.type === "interval"}
-                  <div class="scheduler-form-grid">
-                    <label>
-                      <span>间隔秒数</span>
-                      <input type="number" min="1" value={task.trigger.everySeconds} on:input={(event) => patchTrigger(task.id, { everySeconds: numberValue(event, 300, 1, 31536000) })} />
-                    </label>
-                    <label>
-                      <span>重复次数（0 = 无限）</span>
-                      <input type="number" min="0" value={task.trigger.repeatCount} on:input={(event) => patchTrigger(task.id, { repeatCount: numberValue(event, 0, 0, 1000000) })} />
-                    </label>
-                  </div>
-                  <div class="condition-row">
-                    <label class="checkbox-line">
-                      <input type="checkbox" checked={task.trigger.stopCondition.enabled} on:change={(event) => patchStopCondition(task.id, { enabled: checkedValue(event) })} />
-                      stdout 满足条件时终止
-                    </label>
-                    <select value={task.trigger.stopCondition.mode} on:change={(event) => patchStopCondition(task.id, { mode: textValue(event) as SchedulerCondition["mode"] })}>
-                      <option value="contains">包含文本</option>
-                      <option value="regex">匹配正则</option>
-                    </select>
-                    <input value={task.trigger.stopCondition.pattern} placeholder="例如 DONE 或 ^ok" on:input={(event) => patchStopCondition(task.id, { pattern: textValue(event) })} />
-                  </div>
-                {:else if task.trigger.type === "calendar"}
-                  <label class="wide">
-                    <span>Cron 表达式（分 时 日 月 周）</span>
-                    <input value={task.trigger.cron} placeholder="0 9 * * *" on:input={(event) => patchTrigger(task.id, { cron: textValue(event) })} />
-                    <small>例：每天 9:00 = 0 9 * * *；每周一 8:30 = 30 8 * * 1；每月 1 号 10:00 = 0 10 1 * *</small>
-                  </label>
-                {:else}
-                  <div class="scheduler-form-grid">
-                    <label>
-                      <span>检查间隔秒数</span>
-                      <input type="number" min="1" value={task.trigger.everySeconds} on:input={(event) => patchTrigger(task.id, { everySeconds: numberValue(event, 60, 1, 31536000) })} />
-                    </label>
-                    <label>
-                      <span>条件判断</span>
-                      <select value={task.trigger.probeCondition.mode} on:change={(event) => patchProbeCondition(task.id, { mode: textValue(event) as SchedulerCondition["mode"] })}>
-                        <option value="contains">stdout 包含</option>
-                        <option value="regex">stdout 匹配正则</option>
-                      </select>
-                    </label>
-                  </div>
-                  <label class="wide">
-                    <span>触发条件</span>
-                    <input value={task.trigger.probeCondition.pattern} placeholder="例如 READY 或 ^changed=true" on:input={(event) => patchProbeCondition(task.id, { enabled: true, pattern: textValue(event) })} />
-                  </label>
-                  <SchedulerActionEditor
-                    title="条件检测脚本"
-                    action={task.trigger.probeAction}
-                    placeholder={runtimePlaceholder(task.trigger.probeAction.language)}
-                    onPatch={(patch) => patchProbeAction(task.id, patch)}
-                  />
-                {/if}
-
-                <SchedulerActionEditor
-                  title="执行动作"
-                  action={task.action}
-                  placeholder={runtimePlaceholder(task.action.language)}
-                  onPatch={(patch) => patchAction(task.id, patch)}
-                  onType={(type) => setActionType(task.id, type)}
-                  onLanguage={(language) => setActionLanguage(task.id, language)}
-                />
-              </div>
-            {:else if task.expanded}
-              <div class="scheduled-expanded-body">
-                <strong>{describeTrigger(task)}</strong>
-                <span>{describeAction(task.action)}</span>
-                <div class="scheduled-meta-grid">
-                  <span>运行次数：{task.runCount}</span>
-                  <span>上次运行：{formatDateTime(task.lastRunAt)}</span>
-                  <span>退出码：{task.lastExitCode ?? "—"}</span>
-                </div>
-                {#if task.lastStdout || task.lastStderr}
-                  <div class="scheduler-output">
-                    {#if task.lastStdout}<pre>{task.lastStdout}</pre>{/if}
-                    {#if task.lastStderr}<pre class="stderr">{task.lastStderr}</pre>{/if}
-                  </div>
-                {/if}
-              </div>
-            {:else}
-              <div class="scheduled-title-row">
-                <strong>{task.name}</strong>
-                <span>{describeTrigger(task)}</span>
-              </div>
-            {/if}
-          </section>
-
-          {#if !task.editing}
-            <span class="scheduler-status" class:bad={task.lastStatus === "failed"} class:good={task.lastStatus === "success"}>{statusLabels[task.lastStatus]}</span>
-          {/if}
+          <span class="scheduler-status" class:bad={task.lastStatus === "failed"} class:good={task.lastStatus === "success"}>{statusLabels[task.lastStatus]}</span>
 
           <button class="scheduler-power" type="button" title={task.enabled ? "暂停" : "启用"} on:click|stopPropagation={() => toggleEnabled(task)}>
             <Power size={18} />
           </button>
 
-          <button class="scheduler-run-now" type="button" title="立即运行" disabled={manualRunningId !== null} on:click|stopPropagation={() => void runNow(task)}>
-            <Play size={17} />
+          <button class="scheduler-config-button" type="button" title={task.editing ? "完成配置" : "配置定时任务"} on:click|stopPropagation={() => toggleEditing(task)}>
+            {#if task.editing}<Check size={18} />{:else}<Settings size={18} />{/if}
           </button>
-
-          {#if task.editing}
-            <button class="edit-button scheduler-card-button" type="button" title="完成编辑" on:click|stopPropagation={() => finishEditing(task.id)}>
-              <Check size={18} />
-            </button>
-          {:else}
-            <button class="edit-button scheduler-card-button" type="button" title="编辑定时任务" on:click|stopPropagation={() => startEditing(task.id)}>
-              <PenLine size={18} />
-            </button>
-          {/if}
 
           <button class="scheduler-delete" type="button" title="删除" on:click|stopPropagation={() => deleteTask(task.id)}>
             <Trash2 size={17} />
           </button>
-
-          {#if task.expanded && !task.editing}
-            <button class="collapse-button" type="button" title="收起卡片" on:click|stopPropagation={() => toggleExpanded(task)}>
-              <ChevronUp size={18} />
-            </button>
-          {/if}
         </div>
+
+        {#if task.editing}
+          <div class="scheduled-card-panel scheduler-editor">
+            <label class="wide">
+              <span>任务名称</span>
+              <input value={task.name} on:input={(event) => patchTask(task.id, { name: textValue(event) || "未命名定时任务" })} />
+            </label>
+
+            <div class="scheduler-form-grid">
+              <label>
+                <span>触发类型</span>
+                <select value={task.trigger.type} on:change={(event) => setTriggerType(task.id, textValue(event) as ScheduledTaskTrigger["type"])}>
+                  {#each Object.entries(triggerLabels) as [type, label]}
+                    <option value={type}>{label}</option>
+                  {/each}
+                </select>
+              </label>
+              <label>
+                <span>动作类型</span>
+                <select value={task.action.type} on:change={(event) => setActionType(task.id, textValue(event) as ScheduledTaskAction["type"])}>
+                  <option value="script">执行脚本</option>
+                  <option value="executable">执行可执行文件</option>
+                </select>
+              </label>
+            </div>
+
+            {#if task.trigger.type === "once"}
+              <label class="wide">
+                <span>触发时间</span>
+                <input type="datetime-local" value={task.trigger.runAt} on:input={(event) => patchTrigger(task.id, { runAt: textValue(event) })} />
+              </label>
+            {:else if task.trigger.type === "interval"}
+              <div class="scheduler-form-grid">
+                <label>
+                  <span>间隔秒数</span>
+                  <input type="number" min="1" value={task.trigger.everySeconds} on:input={(event) => patchTrigger(task.id, { everySeconds: numberValue(event, 300, 1, 31536000) })} />
+                </label>
+                <label>
+                  <span>重复次数（0 = 无限）</span>
+                  <input type="number" min="0" value={task.trigger.repeatCount} on:input={(event) => patchTrigger(task.id, { repeatCount: numberValue(event, 0, 0, 1000000) })} />
+                </label>
+              </div>
+              <div class="condition-row">
+                <label class="checkbox-line">
+                  <input type="checkbox" checked={task.trigger.stopCondition.enabled} on:change={(event) => patchStopCondition(task.id, { enabled: checkedValue(event) })} />
+                  stdout 满足条件时终止
+                </label>
+                <select value={task.trigger.stopCondition.mode} on:change={(event) => patchStopCondition(task.id, { mode: textValue(event) as SchedulerCondition["mode"] })}>
+                  <option value="contains">包含文本</option>
+                  <option value="regex">匹配正则</option>
+                </select>
+                <input value={task.trigger.stopCondition.pattern} placeholder="例如 DONE 或 ^ok" on:input={(event) => patchStopCondition(task.id, { pattern: textValue(event) })} />
+              </div>
+            {:else if task.trigger.type === "calendar"}
+              <label class="wide">
+                <span>Cron 表达式（分 时 日 月 周）</span>
+                <input value={task.trigger.cron} placeholder="0 9 * * *" on:input={(event) => patchTrigger(task.id, { cron: textValue(event) })} />
+                <small>例：每天 9:00 = 0 9 * * *；每周一 8:30 = 30 8 * * 1；每月 1 号 10:00 = 0 10 1 * *</small>
+              </label>
+            {:else}
+              <div class="scheduler-form-grid">
+                <label>
+                  <span>检查间隔秒数</span>
+                  <input type="number" min="1" value={task.trigger.everySeconds} on:input={(event) => patchTrigger(task.id, { everySeconds: numberValue(event, 60, 1, 31536000) })} />
+                </label>
+                <label>
+                  <span>条件判断</span>
+                  <select value={task.trigger.probeCondition.mode} on:change={(event) => patchProbeCondition(task.id, { mode: textValue(event) as SchedulerCondition["mode"] })}>
+                    <option value="contains">stdout 包含</option>
+                    <option value="regex">stdout 匹配正则</option>
+                  </select>
+                </label>
+              </div>
+              <label class="wide">
+                <span>触发条件</span>
+                <input value={task.trigger.probeCondition.pattern} placeholder="例如 READY 或 ^changed=true" on:input={(event) => patchProbeCondition(task.id, { enabled: true, pattern: textValue(event) })} />
+              </label>
+              <SchedulerActionEditor
+                title="条件检测脚本"
+                action={task.trigger.probeAction}
+                placeholder={runtimePlaceholder(task.trigger.probeAction.language)}
+                onPatch={(patch) => patchProbeAction(task.id, patch)}
+              />
+            {/if}
+
+            <SchedulerActionEditor
+              title="执行动作"
+              action={task.action}
+              placeholder={runtimePlaceholder(task.action.language)}
+              onPatch={(patch) => patchAction(task.id, patch)}
+              onType={(type) => setActionType(task.id, type)}
+              onLanguage={(language) => setActionLanguage(task.id, language)}
+            />
+          </div>
+        {:else if task.expanded}
+          <div class="scheduled-card-panel scheduled-expanded-body">
+            <strong>{describeAction(task.action)}</strong>
+            <div class="scheduled-meta-grid">
+              <span>运行次数：{task.runCount}</span>
+              <span>上次运行：{formatDateTime(task.lastRunAt)}</span>
+              <span>退出码：{task.lastExitCode ?? "—"}</span>
+            </div>
+            {#if task.lastStdout || task.lastStderr}
+              <div class="scheduler-output-head">
+                <span>最近一次执行输出</span>
+                <button type="button" on:click|stopPropagation={() => clearOutput(task.id)}>清空</button>
+              </div>
+              <div class="scheduler-output">
+                {#if task.lastStdout}<pre>{task.lastStdout}</pre>{/if}
+                {#if task.lastStderr}<pre class="stderr">{task.lastStderr}</pre>{/if}
+              </div>
+            {:else}
+              <div class="scheduler-output-empty">暂无 stdout / stderr 输出</div>
+            {/if}
+          </div>
+        {/if}
       </article>
     {/each}
 

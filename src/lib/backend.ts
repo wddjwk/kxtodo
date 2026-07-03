@@ -148,6 +148,17 @@ export async function pickImageFile(): Promise<string | null> {
   return typeof selected === "string" ? selected : null;
 }
 
+export async function pickExecutableFile(): Promise<string | null> {
+  if (!isTauriRuntime) {
+    return null;
+  }
+  const selected = await open({
+    multiple: false,
+    directory: false
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
 /** Copy a picked image into the data dir (no base64) and return its filename. */
 export async function importBackgroundImage(srcPath: string): Promise<string> {
   return invoke<string>("import_background_image", { srcPath });

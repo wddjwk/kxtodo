@@ -516,6 +516,12 @@ fn build_scheduled_command(
         command.current_dir(path);
     }
 
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+
     Ok((command, temp_file))
 }
 

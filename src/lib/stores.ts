@@ -9,7 +9,7 @@ import {
 import { buildListCounts, buildVisibleTasks, getBackground } from "./nodes";
 import { accentForNode, uiScaleValue } from "./styles";
 
-export const APP_VERSION = "8.0.0";
+export const APP_VERSION = "8.1.0";
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -227,3 +227,4 @@ export async function hydrate(): Promise<void> {
 
   await syncNativeLifecycle(loadedSettings);
 }
+

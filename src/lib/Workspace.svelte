@@ -3,7 +3,7 @@
   import {
     ArrowLeft, ArrowUpDown, Calendar, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
     ChevronsDown, ChevronsUp, Download, Eraser, FolderInput, Image,
-    Lightbulb, MoreHorizontal, Palette, PenLine, Plus, Search, Star, Sun, Trash2, Upload
+    Lightbulb, MoreHorizontal, Palette, PenLine, Plus, Search, Settings as SettingsIcon, Star, Sun, Trash2, Upload
   } from "@lucide/svelte";
   import {
     appState, appSettings, commit, commitScheduler, commitSettings, showToast,
@@ -58,6 +58,7 @@
   let importInput: HTMLInputElement;
   let backgroundFileInput: HTMLInputElement;
   let colorPickerInput: HTMLInputElement;
+  let schedulerViewRef: ScheduledTasksView;
   let showMobileHeaderActions = false;
   let editingPresetIndex: number | null = null;
   let presetNameDraft = "";
@@ -211,6 +212,7 @@
     showCalendar = false;
     showMobileHeaderActions = false;
     cancelPresetEdit();
+    schedulerViewRef?.closeOverlays();
     taskMenu = null;
   }
 
@@ -797,6 +799,11 @@
       >{$isSearching ? `搜索结果：${$searchQuery}` : $selectedNode?.name ?? "KXToDo"}</h1>
     </div>
     <div class="header-actions" class:mobile-hidden={$isMobile && !showMobileHeaderActions} on:click|stopPropagation>
+      {#if isScheduled}
+        <button type="button" title="执行器路径" on:click|stopPropagation={() => schedulerViewRef?.toggleRuntimeSettings()}>
+          <SettingsIcon size={21} />
+        </button>
+      {/if}
       {#if !isScheduled}
         {#if isMyDay}
           <button type="button" title="完成日历" on:click|stopPropagation={toggleCalendar}>
@@ -811,13 +818,6 @@
           title={allExpanded ? "收起全部" : "展开全部"}
           on:click|stopPropagation={toggleExpandAll}
         >{#if allExpanded}<ChevronsUp size={21} />{:else}<ChevronsDown size={21} />{/if}</button>
-        <button
-          type="button"
-          title="分类/条目菜单"
-          on:mousedown|preventDefault|stopPropagation={toggleListMenu}
-          on:click|stopPropagation
-          on:keydown={handleListMenuKeydown}
-        ><MoreHorizontal size={23} /></button>
 
         {#if showSuggestions}
         <section class="suggestion-panel" on:click|stopPropagation>
@@ -895,6 +895,16 @@
           {/if}
         </section>
         {/if}
+      {/if}
+
+      <button
+        type="button"
+        title="分类/条目菜单"
+        on:mousedown|preventDefault|stopPropagation={toggleListMenu}
+        on:click|stopPropagation
+        on:keydown={handleListMenuKeydown}
+      ><MoreHorizontal size={23} /></button>
+
         {#if showListMenu}
         <section class="list-menu">
           <button type="button" disabled={!$selectedNode || $selectedNode.kind === "system"} on:click={() => $selectedNode && startRename($selectedNode.id)}>
@@ -916,15 +926,17 @@
               </div>
             {/if}
           {/if}
-          <button type="button" on:click={() => showSortOptions = !showSortOptions}>
-            <ArrowUpDown size={15} /> 排序方式
-          </button>
-          {#if showSortOptions}
-            <div class="sort-submenu">
-              {#each Object.entries(sortLabels) as [mode, label]}
-                <button type="button" class:active={sortMode === mode} on:click={() => setSortMode(mode as SortMode)}>{label}</button>
-              {/each}
-            </div>
+          {#if !isScheduled}
+            <button type="button" on:click={() => showSortOptions = !showSortOptions}>
+              <ArrowUpDown size={15} /> 排序方式
+            </button>
+            {#if showSortOptions}
+              <div class="sort-submenu">
+                {#each Object.entries(sortLabels) as [mode, label]}
+                  <button type="button" class:active={sortMode === mode} on:click={() => setSortMode(mode as SortMode)}>{label}</button>
+                {/each}
+              </div>
+            {/if}
           {/if}
           {#if $selectedNode && $selectedNode.kind !== "system"}
             <button class="danger" type="button" on:click={deleteCurrentNode}>
@@ -986,12 +998,11 @@
           </div>
         </section>
         {/if}
-      {/if}
     </div>
   </section>
 
   {#if isScheduled}
-    <ScheduledTasksView />
+    <ScheduledTasksView bind:this={schedulerViewRef} />
   {:else}
   {#if isMyDay}
     <p class="my-day-subtitle">

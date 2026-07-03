@@ -3,25 +3,112 @@ import { isTauriRuntime, runScheduledAction } from "./backend";
 import { appState, commitScheduler, now, showToast } from "./stores";
 import type { ScheduledTask, SchedulerCondition, SchedulerState } from "./types";
 
-const TICK_MS = 15_000;
+const MIN_DELAY_MS = 1_000;
+const MAX_DELAY_MS = 60_000;
+const MAX_CRON_SCAN_MINUTES = 366 * 24 * 60;
+
 const running = new Set<string>();
 const lastProbeAt = new Map<string, number>();
 let timer: number | undefined;
+let unsubscribeState: (() => void) | undefined;
+let rescheduleQueued = false;
 
 export function startSchedulerRuntime(): () => void {
   stopSchedulerRuntime();
   if (!isTauriRuntime) {
     return stopSchedulerRuntime;
   }
-  void schedulerTick();
-  timer = window.setInterval(() => void schedulerTick(), TICK_MS);
+  unsubscribeState = appState.subscribe(() => queueReschedule());
+  queueReschedule();
   return stopSchedulerRuntime;
 }
 
 export function stopSchedulerRuntime(): void {
   if (timer !== undefined) {
-    window.clearInterval(timer);
+    window.clearTimeout(timer);
     timer = undefined;
+  }
+  unsubscribeState?.();
+  unsubscribeState = undefined;
+  rescheduleQueued = false;
+}
+
+function queueReschedule(): void {
+  if (rescheduleQueued) {
+    return;
+  }
+  rescheduleQueued = true;
+  queueMicrotask(() => {
+    rescheduleQueued = false;
+    scheduleNext();
+  });
+}
+
+function scheduleNext(): void {
+  if (timer !== undefined) {
+    window.clearTimeout(timer);
+    timer = undefined;
+  }
+  const delay = nextSchedulerDelay();
+  if (delay === null) {
+    return;
+  }
+  timer = window.setTimeout(() => {
+    timer = undefined;
+    void schedulerTick().finally(queueReschedule);
+  }, delay);
+}
+
+function nextSchedulerDelay(): number | null {
+  const state = get(appState);
+  const current = new Date();
+  const nowMs = current.getTime();
+  let nextAt = Number.POSITIVE_INFINITY;
+
+  for (const task of state.scheduler.tasks) {
+    if (!task.enabled || running.has(task.id)) {
+      continue;
+    }
+    const dueAt = nextDueTime(task, current);
+    if (dueAt !== null) {
+      nextAt = Math.min(nextAt, dueAt);
+    }
+  }
+
+  if (!Number.isFinite(nextAt)) {
+    return null;
+  }
+  const delay = Math.max(0, nextAt - nowMs);
+  return Math.min(MAX_DELAY_MS, Math.max(delay, delay === 0 ? 0 : MIN_DELAY_MS));
+}
+
+function nextDueTime(task: ScheduledTask, current: Date): number | null {
+  switch (task.trigger.type) {
+    case "once": {
+      if (task.runCount > 0) {
+        return null;
+      }
+      return parseDateTime(task.trigger.runAt)?.getTime() ?? null;
+    }
+    case "interval": {
+      if (task.trigger.repeatCount > 0 && task.runCount >= task.trigger.repeatCount) {
+        return current.getTime();
+      }
+      const base = parseDateTime(task.lastRunAt ?? task.updatedAt ?? task.createdAt) ?? current;
+      return base.getTime() + task.trigger.everySeconds * 1000;
+    }
+    case "calendar": {
+      if (isTaskDue(task, current)) {
+        return current.getTime();
+      }
+      return nextCronTime(task.trigger.cron, current);
+    }
+    case "condition": {
+      const previous = lastProbeAt.get(task.id);
+      return previous ? previous + task.trigger.everySeconds * 1000 : current.getTime();
+    }
+    default:
+      return null;
   }
 }
 
@@ -59,7 +146,7 @@ function isTaskDue(task: ScheduledTask, current: Date): boolean {
       return current.getTime() - base.getTime() >= task.trigger.everySeconds * 1000;
     }
     case "calendar":
-      return cronMatches(task.trigger.cron, current) && task.lastRunAt?.slice(0, 16) !== current.toISOString().slice(0, 16);
+      return cronMatches(task.trigger.cron, current) && minuteKey(task.lastRunAt) !== minuteKey(current);
     default:
       return false;
   }
@@ -111,6 +198,7 @@ async function runMainAction(task: ScheduledTask): Promise<void> {
     showToast(`定时任务执行失败：${task.name}`);
   } finally {
     running.delete(task.id);
+    queueReschedule();
   }
 }
 
@@ -153,6 +241,7 @@ async function probeAndMaybeRun(task: ScheduledTask): Promise<void> {
     showToast(`条件定时任务执行失败：${task.name}`);
   } finally {
     running.delete(task.id);
+    queueReschedule();
   }
 }
 
@@ -210,6 +299,19 @@ function nextRunAt(task: ScheduledTask, fromIso: string): string | undefined {
   return undefined;
 }
 
+function nextCronTime(expression: string, current: Date): number | null {
+  const candidate = new Date(current);
+  candidate.setSeconds(0, 0);
+  candidate.setMinutes(candidate.getMinutes() + 1);
+  for (let i = 0; i < MAX_CRON_SCAN_MINUTES; i++) {
+    if (cronMatches(expression, candidate)) {
+      return candidate.getTime();
+    }
+    candidate.setMinutes(candidate.getMinutes() + 1);
+  }
+  return null;
+}
+
 function cronMatches(expression: string, date: Date): boolean {
   const fields = expression.trim().split(/\s+/);
   if (fields.length !== 5) {
@@ -255,4 +357,18 @@ function partMatches(part: string, value: number, isDayOfWeek: boolean): boolean
 
 function normalizeCronNumber(value: number, isDayOfWeek: boolean): number {
   return isDayOfWeek && value === 7 ? 0 : value;
+}
+
+function minuteKey(value?: string | Date): string {
+  const date = value instanceof Date ? value : parseDateTime(value);
+  if (!date) {
+    return "";
+  }
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+    String(date.getHours()).padStart(2, "0"),
+    String(date.getMinutes()).padStart(2, "0")
+  ].join("-");
 }
