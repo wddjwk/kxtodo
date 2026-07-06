@@ -1,6 +1,6 @@
 [package]
 name = "todo-note"
-version = "8.2.0"
+version = "8.2.1"
 description = "A fast local-first todo and markdown note desktop app."
 authors = ["wddjwk"]
 license = ""
@@ -19,6 +19,7 @@ tauri-build = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
+encoding_rs = "0.8"
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
 
@@ -34,6 +35,10 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 tauri-plugin-opener = "2"
+
+
+
+
 
 
 

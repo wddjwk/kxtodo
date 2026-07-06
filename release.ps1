@@ -1,5 +1,5 @@
 param(
-  [string]$Version = "8.2.0",
+  [string]$Version = "8.2.1",
   [ValidateSet("all", "windows", "android")]
   [string]$Targets = "windows",
   [switch]$Log

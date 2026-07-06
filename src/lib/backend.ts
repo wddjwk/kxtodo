@@ -173,6 +173,13 @@ export async function pickExecutableFile(): Promise<string | null> {
   return typeof selected === "string" ? selected : null;
 }
 
+export async function resolveExecutablePath(name: string): Promise<string | null> {
+  if (!isTauriRuntime || !name.trim()) {
+    return null;
+  }
+  return invoke<string | null>("resolve_executable_path", { name });
+}
+
 /** Copy a picked image into the data dir (no base64) and return its filename. */
 export async function importBackgroundImage(srcPath: string): Promise<string> {
   return invoke<string>("import_background_image", { srcPath });

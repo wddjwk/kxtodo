@@ -61,17 +61,19 @@
     updateAppearance("uiScale", nextPercent / 100);
   }
 
-  function updateAppearanceFont(field: "uiFontSize" | "markdownFontSize" | "editorFontSize", value: number): void {
-    const max = field === "uiFontSize" ? 22 : 26;
-    if (isNumberInRange(value, 14, max)) {
+  function updateAppearanceFont(field: "uiFontSize" | "markdownFontSize" | "editorFontSize" | "tagFontSize", value: number): void {
+    const max = field === "uiFontSize" ? 22 : field === "tagFontSize" ? 30 : 26;
+    const min = field === "tagFontSize" ? 11 : 14;
+    if (isNumberInRange(value, min, max)) {
       updateAppearance(field, Math.round(value));
     }
   }
 
-  function commitAppearanceFont(field: "uiFontSize" | "markdownFontSize" | "editorFontSize", value: number): void {
+  function commitAppearanceFont(field: "uiFontSize" | "markdownFontSize" | "editorFontSize" | "tagFontSize", value: number): void {
     const fallback = defaultSettings.appearance[field];
-    const nextSize = clampNumber(value, fallback, 14, field === "uiFontSize" ? 22 : 26);
-    updateAppearance(field, nextSize);
+    const max = field === "uiFontSize" ? 22 : field === "tagFontSize" ? 30 : 26;
+    const min = field === "tagFontSize" ? 11 : 14;
+    updateAppearance(field, clampNumber(value, fallback, min, max));
   }
 
   function updateNotificationDuration(value: number): void {
@@ -241,6 +243,22 @@
           value={$appSettings.appearance.editorFontSize}
           on:input={(event) => updateAppearanceFont("editorFontSize", event.currentTarget.valueAsNumber)}
           on:change={(event) => commitAppearanceFont("editorFontSize", event.currentTarget.valueAsNumber)}
+        />
+        <span>px</span>
+      </span>
+    </div>
+    <div class="settings-row number-row">
+      <span>标签字号</span>
+      <span class="number-control">
+        <input
+          aria-label="标签字号"
+          type="number"
+          min="11"
+          max="30"
+          step="1"
+          value={$appSettings.appearance.tagFontSize}
+          on:input={(event) => updateAppearanceFont("tagFontSize", event.currentTarget.valueAsNumber)}
+          on:change={(event) => commitAppearanceFont("tagFontSize", event.currentTarget.valueAsNumber)}
         />
         <span>px</span>
       </span>

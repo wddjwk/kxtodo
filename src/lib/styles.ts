@@ -61,11 +61,13 @@ export function buildAppShellStyle(appearance: Settings["appearance"]): string {
   const uiFontSize = fontSizeValue(appearance.uiFontSize, defaultSettings.appearance.uiFontSize, 14, 22);
   const markdownFontSize = fontSizeValue(appearance.markdownFontSize, defaultSettings.appearance.markdownFontSize, 14, 26);
   const editorFontSize = fontSizeValue(appearance.editorFontSize, defaultSettings.appearance.editorFontSize, 14, 26);
+  const tagFontSize = fontSizeValue(appearance.tagFontSize, defaultSettings.appearance.tagFontSize, 11, 30);
   return [
     `--ui-scale: ${scale}`,
     `--ui-font-size: ${uiFontSize}px`,
     `--markdown-font-size: ${markdownFontSize}px`,
     `--editor-font-size: ${editorFontSize}px`,
+    `--tag-font-size: ${tagFontSize}px`,
     `--app-width: ${100 / scale}vw`,
     `--app-height: ${100 / scale}vh`,
     `--font-title: ${uiFontSize + 18}px`,
@@ -81,11 +83,13 @@ export function buildMobileShellStyle(appearance: Settings["appearance"]): strin
   const uiFontSize = fontSizeValue(appearance.uiFontSize, defaultSettings.appearance.uiFontSize, 14, 22);
   const markdownFontSize = fontSizeValue(appearance.markdownFontSize, defaultSettings.appearance.markdownFontSize, 14, 26);
   const editorFontSize = fontSizeValue(appearance.editorFontSize, defaultSettings.appearance.editorFontSize, 14, 26);
+  const tagFontSize = fontSizeValue(appearance.tagFontSize, defaultSettings.appearance.tagFontSize, 11, 30);
   return [
     `--ui-scale: 1`,
     `--ui-font-size: ${uiFontSize}px`,
     `--markdown-font-size: ${markdownFontSize}px`,
     `--editor-font-size: ${editorFontSize}px`,
+    `--tag-font-size: ${tagFontSize}px`,
     `--app-width: 100vw`,
     `--app-height: 100vh`,
     `--font-title: ${uiFontSize + 18}px`,

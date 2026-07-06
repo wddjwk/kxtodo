@@ -39,8 +39,7 @@ button:disabled {
 }
 
 button,
-.nav-row,
-.task-card {
+.nav-row {
   user-select: none;
 }
 

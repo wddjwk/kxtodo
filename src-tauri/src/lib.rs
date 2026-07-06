@@ -36,7 +36,7 @@ const IMG_DIR: &str = "img";
 const AVATAR_DIR: &str = "avator";
 const BACKGROUND_DIR: &str = "background";
 const ENTRY_IMAGE_DIR: &str = "data";
-const DEFAULT_NOTIFICATION_DURATION_MS: u64 = 5_200;
+const DEFAULT_NOTIFICATION_DURATION_MS: u64 = 3_000;
 
 // Fields are only read by desktop-only tray / window-close handling.
 #[cfg_attr(not(desktop), allow(dead_code))]
@@ -392,6 +392,16 @@ fn resolve_executor_paths() -> HashMap<String, String> {
     default_executor_paths()
 }
 
+#[tauri::command]
+fn resolve_executable_path(name: String) -> Option<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let path = find_executable(&[name], &[]);
+    if path.is_empty() { None } else { Some(path) }
+}
+
 fn clamp_notification_duration(duration_ms: u64, fallback: u64) -> u64 {
     let raw = if duration_ms == 0 {
         fallback
@@ -529,8 +539,8 @@ fn show_notification_window(
     let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
     let url = WebviewUrl::App(format!("notification.html?payload={encoded}").into());
     let position_kind = parse_notification_position(&notification.position);
-    let width = 486.0;
-    let height = 108.0;
+    let width = 400.0;
+    let height = 68.0;
 
     let window = WebviewWindowBuilder::new(app, label.clone(), url)
         .title("KXToDo 通知")
@@ -915,10 +925,16 @@ fn build_scheduled_command(
     }
     let action_args = split_arguments(action.arguments.trim())?;
     let mut command = if action.action_type == "executable" {
-        let program = action.executable_path.trim();
-        if program.is_empty() {
+        let program_raw = action.executable_path.trim();
+        if program_raw.is_empty() {
             return Err("Executable path is required".to_string());
         }
+        let program = if program_raw.contains('/') || program_raw.contains('\\') || std::path::Path::new(program_raw).is_absolute() {
+            program_raw.to_string()
+        } else {
+            let resolved = find_executable(&[program_raw], &[]);
+            if resolved.is_empty() { program_raw.to_string() } else { resolved }
+        };
         let mut command = Command::new(program);
         command.args(action_args);
         command
@@ -1003,7 +1019,13 @@ fn mutex_error<T>(error: std::sync::PoisonError<T>) -> String {
 fn read_pipe_to_string<R: Read>(mut reader: R) -> String {
     let mut bytes = Vec::new();
     let _ = reader.read_to_end(&mut bytes);
-    String::from_utf8_lossy(&bytes).to_string()
+    match std::str::from_utf8(&bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => {
+            let (decoded, _, _) = encoding_rs::GBK.decode(&bytes);
+            decoded.into_owned()
+        }
+    }
 }
 
 #[cfg(desktop)]
@@ -1689,6 +1711,7 @@ pub fn run() {
             load_scheduler,
             save_scheduler,
             resolve_executor_paths,
+            resolve_executable_path,
             run_scheduled_action,
             stop_scheduled_action,
             export_data,

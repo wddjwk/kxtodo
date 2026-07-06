@@ -101,6 +101,15 @@ export function moveTargetOptions(sourceId: string, nodes: AppNode[]): Array<{ i
   ];
 }
 
+export function taskMoveTargets(nodes: AppNode[], currentNodeId: string): Array<{ id: string; name: string }> {
+  return nodes
+    .filter((node) => node.kind === "entry" && node.id !== currentNodeId)
+    .map((node) => ({
+      id: node.id,
+      name: `${"　".repeat(ancestorIds(node.id, nodes).size)}${node.name}`
+    }));
+}
+
 export function getBackground(nodeId: string | undefined, backgrounds: Record<string, ListBackground>): ListBackground {
   return nodeId ? (backgrounds[nodeId] ?? defaultBackground) : defaultBackground;
 }

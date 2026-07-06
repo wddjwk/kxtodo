@@ -1,5 +1,7 @@
 <script lang="ts">
   import Dropdown from "./Dropdown.svelte";
+  import { FolderOpen, Search } from "@lucide/svelte";
+  import { pickExecutableFile, resolveExecutablePath } from "./backend";
   import type { AppNotification, ScheduledTaskAction, SchedulerCondition } from "./types";
 
   export let title = "执行动作";
@@ -56,10 +58,10 @@
 
   function numberValue(event: Event, fallback: number): number {
     const value = Number(textValue(event));
-    if (!Number.isFinite(value)) {
+    if (!Number.isFinite(value) || value < 0) {
       return fallback;
     }
-    return Math.min(60_000, Math.max(1_200, Math.round(value)));
+    return Math.round(value);
   }
 
   function checkedValue(event: Event): boolean {
@@ -101,6 +103,26 @@
         condition: { ...action.stdoutNotification.condition, enabled }
       }
     });
+  }
+
+  async function browseExecutable(): Promise<void> {
+    const p = await pickExecutableFile();
+    if (p) onPatch({ executablePath: p });
+  }
+
+  async function resolveExecutable(): Promise<void> {
+    const p = await resolveExecutablePath(action.executablePath);
+    if (p) onPatch({ executablePath: p });
+  }
+
+  async function browseScriptFile(): Promise<void> {
+    const p = await pickExecutableFile();
+    if (p) onPatch({ filePath: p });
+  }
+
+  async function browseInterpreter(): Promise<void> {
+    const p = await pickExecutableFile();
+    if (p) onPatch({ interpreter: p });
   }
 </script>
 
@@ -150,7 +172,7 @@
       </label>
       <label>
         <span>自动隐藏</span>
-        <input type="number" min="1200" max="60000" step="100" value={action.notification.durationMs} on:input={(event) => patchNotification({ durationMs: numberValue(event, action.notification.durationMs) })} />
+        <input type="text" inputmode="numeric" value={action.notification.durationMs} on:input={(event) => patchNotification({ durationMs: numberValue(event, action.notification.durationMs) })} />
       </label>
       <small class="wide">可在消息中使用 {"{taskName}"}，脚本输出变量在执行脚本后通知中可用。</small>
     </div>
@@ -158,7 +180,15 @@
     {#if action.type === "executable"}
       <label class="wide">
         <span>可执行文件路径</span>
-        <input value={action.executablePath} placeholder="C:\Tools\demo.exe" on:input={(event) => onPatch({ executablePath: textValue(event) })} />
+        <div class="path-input-row">
+          <input value={action.executablePath} placeholder="C:\Tools\demo.exe" on:input={(event) => onPatch({ executablePath: textValue(event) })} />
+          <button type="button" title="选择文件" on:click={browseExecutable}>
+            <FolderOpen size={15} />
+          </button>
+          <button type="button" title="从 PATH 解析" on:click={resolveExecutable}>
+            <Search size={15} />
+          </button>
+        </div>
       </label>
     {:else}
       <div class="scheduler-form-grid">
@@ -173,13 +203,23 @@
         </label>
         <label>
           <span>解释器（可覆盖默认值）</span>
-          <input value={action.interpreter} placeholder={placeholder} on:input={(event) => onPatch({ interpreter: textValue(event) })} />
+          <div class="path-input-row">
+            <input value={action.interpreter} placeholder={placeholder} on:input={(event) => onPatch({ interpreter: textValue(event) })} />
+            <button type="button" title="选择文件" on:click={browseInterpreter}>
+              <FolderOpen size={15} />
+            </button>
+          </div>
         </label>
       </div>
       {#if action.scriptMode === "path"}
         <label class="wide">
           <span>脚本文件路径</span>
-          <input value={action.filePath} placeholder="D:\scripts\task.py" on:input={(event) => onPatch({ filePath: textValue(event) })} />
+          <div class="path-input-row">
+            <input value={action.filePath} placeholder="D:\scripts\task.py" on:input={(event) => onPatch({ filePath: textValue(event) })} />
+            <button type="button" title="选择文件" on:click={browseScriptFile}>
+              <FolderOpen size={15} />
+            </button>
+          </div>
         </label>
       {:else}
         <label class="wide">
@@ -226,7 +266,7 @@
           </label>
           <label>
             <span>自动隐藏</span>
-            <input type="number" min="1200" max="60000" step="100" value={action.completionNotification.durationMs} on:input={(event) => patchCompletionNotification({ durationMs: numberValue(event, action.completionNotification.durationMs) })} />
+            <input type="text" inputmode="numeric" value={action.completionNotification.durationMs} on:input={(event) => patchCompletionNotification({ durationMs: numberValue(event, action.completionNotification.durationMs) })} />
           </label>
         </div>
       {/if}
@@ -267,7 +307,7 @@
           </label>
           <label>
             <span>自动隐藏</span>
-            <input type="number" min="1200" max="60000" step="100" value={action.stdoutNotification.notification.durationMs} on:input={(event) => patchStdoutNotification({ durationMs: numberValue(event, action.stdoutNotification.notification.durationMs) })} />
+            <input type="text" inputmode="numeric" value={action.stdoutNotification.notification.durationMs} on:input={(event) => patchStdoutNotification({ durationMs: numberValue(event, action.stdoutNotification.notification.durationMs) })} />
           </label>
         </div>
       {/if}
@@ -275,3 +315,30 @@
     </div>
   {/if}
 </section>
+
+<style>
+  .path-input-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .path-input-row input {
+    flex: 1;
+    min-width: 0;
+  }
+  .path-input-row button {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border: 1px solid #e0e0e0;
+    border-radius: 7px;
+    background: #f7f7f7;
+    color: #5f6368;
+    cursor: pointer;
+  }
+  .path-input-row button:hover {
+    background: #eee;
+  }
+</style>

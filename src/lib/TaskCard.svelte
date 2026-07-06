@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher, tick } from "svelte";
-  import { Check, ChevronUp, ImagePlus, PenLine, Plus } from "@lucide/svelte";
+  import { Check, ChevronUp, ImagePlus, PenLine, Plus, X } from "@lucide/svelte";
   import { collapsedMarkdownLine, hasMultipleMarkdownLines, renderInlineMarkdown, renderMarkdown } from "./markdown";
   import { mdImageCache, resolveMarkdownImages, primeMdImageCache } from "./images";
   import { isTauriRuntime, pickImageFile, saveMdImage, mdImageUrl, saveMdImageFromDataUrl } from "./backend";
@@ -21,6 +21,8 @@
     context: { id: string; x: number; y: number };
     openLink: string;
     setDate: { id: string; date: string };
+    removeTag: { id: string; tagId: string };
+    editTag: { id: string; tagId: string; text: string };
   }>();
 
   let draft = "";
@@ -28,6 +30,9 @@
   let editorEl: HTMLTextAreaElement;
   let showPicker = false;
   let suppressBlurCommit = false;
+  let editingTagId = "";
+  let editingTagText = "";
+  let tagEditEl: HTMLInputElement;
 
   $: resolvedMd = resolveMarkdownImages(task.markdown, nodeId, $mdImageCache);
   $: collapsedHtml = renderInlineMarkdown(collapsedMarkdownLine(task.markdown));
@@ -127,7 +132,10 @@
     dispatch("edit", task.id);
     await tick();
     resizeEditor();
-    editorEl?.focus();
+    if (editorEl) {
+      editorEl.focus();
+      editorEl.setSelectionRange(draft.length, draft.length);
+    }
   }
 
   function commitEdit(): void {
@@ -188,6 +196,12 @@
     toggleExpand(event);
   }
 
+  function handleBodyMouseDown(event: MouseEvent): void {
+    if (event.detail >= 2) {
+      event.preventDefault();
+    }
+  }
+
   function openContext(event: MouseEvent): void {
     event.preventDefault();
     event.stopPropagation();
@@ -214,6 +228,23 @@
     editorEl.style.height = "auto";
     editorEl.style.height = `${Math.min(editorEl.scrollHeight, 420)}px`;
   }
+
+  function startTagEdit(tagId: string, currentText: string): void {
+    editingTagId = tagId;
+    editingTagText = currentText || "";
+    void tick().then(() => tagEditEl?.focus());
+  }
+
+  function commitTagEdit(): void {
+    if (editingTagId) {
+      dispatch("editTag", { id: task.id, tagId: editingTagId, text: editingTagText.trim() });
+      editingTagId = "";
+    }
+  }
+
+  function removeTag(tagId: string): void {
+    dispatch("removeTag", { id: task.id, tagId });
+  }
 </script>
 
 <svelte:window on:click={() => (showPicker = false)} />
@@ -238,7 +269,7 @@
       {/if}
     </button>
 
-    <section class="task-body" on:dblclick={handleBodyDblClick}>
+    <section class="task-body" on:mousedown={handleBodyMouseDown} on:dblclick={handleBodyDblClick}>
       {#if task.editing}
         <textarea
           bind:this={editorEl}
@@ -259,6 +290,33 @@
         </div>
       {/if}
     </section>
+
+    <div class="task-tags">
+      {#each task.tags as tag (tag.id)}
+        {#if editingTagId === tag.id}
+          <input
+            bind:this={tagEditEl}
+            bind:value={editingTagText}
+            class="tag-edit-input"
+            maxlength="20"
+            on:blur={commitTagEdit}
+            on:click|stopPropagation
+            on:keydown|stopPropagation={(e) => { if (e.key === "Enter") commitTagEdit(); }}
+          />
+        {:else}
+          <span
+            class={`task-tag tag-${tag.color}`}
+            title={tag.text || "点击编辑标签"}
+            on:click|stopPropagation={() => startTagEdit(tag.id, tag.text || "")}
+          >
+            {#if tag.text}{tag.text}{/if}
+            <button class="tag-delete" type="button" aria-label="删除标签" on:click|stopPropagation={() => removeTag(tag.id)}>
+              <X size={10} strokeWidth={3} />
+            </button>
+          </span>
+        {/if}
+      {/each}
+    </div>
 
     {#if !isExpanded && !task.editing && task.dueDate}
       <div class="task-due-wrap">

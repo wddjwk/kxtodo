@@ -13,6 +13,8 @@ import type {
   SchedulerRuntimePaths,
   SchedulerState,
   Settings,
+  Tag,
+  TagColor,
   Task,
   ThemePreset
 } from "./types";
@@ -60,6 +62,7 @@ export const defaultSettings: Settings = {
     uiFontSize: 18,
     markdownFontSize: 20,
     editorFontSize: 20,
+    tagFontSize: 14,
     themePresets: themePresets.map((preset) => ({ ...preset })),
     uiColors: {}
   },
@@ -68,7 +71,7 @@ export const defaultSettings: Settings = {
     launchAtStartup: false
   },
   notifications: {
-    durationMs: 5200,
+    durationMs: 3000,
     position: "bottom-right"
   },
   shortcuts: {
@@ -254,6 +257,22 @@ function normalizeNode(raw: unknown): AppNode | null {
   };
 }
 
+const TAG_COLORS: TagColor[] = ["red", "yellow", "blue", "green", "gray"];
+
+function normalizeTags(raw: unknown): Tag[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item): Tag | null => {
+      if (!item || typeof item !== "object") return null;
+      const tag = item as Partial<Tag>;
+      const color = TAG_COLORS.includes(tag.color as TagColor) ? tag.color as TagColor : "gray";
+      const id = typeof tag.id === "string" && tag.id ? tag.id : createId("tag");
+      const text = typeof tag.text === "string" ? tag.text.trim().slice(0, 20) : undefined;
+      return { id, color, text: text || undefined };
+    })
+    .filter((tag): tag is Tag => tag !== null);
+}
+
 function normalizeTask(raw: unknown, fallbackNodeId: string): Task | null {
   const source = raw as Partial<Task> & { listId?: string; content?: string; dueDate?: string | null; plannedDate?: string | null };
   if (!source || typeof source !== "object") {
@@ -273,6 +292,7 @@ function normalizeTask(raw: unknown, fallbackNodeId: string): Task | null {
     plannedDate: typeof source.plannedDate === "string" ? source.plannedDate : undefined,
     dueDate: typeof source.dueDate === "string" ? source.dueDate : undefined,
     completedAt: typeof source.completedAt === "string" ? source.completedAt : source.completed ? (typeof source.updatedAt === "string" ? source.updatedAt : now()) : undefined,
+    tags: normalizeTags(source.tags),
     expanded: Boolean(source.expanded),
     editing: Boolean(source.editing),
     createdAt: typeof source.createdAt === "string" ? source.createdAt : now(),
@@ -552,6 +572,7 @@ export function normalizeSettings(raw: unknown): Settings {
       uiFontSize: normalizeFontSize(source?.appearance?.uiFontSize, defaultSettings.appearance.uiFontSize, 14, 22),
       markdownFontSize: normalizeFontSize(source?.appearance?.markdownFontSize, defaultSettings.appearance.markdownFontSize, 14, 26),
       editorFontSize: normalizeFontSize(source?.appearance?.editorFontSize, defaultSettings.appearance.editorFontSize, 14, 26),
+      tagFontSize: normalizeFontSize(source?.appearance?.tagFontSize, defaultSettings.appearance.tagFontSize, 11, 30),
       themePresets: normalizeThemePresets(source?.appearance?.themePresets),
       uiColors: normalizeUiColors(source?.appearance?.uiColors)
     },

@@ -10,6 +10,14 @@ export type AppNode = {
   createdAt: string;
 };
 
+export type TagColor = "red" | "yellow" | "blue" | "green" | "gray";
+
+export type Tag = {
+  id: string;
+  color: TagColor;
+  text?: string;
+};
+
 export type Task = {
   id: string;
   nodeId: string;
@@ -20,6 +28,7 @@ export type Task = {
   plannedDate?: string;
   dueDate?: string;
   completedAt?: string;
+  tags: Tag[];
   expanded?: boolean;
   editing?: boolean;
   createdAt: string;
@@ -45,6 +54,7 @@ export type Settings = {
     uiFontSize: number;
     markdownFontSize: number;
     editorFontSize: number;
+    tagFontSize: number;
     themePresets: ThemePreset[];
     uiColors: Record<string, string>;
   };

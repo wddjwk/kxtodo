@@ -3,7 +3,7 @@
   import {
     ArrowLeft, ArrowUpDown, Calendar, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
     ChevronsDown, ChevronsUp, Download, Eraser, FolderInput, Image,
-    Lightbulb, MoreHorizontal, Palette, PenLine, Plus, Search, Settings as SettingsIcon, Star, Sun, Trash2, Upload
+    Lightbulb, MoreHorizontal, Palette, PenLine, Plus, Search, Settings as SettingsIcon, Star, Sun, Tag, Trash2, Upload
   } from "@lucide/svelte";
   import {
     appState, appSettings, commit, commitScheduler, commitSettings, showToast,
@@ -11,7 +11,7 @@
     accent, isSearching, now, todayIso, yesterdayIso, dateOnly,
     createTaskId, safeFileName, fileToDataUrl, APP_VERSION
   } from "./stores";
-  import { moveTargetOptions, nodeAndDescendantIds, exportStateForNode, getBackground } from "./nodes";
+  import { moveTargetOptions, nodeAndDescendantIds, exportStateForNode, getBackground, taskMoveTargets } from "./nodes";
   import { buildMainStyle, buildMenuStyle, uiScaleValue } from "./styles";
   import { normalizeState, normalizeSettings, defaultBackground, themePresets, createEntryNode } from "./defaults";
   import { hasMultipleMarkdownLines } from "./markdown";
@@ -25,7 +25,7 @@
   import ScheduledTasksView from "./ScheduledTasksView.svelte";
   import DatePicker from "./DatePicker.svelte";
   import { showMobileList, isMobile } from "./platform";
-  import type { AppNode, AppState, ListBackground, Settings, Task } from "./types";
+  import type { AppNode, AppState, ListBackground, Settings, TagColor, Task } from "./types";
 
   type SortMode = "created-desc" | "created-asc" | "alpha-asc" | "alpha-desc" | "due-asc" | "due-desc" | "importance";
 
@@ -50,6 +50,12 @@
   let sortMode: SortMode = "created-desc";
   let allExpanded = false;
   let taskMenu: { taskId: string; x: number; y: number; showDate: boolean } | null = null;
+  let showTagOptions = false;
+  let showMoveTargets = false;
+  let tagInputText = "";
+  let selectedTagColor: TagColor = "yellow";
+  let editingTagIdInMenu = "";
+  let editingTagTextInMenu = "";
   let taskMenuHeight = 0;
   let taskMenuWidth = 0;
   let backgroundLinkDraft = "";
@@ -86,8 +92,10 @@
         : sortedTasks.filter((task) => task.completed && dateOnly(task.completedAt) === todayIso()))
     : sortedTasks.filter((task) => task.completed);
   $: selectedMoveTargets = $selectedNode ? moveTargetOptions($selectedNode.id, $appState.nodes) : [];
-  $: taskMenuStyle = taskMenu ? buildMenuStyle(taskMenu.x, taskMenu.y, taskMenuWidth || 264, taskMenuHeight || (taskMenu.showDate ? 520 : 188), uiScaleValue($appSettings.appearance.uiScale)) : "";
+  $: taskMenuStyle = taskMenu ? buildMenuStyle(taskMenu.x, taskMenu.y, taskMenuWidth || 264, taskMenuHeight || (taskMenu.showDate ? 620 : 300), uiScaleValue($appSettings.appearance.uiScale)) : "";
   $: taskMenuTask = taskMenu ? $appState.tasks.find((task) => task.id === taskMenu?.taskId) : null;
+  $: taskMoveTargetList = taskMenu ? taskMoveTargets($appState.nodes, taskMenuTask?.nodeId ?? "") : [];
+  $: if (!taskMenu) { showTagOptions = false; showMoveTargets = false; tagInputText = ""; selectedTagColor = "yellow"; editingTagIdInMenu = ""; editingTagTextInMenu = ""; }
   $: if (($selectedNode?.id ?? "") !== backgroundDraftNodeId) {
     backgroundDraftNodeId = $selectedNode?.id ?? "";
     backgroundLinkDraft = isLocalImageRef($selectedBackground.image) ? "" : ($selectedBackground.image ?? "");
@@ -348,6 +356,48 @@
     taskMenu = null;
   }
 
+  function addTagToTask(taskId: string, color: TagColor, text?: string): void {
+    updateTask(taskId, (task) => ({
+      ...task,
+      tags: [...task.tags, { id: `tag-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, color, text: text?.trim() || undefined }]
+    }));
+  }
+
+  function submitTagInput(): void {
+    if (!taskMenu || !taskMenuTask) return;
+    const text = tagInputText.trim();
+    addTagToTask(taskMenuTask.id, selectedTagColor, text);
+    tagInputText = "";
+    taskMenu = null;
+  }
+
+  function submitTagEditInMenu(): void {
+    if (!taskMenu || !taskMenuTask || !editingTagIdInMenu) return;
+    editTagAtTask(taskMenuTask.id, editingTagIdInMenu, editingTagTextInMenu);
+    editingTagIdInMenu = "";
+  }
+
+  function clearTagsFromTask(taskId: string): void {
+    updateTask(taskId, (task) => ({ ...task, tags: [] }));
+  }
+
+  function removeTagFromTask(taskId: string, tagId: string): void {
+    updateTask(taskId, (task) => ({ ...task, tags: task.tags.filter((t) => t.id !== tagId) }));
+  }
+
+  function editTagAtTask(taskId: string, tagId: string, text: string): void {
+    updateTask(taskId, (task) => ({
+      ...task,
+      tags: task.tags.map((t) => t.id === tagId ? { ...t, text: text || undefined } : t)
+    }));
+  }
+
+  function moveTaskToNode(taskId: string, targetNodeId: string): void {
+    updateTask(taskId, (task) => ({ ...task, nodeId: targetNodeId }));
+    showMoveTargets = false;
+    taskMenu = null;
+  }
+
   function taskTargetNode(): AppNode | undefined {
     return $selectedNode?.kind === "entry" ? $selectedNode : $appState.nodes.find((n) => n.kind === "entry");
   }
@@ -370,6 +420,7 @@
       myDay: $selectedNode?.id === "my-day",
       expanded: false,
       editing: false,
+      tags: [],
       createdAt: timestamp,
       updatedAt: timestamp
     };
@@ -1030,6 +1081,8 @@
         on:context={openTaskMenu}
         on:openLink={openTaskLink}
         on:setDate={handleTaskSetDate}
+        on:removeTag={(e) => removeTagFromTask(e.detail.id, e.detail.tagId)}
+        on:editTag={(e) => editTagAtTask(e.detail.id, e.detail.tagId, e.detail.text)}
       />
     {/each}
 
@@ -1053,6 +1106,8 @@
               on:context={openTaskMenu}
               on:openLink={openTaskLink}
               on:setDate={handleTaskSetDate}
+              on:removeTag={(e) => removeTagFromTask(e.detail.id, e.detail.tagId)}
+              on:editTag={(e) => editTagAtTask(e.detail.id, e.detail.tagId, e.detail.text)}
             />
           {/each}
         {/if}
@@ -1095,6 +1150,88 @@
       <button type="button" on:click={() => { updateTask(taskMenuTask.id, (task) => ({ ...task, important: !task.important })); taskMenu = null; }}>
         <Star size={16} /> {taskMenuTask.important ? "取消收藏" : "收藏"}
       </button>
+      <!-- Tags submenu -->
+      <button on:click={() => { showTagOptions = !showTagOptions; showMoveTargets = false; }}>
+        <Tag size={16} /> 标签
+      </button>
+      {#if showTagOptions}
+        <div class="tag-editor-panel" on:click|stopPropagation={() => { editingTagIdInMenu = ""; }}>
+          {#if taskMenuTask.tags.length > 0}
+            {#each taskMenuTask.tags as tag (tag.id)}
+              {#if editingTagIdInMenu === tag.id}
+                <div class="tag-editor-input-row" on:click|stopPropagation>
+                  <input
+                    type="text"
+                    maxlength="20"
+                    value={editingTagTextInMenu}
+                    on:input={(e) => editingTagTextInMenu = e.currentTarget.value}
+                    on:keydown|stopPropagation={(e) => { if (e.key === "Enter") submitTagEditInMenu(); }}
+                    on:blur={submitTagEditInMenu}
+                  />
+                  <button class="tag-add-btn" type="button" on:click|stopPropagation={submitTagEditInMenu}>
+                    <Plus size={15} />
+                  </button>
+                </div>
+              {:else}
+                <div
+                  class={`tag-list-item bg-${tag.color}`}
+                  on:click|stopPropagation={() => { editingTagIdInMenu = tag.id; editingTagTextInMenu = tag.text || ""; }}
+                >
+                  <span class="tag-list-text">{tag.text || "(无文字)"}</span>
+                  <button class="tag-list-delete" type="button" title="删除此标签" on:click|stopPropagation={() => removeTagFromTask(taskMenuTask.id, tag.id)}>
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              {/if}
+            {/each}
+          {/if}
+          <div class="tag-editor-input-row">
+            <input
+              type="text"
+              placeholder="输入标签文字..."
+              maxlength="20"
+              value={tagInputText}
+              on:input={(e) => tagInputText = e.currentTarget.value}
+              on:keydown|stopPropagation={(e) => { if (e.key === "Enter") submitTagInput(); }}
+            />
+            <button class="tag-add-btn" type="button" title="添加标签" on:click|stopPropagation={submitTagInput}>
+              <Plus size={15} />
+            </button>
+          </div>
+          <div class="tag-editor-colors">
+            {#each [["red", "红色"], ["yellow", "黄色"], ["blue", "蓝色"], ["green", "绿色"], ["gray", "灰色"]] as [color, label]}
+              <button
+                class={`color-circle ${color}`}
+                class:selected={selectedTagColor === color}
+                title={label}
+                on:click|stopPropagation={() => selectedTagColor = color as TagColor}
+              ></button>
+            {/each}
+          </div>
+          {#if taskMenuTask.tags.length > 0}
+            <button class="danger tag-clear-all" on:click|stopPropagation={() => clearTagsFromTask(taskMenuTask.id)}>
+              <Trash2 size={14} /> 清除所有标签
+            </button>
+          {/if}
+        </div>
+      {/if}
+
+      <!-- Move to submenu -->
+      <button on:click={() => { showMoveTargets = !showMoveTargets; showTagOptions = false; }}>
+        <FolderInput size={16} /> 移动到
+      </button>
+      {#if showMoveTargets}
+        <div class="menu-submenu">
+          {#each taskMoveTargetList as target}
+            <button on:click|stopPropagation={() => moveTaskToNode(taskMenuTask.id, target.id)}>
+              {target.name}
+            </button>
+          {/each}
+          {#if taskMoveTargetList.length === 0}
+            <button disabled>没有可移动的目标</button>
+          {/if}
+        </div>
+      {/if}
       <button type="button" on:click={() => startTaskEditing(taskMenuTask.id)}>
         <PenLine size={16} /> 编辑
       </button>
