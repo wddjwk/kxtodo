@@ -1,4 +1,12 @@
 use base64::Engine;
+#[cfg(desktop)]
+use std::{
+    io::{Read, Write},
+    process::{Child, Command, Stdio},
+    sync::{Arc, Mutex},
+    thread,
+    time::Duration,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -11,12 +19,11 @@ use std::{
 use tauri::{AppHandle, Manager};
 
 #[cfg(desktop)]
-use std::process::Command;
-#[cfg(desktop)]
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    LogicalPosition, WebviewUrl, WebviewWindowBuilder,
     State,
 };
 #[cfg(desktop)]
@@ -29,6 +36,7 @@ const IMG_DIR: &str = "img";
 const AVATAR_DIR: &str = "avator";
 const BACKGROUND_DIR: &str = "background";
 const ENTRY_IMAGE_DIR: &str = "data";
+const DEFAULT_NOTIFICATION_DURATION_MS: u64 = 5_200;
 
 // Fields are only read by desktop-only tray / window-close handling.
 #[cfg_attr(not(desktop), allow(dead_code))]
@@ -44,6 +52,20 @@ impl Default for LifecycleState {
             quitting: AtomicBool::new(false),
         }
     }
+}
+
+#[cfg(desktop)]
+#[derive(Default)]
+struct SchedulerProcessState {
+    children: Mutex<HashMap<String, Arc<Mutex<Child>>>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum NotificationPosition {
+    BottomRight,
+    TopRight,
+    BottomLeft,
+    TopLeft,
 }
 
 fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -262,6 +284,25 @@ struct ScheduledActionOutput {
     stderr: String,
 }
 
+fn default_notification_title() -> String {
+    "KXToDo".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NotificationRequest {
+    #[serde(default = "default_notification_title")]
+    title: String,
+    #[serde(default)]
+    message: String,
+    #[serde(default)]
+    duration_ms: u64,
+    #[serde(default)]
+    tone: String,
+    #[serde(default)]
+    position: String,
+}
+
 #[cfg(target_os = "windows")]
 fn executable_candidates(name: &str) -> Vec<String> {
     if std::path::Path::new(name).extension().is_some() {
@@ -349,6 +390,431 @@ fn default_executor_paths() -> HashMap<String, String> {
 #[tauri::command]
 fn resolve_executor_paths() -> HashMap<String, String> {
     default_executor_paths()
+}
+
+fn clamp_notification_duration(duration_ms: u64, fallback: u64) -> u64 {
+    let raw = if duration_ms == 0 {
+        fallback
+    } else {
+        duration_ms
+    };
+    raw.clamp(1_200, 60_000)
+}
+
+fn default_notification_duration(app: &AppHandle) -> u64 {
+    let Ok(path) = settings_file(app) else {
+        return DEFAULT_NOTIFICATION_DURATION_MS;
+    };
+    let Ok(value) = read_json(path) else {
+        return DEFAULT_NOTIFICATION_DURATION_MS;
+    };
+    value
+        .get("notifications")
+        .and_then(|item| item.get("durationMs"))
+        .and_then(Value::as_u64)
+        .map(|duration| clamp_notification_duration(duration, DEFAULT_NOTIFICATION_DURATION_MS))
+        .unwrap_or(DEFAULT_NOTIFICATION_DURATION_MS)
+}
+
+fn parse_notification_position(raw: &str) -> NotificationPosition {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "top-right" => NotificationPosition::TopRight,
+        "bottom-left" => NotificationPosition::BottomLeft,
+        "top-left" => NotificationPosition::TopLeft,
+        _ => NotificationPosition::BottomRight,
+    }
+}
+
+fn default_notification_position(app: &AppHandle) -> NotificationPosition {
+    let Ok(path) = settings_file(app) else {
+        return NotificationPosition::BottomRight;
+    };
+    let Ok(value) = read_json(path) else {
+        return NotificationPosition::BottomRight;
+    };
+    value
+        .get("notifications")
+        .and_then(|item| item.get("position"))
+        .and_then(Value::as_str)
+        .map(parse_notification_position)
+        .unwrap_or(NotificationPosition::BottomRight)
+}
+
+fn normalize_notification(app: &AppHandle, notification: NotificationRequest) -> NotificationRequest {
+    let title = notification.title.trim();
+    let message = notification.message.trim();
+    let tone = match notification.tone.trim().to_ascii_lowercase().as_str() {
+        "success" => "success",
+        "warning" => "warning",
+        "error" => "error",
+        _ => "info",
+    };
+    NotificationRequest {
+        title: if title.is_empty() {
+            default_notification_title()
+        } else {
+            title.chars().take(80).collect()
+        },
+        message: if message.is_empty() {
+            "通知".to_string()
+        } else {
+            message.to_string()
+        },
+        duration_ms: clamp_notification_duration(
+            notification.duration_ms,
+            default_notification_duration(app),
+        ),
+        tone: tone.to_string(),
+        position: if notification.position.trim().is_empty() {
+            match default_notification_position(app) {
+                NotificationPosition::TopRight => "top-right",
+                NotificationPosition::BottomLeft => "bottom-left",
+                NotificationPosition::TopLeft => "top-left",
+                NotificationPosition::BottomRight => "bottom-right",
+            }
+            .to_string()
+        } else {
+            match parse_notification_position(&notification.position) {
+                NotificationPosition::TopRight => "top-right",
+                NotificationPosition::BottomLeft => "bottom-left",
+                NotificationPosition::TopLeft => "top-left",
+                NotificationPosition::BottomRight => "bottom-right",
+            }
+            .to_string()
+        },
+    }
+}
+
+#[cfg(desktop)]
+static NOTIFICATION_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(desktop)]
+fn notification_position(
+    app: &AppHandle,
+    width: f64,
+    height: f64,
+    stack_index: u64,
+    position_kind: NotificationPosition,
+) -> Option<LogicalPosition<f64>> {
+    let monitor = app.primary_monitor().ok().flatten()?;
+    let scale = monitor.scale_factor();
+    let work_area = monitor.work_area();
+    let left = f64::from(work_area.position.x) / scale;
+    let top = f64::from(work_area.position.y) / scale;
+    let screen_width = f64::from(work_area.size.width) / scale;
+    let screen_height = f64::from(work_area.size.height) / scale;
+    let stack_offset = (stack_index % 5) as f64 * (height + 10.0);
+    let x = match position_kind {
+        NotificationPosition::BottomLeft | NotificationPosition::TopLeft => left + 22.0,
+        NotificationPosition::BottomRight | NotificationPosition::TopRight => {
+            left + screen_width - width - 22.0
+        }
+    };
+    let y = match position_kind {
+        NotificationPosition::TopLeft | NotificationPosition::TopRight => top + 24.0 + stack_offset,
+        NotificationPosition::BottomLeft | NotificationPosition::BottomRight => top + screen_height - height - 18.0 - stack_offset,
+    };
+    Some(LogicalPosition::new(x, y))
+}
+
+#[cfg(desktop)]
+fn show_notification_window(
+    app: &AppHandle,
+    notification: NotificationRequest,
+) -> Result<(), String> {
+    let notification = normalize_notification(app, notification);
+    let counter = NOTIFICATION_COUNTER.fetch_add(1, Ordering::SeqCst);
+    let label = format!("notification-{counter}");
+    let payload = serde_json::to_vec(&notification).map_err(|error| error.to_string())?;
+    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
+    let url = WebviewUrl::App(format!("notification.html?payload={encoded}").into());
+    let position_kind = parse_notification_position(&notification.position);
+    let width = 486.0;
+    let height = 108.0;
+
+    let window = WebviewWindowBuilder::new(app, label.clone(), url)
+        .title("KXToDo 通知")
+        .inner_size(width, height)
+        .min_inner_size(width, height)
+        .max_inner_size(width, height)
+        .resizable(false)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .transparent(true)
+        .shadow(true)
+        .visible(false)
+        .build()
+        .map_err(|error| error.to_string())?;
+
+    if let Some(position) = notification_position(app, width, height, counter, position_kind) {
+        let _ = window.set_position(position);
+    }
+    window.show().map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+#[cfg(desktop)]
+fn cli_usage() -> String {
+    [
+        "KXToDo 命令行用法：",
+        "  KXToDo.exe                         打开 / 隐藏主窗口",
+        "  KXToDo.exe -h | --help             显示帮助",
+        "  KXToDo.exe notify <消息> [选项]     发送悬浮通知",
+        "",
+        "notify 选项：",
+        "  -h, --help                         显示 notify 帮助",
+        "  -t, --title <标题>                  通知标题",
+        "  -m, --message <消息>                通知消息",
+        "  -d, --duration <5200|5s|5200ms>     自动隐藏时长",
+        "  --tone <info|success|warning|error> 通知样式",
+        "  --position <bottom-right|top-right|bottom-left|top-left> 弹窗位置",
+    ]
+    .join("\n")
+}
+
+#[cfg(desktop)]
+fn notify_usage() -> String {
+    [
+        "KXToDo notify 用法：",
+        "  KXToDo.exe notify <消息> [--title 标题] [--duration 5s] [--tone success]",
+        "  KXToDo.exe notify --message \"构建完成\" --title \"CI\" --position bottom-right",
+    ]
+    .join("\n")
+}
+
+#[cfg(desktop)]
+fn parse_duration_ms(raw: &str) -> Result<u64, String> {
+    let value = raw.trim();
+    if let Some(ms) = value.strip_suffix("ms") {
+        return ms
+            .trim()
+            .parse::<u64>()
+            .map_err(|_| "duration 必须是毫秒数或 5s 这样的秒数".to_string());
+    }
+    if let Some(seconds) = value.strip_suffix('s') {
+        let parsed = seconds
+            .trim()
+            .parse::<f64>()
+            .map_err(|_| "duration 必须是毫秒数或 5s 这样的秒数".to_string())?;
+        if parsed.is_finite() && parsed > 0.0 {
+            return Ok((parsed * 1000.0).round() as u64);
+        }
+        return Err("duration 必须大于 0".to_string());
+    }
+    value
+        .parse::<u64>()
+        .map_err(|_| "duration 必须是毫秒数或 5s 这样的秒数".to_string())
+}
+
+#[cfg(desktop)]
+fn take_cli_value(args: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
+    *index += 1;
+    args.get(*index)
+        .cloned()
+        .ok_or_else(|| format!("{flag} 需要一个参数"))
+}
+
+#[cfg(desktop)]
+#[derive(Debug, Clone)]
+enum CliAction {
+    Gui,
+    Help(String),
+    Notify(NotificationRequest),
+    Error(String),
+}
+
+#[cfg(all(desktop, target_os = "windows"))]
+fn print_cli_text(message: &str) {
+    use windows_sys::Win32::{
+        Foundation::INVALID_HANDLE_VALUE,
+        Storage::FileSystem::WriteFile,
+        System::Console::{
+            AttachConsole, GetStdHandle, WriteConsoleW, ATTACH_PARENT_PROCESS, STD_OUTPUT_HANDLE,
+        },
+    };
+    let stdout_text = format!("{message}\n");
+    unsafe {
+        let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+    unsafe {
+        let handle = GetStdHandle(STD_OUTPUT_HANDLE);
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+            let _ = std::io::stdout().write_all(stdout_text.as_bytes());
+            let _ = std::io::stdout().flush();
+            return;
+        }
+        let text = format!("{message}\r\n");
+        let wide = text.encode_utf16().collect::<Vec<_>>();
+        let mut written = 0;
+        if WriteConsoleW(
+            handle,
+            wide.as_ptr(),
+            wide.len() as u32,
+            &mut written,
+            std::ptr::null_mut(),
+        ) != 0
+        {
+            return;
+        }
+        let bytes = stdout_text.as_bytes();
+        let _ = WriteFile(
+            handle,
+            bytes.as_ptr(),
+            bytes.len() as u32,
+            &mut written,
+            std::ptr::null_mut(),
+        );
+    }
+}
+
+#[cfg(all(desktop, not(target_os = "windows")))]
+fn print_cli_text(message: &str) {
+    println!("{message}");
+}
+
+#[cfg(desktop)]
+fn parse_cli_action(args: &[String]) -> CliAction {
+    let Some(command) = args.first().map(String::as_str) else {
+        return CliAction::Gui;
+    };
+    match command {
+        "-h" | "--help" | "help" => CliAction::Help(cli_usage()),
+        "notify" => match parse_cli_notification(args) {
+            Ok(notification) => CliAction::Notify(notification),
+            Err(message) if message == notify_usage() => CliAction::Help(message),
+            Err(message) => CliAction::Error(message),
+        },
+        unsupported => CliAction::Error(format!(
+            "不支持的命令行参数：{unsupported}\n\n{}",
+            cli_usage()
+        )),
+    }
+}
+
+#[cfg(desktop)]
+fn parse_cli_notification(args: &[String]) -> Result<NotificationRequest, String> {
+    let mut notification = NotificationRequest {
+        title: default_notification_title(),
+        message: String::new(),
+        duration_ms: 0,
+        tone: "info".to_string(),
+        position: String::new(),
+    };
+    let mut message_parts = Vec::new();
+    let mut index = 1;
+    while index < args.len() {
+        let arg = &args[index];
+        match arg.as_str() {
+            "--help" | "-h" => return Err(notify_usage()),
+            "--title" | "-t" => {
+                notification.title = take_cli_value(args, &mut index, arg)?;
+            }
+            "--message" | "--body" | "-m" => {
+                notification.message = take_cli_value(args, &mut index, arg)?;
+            }
+            "--duration" | "--timeout" | "-d" => {
+                let value = take_cli_value(args, &mut index, arg)?;
+                notification.duration_ms = parse_duration_ms(&value)?;
+            }
+            "--tone" | "--type" => {
+                notification.tone = take_cli_value(args, &mut index, arg)?;
+            }
+            "--position" => {
+                notification.position = take_cli_value(args, &mut index, arg)?;
+            }
+            value if value.starts_with("--title=") => {
+                notification.title = value.trim_start_matches("--title=").to_string();
+            }
+            value if value.starts_with("--message=") => {
+                notification.message = value.trim_start_matches("--message=").to_string();
+            }
+            value if value.starts_with("--body=") => {
+                notification.message = value.trim_start_matches("--body=").to_string();
+            }
+            value if value.starts_with("--duration=") => {
+                notification.duration_ms = parse_duration_ms(value.trim_start_matches("--duration="))?;
+            }
+            value if value.starts_with("--timeout=") => {
+                notification.duration_ms = parse_duration_ms(value.trim_start_matches("--timeout="))?;
+            }
+            value if value.starts_with("--tone=") => {
+                notification.tone = value.trim_start_matches("--tone=").to_string();
+            }
+            value if value.starts_with("--type=") => {
+                notification.tone = value.trim_start_matches("--type=").to_string();
+            }
+            value if value.starts_with("--position=") => {
+                notification.position = value.trim_start_matches("--position=").to_string();
+            }
+            value => message_parts.push(value.to_string()),
+        }
+        index += 1;
+    }
+
+    if notification.message.trim().is_empty() {
+        notification.message = message_parts.join(" ");
+    }
+    if notification.message.trim().is_empty() {
+        return Err(notify_usage());
+    }
+
+    Ok(notification)
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn send_notification(notification: NotificationRequest) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let mut cmd = Command::new(&exe);
+    cmd.arg("notify")
+        .arg("--message")
+        .arg(&notification.message)
+        .arg("--title")
+        .arg(&notification.title);
+
+    if notification.duration_ms > 0 {
+        cmd.arg("--duration")
+            .arg(format!("{}ms", notification.duration_ms));
+    }
+    if !notification.tone.trim().is_empty() {
+        cmd.arg("--tone").arg(&notification.tone);
+    }
+    if !notification.position.trim().is_empty() {
+        cmd.arg("--position").arg(&notification.position);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    cmd.spawn()
+        .map_err(|e| format!("Failed to spawn notification process: {}", e))?;
+    Ok(())
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn close_notification_window(window: tauri::Window) -> Result<(), String> {
+    if !window.label().starts_with("notification-") {
+        return Err("当前窗口不是通知窗口".to_string());
+    }
+    window.close().map_err(|error| error.to_string())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+fn send_notification(_notification: NotificationRequest) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+fn close_notification_window() -> Result<(), String> {
+    Ok(())
 }
 
 #[cfg(desktop)]
@@ -444,6 +910,9 @@ fn build_scheduled_command(
     runtimes: &HashMap<String, String>,
 ) -> Result<(Command, Option<PathBuf>), String> {
     let mut temp_file = None;
+    if action.action_type == "notification" {
+        return Err("Notification actions are handled by the scheduler".to_string());
+    }
     let action_args = split_arguments(action.arguments.trim())?;
     let mut command = if action.action_type == "executable" {
         let program = action.executable_path.trim();
@@ -526,36 +995,135 @@ fn build_scheduled_command(
 }
 
 #[cfg(desktop)]
+fn mutex_error<T>(error: std::sync::PoisonError<T>) -> String {
+    error.to_string()
+}
+
+#[cfg(desktop)]
+fn read_pipe_to_string<R: Read>(mut reader: R) -> String {
+    let mut bytes = Vec::new();
+    let _ = reader.read_to_end(&mut bytes);
+    String::from_utf8_lossy(&bytes).to_string()
+}
+
+#[cfg(desktop)]
+fn wait_for_child(child: &Arc<Mutex<Child>>) -> Result<std::process::ExitStatus, String> {
+    loop {
+        if let Some(status) = child
+            .lock()
+            .map_err(mutex_error)?
+            .try_wait()
+            .map_err(|error| error.to_string())?
+        {
+            return Ok(status);
+        }
+        thread::sleep(Duration::from_millis(80));
+    }
+}
+
+#[cfg(desktop)]
+fn run_cancellable_command(
+    mut command: Command,
+    process_state: Arc<SchedulerProcessState>,
+    task_id: Option<String>,
+) -> Result<ScheduledActionOutput, String> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|error| error.to_string())?;
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let stdout_thread = stdout.map(|reader| thread::spawn(move || read_pipe_to_string(reader)));
+    let stderr_thread = stderr.map(|reader| thread::spawn(move || read_pipe_to_string(reader)));
+    let child = Arc::new(Mutex::new(child));
+
+    if let Some(task_id) = task_id.as_ref().filter(|value| !value.trim().is_empty()) {
+        process_state
+            .children
+            .lock()
+            .map_err(mutex_error)?
+            .insert(task_id.to_string(), child.clone());
+    }
+
+    let status = wait_for_child(&child);
+    if let Some(task_id) = task_id.as_ref().filter(|value| !value.trim().is_empty()) {
+        let _ = process_state
+            .children
+            .lock()
+            .map_err(mutex_error)
+            .map(|mut children| children.remove(task_id));
+    }
+    let status = status?;
+    let stdout = stdout_thread
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default();
+    let stderr = stderr_thread
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default();
+
+    Ok(ScheduledActionOutput {
+        exit_code: status.code(),
+        stdout,
+        stderr,
+    })
+}
+
+#[cfg(desktop)]
 #[tauri::command]
 async fn run_scheduled_action(
     app: AppHandle,
+    process_state: State<'_, Arc<SchedulerProcessState>>,
+    task_id: Option<String>,
     action: ScheduledActionCommand,
     runtimes: HashMap<String, String>,
 ) -> Result<ScheduledActionOutput, String> {
+    let process_state = process_state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let (mut command, temp_file) = build_scheduled_command(&app, &action, &runtimes)?;
-        let output = command.output().map_err(|error| error.to_string());
+        let (command, temp_file) = build_scheduled_command(&app, &action, &runtimes)?;
+        let output = run_cancellable_command(command, process_state, task_id);
         if let Some(path) = temp_file {
             let _ = fs::remove_file(path);
         }
-        let output = output?;
-        Ok(ScheduledActionOutput {
-            exit_code: output.status.code(),
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        })
+        output
     })
     .await
     .map_err(|error| error.to_string())?
 }
 
+#[cfg(desktop)]
+#[tauri::command]
+fn stop_scheduled_action(
+    process_state: State<'_, Arc<SchedulerProcessState>>,
+    task_id: String,
+) -> Result<(), String> {
+    let child = process_state
+        .children
+        .lock()
+        .map_err(mutex_error)?
+        .get(task_id.trim())
+        .cloned();
+    if let Some(child) = child {
+        child
+            .lock()
+            .map_err(mutex_error)?
+            .kill()
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 #[cfg(not(desktop))]
 #[tauri::command]
 async fn run_scheduled_action(
+    _task_id: Option<String>,
     _action: ScheduledActionCommand,
     _runtimes: HashMap<String, String>,
 ) -> Result<ScheduledActionOutput, String> {
     Err("Scheduled task execution is not supported on mobile".to_string())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+fn stop_scheduled_action(_task_id: String) -> Result<(), String> {
+    Ok(())
 }
 
 #[tauri::command]
@@ -839,6 +1407,21 @@ fn shortcut_from_string(raw: &str) -> Result<Shortcut, String> {
 }
 
 #[cfg(desktop)]
+fn toggle_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let visible = window.is_visible().unwrap_or(false);
+        let minimized = window.is_minimized().unwrap_or(false);
+        if visible && !minimized {
+            let _ = window.hide();
+        } else {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    }
+}
+
+#[cfg(desktop)]
 fn register_global_toggle(app: &AppHandle, raw: &str) -> Result<(), String> {
     let shortcut = shortcut_from_string(raw)?;
     app.global_shortcut()
@@ -852,14 +1435,7 @@ fn register_global_toggle(app: &AppHandle, raw: &str) -> Result<(), String> {
                 return;
             }
 
-            if let Some(window) = app_handle.get_webview_window("main") {
-                if window.is_visible().unwrap_or(true) {
-                    let _ = window.hide();
-                } else {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
-            }
+            toggle_main_window(&app_handle);
         })
         .map_err(|error| error.to_string())
 }
@@ -1049,22 +1625,59 @@ fn open_url(app: AppHandle, url: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(desktop)]
+    let cli_action = {
+        let args = env::args().skip(1).collect::<Vec<_>>();
+        parse_cli_action(&args)
+    };
+    #[cfg(desktop)]
+    {
+        match &cli_action {
+            CliAction::Help(message) => {
+                print_cli_text(message);
+                std::process::exit(0);
+            }
+            CliAction::Error(message) => {
+                print_cli_text(message);
+                std::process::exit(2);
+            }
+            CliAction::Gui | CliAction::Notify(_) => {}
+        }
+    }
+    #[cfg(desktop)]
+    let is_cli_notify = matches!(cli_action, CliAction::Notify(_));
+
     let builder = tauri::Builder::default().manage(LifecycleState::default());
 
     #[cfg(desktop)]
-    let builder = builder
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            show_main_window(app);
-        }))
-        .plugin(tauri_plugin_window_state::Builder::default().build())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_autostart::init(
-            MacosLauncher::LaunchAgent,
-            Some(vec!["--from-autostart"]),
-        ));
+    let builder = builder.manage(Arc::new(SchedulerProcessState::default()));
+
+    #[cfg(desktop)]
+    let builder = if is_cli_notify {
+        builder
+    } else {
+        builder
+            .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+                toggle_main_window(app);
+            }))
+            .plugin(tauri_plugin_window_state::Builder::default().build())
+            .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+            .plugin(tauri_plugin_autostart::init(
+                MacosLauncher::LaunchAgent,
+                None,
+            ))
+    };
 
     #[cfg(not(desktop))]
     let builder = builder.plugin(tauri_plugin_opener::init());
+
+    let mut context = tauri::generate_context!();
+    #[cfg(desktop)]
+    if is_cli_notify {
+        for window in &mut context.config_mut().app.windows {
+            window.create = false;
+        }
+    }
 
     builder
         .plugin(tauri_plugin_dialog::init())
@@ -1077,6 +1690,7 @@ pub fn run() {
             save_scheduler,
             resolve_executor_paths,
             run_scheduled_action,
+            stop_scheduled_action,
             export_data,
             save_background_image,
             load_background_image,
@@ -1091,6 +1705,8 @@ pub fn run() {
             delete_node_images,
             md_image_path,
             save_md_image_data,
+            send_notification,
+            close_notification_window,
             register_global_shortcut,
             set_close_to_tray,
             set_autostart,
@@ -1098,12 +1714,18 @@ pub fn run() {
             set_webview_zoom,
             open_url
         ])
-        .setup(|app| {
+        .setup(move |app| {
             ensure_storage_layout(app.handle()).map_err(|error| {
                 tauri::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, error))
             })?;
             #[cfg(desktop)]
             {
+                if let CliAction::Notify(notification) = cli_action.clone() {
+                    show_notification_window(app.handle(), notification).map_err(|error| {
+                        tauri::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, error))
+                    })?;
+                    return Ok(());
+                }
                 if let Some(webview) = app.get_webview_window("main") {
                     let _ = webview.set_zoom(1.0);
                 }
@@ -1112,10 +1734,24 @@ pub fn run() {
             }
             Ok(())
         })
-        .on_window_event(|window, event| {
+        .on_window_event(move |window, event| {
+            #[cfg(desktop)]
+            {
+                if window.label().starts_with("notification-") {
+                    if let tauri::WindowEvent::CloseRequested { .. } = event {
+                        if is_cli_notify {
+                            window.app_handle().exit(0);
+                        }
+                    }
+                    return;
+                }
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 #[cfg(desktop)]
                 {
+                    if window.label() != "main" {
+                        return;
+                    }
                     let lifecycle = window.state::<LifecycleState>();
                     if lifecycle.quitting.load(Ordering::SeqCst)
                         || !lifecycle.close_to_tray.load(Ordering::SeqCst)
@@ -1134,6 +1770,6 @@ pub fn run() {
                 }
             }
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("failed to run KXToDo");
 }

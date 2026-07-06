@@ -1,13 +1,14 @@
 import { get } from "svelte/store";
-import { isTauriRuntime, runScheduledAction } from "./backend";
-import { appState, commitScheduler, now, showToast } from "./stores";
-import type { ScheduledTask, SchedulerCondition, SchedulerState } from "./types";
+import { isTauriRuntime, runScheduledAction, stopScheduledAction, type ScheduledActionOutput } from "./backend";
+import { appState, commitScheduler, now, showNotification, showToast } from "./stores";
+import type { AppNotification, ScheduledTask, ScheduledTaskAction, SchedulerCondition, SchedulerState } from "./types";
 
 const MIN_DELAY_MS = 1_000;
 const MAX_DELAY_MS = 60_000;
 const MAX_CRON_SCAN_MINUTES = 366 * 24 * 60;
 
 const running = new Set<string>();
+const cancellationRequested = new Set<string>();
 const lastProbeAt = new Map<string, number>();
 let timer: number | undefined;
 let unsubscribeState: (() => void) | undefined;
@@ -31,6 +32,15 @@ export function stopSchedulerRuntime(): void {
   unsubscribeState?.();
   unsubscribeState = undefined;
   rescheduleQueued = false;
+}
+
+export function stopScheduledTask(taskId: string, message = "用户已终止任务"): void {
+  cancellationRequested.add(taskId);
+  void stopScheduledAction(taskId).catch((error) => {
+    showToast(`终止定时任务失败：${String(error)}`);
+  });
+  stopTask(taskId, message);
+  queueReschedule();
 }
 
 function queueReschedule(): void {
@@ -162,9 +172,13 @@ function isConditionProbeDue(task: ScheduledTask, current: Date): boolean {
 
 async function runMainAction(task: ScheduledTask): Promise<void> {
   running.add(task.id);
+  cancellationRequested.delete(task.id);
   markTaskRunning(task.id);
   try {
-    const output = await runScheduledAction(task.action, get(appState).scheduler.runtimes);
+    const output = await executeTaskAction(task, task.action);
+    if (isTaskCancellationCurrent(task.id)) {
+      return;
+    }
     const timestamp = now();
     const shouldStopByStdout = task.trigger.type === "interval" && conditionMatches(task.trigger.stopCondition, output.stdout);
     const nextRunCount = task.runCount + 1;
@@ -188,6 +202,9 @@ async function runMainAction(task: ScheduledTask): Promise<void> {
         : item)
     }));
   } catch (error) {
+    if (isTaskCancellationCurrent(task.id)) {
+      return;
+    }
     const timestamp = now();
     updateTask(task.id, {
       lastRunAt: timestamp,
@@ -198,16 +215,21 @@ async function runMainAction(task: ScheduledTask): Promise<void> {
     showToast(`定时任务执行失败：${task.name}`);
   } finally {
     running.delete(task.id);
+    cancellationRequested.delete(task.id);
     queueReschedule();
   }
 }
 
 async function probeAndMaybeRun(task: ScheduledTask): Promise<void> {
   running.add(task.id);
+  cancellationRequested.delete(task.id);
   markTaskRunning(task.id);
   lastProbeAt.set(task.id, Date.now());
   try {
-    const probe = await runScheduledAction(task.trigger.probeAction, get(appState).scheduler.runtimes);
+    const probe = await runScheduledAction(task.trigger.probeAction, get(appState).scheduler.runtimes, task.id);
+    if (isTaskCancellationCurrent(task.id)) {
+      return;
+    }
     if (!conditionMatches(task.trigger.probeCondition, probe.stdout)) {
       updateTask(task.id, {
         lastStatus: "idle",
@@ -219,7 +241,10 @@ async function probeAndMaybeRun(task: ScheduledTask): Promise<void> {
       return;
     }
 
-    const output = await runScheduledAction(task.action, get(appState).scheduler.runtimes);
+    const output = await executeTaskAction(task, task.action);
+    if (isTaskCancellationCurrent(task.id)) {
+      return;
+    }
     const timestamp = now();
     updateTask(task.id, {
       enabled: false,
@@ -233,6 +258,9 @@ async function probeAndMaybeRun(task: ScheduledTask): Promise<void> {
       updatedAt: timestamp
     });
   } catch (error) {
+    if (isTaskCancellationCurrent(task.id)) {
+      return;
+    }
     updateTask(task.id, {
       lastStatus: "failed",
       lastStderr: String(error),
@@ -241,8 +269,70 @@ async function probeAndMaybeRun(task: ScheduledTask): Promise<void> {
     showToast(`条件定时任务执行失败：${task.name}`);
   } finally {
     running.delete(task.id);
+    cancellationRequested.delete(task.id);
     queueReschedule();
   }
+}
+
+async function executeTaskAction(task: ScheduledTask, action: ScheduledTaskAction): Promise<ScheduledActionOutput> {
+  if (action.type === "notification") {
+    await dispatchNotification(task, action.notification, {
+      stdout: "",
+      stderr: "",
+      exitCode: ""
+    });
+    return { exitCode: 0, stdout: "", stderr: "" };
+  }
+
+  const output = await runScheduledAction(action, get(appState).scheduler.runtimes, task.id);
+  await dispatchActionNotifications(task, action, output);
+  return output;
+}
+
+function isTaskCancellationCurrent(taskId: string): boolean {
+  if (cancellationRequested.has(taskId)) {
+    return true;
+  }
+  const task = get(appState).scheduler.tasks.find((item) => item.id === taskId);
+  return task?.lastStatus === "stopped" && !task.enabled;
+}
+
+async function dispatchActionNotifications(task: ScheduledTask, action: ScheduledTaskAction, output: ScheduledActionOutput): Promise<void> {
+  const replacements = {
+    stdout: output.stdout,
+    stderr: output.stderr,
+    exitCode: output.exitCode === null ? "" : String(output.exitCode)
+  };
+  if (action.notifyOnComplete) {
+    await dispatchNotification(task, action.completionNotification, replacements);
+  }
+  if (action.stdoutNotification.enabled && conditionMatches(action.stdoutNotification.condition, output.stdout)) {
+    await dispatchNotification(task, action.stdoutNotification.notification, replacements);
+  }
+}
+
+async function dispatchNotification(
+  task: ScheduledTask,
+  notification: AppNotification,
+  replacements: { stdout: string; stderr: string; exitCode: string }
+): Promise<void> {
+  await showNotification(renderNotificationText(notification.message, task, replacements), {
+    title: renderNotificationText(notification.title, task, replacements),
+    tone: notification.tone,
+    durationMs: notification.durationMs
+  });
+}
+
+function renderNotificationText(
+  template: string,
+  task: ScheduledTask,
+  replacements: { stdout: string; stderr: string; exitCode: string }
+): string {
+  return template
+    .replaceAll("{stdout}", replacements.stdout)
+    .replaceAll("{stderr}", replacements.stderr)
+    .replaceAll("{exitCode}", replacements.exitCode)
+    .replaceAll("{taskName}", task.name);
 }
 
 function updateTask(taskId: string, patch: Partial<ScheduledTask>): void {

@@ -2,6 +2,9 @@ import type {
   AppNode,
   AppState,
   ListBackground,
+  AppNotification,
+  NotificationPosition,
+  NotificationTone,
   ScheduledTask,
   ScheduledTaskAction,
   ScheduledTaskTrigger,
@@ -64,6 +67,10 @@ export const defaultSettings: Settings = {
     closeToTray: true,
     launchAtStartup: false
   },
+  notifications: {
+    durationMs: 5200,
+    position: "bottom-right"
+  },
   shortcuts: {
     newTask: "Ctrl+N",
     focusSearch: "Ctrl+F",
@@ -95,6 +102,15 @@ export function defaultSchedulerCondition(enabled = false): SchedulerCondition {
   };
 }
 
+export function defaultAppNotification(message = "定时任务已触发", tone: NotificationTone = "info"): AppNotification {
+  return {
+    title: "KXToDo",
+    message,
+    durationMs: defaultSettings.notifications.durationMs,
+    tone
+  };
+}
+
 export function defaultScheduledTaskAction(language: ScheduledTaskAction["language"] = "python"): ScheduledTaskAction {
   return {
     type: "script",
@@ -105,7 +121,15 @@ export function defaultScheduledTaskAction(language: ScheduledTaskAction["langua
     code: language === "python" ? "print(\"hello from KXToDo\")" : "",
     executablePath: "",
     arguments: "",
-    workingDirectory: ""
+    workingDirectory: "",
+    notification: defaultAppNotification("定时任务已触发", "info"),
+    notifyOnComplete: false,
+    completionNotification: defaultAppNotification("任务 {taskName} 执行完成\n{stdout}", "success"),
+    stdoutNotification: {
+      enabled: false,
+      condition: defaultSchedulerCondition(false),
+      notification: defaultAppNotification("stdout 匹配成功：\n{stdout}", "info")
+    }
   };
 }
 
@@ -265,6 +289,31 @@ function normalizeSchedulerCondition(raw: unknown, fallbackEnabled = false): Sch
   };
 }
 
+function normalizeNotificationTone(raw: unknown, fallback: NotificationTone): NotificationTone {
+  return raw === "success" || raw === "warning" || raw === "error" || raw === "info" ? raw : fallback;
+}
+
+function normalizeNotificationPosition(raw: unknown, fallback: NotificationPosition): NotificationPosition {
+  return raw === "top-right" || raw === "bottom-left" || raw === "top-left" || raw === "bottom-right" ? raw : fallback;
+}
+
+function normalizeNotificationDuration(raw: unknown, fallback: number): number {
+  return typeof raw === "number" && Number.isFinite(raw)
+    ? Math.min(60_000, Math.max(1_200, Math.round(raw)))
+    : fallback;
+}
+
+function normalizeAppNotification(raw: unknown, fallback: AppNotification): AppNotification {
+  const source = raw as Partial<AppNotification> | undefined;
+  return {
+    title: typeof source?.title === "string" && source.title.trim() ? source.title.trim().slice(0, 80) : fallback.title,
+    message: typeof source?.message === "string" && source.message.trim() ? source.message : fallback.message,
+    durationMs: normalizeNotificationDuration(source?.durationMs, fallback.durationMs),
+    tone: normalizeNotificationTone(source?.tone, fallback.tone),
+    position: source?.position ? normalizeNotificationPosition(source.position, defaultSettings.notifications.position) : undefined
+  };
+}
+
 function normalizeScheduledAction(raw: unknown, fallbackLanguage: ScheduledTaskAction["language"] = "python"): ScheduledTaskAction {
   const source = raw as Partial<ScheduledTaskAction> | undefined;
   const language =
@@ -276,8 +325,9 @@ function normalizeScheduledAction(raw: unknown, fallbackLanguage: ScheduledTaskA
     source?.language === "python"
       ? source.language
       : fallbackLanguage;
+  const defaultAction = defaultScheduledTaskAction(language);
   return {
-    type: source?.type === "executable" ? "executable" : "script",
+    type: source?.type === "executable" || source?.type === "notification" ? source.type : "script",
     scriptMode: source?.scriptMode === "path" ? "path" : "inline",
     language,
     interpreter: typeof source?.interpreter === "string" ? source.interpreter : "",
@@ -285,7 +335,15 @@ function normalizeScheduledAction(raw: unknown, fallbackLanguage: ScheduledTaskA
     code: typeof source?.code === "string" ? source.code : (language === "python" ? "print(\"hello from KXToDo\")" : ""),
     executablePath: typeof source?.executablePath === "string" ? source.executablePath : "",
     arguments: typeof source?.arguments === "string" ? source.arguments : "",
-    workingDirectory: typeof source?.workingDirectory === "string" ? source.workingDirectory : ""
+    workingDirectory: typeof source?.workingDirectory === "string" ? source.workingDirectory : "",
+    notification: normalizeAppNotification(source?.notification, defaultAction.notification),
+    notifyOnComplete: Boolean(source?.notifyOnComplete),
+    completionNotification: normalizeAppNotification(source?.completionNotification, defaultAction.completionNotification),
+    stdoutNotification: {
+      enabled: Boolean(source?.stdoutNotification?.enabled),
+      condition: normalizeSchedulerCondition(source?.stdoutNotification?.condition, false),
+      notification: normalizeAppNotification(source?.stdoutNotification?.notification, defaultAction.stdoutNotification.notification)
+    }
   };
 }
 
@@ -420,8 +478,9 @@ export function normalizeSettings(raw: unknown): Settings {
     profile?: Partial<Settings["profile"]> & { name?: string };
     appearance?: Partial<Settings["appearance"]>;
     lifecycle?: Partial<Settings["lifecycle"]>;
+    notifications?: Partial<Settings["notifications"]>;
     behavior?: Partial<{ linkOpenMode: Settings["appearance"]["linkOpenMode"] }>;
-    display?: Partial<{ uiScale: number; closeToTray: boolean; launchAtStartup: boolean }>;
+    display?: Partial<{ uiScale: number; closeToTray: boolean; launchAtStartup: boolean; notificationDurationMs: number }>;
     globalShortcut?: string;
     shortcuts?: Partial<Settings["shortcuts"]> | Array<{ id: string; combo: string }>;
     cloudSync?: Partial<Settings["cloud"]>;
@@ -509,6 +568,13 @@ export function normalizeSettings(raw: unknown): Settings {
           : typeof source?.display?.launchAtStartup === "boolean"
             ? source.display.launchAtStartup
             : defaultSettings.lifecycle.launchAtStartup
+    },
+    notifications: {
+      durationMs: normalizeNotificationDuration(
+        source?.notifications?.durationMs ?? source?.display?.notificationDurationMs,
+        defaultSettings.notifications.durationMs
+      ),
+      position: normalizeNotificationPosition(source?.notifications?.position, defaultSettings.notifications.position)
     },
     shortcuts: {
       newTask: shortcutValue("newTask", defaultSettings.shortcuts.newTask),

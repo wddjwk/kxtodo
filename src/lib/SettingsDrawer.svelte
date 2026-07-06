@@ -1,6 +1,6 @@
 <script lang="ts">
   import {
-    appSettings, commitSettings, showSettings, showToast, fileToDataUrl
+    appSettings, commitSettings, showSettings, showToast, showNotification, fileToDataUrl
   } from "./stores";
   import {
     uiScaleValue, scalePercentValue, clampNumber, isNumberInRange,
@@ -16,6 +16,13 @@
   import type { Settings } from "./types";
 
   let avatarFileInput: HTMLInputElement;
+
+  const notificationPositionOptions: Array<{ value: Settings["notifications"]["position"]; label: string }> = [
+    { value: "bottom-right", label: "右下角" },
+    { value: "top-right", label: "右上角" },
+    { value: "bottom-left", label: "左下角" },
+    { value: "top-left", label: "左上角" }
+  ];
 
   $: drawerStyle = buildSettingsDrawerStyle($appSettings.appearance);
   $: resolvedAvatar = resolveAvatarSrc($appSettings.profile.avatar, $avatarCache);
@@ -33,6 +40,13 @@
     commitSettings({
       ...$appSettings,
       appearance: { ...$appSettings.appearance, [field]: value }
+    });
+  }
+
+  function updateNotifications<K extends keyof Settings["notifications"]>(field: K, value: Settings["notifications"][K]): void {
+    commitSettings({
+      ...$appSettings,
+      notifications: { ...$appSettings.notifications, [field]: value }
     });
   }
 
@@ -58,6 +72,23 @@
     const fallback = defaultSettings.appearance[field];
     const nextSize = clampNumber(value, fallback, 14, field === "uiFontSize" ? 22 : 26);
     updateAppearance(field, nextSize);
+  }
+
+  function updateNotificationDuration(value: number): void {
+    if (isNumberInRange(value, 1200, 60000)) {
+      updateNotifications("durationMs", Math.round(value));
+    }
+  }
+
+  function commitNotificationDuration(value: number): void {
+    updateNotifications("durationMs", clampNumber(value, defaultSettings.notifications.durationMs, 1200, 60000));
+  }
+
+  function testNotification(): void {
+    void showNotification("这是一条测试消息，会按当前时长自动隐藏。", {
+      title: "KXToDo 通知",
+      tone: "success"
+    });
   }
 
   async function updateLifecycle<K extends keyof Settings["lifecycle"]>(field: K, value: Settings["lifecycle"][K]): Promise<void> {
@@ -251,6 +282,39 @@
       />
     </label>
     <p class="muted">托盘图标右键菜单可打开窗口或退出应用；再次启动程序会聚焦已运行窗口。</p>
+  </section>
+
+  <section>
+    <h3>消息通知</h3>
+    <div class="settings-row number-row">
+      <span>自动隐藏</span>
+      <span class="number-control">
+        <input
+          aria-label="通知自动隐藏时长"
+          type="number"
+          min="1200"
+          max="60000"
+          step="100"
+          value={$appSettings.notifications.durationMs}
+          on:input={(event) => updateNotificationDuration(event.currentTarget.valueAsNumber)}
+          on:change={(event) => commitNotificationDuration(event.currentTarget.valueAsNumber)}
+        />
+        <span>ms</span>
+      </span>
+    </div>
+    <div class="settings-row">
+      <span>弹窗位置</span>
+      <Dropdown
+        ariaLabel="通知弹窗位置"
+        value={$appSettings.notifications.position}
+        options={notificationPositionOptions}
+        on:change={(event) => updateNotifications("position", event.detail as Settings["notifications"]["position"])}
+      />
+    </div>
+    <div class="notification-setting-card">
+      <span>通知会以独立悬浮小窗展示，适用于命令行 notify 和定时任务。</span>
+      <button type="button" on:click={testNotification}>发送测试通知</button>
+    </div>
   </section>
 
   <section>

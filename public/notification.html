@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>KXToDo 通知</title>
+    <style>
+      :root {
+        --tone: #2564cf;
+        --tone-soft: #eaf1ff;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: transparent;
+        font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+      }
+
+      body {
+        padding: 0;
+      }
+
+      .card {
+        position: relative;
+        display: grid;
+        grid-template-columns: 38px minmax(0, 1fr) 24px;
+        gap: 12px;
+        width: 100%;
+        height: 100vh;
+        overflow: hidden;
+        border: 1px solid rgb(33 50 70 / 9%);
+        border-radius: 10px;
+        background:
+          linear-gradient(135deg, rgb(255 255 255 / 98%), rgb(248 251 254 / 96%)),
+          radial-gradient(circle at 8% 0%, color-mix(in srgb, var(--tone) 12%, transparent), transparent 38%);
+        box-shadow: 0 12px 26px rgb(20 35 60 / 16%), 0 1px 4px rgb(20 35 60 / 8%);
+        padding: 13px 14px;
+        align-items: start;
+      }
+
+      .icon {
+        display: grid;
+        width: 38px;
+        height: 38px;
+        place-items: center;
+        overflow: hidden;
+        border-radius: 9px;
+        background: #ffffff;
+        box-shadow: inset 0 0 0 1px rgb(0 0 0 / 7%);
+      }
+
+      .icon img {
+        display: block;
+        width: 30px;
+        height: 30px;
+        object-fit: contain;
+      }
+
+      .content {
+        min-width: 0;
+        padding-top: 1px;
+      }
+
+      .title {
+        overflow: hidden;
+        color: #1f2933;
+        font-size: 15px;
+        font-weight: 800;
+        line-height: 1.35;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .message {
+        display: -webkit-box;
+        overflow: hidden;
+        margin-top: 4px;
+        color: #556170;
+        font-size: 13px;
+        line-height: 1.38;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        white-space: pre-wrap;
+      }
+
+      .close {
+        display: grid;
+        width: 24px;
+        height: 24px;
+        place-items: center;
+        border: 0;
+        border-radius: 8px;
+        background: transparent;
+        color: #8b95a1;
+        cursor: pointer;
+        font-size: 18px;
+        line-height: 1;
+      }
+
+      .close:hover {
+        background: rgb(0 0 0 / 6%);
+        color: #3f4752;
+      }
+
+      .card.success {
+        --tone: #167544;
+        --tone-soft: #e7f5ed;
+      }
+
+      .card.warning {
+        --tone: #a15c00;
+        --tone-soft: #fff3da;
+      }
+
+      .card.error {
+        --tone: #b3261e;
+        --tone-soft: #fff0ed;
+      }
+
+    </style>
+  </head>
+  <body>
+    <article class="card info" id="card">
+      <div class="icon"><img src="logo.png" alt="" /></div>
+      <div class="content">
+        <div class="title" id="title">KXToDo</div>
+        <div class="message" id="message">通知</div>
+      </div>
+      <button class="close" type="button" aria-label="关闭通知" id="close">×</button>
+    </article>
+
+    <script>
+      function decodePayload() {
+        const encoded = new URLSearchParams(location.search).get("payload");
+        if (!encoded) return {};
+        const base64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
+        const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+        const bytes = Uint8Array.from(atob(padded), (char) => char.charCodeAt(0));
+        return JSON.parse(new TextDecoder().decode(bytes));
+      }
+
+      const payload = decodePayload();
+      const tone = ["info", "success", "warning", "error"].includes(payload.tone) ? payload.tone : "info";
+      const cardElement = document.getElementById("card");
+      const titleElement = document.getElementById("title");
+      const messageElement = document.getElementById("message");
+      const closeButton = document.getElementById("close");
+
+      cardElement.className = `card ${tone}`;
+      titleElement.textContent = payload.title || "KXToDo";
+      messageElement.textContent = payload.message || "通知";
+
+      function invokeCommand(command, args = {}) {
+        const invoke = window.__TAURI_INTERNALS__?.invoke;
+        if (invoke) {
+          return invoke(command, args);
+        }
+        return Promise.reject(new Error("Tauri IPC is unavailable"));
+      }
+
+      function closeNotification() {
+        if (timeoutId !== undefined) {
+          window.clearTimeout(timeoutId);
+          timeoutId = undefined;
+        }
+        invokeCommand("close_notification_window").catch(() => window.close());
+      }
+
+      closeButton.addEventListener("click", closeNotification);
+
+      const durationMs = Math.min(60000, Math.max(1200, Number(payload.durationMs) || 5200));
+      let timeoutId = window.setTimeout(closeNotification, durationMs);
+
+      cardElement.addEventListener("mouseenter", () => {
+        if (timeoutId !== undefined) {
+          window.clearTimeout(timeoutId);
+          timeoutId = undefined;
+        }
+      });
+      cardElement.addEventListener("mouseleave", () => {
+        if (timeoutId === undefined) {
+          timeoutId = window.setTimeout(closeNotification, durationMs);
+        }
+      });
+    </script>
+  </body>
+</html>

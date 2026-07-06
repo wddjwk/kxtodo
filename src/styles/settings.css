@@ -148,6 +148,32 @@
   padding: 12px;
 }
 
+.notification-setting-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid #e7edf3;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #fbfdff, #f4f8fc);
+  color: #536171;
+  padding: 12px;
+  line-height: 1.5;
+}
+
+.notification-setting-card button {
+  border: 1px solid color-mix(in srgb, var(--accent, #2564cf) 24%, #dfe7f1);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--accent, #2564cf);
+  padding: 8px 12px;
+  font-weight: 700;
+}
+
+.notification-setting-card button:hover {
+  background: color-mix(in srgb, var(--accent, #2564cf) 10%, white);
+}
+
 /* Custom dropdown (matches right-click menu style) */
 .dropdown {
   position: relative;

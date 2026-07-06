@@ -52,6 +52,10 @@ export type Settings = {
     closeToTray: boolean;
     launchAtStartup: boolean;
   };
+  notifications: {
+    durationMs: number;
+    position: NotificationPosition;
+  };
   shortcuts: {
     newTask: string;
     focusSearch: string;
@@ -83,8 +87,25 @@ export type SchedulerCondition = {
 
 export type SchedulerScriptLanguage = "python" | "javascript" | "powershell" | "bash" | "makefile" | "custom";
 
+export type NotificationTone = "info" | "success" | "warning" | "error";
+export type NotificationPosition = "bottom-right" | "top-right" | "bottom-left" | "top-left";
+
+export type AppNotification = {
+  title: string;
+  message: string;
+  durationMs: number;
+  tone: NotificationTone;
+  position?: NotificationPosition;
+};
+
+export type SchedulerStdoutNotification = {
+  enabled: boolean;
+  condition: SchedulerCondition;
+  notification: AppNotification;
+};
+
 export type ScheduledTaskAction = {
-  type: "script" | "executable";
+  type: "script" | "executable" | "notification";
   scriptMode: "path" | "inline";
   language: SchedulerScriptLanguage;
   interpreter: string;
@@ -93,6 +114,10 @@ export type ScheduledTaskAction = {
   executablePath: string;
   arguments: string;
   workingDirectory: string;
+  notification: AppNotification;
+  notifyOnComplete: boolean;
+  completionNotification: AppNotification;
+  stdoutNotification: SchedulerStdoutNotification;
 };
 
 export type ScheduledTaskTrigger = {

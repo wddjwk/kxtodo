@@ -1,7 +1,7 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { defaultSettings, emptySchedulerState, emptyState, normalizeSchedulerState, normalizeSettings, normalizeState } from "./defaults";
-import type { AppState, ScheduledTaskAction, SchedulerRuntimePaths, SchedulerState, Settings } from "./types";
+import type { AppNotification, AppState, ScheduledTaskAction, SchedulerRuntimePaths, SchedulerState, Settings } from "./types";
 
 const stateKey = "todo-note-state-v3";
 const settingsKey = "todo-note-settings-v3";
@@ -85,11 +85,25 @@ export async function resolveExecutorPaths(): Promise<SchedulerRuntimePaths> {
   return { ...empty, ...(await invoke<Partial<SchedulerRuntimePaths>>("resolve_executor_paths")) };
 }
 
-export async function runScheduledAction(action: ScheduledTaskAction, runtimes: SchedulerRuntimePaths): Promise<ScheduledActionOutput> {
+export async function runScheduledAction(action: ScheduledTaskAction, runtimes: SchedulerRuntimePaths, taskId?: string): Promise<ScheduledActionOutput> {
   if (!isTauriRuntime) {
     throw new Error("浏览器预览模式不支持执行定时任务");
   }
-  return invoke<ScheduledActionOutput>("run_scheduled_action", { action, runtimes });
+  return invoke<ScheduledActionOutput>("run_scheduled_action", { action, runtimes, taskId });
+}
+
+export async function stopScheduledAction(taskId: string): Promise<void> {
+  if (!isTauriRuntime) {
+    return;
+  }
+  await invoke("stop_scheduled_action", { taskId });
+}
+
+export async function sendNativeNotification(notification: AppNotification): Promise<void> {
+  if (!isTauriRuntime) {
+    return;
+  }
+  await invoke("send_notification", { notification });
 }
 
 export async function exportData(payload: unknown, defaultName: string): Promise<void> {

@@ -10,6 +10,7 @@
     schedulerRuntimeKeys
   } from "./defaults";
   import { pickExecutableFile, resolveExecutorPaths } from "./backend";
+  import { stopScheduledTask } from "./scheduler";
   import Dropdown from "./Dropdown.svelte";
   import SchedulerActionEditor from "./SchedulerActionEditor.svelte";
   import type {
@@ -46,7 +47,8 @@
 
   const actionTypeOptions: Array<{ value: ScheduledTaskAction["type"]; label: string }> = [
     { value: "script", label: "执行脚本" },
-    { value: "executable", label: "执行可执行文件" }
+    { value: "executable", label: "执行可执行文件" },
+    { value: "notification", label: "发送通知" }
   ];
 
   const conditionModeOptions: Array<{ value: SchedulerCondition["mode"]; label: string }> = [
@@ -141,7 +143,9 @@
       ...task,
       action: type === "script"
         ? { ...defaultScheduledTaskAction(task.action.language), type: "script" }
-        : { ...task.action, type: "executable" }
+        : type === "notification"
+          ? { ...task.action, type: "notification" }
+          : { ...task.action, type: "executable" }
     }));
   }
 
@@ -158,13 +162,17 @@
   }
 
   function toggleEnabled(task: ScheduledTask): void {
+    if (task.enabled || task.lastStatus === "running") {
+      stopScheduledTask(task.id);
+      return;
+    }
     const enabled = !task.enabled;
     patchTask(task.id, {
       enabled,
       runCount: enabled ? 0 : task.runCount,
       lastRunAt: enabled ? undefined : task.lastRunAt,
       nextRunAt: enabled && task.trigger.type === "once" ? task.trigger.runAt : task.nextRunAt,
-      lastStatus: enabled ? "idle" : task.lastStatus
+      lastStatus: "idle"
     });
   }
 
@@ -286,6 +294,7 @@
   }
 
   function describeAction(action: ScheduledTaskAction): string {
+    if (action.type === "notification") return `通知 · ${action.notification.title || "KXToDo"}`;
     if (action.type === "executable") return action.executablePath || "可执行文件未配置";
     const source = action.scriptMode === "path" ? action.filePath || "脚本路径未配置" : "内联代码";
     return `${languageLabels[action.language]} · ${source}`;
@@ -475,6 +484,7 @@
               title="执行动作"
               action={task.action}
               placeholder={runtimePlaceholder(task.action.language)}
+              allowNotification={true}
               onPatch={(patch) => patchAction(task.id, patch)}
               onType={(type) => setActionType(task.id, type)}
               onLanguage={(language) => setActionLanguage(task.id, language)}

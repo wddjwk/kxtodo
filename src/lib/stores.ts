@@ -1,15 +1,15 @@
 import { writable, derived, get } from "svelte/store";
-import type { AppState, AppNode, SchedulerState, Settings } from "./types";
+import type { AppNotification, AppState, AppNode, NotificationTone, SchedulerState, Settings } from "./types";
 import { defaultSchedulerRuntimes, defaultSettings, emptyState, normalizeState, normalizeSettings, schedulerRuntimeKeys } from "./defaults";
 import {
   loadState, saveState, loadSettings, saveSettings, loadScheduler, saveScheduler,
   registerGlobalShortcut, setCloseToTray, setAutostart,
-  setWebviewZoom, isTauriRuntime, resolveExecutorPaths
+  setWebviewZoom, isTauriRuntime, resolveExecutorPaths, sendNativeNotification
 } from "./backend";
 import { buildListCounts, buildVisibleTasks, getBackground } from "./nodes";
 import { accentForNode, uiScaleValue } from "./styles";
 
-export const APP_VERSION = "8.1.1";
+export const APP_VERSION = "8.2.0";
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -73,10 +73,34 @@ export const searchQuery = writable("");
 export const toastMessage = writable("");
 let toastTimer: number | undefined;
 
-export function showToast(message: string): void {
+export function showToast(message: string, durationMs = 3200): void {
   toastMessage.set(message);
   window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => toastMessage.set(""), 3200);
+  toastTimer = window.setTimeout(() => toastMessage.set(""), durationMs);
+}
+
+export function showNotification(
+  message: string,
+  options: Partial<Omit<AppNotification, "message">> = {}
+): Promise<void> {
+  const settings = get(appSettings);
+  const notification: AppNotification = {
+    title: options.title?.trim() || "KXToDo",
+    message: message.trim() || "通知",
+    durationMs: Math.min(60_000, Math.max(1_200, Math.round(options.durationMs ?? settings.notifications.durationMs))),
+    tone: (options.tone ?? "info") as NotificationTone,
+    position: options.position ?? settings.notifications.position
+  };
+
+  if (!isTauriRuntime) {
+    showToast(`${notification.title}：${notification.message}`, notification.durationMs);
+    return Promise.resolve();
+  }
+
+  void sendNativeNotification(notification).catch((error) => {
+    showToast(`通知发送失败：${String(error)}`);
+  });
+  return Promise.resolve();
 }
 
 // ---------------------------------------------------------------------------
@@ -227,4 +251,13 @@ export async function hydrate(): Promise<void> {
 
   await syncNativeLifecycle(loadedSettings);
 }
+
+
+
+
+
+
+
+
+
 
