@@ -153,6 +153,12 @@
       titleElement.textContent = payload.title || "KXToDo";
       messageElement.textContent = payload.message || "通知";
       messageElement.title = payload.message || "通知";
+      if (payload.titleFontSize) {
+        titleElement.style.fontSize = payload.titleFontSize + "px";
+      }
+      if (payload.bodyFontSize) {
+        messageElement.style.fontSize = payload.bodyFontSize + "px";
+      }
 
       function invokeCommand(command, args = {}) {
         const invoke = window.__TAURI_INTERNALS__?.invoke;

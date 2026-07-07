@@ -72,7 +72,11 @@ export const defaultSettings: Settings = {
   },
   notifications: {
     durationMs: 3000,
-    position: "bottom-right"
+    position: "bottom-right",
+    width: 400,
+    height: 68,
+    titleFontSize: 14,
+    bodyFontSize: 12
   },
   shortcuts: {
     newTask: "Ctrl+N",
@@ -595,7 +599,15 @@ export function normalizeSettings(raw: unknown): Settings {
         source?.notifications?.durationMs ?? source?.display?.notificationDurationMs,
         defaultSettings.notifications.durationMs
       ),
-      position: normalizeNotificationPosition(source?.notifications?.position, defaultSettings.notifications.position)
+      position: normalizeNotificationPosition(source?.notifications?.position, defaultSettings.notifications.position),
+      width: typeof source?.notifications?.width === "number" && Number.isFinite(source.notifications.width)
+        ? Math.min(600, Math.max(280, Math.round(source.notifications.width))) : defaultSettings.notifications.width,
+      height: typeof source?.notifications?.height === "number" && Number.isFinite(source.notifications.height)
+        ? Math.min(200, Math.max(50, Math.round(source.notifications.height))) : defaultSettings.notifications.height,
+      titleFontSize: typeof source?.notifications?.titleFontSize === "number" && Number.isFinite(source.notifications.titleFontSize)
+        ? Math.min(24, Math.max(10, Math.round(source.notifications.titleFontSize))) : defaultSettings.notifications.titleFontSize,
+      bodyFontSize: typeof source?.notifications?.bodyFontSize === "number" && Number.isFinite(source.notifications.bodyFontSize)
+        ? Math.min(20, Math.max(8, Math.round(source.notifications.bodyFontSize))) : defaultSettings.notifications.bodyFontSize
     },
     shortcuts: {
       newTask: shortcutValue("newTask", defaultSettings.shortcuts.newTask),

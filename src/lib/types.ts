@@ -65,6 +65,10 @@ export type Settings = {
   notifications: {
     durationMs: number;
     position: NotificationPosition;
+    width: number;
+    height: number;
+    titleFontSize: number;
+    bodyFontSize: number;
   };
   shortcuts: {
     newTask: string;

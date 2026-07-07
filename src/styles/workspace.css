@@ -314,9 +314,9 @@ h1 {
 }
 
 .task-card.compact {
-  min-height: 60px;
-  padding-top: 13px;
-  padding-bottom: 13px;
+  min-height: 56px;
+  padding-top: 10px;
+  padding-bottom: 10px;
 }
 
 .task-title-grid {
@@ -1772,7 +1772,8 @@ h1 {
   gap: 4px;
   align-self: center;
   justify-self: end;
-  max-width: 280px;
+  justify-content: flex-end;
+  max-width: 460px;
 }
 
 .task-card.expanded .task-tags {

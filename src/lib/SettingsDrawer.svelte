@@ -329,6 +329,50 @@
         on:change={(event) => updateNotifications("position", event.detail as Settings["notifications"]["position"])}
       />
     </div>
+    <div class="settings-row number-row">
+      <span>弹窗宽度</span>
+      <span class="number-control">
+        <input aria-label="通知弹窗宽度" type="number" min="280" max="600" step="10"
+          value={$appSettings.notifications.width}
+          on:input={(event) => { const v = event.currentTarget.valueAsNumber; if (Number.isFinite(v)) updateNotifications("width", Math.min(600, Math.max(280, Math.round(v)))); }}
+          on:change={(event) => updateNotifications("width", clampNumber(event.currentTarget.valueAsNumber, defaultSettings.notifications.width, 280, 600))}
+        />
+        <span>px</span>
+      </span>
+    </div>
+    <div class="settings-row number-row">
+      <span>弹窗高度</span>
+      <span class="number-control">
+        <input aria-label="通知弹窗高度" type="number" min="50" max="200" step="2"
+          value={$appSettings.notifications.height}
+          on:input={(event) => { const v = event.currentTarget.valueAsNumber; if (Number.isFinite(v)) updateNotifications("height", Math.min(200, Math.max(50, Math.round(v)))); }}
+          on:change={(event) => updateNotifications("height", clampNumber(event.currentTarget.valueAsNumber, defaultSettings.notifications.height, 50, 200))}
+        />
+        <span>px</span>
+      </span>
+    </div>
+    <div class="settings-row number-row">
+      <span>标题字号</span>
+      <span class="number-control">
+        <input aria-label="通知标题字号" type="number" min="10" max="24" step="1"
+          value={$appSettings.notifications.titleFontSize}
+          on:input={(event) => { const v = event.currentTarget.valueAsNumber; if (Number.isFinite(v)) updateNotifications("titleFontSize", Math.min(24, Math.max(10, Math.round(v)))); }}
+          on:change={(event) => updateNotifications("titleFontSize", clampNumber(event.currentTarget.valueAsNumber, defaultSettings.notifications.titleFontSize, 10, 24))}
+        />
+        <span>px</span>
+      </span>
+    </div>
+    <div class="settings-row number-row">
+      <span>正文字号</span>
+      <span class="number-control">
+        <input aria-label="通知正文字号" type="number" min="8" max="20" step="1"
+          value={$appSettings.notifications.bodyFontSize}
+          on:input={(event) => { const v = event.currentTarget.valueAsNumber; if (Number.isFinite(v)) updateNotifications("bodyFontSize", Math.min(20, Math.max(8, Math.round(v)))); }}
+          on:change={(event) => updateNotifications("bodyFontSize", clampNumber(event.currentTarget.valueAsNumber, defaultSettings.notifications.bodyFontSize, 8, 20))}
+        />
+        <span>px</span>
+      </span>
+    </div>
     <div class="notification-setting-card">
       <span>通知会以独立悬浮小窗展示，适用于命令行 notify 和定时任务。</span>
       <button type="button" on:click={testNotification}>发送测试通知</button>

@@ -215,7 +215,7 @@
     if (!(link instanceof HTMLAnchorElement)) {
       return;
     }
-    if (linkOpenMode === "system") {
+    if (event.ctrlKey || event.metaKey || linkOpenMode === "system") {
       event.preventDefault();
       dispatch("openLink", link.href);
     }
@@ -285,7 +285,7 @@
           {@html fullHtml}
         </div>
       {:else}
-        <div class="markdown-body markdown-title-row">
+        <div class="markdown-body markdown-title-row" on:click={handleMarkdownClick}>
           {@html collapsedHtml}
         </div>
       {/if}

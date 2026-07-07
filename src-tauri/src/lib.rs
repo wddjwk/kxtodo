@@ -301,6 +301,10 @@ struct NotificationRequest {
     tone: String,
     #[serde(default)]
     position: String,
+    #[serde(default)]
+    title_font_size: f64,
+    #[serde(default)]
+    body_font_size: f64,
 }
 
 #[cfg(target_os = "windows")]
@@ -450,6 +454,21 @@ fn default_notification_position(app: &AppHandle) -> NotificationPosition {
         .unwrap_or(NotificationPosition::BottomRight)
 }
 
+fn notification_setting_f64(app: &AppHandle, field: &str, fallback: f64) -> f64 {
+    let Ok(path) = settings_file(app) else {
+        return fallback;
+    };
+    let Ok(value) = read_json(path) else {
+        return fallback;
+    };
+    value
+        .get("notifications")
+        .and_then(|item| item.get(field))
+        .and_then(Value::as_f64)
+        .filter(|v| *v > 0.0)
+        .unwrap_or(fallback)
+}
+
 fn normalize_notification(app: &AppHandle, notification: NotificationRequest) -> NotificationRequest {
     let title = notification.title.trim();
     let message = notification.message.trim();
@@ -491,6 +510,16 @@ fn normalize_notification(app: &AppHandle, notification: NotificationRequest) ->
                 NotificationPosition::BottomRight => "bottom-right",
             }
             .to_string()
+        },
+        title_font_size: if notification.title_font_size > 0.0 {
+            notification.title_font_size
+        } else {
+            notification_setting_f64(app, "titleFontSize", 14.0)
+        },
+        body_font_size: if notification.body_font_size > 0.0 {
+            notification.body_font_size
+        } else {
+            notification_setting_f64(app, "bodyFontSize", 12.0)
         },
     }
 }
@@ -539,8 +568,8 @@ fn show_notification_window(
     let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
     let url = WebviewUrl::App(format!("notification.html?payload={encoded}").into());
     let position_kind = parse_notification_position(&notification.position);
-    let width = 400.0;
-    let height = 68.0;
+    let width = notification_setting_f64(app, "width", 400.0);
+    let height = notification_setting_f64(app, "height", 68.0);
 
     let window = WebviewWindowBuilder::new(app, label.clone(), url)
         .title("KXToDo 通知")
@@ -711,6 +740,8 @@ fn parse_cli_notification(args: &[String]) -> Result<NotificationRequest, String
         duration_ms: 0,
         tone: "info".to_string(),
         position: String::new(),
+        title_font_size: 0.0,
+        body_font_size: 0.0,
     };
     let mut message_parts = Vec::new();
     let mut index = 1;
