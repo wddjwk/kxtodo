@@ -45,9 +45,7 @@ export const themePresets: ThemePreset[] = [
   { name: "石英灰",   color: "#e3e0d8" },
   { name: "鼠尾草",   color: "#d8dfd2" },
   { name: "贵族蓝灰", color: "#cfd9df" },
-  { name: "陶土玫瑰", color: "#e5d4cb" },
-  { name: "胡桃绒",   color: "#d2c5b6" },
-  { name: "夜幕墨蓝", color: "#29313a" }
+  { name: "陶土玫瑰", color: "#e5d4cb" }
 ];
 
 export const defaultSettings: Settings = {
@@ -297,6 +295,7 @@ function normalizeTask(raw: unknown, fallbackNodeId: string): Task | null {
     dueDate: typeof source.dueDate === "string" ? source.dueDate : undefined,
     completedAt: typeof source.completedAt === "string" ? source.completedAt : source.completed ? (typeof source.updatedAt === "string" ? source.updatedAt : now()) : undefined,
     tags: normalizeTags(source.tags),
+    emoji: typeof source.emoji === "string" && source.emoji ? source.emoji : undefined,
     expanded: Boolean(source.expanded),
     editing: Boolean(source.editing),
     createdAt: typeof source.createdAt === "string" ? source.createdAt : now(),

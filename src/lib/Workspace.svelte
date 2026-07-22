@@ -3,7 +3,7 @@
   import {
     ArrowLeft, ArrowUpDown, Calendar, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
     ChevronsDown, ChevronsUp, Download, Eraser, FolderInput, Image,
-    Lightbulb, MoreHorizontal, Palette, PenLine, Plus, Search, Settings as SettingsIcon, Star, Sun, Tag, Trash2, Upload
+    Lightbulb, MoreHorizontal, Palette, PenLine, Plus, RotateCcw, Search, Settings as SettingsIcon, SmilePlus, Star, Sun, Tag, Trash2, Upload, X
   } from "@lucide/svelte";
   import {
     appState, appSettings, commit, commitScheduler, commitSettings, showToast,
@@ -21,6 +21,7 @@
     mdImageCache, resolveMarkdownImages, primeMdImageCache
   } from "./images";
   import IconGlyph from "./IconGlyph.svelte";
+  import IconPicker from "./IconPicker.svelte";
   import TaskCard from "./TaskCard.svelte";
   import ScheduledTasksView from "./ScheduledTasksView.svelte";
   import DatePicker from "./DatePicker.svelte";
@@ -69,6 +70,9 @@
   let editingPresetIndex: number | null = null;
   let presetNameDraft = "";
   let presetColorDraft = "";
+  let linkPreviewUrl = "";
+  let emojiPickerTaskId = "";
+  let presetEditOriginalColor = "";
 
   // Calendar state
   let calViewMode: "month" | "week" = "month";
@@ -222,6 +226,8 @@
     cancelPresetEdit();
     schedulerViewRef?.closeOverlays();
     taskMenu = null;
+    linkPreviewUrl = "";
+    emojiPickerTaskId = "";
   }
 
   export function focusComposer(): void {
@@ -539,12 +545,17 @@
     editingPresetIndex = index;
     presetNameDraft = preset.name;
     presetColorDraft = preset.color;
+    presetEditOriginalColor = $selectedBackground.color;
   }
 
   function cancelPresetEdit(): void {
+    if (editingPresetIndex !== null && presetEditOriginalColor) {
+      setBackground({ color: presetEditOriginalColor });
+    }
     editingPresetIndex = null;
     presetNameDraft = "";
     presetColorDraft = "";
+    presetEditOriginalColor = "";
   }
 
   function normalizeHexColor(value: string, fallback: string): string {
@@ -563,6 +574,10 @@
     const target = event.currentTarget;
     if (target instanceof HTMLInputElement) {
       presetColorDraft = target.value;
+      const validColor = normalizeHexColor(target.value, "");
+      if (validColor) {
+        setBackground({ color: validColor });
+      }
     }
   }
 
@@ -571,9 +586,10 @@
     const presets = currentThemePresets().map((preset) => ({ ...preset }));
     const current = presets[editingPresetIndex];
     if (!current) return;
+    const finalColor = normalizeHexColor(presetColorDraft, current.color);
     presets[editingPresetIndex] = {
       name: presetNameDraft.trim().slice(0, 24) || current.name,
-      color: normalizeHexColor(presetColorDraft, current.color)
+      color: finalColor
     };
     commitSettings({
       ...$appSettings,
@@ -582,7 +598,11 @@
         themePresets: presets
       }
     });
-    cancelPresetEdit();
+    setBackground({ color: finalColor });
+    editingPresetIndex = null;
+    presetNameDraft = "";
+    presetColorDraft = "";
+    presetEditOriginalColor = "";
   }
 
   function setUiColor(color: string): void {
@@ -643,6 +663,10 @@
     } catch {
       // User cancelled
     }
+  }
+
+  function resetBackgroundToDefault(): void {
+    setBackground({ color: defaultBackground.color });
   }
 
   async function pickBackgroundImage(): Promise<void> {
@@ -821,11 +845,35 @@
   }
 
   async function openTaskLink(event: CustomEvent<string>): Promise<void> {
-    try {
-      await openExternalUrl(event.detail);
-    } catch (error) {
-      showToast(`打开链接失败：${String(error)}`);
+    const url = event.detail;
+    if ($appSettings.appearance.linkOpenMode === "system") {
+      try {
+        await openExternalUrl(url);
+      } catch (error) {
+        showToast(`打开链接失败：${String(error)}`);
+      }
+    } else {
+      linkPreviewUrl = url;
     }
+  }
+
+  function closeLinkPreview(): void {
+    linkPreviewUrl = "";
+  }
+
+  function openEmojiPickerForTask(taskId: string): void {
+    emojiPickerTaskId = taskId;
+    taskMenu = null;
+  }
+
+  function handleEmojiPick(emoji: string): void {
+    if (!emojiPickerTaskId) return;
+    updateTask(emojiPickerTaskId, (task) => ({ ...task, emoji }));
+    emojiPickerTaskId = "";
+  }
+
+  function removeEmojiFromTask(taskId: string): void {
+    updateTask(taskId, (task) => ({ ...task, emoji: undefined }));
   }
 </script>
 
@@ -1019,6 +1067,9 @@
               ></button>
             {/each}
             <button type="button" class="palette-button" title="自定义颜色" on:click={openColorPicker}></button>
+            <button type="button" class="reset-bg-button" title="恢复默认配色" on:click={resetBackgroundToDefault}>
+              <RotateCcw size={14} />
+            </button>
           </div>
           {#if editingPresetIndex !== null}
             <div class="preset-editor">
@@ -1083,6 +1134,8 @@
         on:setDate={handleTaskSetDate}
         on:removeTag={(e) => removeTagFromTask(e.detail.id, e.detail.tagId)}
         on:editTag={(e) => editTagAtTask(e.detail.id, e.detail.tagId, e.detail.text)}
+        on:removeEmoji={(e) => removeEmojiFromTask(e.detail)}
+        on:pickEmoji={(e) => openEmojiPickerForTask(e.detail)}
       />
     {/each}
 
@@ -1108,6 +1161,8 @@
               on:setDate={handleTaskSetDate}
               on:removeTag={(e) => removeTagFromTask(e.detail.id, e.detail.tagId)}
               on:editTag={(e) => editTagAtTask(e.detail.id, e.detail.tagId, e.detail.text)}
+              on:removeEmoji={(e) => removeEmojiFromTask(e.detail)}
+              on:pickEmoji={(e) => openEmojiPickerForTask(e.detail)}
             />
           {/each}
         {/if}
@@ -1216,6 +1271,11 @@
         </div>
       {/if}
 
+      <!-- Emoji -->
+      <button type="button" on:click={() => openEmojiPickerForTask(taskMenuTask.id)}>
+        <SmilePlus size={16} /> {taskMenuTask.emoji ? "更换表情" : "添加表情"}
+      </button>
+
       <!-- Move to submenu -->
       <button on:click={() => { showMoveTargets = !showMoveTargets; showTagOptions = false; }}>
         <FolderInput size={16} /> 移动到
@@ -1258,5 +1318,25 @@
       </div>
     </section>
   {/if}
+  {/if}
+
+  {#if linkPreviewUrl}
+    <div class="link-preview-overlay">
+      <div class="link-preview-close-zone">
+        <button class="link-preview-close" type="button" title="关闭预览" on:click={closeLinkPreview}>
+          <X size={22} strokeWidth={2.5} />
+        </button>
+      </div>
+      <iframe class="link-preview-frame" src={linkPreviewUrl} title="链接预览" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
+    </div>
+  {/if}
+
+  {#if emojiPickerTaskId}
+    <IconPicker
+      mode="emoji"
+      selected={$appState.tasks.find((t) => t.id === emojiPickerTaskId)?.emoji ?? ""}
+      onPick={handleEmojiPick}
+      onClose={() => (emojiPickerTaskId = "")}
+    />
   {/if}
 </main>

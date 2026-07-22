@@ -367,7 +367,7 @@
   {/if}
 
   {#if selectedIconPickerList}
-    <IconPicker selected={selectedIconPickerList.icon} onPick={pickIcon} onClose={() => (iconPickerListId = null)} />
+    <IconPicker mode="icon" selected={selectedIconPickerList.icon} onPick={pickIcon} onClose={() => (iconPickerListId = null)} />
   {/if}
 
   <div class="sidebar-footer" on:click|stopPropagation>

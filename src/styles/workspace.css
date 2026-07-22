@@ -2019,3 +2019,126 @@ h1 {
   padding: 6px 10px;
   font-size: 13px;
 }
+
+/* ---------- Task emoji badge ---------- */
+
+.task-emoji-badge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #f8f6f2;
+  border: 1px solid #e8e4de;
+  font-size: 16px;
+  cursor: pointer;
+  transition: filter 0.12s, box-shadow 0.12s;
+}
+
+.task-emoji-badge:hover {
+  filter: brightness(0.96);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 8%);
+  z-index: 6;
+}
+
+.task-emoji-badge .tag-delete {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: #e74c3c;
+  color: white;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+  line-height: 0;
+  padding: 0;
+}
+
+.task-emoji-badge:hover .tag-delete {
+  opacity: 1;
+}
+
+.task-emoji-badge .tag-delete:hover {
+  background: #c0392b;
+}
+
+/* ---------- Link preview overlay ---------- */
+
+.link-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: flex;
+  flex-direction: column;
+  background: white;
+}
+
+.link-preview-close-zone {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 80px;
+  z-index: 9001;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 16px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.link-preview-overlay:hover .link-preview-close-zone {
+  opacity: 1;
+}
+
+.link-preview-close {
+  pointer-events: auto;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(30 30 30 / 75%);
+  color: white;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 25%);
+  transition: background 0.15s, transform 0.15s;
+}
+
+.link-preview-close:hover {
+  background: rgb(200 50 50 / 90%);
+  transform: scale(1.08);
+}
+
+.link-preview-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* ---------- Color grid reset button ---------- */
+
+.reset-bg-button {
+  display: grid;
+  place-items: center;
+  border: 1px solid #e0e0e0 !important;
+  background: #fafafa !important;
+  color: #666;
+  cursor: pointer;
+}
+
+.reset-bg-button:hover {
+  background: #f0f0f0 !important;
+  color: #333;
+}

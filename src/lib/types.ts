@@ -29,6 +29,7 @@ export type Task = {
   dueDate?: string;
   completedAt?: string;
   tags: Tag[];
+  emoji?: string;
   expanded?: boolean;
   editing?: boolean;
   createdAt: string;
