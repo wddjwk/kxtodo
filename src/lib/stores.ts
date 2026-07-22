@@ -9,7 +9,7 @@ import {
 import { buildListCounts, buildVisibleTasks, getBackground } from "./nodes";
 import { accentForNode, uiScaleValue } from "./styles";
 
-export const APP_VERSION = "8.2.1";
+export const APP_VERSION = "8.3.1";
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -65,6 +65,7 @@ export const appSettings = writable<Settings>(clone(defaultSettings));
 export const isHydrated = writable(false);
 export const showSettings = writable(false);
 export const searchQuery = writable("");
+export const taskEmojiPickerId = writable("");
 
 // ---------------------------------------------------------------------------
 // Toast
@@ -251,6 +252,10 @@ export async function hydrate(): Promise<void> {
 
   await syncNativeLifecycle(loadedSettings);
 }
+
+
+
+
 
 
 

@@ -9,7 +9,7 @@
     appState, appSettings, commit, commitScheduler, commitSettings, showToast,
     searchQuery, selectedNode, visibleTasks, selectedBackground,
     accent, isSearching, now, todayIso, yesterdayIso, dateOnly,
-    createTaskId, safeFileName, fileToDataUrl, APP_VERSION
+    createTaskId, safeFileName, fileToDataUrl, APP_VERSION, taskEmojiPickerId
   } from "./stores";
   import { moveTargetOptions, nodeAndDescendantIds, exportStateForNode, getBackground, taskMoveTargets } from "./nodes";
   import { buildMainStyle, buildMenuStyle, uiScaleValue } from "./styles";
@@ -21,12 +21,11 @@
     mdImageCache, resolveMarkdownImages, primeMdImageCache
   } from "./images";
   import IconGlyph from "./IconGlyph.svelte";
-  import IconPicker from "./IconPicker.svelte";
   import TaskCard from "./TaskCard.svelte";
   import ScheduledTasksView from "./ScheduledTasksView.svelte";
   import DatePicker from "./DatePicker.svelte";
   import { showMobileList, isMobile } from "./platform";
-  import type { AppNode, AppState, ListBackground, Settings, TagColor, Task } from "./types";
+  import type { AppNode, AppState, ListBackground, TagColor, Task } from "./types";
 
   type SortMode = "created-desc" | "created-asc" | "alpha-asc" | "alpha-desc" | "due-asc" | "due-desc" | "importance";
 
@@ -71,7 +70,6 @@
   let presetNameDraft = "";
   let presetColorDraft = "";
   let linkPreviewUrl = "";
-  let emojiPickerTaskId = "";
   let presetEditOriginalColor = "";
 
   // Calendar state
@@ -99,6 +97,9 @@
   $: taskMenuStyle = taskMenu ? buildMenuStyle(taskMenu.x, taskMenu.y, taskMenuWidth || 264, taskMenuHeight || (taskMenu.showDate ? 620 : 300), uiScaleValue($appSettings.appearance.uiScale)) : "";
   $: taskMenuTask = taskMenu ? $appState.tasks.find((task) => task.id === taskMenu?.taskId) : null;
   $: taskMoveTargetList = taskMenu ? taskMoveTargets($appState.nodes, taskMenuTask?.nodeId ?? "") : [];
+  $: presets = $appSettings.appearance.themePresets.length
+    ? $appSettings.appearance.themePresets
+    : themePresets;
   $: if (!taskMenu) { showTagOptions = false; showMoveTargets = false; tagInputText = ""; selectedTagColor = "yellow"; editingTagIdInMenu = ""; editingTagTextInMenu = ""; }
   $: if (($selectedNode?.id ?? "") !== backgroundDraftNodeId) {
     backgroundDraftNodeId = $selectedNode?.id ?? "";
@@ -227,7 +228,7 @@
     schedulerViewRef?.closeOverlays();
     taskMenu = null;
     linkPreviewUrl = "";
-    emojiPickerTaskId = "";
+    taskEmojiPickerId.set("");
   }
 
   export function focusComposer(): void {
@@ -533,14 +534,8 @@
     setBackground({ color });
   }
 
-  function currentThemePresets(): Settings["appearance"]["themePresets"] {
-    return $appSettings.appearance.themePresets.length
-      ? $appSettings.appearance.themePresets
-      : themePresets;
-  }
-
   function beginPresetEdit(index: number): void {
-    const preset = currentThemePresets()[index];
+    const preset = presets[index];
     if (!preset) return;
     editingPresetIndex = index;
     presetNameDraft = preset.name;
@@ -583,11 +578,11 @@
 
   function savePresetEdit(): void {
     if (editingPresetIndex === null) return;
-    const presets = currentThemePresets().map((preset) => ({ ...preset }));
-    const current = presets[editingPresetIndex];
+    const nextPresets = presets.map((preset) => ({ ...preset }));
+    const current = nextPresets[editingPresetIndex];
     if (!current) return;
     const finalColor = normalizeHexColor(presetColorDraft, current.color);
-    presets[editingPresetIndex] = {
+    nextPresets[editingPresetIndex] = {
       name: presetNameDraft.trim().slice(0, 24) || current.name,
       color: finalColor
     };
@@ -595,7 +590,7 @@
       ...$appSettings,
       appearance: {
         ...$appSettings.appearance,
-        themePresets: presets
+        themePresets: nextPresets
       }
     });
     setBackground({ color: finalColor });
@@ -862,14 +857,8 @@
   }
 
   function openEmojiPickerForTask(taskId: string): void {
-    emojiPickerTaskId = taskId;
+    taskEmojiPickerId.set(taskId);
     taskMenu = null;
-  }
-
-  function handleEmojiPick(emoji: string): void {
-    if (!emojiPickerTaskId) return;
-    updateTask(emojiPickerTaskId, (task) => ({ ...task, emoji }));
-    emojiPickerTaskId = "";
   }
 
   function removeEmojiFromTask(taskId: string): void {
@@ -1056,7 +1045,7 @@
           </div>
           <div class="menu-section-title">背景颜色</div>
           <div class="color-grid">
-            {#each currentThemePresets() as preset, index}
+            {#each presets as preset, index}
               <button
                 type="button"
                 title={`${preset.name}（右键编辑）`}
@@ -1329,14 +1318,5 @@
       </div>
       <iframe class="link-preview-frame" src={linkPreviewUrl} title="链接预览" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
     </div>
-  {/if}
-
-  {#if emojiPickerTaskId}
-    <IconPicker
-      mode="emoji"
-      selected={$appState.tasks.find((t) => t.id === emojiPickerTaskId)?.emoji ?? ""}
-      onPick={handleEmojiPick}
-      onClose={() => (emojiPickerTaskId = "")}
-    />
   {/if}
 </main>

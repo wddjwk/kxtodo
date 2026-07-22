@@ -3,7 +3,8 @@
   import { matchesShortcut } from "./lib/shortcuts";
   import { buildAppShellStyle, buildMobileShellStyle } from "./lib/styles";
   import {
-    appSettings, showSettings, searchQuery,
+    appSettings, appState, commit, showSettings, searchQuery,
+    taskEmojiPickerId, now,
     hydrate as hydrateStores
   } from "./lib/stores";
   import { isMobile, mobileView } from "./lib/platform";
@@ -13,6 +14,7 @@
   import Sidebar from "./lib/Sidebar.svelte";
   import Workspace from "./lib/Workspace.svelte";
   import SettingsDrawer from "./lib/SettingsDrawer.svelte";
+  import IconPicker from "./lib/IconPicker.svelte";
 
   let sidebarRef: Sidebar;
   let workspaceRef: Workspace;
@@ -20,6 +22,10 @@
   $: appShellStyle = $isMobile
     ? buildMobileShellStyle($appSettings.appearance)
     : buildAppShellStyle($appSettings.appearance);
+
+  $: emojiPickerTask = $taskEmojiPickerId
+    ? $appState.tasks.find((t) => t.id === $taskEmojiPickerId)
+    : null;
 
   onMount(() => {
     let stopScheduler: () => void = () => undefined;
@@ -52,6 +58,18 @@
       showSettings.update((v) => !v);
     }
   }
+
+  function handleEmojiPick(emoji: string): void {
+    const taskId = $taskEmojiPickerId;
+    if (!taskId) return;
+    commit({
+      ...$appState,
+      tasks: $appState.tasks.map((task) =>
+        task.id === taskId ? { ...task, emoji, updatedAt: now() } : task
+      )
+    });
+    taskEmojiPickerId.set("");
+  }
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -79,4 +97,13 @@
   </div>
 
   <Toast />
+
+  {#if emojiPickerTask}
+    <IconPicker
+      mode="emoji"
+      selected={emojiPickerTask.emoji ?? ""}
+      onPick={handleEmojiPick}
+      onClose={() => taskEmojiPickerId.set("")}
+    />
+  {/if}
 </div>
