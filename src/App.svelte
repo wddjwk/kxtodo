@@ -4,7 +4,7 @@
   import { buildAppShellStyle, buildMobileShellStyle } from "./lib/styles";
   import {
     appSettings, appState, commit, showSettings, searchQuery,
-    taskEmojiPickerId, now,
+    taskEmojiPicker, now,
     hydrate as hydrateStores
   } from "./lib/stores";
   import { isMobile, mobileView } from "./lib/platform";
@@ -23,8 +23,8 @@
     ? buildMobileShellStyle($appSettings.appearance)
     : buildAppShellStyle($appSettings.appearance);
 
-  $: emojiPickerTask = $taskEmojiPickerId
-    ? $appState.tasks.find((t) => t.id === $taskEmojiPickerId)
+  $: emojiPickerTask = $taskEmojiPicker
+    ? $appState.tasks.find((t) => t.id === $taskEmojiPicker?.taskId) ?? null
     : null;
 
   onMount(() => {
@@ -60,15 +60,23 @@
   }
 
   function handleEmojiPick(emoji: string): void {
-    const taskId = $taskEmojiPickerId;
-    if (!taskId) return;
+    const target = $taskEmojiPicker;
+    if (!target) return;
+    const { taskId, index } = target;
     commit({
       ...$appState,
-      tasks: $appState.tasks.map((task) =>
-        task.id === taskId ? { ...task, emoji, updatedAt: now() } : task
-      )
+      tasks: $appState.tasks.map((task) => {
+        if (task.id !== taskId) return task;
+        const emojis = [...task.emojis];
+        if (index >= 0 && index < emojis.length) {
+          emojis[index] = emoji;
+        } else {
+          emojis.push(emoji);
+        }
+        return { ...task, emojis, updatedAt: now() };
+      })
     });
-    taskEmojiPickerId.set("");
+    taskEmojiPicker.set(null);
   }
 </script>
 
@@ -98,12 +106,12 @@
 
   <Toast />
 
-  {#if emojiPickerTask}
+  {#if emojiPickerTask && $taskEmojiPicker}
     <IconPicker
       mode="emoji"
-      selected={emojiPickerTask.emoji ?? ""}
+      selected={$taskEmojiPicker.index >= 0 ? (emojiPickerTask.emojis[$taskEmojiPicker.index] ?? "") : ""}
       onPick={handleEmojiPick}
-      onClose={() => taskEmojiPickerId.set("")}
+      onClose={() => taskEmojiPicker.set(null)}
     />
   {/if}
 </div>

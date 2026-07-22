@@ -275,8 +275,20 @@ function normalizeTags(raw: unknown): Tag[] {
     .filter((tag): tag is Tag => tag !== null);
 }
 
+function normalizeEmojis(raw: unknown, legacyEmoji: unknown): string[] {
+  const list: string[] = [];
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (typeof item === "string" && item.trim()) list.push(item);
+    }
+  } else if (typeof legacyEmoji === "string" && legacyEmoji.trim()) {
+    list.push(legacyEmoji);
+  }
+  return list;
+}
+
 function normalizeTask(raw: unknown, fallbackNodeId: string): Task | null {
-  const source = raw as Partial<Task> & { listId?: string; content?: string; dueDate?: string | null; plannedDate?: string | null };
+  const source = raw as Partial<Task> & { listId?: string; content?: string; dueDate?: string | null; plannedDate?: string | null; emoji?: string };
   if (!source || typeof source !== "object") {
     return null;
   }
@@ -295,7 +307,7 @@ function normalizeTask(raw: unknown, fallbackNodeId: string): Task | null {
     dueDate: typeof source.dueDate === "string" ? source.dueDate : undefined,
     completedAt: typeof source.completedAt === "string" ? source.completedAt : source.completed ? (typeof source.updatedAt === "string" ? source.updatedAt : now()) : undefined,
     tags: normalizeTags(source.tags),
-    emoji: typeof source.emoji === "string" && source.emoji ? source.emoji : undefined,
+    emojis: normalizeEmojis(source.emojis, source.emoji),
     expanded: Boolean(source.expanded),
     editing: Boolean(source.editing),
     createdAt: typeof source.createdAt === "string" ? source.createdAt : now(),

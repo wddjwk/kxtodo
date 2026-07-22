@@ -1,5 +1,5 @@
 import { writable, derived, get } from "svelte/store";
-import type { AppNotification, AppState, AppNode, NotificationTone, SchedulerState, Settings } from "./types";
+import type { AppNotification, AppState, AppNode, EmojiPickerTarget, NotificationTone, SchedulerState, Settings } from "./types";
 import { defaultSchedulerRuntimes, defaultSettings, emptyState, normalizeState, normalizeSettings, schedulerRuntimeKeys } from "./defaults";
 import {
   loadState, saveState, loadSettings, saveSettings, loadScheduler, saveScheduler,
@@ -9,7 +9,7 @@ import {
 import { buildListCounts, buildVisibleTasks, getBackground } from "./nodes";
 import { accentForNode, uiScaleValue } from "./styles";
 
-export const APP_VERSION = "8.3.1";
+export const APP_VERSION = "8.3.2";
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -65,7 +65,7 @@ export const appSettings = writable<Settings>(clone(defaultSettings));
 export const isHydrated = writable(false);
 export const showSettings = writable(false);
 export const searchQuery = writable("");
-export const taskEmojiPickerId = writable("");
+export const taskEmojiPicker = writable<EmojiPickerTarget | null>(null);
 
 // ---------------------------------------------------------------------------
 // Toast
@@ -252,6 +252,7 @@ export async function hydrate(): Promise<void> {
 
   await syncNativeLifecycle(loadedSettings);
 }
+
 
 
 

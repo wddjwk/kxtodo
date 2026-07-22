@@ -29,11 +29,16 @@ export type Task = {
   dueDate?: string;
   completedAt?: string;
   tags: Tag[];
-  emoji?: string;
+  emojis: string[];
   expanded?: boolean;
   editing?: boolean;
   createdAt: string;
   updatedAt?: string;
+};
+
+export type EmojiPickerTarget = {
+  taskId: string;
+  index: number;
 };
 
 export type ProfileSettings = {

@@ -2027,7 +2027,7 @@ h1 {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 24px;
+  font-size: 20px;
   line-height: 1;
   cursor: pointer;
   transition: transform 0.12s;

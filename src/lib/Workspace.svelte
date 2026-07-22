@@ -9,7 +9,7 @@
     appState, appSettings, commit, commitScheduler, commitSettings, showToast,
     searchQuery, selectedNode, visibleTasks, selectedBackground,
     accent, isSearching, now, todayIso, yesterdayIso, dateOnly,
-    createTaskId, safeFileName, fileToDataUrl, APP_VERSION, taskEmojiPickerId
+    createTaskId, safeFileName, fileToDataUrl, APP_VERSION, taskEmojiPicker
   } from "./stores";
   import { moveTargetOptions, nodeAndDescendantIds, exportStateForNode, getBackground, taskMoveTargets } from "./nodes";
   import { buildMainStyle, buildMenuStyle, uiScaleValue } from "./styles";
@@ -228,7 +228,7 @@
     schedulerViewRef?.closeOverlays();
     taskMenu = null;
     linkPreviewUrl = "";
-    taskEmojiPickerId.set("");
+    taskEmojiPicker.set(null);
   }
 
   export function focusComposer(): void {
@@ -428,6 +428,7 @@
       expanded: false,
       editing: false,
       tags: [],
+      emojis: [],
       createdAt: timestamp,
       updatedAt: timestamp
     };
@@ -661,6 +662,13 @@
   }
 
   function resetBackgroundToDefault(): void {
+    commitSettings({
+      ...$appSettings,
+      appearance: {
+        ...$appSettings.appearance,
+        themePresets: themePresets.map((preset) => ({ ...preset }))
+      }
+    });
     setBackground({ color: defaultBackground.color });
   }
 
@@ -857,12 +865,19 @@
   }
 
   function openEmojiPickerForTask(taskId: string): void {
-    taskEmojiPickerId.set(taskId);
+    taskEmojiPicker.set({ taskId, index: -1 });
     taskMenu = null;
   }
 
-  function removeEmojiFromTask(taskId: string): void {
-    updateTask(taskId, (task) => ({ ...task, emoji: undefined }));
+  function openEmojiPickerAt(taskId: string, index: number): void {
+    taskEmojiPicker.set({ taskId, index });
+  }
+
+  function removeEmojiFromTask(taskId: string, index: number): void {
+    updateTask(taskId, (task) => ({
+      ...task,
+      emojis: task.emojis.filter((_, i) => i !== index)
+    }));
   }
 </script>
 
@@ -1123,8 +1138,8 @@
         on:setDate={handleTaskSetDate}
         on:removeTag={(e) => removeTagFromTask(e.detail.id, e.detail.tagId)}
         on:editTag={(e) => editTagAtTask(e.detail.id, e.detail.tagId, e.detail.text)}
-        on:removeEmoji={(e) => removeEmojiFromTask(e.detail)}
-        on:pickEmoji={(e) => openEmojiPickerForTask(e.detail)}
+        on:removeEmoji={(e) => removeEmojiFromTask(e.detail.id, e.detail.index)}
+        on:pickEmoji={(e) => openEmojiPickerAt(e.detail.id, e.detail.index)}
       />
     {/each}
 
@@ -1150,8 +1165,8 @@
               on:setDate={handleTaskSetDate}
               on:removeTag={(e) => removeTagFromTask(e.detail.id, e.detail.tagId)}
               on:editTag={(e) => editTagAtTask(e.detail.id, e.detail.tagId, e.detail.text)}
-              on:removeEmoji={(e) => removeEmojiFromTask(e.detail)}
-              on:pickEmoji={(e) => openEmojiPickerForTask(e.detail)}
+              on:removeEmoji={(e) => removeEmojiFromTask(e.detail.id, e.detail.index)}
+              on:pickEmoji={(e) => openEmojiPickerAt(e.detail.id, e.detail.index)}
             />
           {/each}
         {/if}
@@ -1262,7 +1277,7 @@
 
       <!-- Emoji -->
       <button type="button" on:click={() => openEmojiPickerForTask(taskMenuTask.id)}>
-        <SmilePlus size={16} /> {taskMenuTask.emoji ? "更换表情" : "添加表情"}
+        <SmilePlus size={16} /> 添加表情
       </button>
 
       <!-- Move to submenu -->

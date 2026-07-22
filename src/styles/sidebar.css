@@ -465,14 +465,21 @@
 }
 
 .icon-picker {
-  width: 360px;
-  max-height: 600px;
+  width: 520px;
+  max-width: calc(100vw - 48px);
+  max-height: 640px;
   overflow-y: auto;
+  overflow-x: hidden;
   border: 1px solid #dedede;
   border-radius: 14px;
   background: white;
-  padding: 14px;
+  padding: 16px;
   box-shadow: 0 20px 60px rgb(0 0 0 / 20%);
+  scrollbar-width: none;
+}
+
+.icon-picker::-webkit-scrollbar {
+  display: none;
 }
 
 .icon-picker header {
@@ -518,7 +525,7 @@
 }
 
 .emoji-grid-wide {
-  grid-template-columns: repeat(8, 1fr);
+  grid-template-columns: repeat(10, 1fr);
 }
 
 .icon-grid button,

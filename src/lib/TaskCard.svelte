@@ -23,8 +23,8 @@
     setDate: { id: string; date: string };
     removeTag: { id: string; tagId: string };
     editTag: { id: string; tagId: string; text: string };
-    removeEmoji: string;
-    pickEmoji: string;
+    removeEmoji: { id: string; index: number };
+    pickEmoji: { id: string; index: number };
   }>();
 
   let draft = "";
@@ -292,18 +292,18 @@
     </section>
 
     <div class="task-tags">
-      {#if task.emoji}
+      {#each task.emojis as emoji, index (`${task.id}-emoji-${index}`)}
         <span
           class="task-emoji-badge"
           title="点击更换表情"
-          on:click|stopPropagation={() => dispatch("pickEmoji", task.id)}
+          on:click|stopPropagation={() => dispatch("pickEmoji", { id: task.id, index })}
         >
-          {task.emoji}
-          <button class="tag-delete" type="button" aria-label="移除表情" on:click|stopPropagation={() => dispatch("removeEmoji", task.id)}>
+          {emoji}
+          <button class="tag-delete" type="button" aria-label="移除表情" on:click|stopPropagation={() => dispatch("removeEmoji", { id: task.id, index })}>
             <X size={10} strokeWidth={3} />
           </button>
         </span>
-      {/if}
+      {/each}
       {#each task.tags as tag (tag.id)}
         {#if editingTagId === tag.id}
           <input
