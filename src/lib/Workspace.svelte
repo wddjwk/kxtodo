@@ -6,11 +6,21 @@
     Lightbulb, MoreHorizontal, Palette, PenLine, Plus, RotateCcw, Search, Settings as SettingsIcon, SmilePlus, Star, Sun, Tag, Trash2, Upload, X
   } from "@lucide/svelte";
   import {
-    appState, appSettings, commit, commitScheduler, commitSettings, showToast,
+    appState, appSettings, showToast,
     searchQuery, selectedNode, visibleTasks, selectedBackground,
     accent, isSearching, now, todayIso, yesterdayIso, dateOnly,
-    createTaskId, safeFileName, fileToDataUrl, APP_VERSION, taskEmojiPicker
+    safeFileName, fileToDataUrl, APP_VERSION, taskEmojiPicker, markEditStart
   } from "./stores";
+  import {
+    updateTask as updateTaskAction, deleteTask as deleteTaskAction,
+    addTask as addTaskAction, setItemUi as setItemUiAction,
+    setItemsUi as setItemsUiAction, replaceTaskTags as replaceTaskTagsAction,
+    replaceTaskEmojis as replaceTaskEmojisAction, saveTaskMarkdown as saveTaskMarkdownAction,
+    setBackground as setBackgroundAction, setConfig as setConfigAction,
+    setUiColor as setUiColorAction, unsetUiColor as unsetUiColorAction,
+    deleteNodeCascade as deleteNodeCascadeAction, applyTreeOrder as applyTreeOrderAction,
+    importState as importStateAction
+  } from "./actions";
   import { moveTargetOptions, nodeAndDescendantIds, exportStateForNode, getBackground, taskMoveTargets } from "./nodes";
   import { buildMainStyle, buildMenuStyle, uiScaleValue } from "./styles";
   import { normalizeState, normalizeSettings, defaultBackground, themePresets, createEntryNode } from "./defaults";
@@ -236,26 +246,24 @@
   }
 
   function toggleCompletion(taskId: string): void {
-    updateTask(taskId, (task) => ({
-      ...task,
-      completed: !task.completed,
-      completedAt: !task.completed ? now() : undefined
-    }));
+    const task = $appState.tasks.find((item) => item.id === taskId);
+    if (task) {
+      void updateTaskAction(taskId, { completed: !task.completed });
+    }
   }
 
   function addToMyDay(taskId: string): void {
-    updateTask(taskId, (task) => ({ ...task, myDay: true }));
+    void updateTaskAction(taskId, { myDay: true });
   }
 
   function handleTaskSetDate(event: CustomEvent<{ id: string; date: string }>): void {
-    const dateVal = event.detail.date ? event.detail.date.slice(0, 10) : undefined;
-    const addMyDay = dateVal === todayIso();
-    updateTask(event.detail.id, (task) => ({
-      ...task,
-      dueDate: dateVal || undefined,
-      plannedDate: dateVal || undefined,
-      myDay: addMyDay ? true : task.myDay
-    }));
+    const dateVal = event.detail.date ? event.detail.date.slice(0, 10) : null;
+    const task = $appState.tasks.find((item) => item.id === event.detail.id);
+    void updateTaskAction(event.detail.id, {
+      dueDate: dateVal,
+      plannedDate: dateVal,
+      myDay: dateVal === todayIso() ? true : task?.myDay
+    });
   }
 
   function toggleSuggestions(): void {
@@ -310,64 +318,50 @@
   function toggleExpandAll(): void {
     allExpanded = !allExpanded;
     const expandTarget = allExpanded;
-    const visibleIds = new Set($visibleTasks.map((t) => t.id));
-    commit({
-      ...$appState,
-      tasks: $appState.tasks.map((task) => {
-        if (!visibleIds.has(task.id)) return task;
-        if (expandTarget && !hasMultipleMarkdownLines(task.markdown)) {
-          return { ...task, expanded: false, editing: false };
-        }
-        return { ...task, expanded: expandTarget, editing: false };
-      })
-    });
-  }
-
-  function updateTask(taskId: string, updater: (task: Task) => Task): void {
-    commit({
-      ...$appState,
-      tasks: $appState.tasks.map((task) => (task.id === taskId ? { ...updater(task), updatedAt: now() } : task))
-    });
+    const ids = $visibleTasks
+      .filter((task) => !expandTarget || hasMultipleMarkdownLines(task.markdown))
+      .map((task) => task.id);
+    if (ids.length > 0) {
+      void setItemsUiAction(ids, expandTarget);
+    }
   }
 
   function toggleTaskExpansion(taskId: string): void {
     selectedTaskId = taskId;
     taskMenu = null;
-    updateTask(taskId, (task) => (
-      hasMultipleMarkdownLines(task.markdown)
-        ? { ...task, expanded: !task.expanded }
-        : { ...task, expanded: false }
-    ));
+    const task = $appState.tasks.find((item) => item.id === taskId);
+    if (!task) return;
+    void setItemUiAction(taskId, {
+      expanded: hasMultipleMarkdownLines(task.markdown) ? !task.expanded : false
+    });
   }
 
   function startTaskEditing(taskId: string): void {
     selectedTaskId = taskId;
     taskMenu = null;
-    updateTask(taskId, (task) => ({ ...task, editing: true, expanded: true }));
+    const task = $appState.tasks.find((item) => item.id === taskId);
+    if (task) {
+      markEditStart(task);
+    }
+    void setItemUiAction(taskId, { editing: true, expanded: true });
   }
 
   function commitTaskMarkdown(taskId: string, markdown: string): void {
-    updateTask(taskId, (task) => ({
-      ...task,
-      markdown,
-      editing: false,
-      expanded: hasMultipleMarkdownLines(markdown)
-    }));
+    void saveTaskMarkdownAction(taskId, markdown, hasMultipleMarkdownLines(markdown));
   }
 
   function deleteTask(taskId: string): void {
-    commit({
-      ...$appState,
-      tasks: $appState.tasks.filter((task) => task.id !== taskId)
-    });
+    void deleteTaskAction(taskId);
     taskMenu = null;
   }
 
   function addTagToTask(taskId: string, color: TagColor, text?: string): void {
-    updateTask(taskId, (task) => ({
-      ...task,
-      tags: [...task.tags, { id: `tag-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, color, text: text?.trim() || undefined }]
-    }));
+    const task = $appState.tasks.find((item) => item.id === taskId);
+    if (!task) return;
+    void replaceTaskTagsAction(taskId, [
+      ...task.tags,
+      { id: `tag-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, color, text: text?.trim() || undefined }
+    ]);
   }
 
   function submitTagInput(): void {
@@ -385,22 +379,25 @@
   }
 
   function clearTagsFromTask(taskId: string): void {
-    updateTask(taskId, (task) => ({ ...task, tags: [] }));
+    void replaceTaskTagsAction(taskId, []);
   }
 
   function removeTagFromTask(taskId: string, tagId: string): void {
-    updateTask(taskId, (task) => ({ ...task, tags: task.tags.filter((t) => t.id !== tagId) }));
+    const task = $appState.tasks.find((item) => item.id === taskId);
+    if (task) {
+      void replaceTaskTagsAction(taskId, task.tags.filter((t) => t.id !== tagId));
+    }
   }
 
   function editTagAtTask(taskId: string, tagId: string, text: string): void {
-    updateTask(taskId, (task) => ({
-      ...task,
-      tags: task.tags.map((t) => t.id === tagId ? { ...t, text: text || undefined } : t)
-    }));
+    const task = $appState.tasks.find((item) => item.id === taskId);
+    if (task) {
+      void replaceTaskTagsAction(taskId, task.tags.map((t) => (t.id === tagId ? { ...t, text: text || undefined } : t)));
+    }
   }
 
   function moveTaskToNode(taskId: string, targetNodeId: string): void {
-    updateTask(taskId, (task) => ({ ...task, nodeId: targetNodeId }));
+    void updateTaskAction(taskId, { entryId: targetNodeId });
     showMoveTargets = false;
     taskMenu = null;
   }
@@ -417,22 +414,11 @@
       showToast("请先创建一个条目");
       return;
     }
-    const timestamp = now();
-    const task: Task = {
-      id: createTaskId(),
-      nodeId: targetNode.id,
+    void addTaskAction(targetNode.id, {
       markdown,
-      completed: false,
       important: $selectedNode?.id === "important",
-      myDay: $selectedNode?.id === "my-day",
-      expanded: false,
-      editing: false,
-      tags: [],
-      emojis: [],
-      createdAt: timestamp,
-      updatedAt: timestamp
-    };
-    commit({ ...$appState, tasks: [...$appState.tasks, task] });
+      myDay: $selectedNode?.id === "my-day"
+    });
     newTaskDraft = "";
     void tick().then(resizeComposer);
   }
@@ -489,28 +475,22 @@
   }
 
   function setTaskDate(taskId: string, date: string): void {
-    const dateVal = date ? date.slice(0, 10) : undefined;
-    const addToMyDay = dateVal === todayIso();
-    updateTask(taskId, (task) => ({
-      ...task,
-      dueDate: dateVal || undefined,
-      plannedDate: dateVal || undefined,
-      myDay: addToMyDay ? true : task.myDay
-    }));
+    const dateVal = date ? date.slice(0, 10) : null;
+    const task = $appState.tasks.find((item) => item.id === taskId);
+    void updateTaskAction(taskId, {
+      dueDate: dateVal,
+      plannedDate: dateVal,
+      myDay: dateVal === todayIso() ? true : task?.myDay
+    });
     taskMenu = null;
   }
 
   function setBackground(patch: Partial<ListBackground>): void {
     if (!$selectedNode) return;
-    commit({
-      ...$appState,
-      backgrounds: {
-        ...$appState.backgrounds,
-        [$selectedNode.id]: {
-          ...getBackground($selectedNode.id, $appState.backgrounds),
-          ...patch
-        }
-      }
+    void setBackgroundAction($selectedNode.id, {
+      color: patch.color,
+      image: patch.image === undefined ? undefined : patch.image ?? null,
+      imageOpacity: patch.imageOpacity
     });
   }
 
@@ -587,13 +567,7 @@
       name: presetNameDraft.trim().slice(0, 24) || current.name,
       color: finalColor
     };
-    commitSettings({
-      ...$appSettings,
-      appearance: {
-        ...$appSettings.appearance,
-        themePresets: nextPresets
-      }
-    });
+    void setConfigAction("appearance.themePresets", nextPresets);
     setBackground({ color: finalColor });
     editingPresetIndex = null;
     presetNameDraft = "";
@@ -603,16 +577,7 @@
 
   function setUiColor(color: string): void {
     if (!$selectedNode) return;
-    commitSettings({
-      ...$appSettings,
-      appearance: {
-        ...$appSettings.appearance,
-        uiColors: {
-          ...$appSettings.appearance.uiColors,
-          [$selectedNode.id]: color
-        }
-      }
-    });
+    void setUiColorAction($selectedNode.id, color);
   }
 
   function handleUiColorPick(event: Event): void {
@@ -624,15 +589,7 @@
 
   function resetUiColor(): void {
     if (!$selectedNode) return;
-    const uiColors = { ...$appSettings.appearance.uiColors };
-    delete uiColors[$selectedNode.id];
-    commitSettings({
-      ...$appSettings,
-      appearance: {
-        ...$appSettings.appearance,
-        uiColors
-      }
-    });
+    void unsetUiColorAction($selectedNode.id);
   }
 
   function handleColorPick(event: Event): void {
@@ -662,13 +619,7 @@
   }
 
   function resetBackgroundToDefault(): void {
-    commitSettings({
-      ...$appSettings,
-      appearance: {
-        ...$appSettings.appearance,
-        themePresets: themePresets.map((preset) => ({ ...preset }))
-      }
-    });
+    void setConfigAction("appearance.themePresets", themePresets.map((preset) => ({ ...preset })));
     setBackground({ color: defaultBackground.color });
   }
 
@@ -727,22 +678,7 @@
       }
       void deleteNodeImages(delId);
     }
-    let nodes = $appState.nodes.filter((n) => !ids.has(n.id));
-    let backgrounds = Object.fromEntries(Object.entries($appState.backgrounds).filter(([key]) => !ids.has(key)));
-    if (!nodes.some((n) => n.kind === "entry")) {
-      const inbox = createEntryNode("收集箱", null, "inbox");
-      nodes = [...nodes, inbox];
-      backgrounds = { ...backgrounds, [inbox.id]: { ...defaultBackground } };
-    }
-    const validNodeIds = new Set(nodes.map((n) => n.id));
-    const fallbackId = nodes.find((n) => n.kind === "entry")?.id ?? "my-day";
-    commit({
-      ...$appState,
-      nodes,
-      tasks: $appState.tasks.filter((t) => validNodeIds.has(t.nodeId)),
-      selectedNodeId: fallbackId,
-      backgrounds
-    });
+    void deleteNodeCascadeAction(id);
     showListMenu = false;
     showMobileList();
   }
@@ -780,12 +716,10 @@
     try {
       const payload = JSON.parse(await target.files[0].text()) as { state?: unknown; settings?: unknown };
       const normalizedState = normalizeState(payload.state ?? payload);
-      commit(normalizedState);
-      commitScheduler(normalizedState.scheduler);
-      if (payload.settings) {
-        commitSettings(normalizeSettings(payload.settings));
-      }
-      showToast("导入完成");
+      await importStateAction(
+        normalizedState,
+        payload.settings ? normalizeSettings(payload.settings) : null
+      );
     } catch (error) {
       showToast(`导入失败：${String(error)}`);
     } finally {
@@ -840,10 +774,8 @@
     }
     const nodes = [...withoutSource];
     nodes.splice(insertIndex, 0, sourceWithParent);
-    commit({
-      ...$appState,
-      nodes: nodes.map((n) => (nextParentId && n.id === nextParentId ? { ...n, collapsed: false } : n))
-    });
+    const ordered = nodes.map((n) => (nextParentId && n.id === nextParentId ? { ...n, collapsed: false } : n));
+    void applyTreeOrderAction(ordered, { [nodeId]: nextParentId });
     showListMenu = false;
   }
 
@@ -874,10 +806,10 @@
   }
 
   function removeEmojiFromTask(taskId: string, index: number): void {
-    updateTask(taskId, (task) => ({
-      ...task,
-      emojis: task.emojis.filter((_, i) => i !== index)
-    }));
+    const task = $appState.tasks.find((item) => item.id === taskId);
+    if (task) {
+      void replaceTaskEmojisAction(taskId, task.emojis.filter((_, i) => i !== index));
+    }
   }
 </script>
 
@@ -1191,7 +1123,7 @@
       bind:clientWidth={taskMenuWidth}
       on:click|stopPropagation
     >
-      <button type="button" on:click={() => { updateTask(taskMenuTask.id, (task) => ({ ...task, myDay: !task.myDay })); taskMenu = null; }}>
+      <button type="button" on:click={() => { void updateTaskAction(taskMenuTask.id, { myDay: !taskMenuTask.myDay }); taskMenu = null; }}>
         <Sun size={16} /> {taskMenuTask.myDay ? "从我的一天中移除" : "添加到我的一天"}
       </button>
       <button type="button" on:click={() => taskMenu && (taskMenu = { ...taskMenu, showDate: !taskMenu.showDate })}>
@@ -1206,7 +1138,7 @@
           />
         </div>
       {/if}
-      <button type="button" on:click={() => { updateTask(taskMenuTask.id, (task) => ({ ...task, important: !task.important })); taskMenu = null; }}>
+      <button type="button" on:click={() => { void updateTaskAction(taskMenuTask.id, { important: !taskMenuTask.important }); taskMenu = null; }}>
         <Star size={16} /> {taskMenuTask.important ? "取消收藏" : "收藏"}
       </button>
       <!-- Tags submenu -->

@@ -206,3 +206,104 @@ src-tauri/
 - 颜色悬浮效果改为仅显示高亮外框。
 - 三点菜单新增"排序方式"子菜单，支持 7 种排序。
 - 三点菜单左侧新增"展开/收起全部"按钮（单行内容跳过展开）。
+
+## v9.0.0 变更摘要
+
+### CLI 与 Domain Core（§3–4）
+
+domain 层引入完整的命令行界面，CLI / GUI / Agent 共享同一个 Rust Domain Core（`src-tauri/src/domain/`），所有写操作经过统一的业务命令层，不再允许"读全量—改 JSON—写全量"。
+
+**模块结构**（`src-tauri/src/domain/`）：
+
+| 模块 | 职责 |
+|---|---|
+| `model.rs` | 权威数据模型（DataFile/SettingsFile/ScheduleFile），serde + schemars 双 derive |
+| `error.rs` | CoreError + 稳定退出码（0/2/3/4/5/10/20） |
+| `time.rs` | 唯一时长解析器（`<n><ms\|s\|m\|h\|d>`）、ISO 8601、DST 迁移 |
+| `repo.rs` | Repository：跨进程文件锁（fs2）、原子写（tmp+rename）、revision、幂等台账、备份 |
+| `migrate.rs` | v8→v9 三文件迁移（data/settings/tasks），幂等可重试 |
+| `ops_task.rs` | task 域：category/entry/item CRUD、树、搜索、分页 |
+| `ops_config.rs` | config 域：点路径 get/set/unset/reset/validate |
+| `ops_schedule.rs` | schedule 域：spec 校验（含 discriminator 分支白名单）、patch 语义、CRUD |
+| `ops_gui.rs` | GUI 专用写命令（select-node/set-collapsed/set-item-ui/set-background/apply-tree-order/import-state） |
+| `core.rs` | 执行器：Invocation → 域分发 → envelope 输出 |
+| `cli.rs` | clap 命令树 + 全局选项 + payload 解析（@file / stdin） |
+| `render.rs` | 输出格式：json / pretty / table / ndjson + 内置 jq 子集 |
+| `jq.rs` | jq 兼容子集（字段路径/下标/迭代/管道/length/keys/map/select） |
+| `schema.rs` | `kxtodo schema`：schemars 生成 JSON Schema + patch 自动派生 + 示例 |
+| `skills.rs` | `kxtodo skills`：SKILL.md 定位/读取/校验 |
+| `doctor.rs` | `kxtodo doctor`：数据完整性/锁/备份/运行时诊断 |
+| `host.rs` | Background Host：IPC 服务端、路由（Host/standalone）、Hidden Host 启动器 |
+| `ipc.rs` | 本机 local socket（interprocess）+ 长度前缀 JSON 帧 |
+| `scheduler.rs` | 调度引擎：once/interval/calendar/condition、missedPolicy、probe、历史 |
+| `exec.rs` | 进程执行器：argv spawn、超时、取消、输出截断 |
+| `plan.rs` | 触发器计划：nextRunAt 计算（cron + chrono-tz） |
+| `history.rs` | 有界 NDJSON 历史（schedule.ndjson / audit.ndjson） |
+| `envelope.rs` | 输出信封：`{ok, command, data\|error, meta}` |
+
+**CLI 命令域**：
+
+```
+kxtodo notify <message> [--title] [--duration] [--tone] [--position] [--wait]
+kxtodo task add|get|list|find|modify|remove|tree
+kxtodo schedule add|validate|get|list|find|modify|remove|enable|disable|run|stop|logs|status
+kxtodo schedule runtime list|detect|set
+kxtodo config list|get|set|unset|reset|path|validate
+kxtodo schema <target> [--example <name>]
+kxtodo skills list|read|path|validate
+kxtodo doctor [--check <name>]
+kxtodo version
+```
+
+全局选项：`--data-dir`、`--format`、`--json`、`-q/--jq`、`--dry-run`、`--yes`、`--idempotency-key`、`--if-revision`。
+
+**数据格式（v9）**：
+
+- `data.json`：`schemaVersion: 5`，顶层 `_meta: {revision, idempotency[]}`，nodes/tasks/backgrounds/selectedNodeId。
+- `settings.json`：`_meta: {schemaVersion: 1, revision, idempotency[]}`，各设置段。
+- `tasks.json`：`_meta: {schemaVersion: 2, revision, idempotency[]}`，`runtimes`，`tasks: [{id, spec, state, ui, createdAt, updatedAt}]`。
+  - `spec`：`{name, enabled, trigger: {type: once|interval|calendar|condition, ...}, action: {type: script|executable|notification, ...}}`
+  - `state`：`{runCount, running?, lastRunAt?, nextRunAt?, lastStatus, lastExitCode?, lastStdout?, lastStderr?, missedCount, lastProbe?}`
+
+### Background Host 与状态机（§4.4）
+
+- **Absent → Hidden Host**：`notify` / `schedule run` 在 Host 缺失时自动 spawn `--kxtodo-host` 隐藏进程。
+- **Hidden Host → GUI Visible**：无参数启动时 single-instance 转发到 Hidden Host，创建主窗口。
+- **GUI 关闭 → Hidden Host**：主窗口隐藏到托盘后 Host 继续运行（调度器 + IPC）。
+- **Hidden Host 自动退出**：无通知、无 GUI、无启用 schedule、无运行子进程时看门狗退出。
+- IPC 端点：`runtime/host.json` 描述符（protocolVersion/pid/dataDir/endpoint/mode），local socket 按 dataDir 哈希命名。
+
+### 前端命令化（§4.3）
+
+- `src/lib/actions.ts`：全部 GUI 写操作的业务命令层（core 路径 + legacy 回退）。
+- `src/lib/stores.ts`：`coreMode` 检测、`coreSnapshot` 水合、`kxtodo://domain-changed` 事件监听、编辑冲突策略（editBases + pending conflict toast）。
+- `src/lib/scheduleAdapter.ts`：v9 ScheduleEntry ↔ v8 UI 编辑模型双向适配（partial patch 保留 CLI 专属字段）。
+- `src/lib/scheduler.ts` 已删除：调度引擎完全在 Rust Host 中运行。
+
+### Agent SKILL（§3.7）
+
+- 编辑源：`skills/kxtodo/SKILL.md`（仓库中唯一编辑位置）。
+- 编译期通过 `include_str!` 嵌入二进制，发布 exe 完全自包含，无外挂文件。
+- `kxtodo skills read kxtodo` 输出嵌入内容；`kxtodo skills validate` 校验引用的命令与当前 CLI 一致。
+
+### 测试（`src-tauri/tests/`）
+
+- `cli_task.rs`（20）：节点/任务 CRUD、过滤、分页、标签、冲突、幂等、revision 守卫。
+- `cli_schedule.rs`（13）：spec 校验、patch 语义、分支白名单、runtime、logs。
+- `cli_config.rs`（9）：点路径读写、map-key、reset、validate。
+- `cli_misc.rs`（13）：version/schema/skills/doctor/jq/格式/帮助。
+- `migration.rs`（6）：v8→v9 三文件迁移、幂等、时区。
+- `repo.rs`（8）：原子写、并发锁、revision、备份、审计。
+- `host_scheduler.rs`（8）：IPC 往返、notify 路由、调度触发、stopWhen、probe、missedPolicy。
+
+运行：`cargo test`（需 MSVC 环境）。
+
+### 构建
+
+- 开发：`npm run desktop:dev`（前端 + Tauri dev server）。
+- 发布：`.\release.ps1`（等同 `.\scripts\package.ps1 -Targets windows`，版本从 Cargo.toml 读取）。
+  - 指定版本：`.\release.ps1 windows 9.0.1`
+  - 含 Android：`.\release.ps1 all`
+- 产物：`release/KXToDo-<版本>.exe`（单文件自包含，SKILL 已嵌入）。
+- 注意：package.ps1 使用 `[System.IO.File]::ReadAllText/WriteAllText` + UTF-8 no-BOM 避免 PS 5.1 GBK 损坏中文。
+- 二进制为 console 子系统：CLI 模式直接输出；GUI 模式（无参数）启动时 `FreeConsole()` 隐藏控制台。

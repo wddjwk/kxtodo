@@ -4,14 +4,20 @@
     FilePlus2, FolderInput, FolderPlus, Pencil, Search, Star, Trash2
   } from "@lucide/svelte";
   import {
-    appState, appSettings, commit, showToast, showSettings,
+    appState, appSettings, showToast, showSettings,
     searchQuery, listCounts, isSearching
   } from "./stores";
+  import {
+    selectNode as selectNodeAction, toggleCategory as toggleCategoryAction,
+    addNode as addNodeAction, renameNode as renameNodeAction,
+    deleteNodeCascade as deleteNodeCascadeAction, applyTreeOrder as applyTreeOrderAction,
+    setNodeIcon as setNodeIconAction
+  } from "./actions";
   import {
     nodeAndDescendantIds, moveTargetOptions
   } from "./nodes";
   import {
-    createCategoryNode, createEntryNode, defaultBackground
+    createEntryNode, defaultBackground
   } from "./defaults";
   import { uiScaleValue, buildMenuStyle, avatarStyle, avatarInitial } from "./styles";
   import { avatarCache, resolveAvatarSrc, isLocalImageRef, localImageFilename } from "./images";
@@ -65,17 +71,17 @@
 
   function selectNode(id: string): void {
     searchQuery.set("");
-    commit({ ...$appState, selectedNodeId: id });
+    void selectNodeAction(id);
     treeMenu = null;
     iconPickerListId = null;
     showMobileContent();
   }
 
   function toggleCategory(id: string): void {
-    commit({
-      ...$appState,
-      nodes: $appState.nodes.map((n) => (n.id === id ? { ...n, collapsed: !n.collapsed } : n))
-    });
+    const node = $appState.nodes.find((n) => n.id === id);
+    if (node) {
+      void toggleCategoryAction(id, !node.collapsed);
+    }
     treeMenu = null;
     iconPickerListId = null;
   }
@@ -88,17 +94,16 @@
   }
 
   function addNode(parentId: string | null, kind: "category" | "entry"): void {
-    const node = kind === "category" ? createCategoryNode("未命名分类", parentId) : createEntryNode("未命名条目", parentId);
-    const backgrounds = kind === "entry" ? { ...$appState.backgrounds, [node.id]: { ...defaultBackground } } : $appState.backgrounds;
-    const nodes = $appState.nodes.map((item) => (item.id === parentId ? { ...item, collapsed: false } : item));
-    commit({
-      ...$appState,
-      nodes: [...nodes, node],
-      selectedNodeId: kind === "entry" ? node.id : $appState.selectedNodeId,
-      backgrounds
+    const name = kind === "category" ? "未命名分类" : "未命名条目";
+    if (parentId) {
+      void toggleCategoryAction(parentId, false);
+    }
+    void addNodeAction(kind, name, parentId).then((node) => {
+      if (node) {
+        renamingId = node.id;
+        renameDraft = node.name;
+      }
     });
-    renamingId = node.id;
-    renameDraft = node.name;
     treeMenu = null;
   }
 
@@ -117,10 +122,7 @@
       showToast("名称不能为空");
       return;
     }
-    commit({
-      ...$appState,
-      nodes: $appState.nodes.map((n) => (n.id === id ? { ...n, name } : n))
-    });
+    void renameNodeAction(id, name);
     renamingId = null;
     renameDraft = "";
   }
@@ -139,22 +141,7 @@
       }
       void deleteNodeImages(delId);
     }
-    let nodes = $appState.nodes.filter((n) => !ids.has(n.id));
-    let backgrounds = Object.fromEntries(Object.entries($appState.backgrounds).filter(([key]) => !ids.has(key)));
-    if (!nodes.some((n) => n.kind === "entry")) {
-      const inbox = createEntryNode("收集箱", null, "inbox");
-      nodes = [...nodes, inbox];
-      backgrounds = { ...backgrounds, [inbox.id]: { ...defaultBackground } };
-    }
-    const validNodeIds = new Set(nodes.map((n) => n.id));
-    const fallbackId = validNodeIds.has($appState.selectedNodeId) ? $appState.selectedNodeId : nodes.find((n) => n.kind === "entry")?.id ?? "my-day";
-    commit({
-      ...$appState,
-      nodes,
-      tasks: $appState.tasks.filter((t) => validNodeIds.has(t.nodeId)),
-      selectedNodeId: fallbackId,
-      backgrounds
-    });
+    void deleteNodeCascadeAction(id);
     treeMenu = null;
   }
 
@@ -185,10 +172,8 @@
     }
     const nodes = [...withoutSource];
     nodes.splice(insertIndex, 0, sourceWithParent);
-    commit({
-      ...$appState,
-      nodes: nodes.map((n) => (position === "inside" && n.id === target.id ? { ...n, collapsed: false } : n))
-    });
+    const ordered = nodes.map((n) => (position === "inside" && n.id === target.id ? { ...n, collapsed: false } : n));
+    void applyTreeOrderAction(ordered, { [id]: nextParentId });
     draggingId = null;
   }
 
@@ -219,10 +204,8 @@
     }
     const nodes = [...withoutSource];
     nodes.splice(insertIndex, 0, sourceWithParent);
-    commit({
-      ...$appState,
-      nodes: nodes.map((n) => (nextParentId && n.id === nextParentId ? { ...n, collapsed: false } : n))
-    });
+    const ordered = nodes.map((n) => (nextParentId && n.id === nextParentId ? { ...n, collapsed: false } : n));
+    void applyTreeOrderAction(ordered, { [id]: nextParentId });
     treeMenu = null;
     draggingId = null;
   }
@@ -240,10 +223,7 @@
 
   function pickIcon(icon: string): void {
     if (!selectedIconPickerList) return;
-    commit({
-      ...$appState,
-      nodes: $appState.nodes.map((n) => (n.id === selectedIconPickerList!.id ? { ...n, icon } : n))
-    });
+    void setNodeIconAction(selectedIconPickerList.id, icon);
     iconPickerListId = null;
   }
 

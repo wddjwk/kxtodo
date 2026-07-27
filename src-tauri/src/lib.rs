@@ -1,7 +1,7 @@
 use base64::Engine;
 #[cfg(desktop)]
 use std::{
-    io::{Read, Write},
+    io::Read,
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
     thread,
@@ -17,6 +17,9 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use tauri::{AppHandle, Manager};
+
+#[cfg(desktop)]
+pub mod domain;
 
 #[cfg(desktop)]
 use tauri::{
@@ -560,7 +563,7 @@ fn notification_position(
 fn show_notification_window(
     app: &AppHandle,
     notification: NotificationRequest,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let notification = normalize_notification(app, notification);
     let counter = NOTIFICATION_COUNTER.fetch_add(1, Ordering::SeqCst);
     let label = format!("notification-{counter}");
@@ -591,250 +594,47 @@ fn show_notification_window(
     }
     window.show().map_err(|error| error.to_string())?;
 
-    Ok(())
-}
-
-#[cfg(desktop)]
-fn cli_usage() -> String {
-    [
-        "KXToDo 命令行用法：",
-        "  KXToDo.exe                         打开 / 隐藏主窗口",
-        "  KXToDo.exe -h | --help             显示帮助",
-        "  KXToDo.exe notify <消息> [选项]     发送悬浮通知",
-        "",
-        "notify 选项：",
-        "  -h, --help                         显示 notify 帮助",
-        "  -t, --title <标题>                  通知标题",
-        "  -m, --message <消息>                通知消息",
-        "  -d, --duration <5200|5s|5200ms>     自动隐藏时长",
-        "  --tone <info|success|warning|error> 通知样式",
-        "  --position <bottom-right|top-right|bottom-left|top-left> 弹窗位置",
-    ]
-    .join("\n")
-}
-
-#[cfg(desktop)]
-fn notify_usage() -> String {
-    [
-        "KXToDo notify 用法：",
-        "  KXToDo.exe notify <消息> [--title 标题] [--duration 5s] [--tone success]",
-        "  KXToDo.exe notify --message \"构建完成\" --title \"CI\" --position bottom-right",
-    ]
-    .join("\n")
-}
-
-#[cfg(desktop)]
-fn parse_duration_ms(raw: &str) -> Result<u64, String> {
-    let value = raw.trim();
-    if let Some(ms) = value.strip_suffix("ms") {
-        return ms
-            .trim()
-            .parse::<u64>()
-            .map_err(|_| "duration 必须是毫秒数或 5s 这样的秒数".to_string());
-    }
-    if let Some(seconds) = value.strip_suffix('s') {
-        let parsed = seconds
-            .trim()
-            .parse::<f64>()
-            .map_err(|_| "duration 必须是毫秒数或 5s 这样的秒数".to_string())?;
-        if parsed.is_finite() && parsed > 0.0 {
-            return Ok((parsed * 1000.0).round() as u64);
-        }
-        return Err("duration 必须大于 0".to_string());
-    }
-    value
-        .parse::<u64>()
-        .map_err(|_| "duration 必须是毫秒数或 5s 这样的秒数".to_string())
-}
-
-#[cfg(desktop)]
-fn take_cli_value(args: &[String], index: &mut usize, flag: &str) -> Result<String, String> {
-    *index += 1;
-    args.get(*index)
-        .cloned()
-        .ok_or_else(|| format!("{flag} 需要一个参数"))
-}
-
-#[cfg(desktop)]
-#[derive(Debug, Clone)]
-enum CliAction {
-    Gui,
-    Help(String),
-    Notify(NotificationRequest),
-    Error(String),
-}
-
-#[cfg(all(desktop, target_os = "windows"))]
-fn print_cli_text(message: &str) {
-    use windows_sys::Win32::{
-        Foundation::INVALID_HANDLE_VALUE,
-        Storage::FileSystem::WriteFile,
-        System::Console::{
-            AttachConsole, GetStdHandle, WriteConsoleW, ATTACH_PARENT_PROCESS, STD_OUTPUT_HANDLE,
-        },
-    };
-    let stdout_text = format!("{message}\n");
-    unsafe {
-        let _ = AttachConsole(ATTACH_PARENT_PROCESS);
-    }
-    unsafe {
-        let handle = GetStdHandle(STD_OUTPUT_HANDLE);
-        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
-            let _ = std::io::stdout().write_all(stdout_text.as_bytes());
-            let _ = std::io::stdout().flush();
-            return;
-        }
-        let text = format!("{message}\r\n");
-        let wide = text.encode_utf16().collect::<Vec<_>>();
-        let mut written = 0;
-        if WriteConsoleW(
-            handle,
-            wide.as_ptr(),
-            wide.len() as u32,
-            &mut written,
-            std::ptr::null_mut(),
-        ) != 0
-        {
-            return;
-        }
-        let bytes = stdout_text.as_bytes();
-        let _ = WriteFile(
-            handle,
-            bytes.as_ptr(),
-            bytes.len() as u32,
-            &mut written,
-            std::ptr::null_mut(),
-        );
-    }
-}
-
-#[cfg(all(desktop, not(target_os = "windows")))]
-fn print_cli_text(message: &str) {
-    println!("{message}");
-}
-
-#[cfg(desktop)]
-fn parse_cli_action(args: &[String]) -> CliAction {
-    let Some(command) = args.first().map(String::as_str) else {
-        return CliAction::Gui;
-    };
-    match command {
-        "-h" | "--help" | "help" => CliAction::Help(cli_usage()),
-        "notify" => match parse_cli_notification(args) {
-            Ok(notification) => CliAction::Notify(notification),
-            Err(message) if message == notify_usage() => CliAction::Help(message),
-            Err(message) => CliAction::Error(message),
-        },
-        unsupported => CliAction::Error(format!(
-            "不支持的命令行参数：{unsupported}\n\n{}",
-            cli_usage()
-        )),
-    }
-}
-
-#[cfg(desktop)]
-fn parse_cli_notification(args: &[String]) -> Result<NotificationRequest, String> {
-    let mut notification = NotificationRequest {
-        title: default_notification_title(),
-        message: String::new(),
-        duration_ms: 0,
-        tone: "info".to_string(),
-        position: String::new(),
-        title_font_size: 0.0,
-        body_font_size: 0.0,
-    };
-    let mut message_parts = Vec::new();
-    let mut index = 1;
-    while index < args.len() {
-        let arg = &args[index];
-        match arg.as_str() {
-            "--help" | "-h" => return Err(notify_usage()),
-            "--title" | "-t" => {
-                notification.title = take_cli_value(args, &mut index, arg)?;
-            }
-            "--message" | "--body" | "-m" => {
-                notification.message = take_cli_value(args, &mut index, arg)?;
-            }
-            "--duration" | "--timeout" | "-d" => {
-                let value = take_cli_value(args, &mut index, arg)?;
-                notification.duration_ms = parse_duration_ms(&value)?;
-            }
-            "--tone" | "--type" => {
-                notification.tone = take_cli_value(args, &mut index, arg)?;
-            }
-            "--position" => {
-                notification.position = take_cli_value(args, &mut index, arg)?;
-            }
-            value if value.starts_with("--title=") => {
-                notification.title = value.trim_start_matches("--title=").to_string();
-            }
-            value if value.starts_with("--message=") => {
-                notification.message = value.trim_start_matches("--message=").to_string();
-            }
-            value if value.starts_with("--body=") => {
-                notification.message = value.trim_start_matches("--body=").to_string();
-            }
-            value if value.starts_with("--duration=") => {
-                notification.duration_ms = parse_duration_ms(value.trim_start_matches("--duration="))?;
-            }
-            value if value.starts_with("--timeout=") => {
-                notification.duration_ms = parse_duration_ms(value.trim_start_matches("--timeout="))?;
-            }
-            value if value.starts_with("--tone=") => {
-                notification.tone = value.trim_start_matches("--tone=").to_string();
-            }
-            value if value.starts_with("--type=") => {
-                notification.tone = value.trim_start_matches("--type=").to_string();
-            }
-            value if value.starts_with("--position=") => {
-                notification.position = value.trim_start_matches("--position=").to_string();
-            }
-            value => message_parts.push(value.to_string()),
-        }
-        index += 1;
-    }
-
-    if notification.message.trim().is_empty() {
-        notification.message = message_parts.join(" ");
-    }
-    if notification.message.trim().is_empty() {
-        return Err(notify_usage());
-    }
-
-    Ok(notification)
+    Ok(label)
 }
 
 #[cfg(desktop)]
 #[tauri::command]
-fn send_notification(notification: NotificationRequest) -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let mut cmd = Command::new(&exe);
-    cmd.arg("notify")
-        .arg("--message")
-        .arg(&notification.message)
-        .arg("--title")
-        .arg(&notification.title);
-
-    if notification.duration_ms > 0 {
-        cmd.arg("--duration")
-            .arg(format!("{}ms", notification.duration_ms));
-    }
-    if !notification.tone.trim().is_empty() {
-        cmd.arg("--tone").arg(&notification.tone);
-    }
-    if !notification.position.trim().is_empty() {
-        cmd.arg("--position").arg(&notification.position);
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
-
-    cmd.spawn()
-        .map_err(|e| format!("Failed to spawn notification process: {}", e))?;
-    Ok(())
+fn send_notification(
+    notification: NotificationRequest,
+    core: State<'_, Arc<domain::host::HostCore>>,
+) -> Result<(), String> {
+    let payload = serde_json::json!({
+        "title": notification.title,
+        "message": notification.message,
+        "duration": if notification.duration_ms > 0 {
+            Some(format!("{}ms", notification.duration_ms))
+        } else {
+            None
+        },
+        "tone": if notification.tone.trim().is_empty() {
+            None
+        } else {
+            Some(notification.tone.clone())
+        },
+        "position": if notification.position.trim().is_empty() {
+            None
+        } else {
+            Some(notification.position.clone())
+        },
+    });
+    let merged = core
+        .resolve_notification_payload(
+            payload.get("title").and_then(Value::as_str),
+            payload.get("message").and_then(Value::as_str).unwrap_or(""),
+            payload.get("duration").and_then(Value::as_str),
+            payload.get("tone").and_then(Value::as_str),
+            payload.get("position").and_then(Value::as_str),
+            false,
+        )
+        .map_err(|error| error.to_string())?;
+    core.show_notification_payload(merged)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(desktop)]
@@ -1676,64 +1476,211 @@ fn open_url(app: AppHandle, url: String) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    #[cfg(desktop)]
-    let cli_action = {
-        let args = env::args().skip(1).collect::<Vec<_>>();
-        parse_cli_action(&args)
-    };
-    #[cfg(desktop)]
-    {
-        match &cli_action {
-            CliAction::Help(message) => {
-                print_cli_text(message);
-                std::process::exit(0);
+// ---------------------------------------------------------------------------
+// v9 host wiring (desktop)
+// ---------------------------------------------------------------------------
+
+#[cfg(desktop)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AppMode {
+    Gui,
+    HiddenHost,
+}
+
+#[cfg(desktop)]
+struct TauriBackend {
+    app: AppHandle,
+}
+
+#[cfg(desktop)]
+impl TauriBackend {
+    fn show_or_create_main_window(&self) -> Result<(), String> {
+        if let Some(window) = self.app.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+            return Ok(());
+        }
+        create_main_window(&self.app)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+}
+
+#[cfg(desktop)]
+impl domain::host::HostBackend for TauriBackend {
+    fn show_notification(
+        &self,
+        payload: &Value,
+        _wait_rx: Option<std::sync::mpsc::Receiver<()>>,
+    ) -> Result<String, domain::CoreError> {
+        let request = NotificationRequest {
+            title: payload
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("KXToDo")
+                .to_string(),
+            message: payload
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            duration_ms: payload
+                .get("durationMs")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            tone: payload
+                .get("tone")
+                .and_then(Value::as_str)
+                .unwrap_or("info")
+                .to_string(),
+            position: payload
+                .get("position")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            title_font_size: payload
+                .get("titleFontSize")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+            body_font_size: payload
+                .get("bodyFontSize")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+        };
+        show_notification_window(&self.app, request).map_err(|error| {
+            domain::CoreError::execution("NOTIFY_FAILED", format!("通知窗口创建失败：{error}"))
+        })
+    }
+
+    fn emit(&self, event: &str, payload: Value) {
+        use tauri::Emitter;
+        let _ = self.app.emit(event, payload);
+    }
+
+    fn apply_native_effect(
+        &self,
+        name: &str,
+        settings: &domain::model::SettingsFile,
+    ) -> Result<(), domain::CoreError> {
+        match name {
+            "autostart" => {
+                if settings.lifecycle.launch_at_startup {
+                    self.app.autolaunch().enable()
+                } else {
+                    self.app.autolaunch().disable()
+                }
+                .map_err(|error| {
+                    domain::CoreError::internal(format!("开机自启应用失败：{error}"))
+                })?;
             }
-            CliAction::Error(message) => {
-                print_cli_text(message);
-                std::process::exit(2);
+            "closeToTray" => {
+                self.app
+                    .state::<LifecycleState>()
+                    .close_to_tray
+                    .store(settings.lifecycle.close_to_tray, Ordering::SeqCst);
             }
-            CliAction::Gui | CliAction::Notify(_) => {}
+            "globalShortcut" => {
+                register_global_toggle(&self.app, &settings.shortcuts.toggle_window).map_err(
+                    |error| domain::CoreError::internal(format!("全局快捷键注册失败：{error}")),
+                )?;
+            }
+            "webviewZoom" | "shortcuts" => {}
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn request_exit(&self) {
+        self.app.exit(0);
+    }
+
+    fn has_gui(&self) -> bool {
+        self.app.get_webview_window("main").is_some()
+    }
+
+    fn show_main_window(&self) -> Result<(), domain::CoreError> {
+        self.show_or_create_main_window()
+            .map_err(domain::CoreError::internal)
+    }
+}
+
+#[cfg(desktop)]
+fn create_main_window(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow> {
+    WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+        .title("KXToDo")
+        .inner_size(1180.0, 820.0)
+        .min_inner_size(900.0, 640.0)
+        .resizable(true)
+        .fullscreen(false)
+        .decorations(false)
+        .shadow(true)
+        .build()
+}
+
+#[cfg(desktop)]
+fn init_host_core(app: &AppHandle, mode: AppMode) -> Arc<domain::host::HostCore> {
+    let dir = data_dir(app).unwrap_or_else(|_| PathBuf::from("todo-note-data"));
+    domain::host::stale_descriptor_cleanup(&dir);
+    let repo = domain::repo::Repository::open(dir.clone())
+        .expect("open repository");
+    if let Err(error) = repo.load_all() {
+        eprintln!("数据迁移失败：{error}");
+    }
+    let core = domain::host::HostCore::new(
+        repo,
+        dir,
+        match mode {
+            AppMode::Gui => "gui",
+            AppMode::HiddenHost => "hidden",
+        },
+    );
+    core.set_backend(Box::new(TauriBackend { app: app.clone() }));
+    match domain::host::start_ipc_server(core.clone()) {
+        Ok(endpoint) => {
+            if let Ok(mut slot) = core.ipc_endpoint.write() {
+                *slot = endpoint;
+            }
+        }
+        Err(error) => {
+            eprintln!("IPC 启动失败（单实例冲突？）：{error}");
         }
     }
-    #[cfg(desktop)]
-    let is_cli_notify = matches!(cli_action, CliAction::Notify(_));
+    core.start_scheduler();
+    app.manage(core.clone());
+    core
+}
 
-    let builder = tauri::Builder::default().manage(LifecycleState::default());
-
-    #[cfg(desktop)]
-    let builder = builder.manage(Arc::new(SchedulerProcessState::default()));
-
-    #[cfg(desktop)]
-    let builder = if is_cli_notify {
-        builder
-    } else {
-        builder
-            .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-                toggle_main_window(app);
-            }))
-            .plugin(tauri_plugin_window_state::Builder::default().build())
-            .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-            .plugin(tauri_plugin_autostart::init(
-                MacosLauncher::LaunchAgent,
-                None,
-            ))
-    };
-
-    #[cfg(not(desktop))]
-    let builder = builder.plugin(tauri_plugin_opener::init());
+#[cfg(desktop)]
+fn run_desktop_app(mode: AppMode) {
+    let builder = tauri::Builder::default()
+        .manage(LifecycleState::default())
+        .manage(Arc::new(SchedulerProcessState::default()))
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // Second instance forwards its argv here.
+            let wants_host = args.iter().any(|arg| arg == "--kxtodo-host");
+            if wants_host {
+                return; // A host is already running; nothing to do.
+            }
+            let backend = TauriBackend { app: app.clone() };
+            let _ = backend.show_or_create_main_window();
+        }))
+        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec!["--kxtodo-host"]),
+        ))
+        .plugin(tauri_plugin_dialog::init());
 
     let mut context = tauri::generate_context!();
-    #[cfg(desktop)]
-    if is_cli_notify {
+    if mode == AppMode::HiddenHost {
         for window in &mut context.config_mut().app.windows {
             window.create = false;
         }
     }
 
-    builder
-        .plugin(tauri_plugin_dialog::init())
+    let builder = builder
         .invoke_handler(tauri::generate_handler![
             load_state,
             save_state,
@@ -1766,24 +1713,23 @@ pub fn run() {
             set_autostart,
             get_autostart_enabled,
             set_webview_zoom,
-            open_url
+            open_url,
+            core_dispatch,
+            core_snapshot
         ])
         .setup(move |app| {
             ensure_storage_layout(app.handle()).map_err(|error| {
                 tauri::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, error))
             })?;
-            #[cfg(desktop)]
-            {
-                if let CliAction::Notify(notification) = cli_action.clone() {
-                    show_notification_window(app.handle(), notification).map_err(|error| {
-                        tauri::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, error))
-                    })?;
-                    return Ok(());
-                }
-                if let Some(webview) = app.get_webview_window("main") {
-                    let _ = webview.set_zoom(1.0);
-                }
-                setup_tray(app)?;
+            let core = init_host_core(app.handle(), mode);
+            if mode == AppMode::HiddenHost {
+                domain::host::start_idle_watchdog(core);
+            }
+            if let Some(webview) = app.get_webview_window("main") {
+                let _ = webview.set_zoom(1.0);
+            }
+            setup_tray(app)?;
+            if mode == AppMode::Gui {
                 show_main_window(app.handle());
             }
             Ok(())
@@ -1793,8 +1739,10 @@ pub fn run() {
             {
                 if window.label().starts_with("notification-") {
                     if let tauri::WindowEvent::CloseRequested { .. } = event {
-                        if is_cli_notify {
-                            window.app_handle().exit(0);
+                        if let Some(core) =
+                            window.app_handle().try_state::<Arc<domain::host::HostCore>>()
+                        {
+                            core.notifications.closed(window.label());
                         }
                     }
                     return;
@@ -1811,6 +1759,11 @@ pub fn run() {
                         || !lifecycle.close_to_tray.load(Ordering::SeqCst)
                     {
                         lifecycle.quitting.store(true, Ordering::SeqCst);
+                        if let Some(core) =
+                            window.app_handle().try_state::<Arc<domain::host::HostCore>>()
+                        {
+                            domain::host::shutdown_host(&core);
+                        }
                         window.app_handle().exit(0);
                         return;
                     }
@@ -1823,7 +1776,138 @@ pub fn run() {
                     let _ = (window, api);
                 }
             }
-        })
-        .run(context)
-        .expect("failed to run KXToDo");
+        });
+    let app = builder
+        .build(context)
+        .expect("failed to build KXToDo");
+    app.run(move |app_handle, event| {
+        match event {
+            // Hidden Host 的窗口（通知窗）全部关闭不应退出进程；退出只由看门狗/显式请求触发。
+            tauri::RunEvent::ExitRequested { api, .. } => {
+                #[cfg(desktop)]
+                if mode == AppMode::HiddenHost {
+                    api.prevent_exit();
+                }
+            }
+            // 任何退出路径（托盘退出、看门狗自动退出、窗口关闭）都回收 Host 资源。
+            tauri::RunEvent::Exit => {
+                #[cfg(desktop)]
+                if let Some(core) = app_handle.try_state::<Arc<domain::host::HostCore>>() {
+                    domain::host::shutdown_host(&core);
+                }
+                let _ = app_handle;
+            }
+            _ => {}
+        }
+    });
+}
+
+/// Generic GUI → Domain Core bridge (§4.3): frontend submits business commands.
+#[cfg(desktop)]
+#[tauri::command]
+fn core_dispatch(
+    core: State<'_, Arc<domain::host::HostCore>>,
+    command: String,
+    params: Value,
+) -> Result<Value, String> {
+    let invocation = domain::core::Invocation::new(command, params);
+    let ctx = domain::core::ExecContext {
+        repo: &core.repo,
+        cwd: core.data_dir.clone(),
+        host: Some(core.as_ref()),
+        custom_data_dir: false,
+    };
+    let outcome = domain::core::execute(&invocation, &ctx);
+    if outcome.code == 0 {
+        Ok(outcome.envelope)
+    } else {
+        Err(serde_json::to_string(&outcome.envelope).unwrap_or_default())
+    }
+}
+
+/// Snapshot read for GUI hydration (replaces full-file load_* paths).
+#[cfg(desktop)]
+#[tauri::command]
+fn core_snapshot(core: State<'_, Arc<domain::host::HostCore>>) -> Result<Value, String> {
+    let data = core.repo.load_data().map_err(|error| error.to_string())?;
+    let settings = core.repo.load_settings().map_err(|error| error.to_string())?;
+    let schedule = core.repo.load_schedule().map_err(|error| error.to_string())?;
+    Ok(serde_json::json!({
+        "data": data,
+        "settings": settings,
+        "schedule": schedule,
+        "revisions": {
+            "data": data.meta.revision,
+            "settings": settings.meta.revision,
+            "schedule": schedule.meta.revision,
+        }
+    }))
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    #[cfg(desktop)]
+    {
+        let args: Vec<String> = env::args().skip(1).collect();
+        match domain::cli::dispatch(&args) {
+            domain::cli::Dispatch::Exit(code) => {
+                std::process::exit(code);
+            }
+            domain::cli::Dispatch::HiddenHost => run_desktop_app(AppMode::HiddenHost),
+            domain::cli::Dispatch::Gui => run_desktop_app(AppMode::Gui),
+        }
+    }
+
+    #[cfg(not(desktop))]
+    {
+        let builder = tauri::Builder::default()
+            .manage(LifecycleState::default())
+            .plugin(tauri_plugin_opener::init());
+
+        let context = tauri::generate_context!();
+        builder
+            .plugin(tauri_plugin_dialog::init())
+            .invoke_handler(tauri::generate_handler![
+                load_state,
+                save_state,
+                load_settings,
+                save_settings,
+                load_scheduler,
+                save_scheduler,
+                resolve_executor_paths,
+                resolve_executable_path,
+                run_scheduled_action,
+                stop_scheduled_action,
+                export_data,
+                save_background_image,
+                load_background_image,
+                delete_background_image,
+                import_background_image,
+                background_image_path,
+                save_avatar_image,
+                delete_avatar_image,
+                avatar_image_path,
+                save_md_image,
+                delete_md_image,
+                delete_node_images,
+                md_image_path,
+                save_md_image_data,
+                send_notification,
+                close_notification_window,
+                register_global_shortcut,
+                set_close_to_tray,
+                set_autostart,
+                get_autostart_enabled,
+                set_webview_zoom,
+                open_url
+            ])
+            .setup(move |app| {
+                ensure_storage_layout(app.handle()).map_err(|error| {
+                    tauri::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, error))
+                })?;
+                Ok(())
+            })
+            .run(context)
+            .expect("failed to run KXToDo");
+    }
 }

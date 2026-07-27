@@ -2,15 +2,20 @@
   import {
     Check, Clock3, FileCode2, FolderOpen, Plus, Power, Settings, Trash2
   } from "@lucide/svelte";
-  import { appState, commitScheduler, now, showToast } from "./stores";
+  import { appState, showToast } from "./stores";
   import {
-    createScheduledTask,
+    addSchedule as addScheduleAction, modifySchedule as modifyScheduleAction,
+    removeSchedule as removeScheduleAction, setScheduleEnabled as setScheduleEnabledAction,
+    stopSchedule as stopScheduleAction, setScheduleUi as setScheduleUiAction,
+    setRuntime as setRuntimeAction, detectRuntimes as detectRuntimesAction,
+    clearScheduleOutput as clearScheduleOutputAction
+  } from "./actions";
+  import {
     defaultScheduledTaskAction,
     defaultScheduledTaskTrigger,
     schedulerRuntimeKeys
   } from "./defaults";
-  import { pickExecutableFile, resolveExecutorPaths } from "./backend";
-  import { stopScheduledTask } from "./scheduler";
+  import { pickExecutableFile } from "./backend";
   import Dropdown from "./Dropdown.svelte";
   import SchedulerActionEditor from "./SchedulerActionEditor.svelte";
   import type {
@@ -69,18 +74,13 @@
   }
 
   function addScheduledTask(): void {
-    const task = createScheduledTask(`定时任务 ${scheduledTasks.length + 1}`);
-    commitScheduler({
-      ...$appState.scheduler,
-      tasks: [...scheduledTasks, task]
-    });
+    void addScheduleAction();
   }
 
   function updateTask(taskId: string, updater: (task: ScheduledTask) => ScheduledTask): void {
-    commitScheduler({
-      ...$appState.scheduler,
-      tasks: scheduledTasks.map((task) => task.id === taskId ? { ...updater(task), updatedAt: now() } : task)
-    });
+    const current = scheduledTasks.find((task) => task.id === taskId);
+    if (!current) return;
+    void modifyScheduleAction(taskId, updater(current));
   }
 
   function patchTask(taskId: string, patch: Partial<ScheduledTask>): void {
@@ -162,33 +162,26 @@
   }
 
   function toggleEnabled(task: ScheduledTask): void {
-    if (task.enabled || task.lastStatus === "running") {
-      stopScheduledTask(task.id);
+    if (task.lastStatus === "running") {
+      void stopScheduleAction(task.id);
       return;
     }
-    const enabled = !task.enabled;
-    patchTask(task.id, {
-      enabled,
-      runCount: enabled ? 0 : task.runCount,
-      lastRunAt: enabled ? undefined : task.lastRunAt,
-      nextRunAt: enabled && task.trigger.type === "once" ? task.trigger.runAt : task.nextRunAt,
-      lastStatus: "idle"
-    });
+    void setScheduleEnabledAction(task.id, !task.enabled);
   }
 
   function toggleExpanded(task: ScheduledTask): void {
     if (task.editing) {
       return;
     }
-    patchTask(task.id, { expanded: !task.expanded });
+    void setScheduleUiAction(task.id, { expanded: !task.expanded });
   }
 
   function startEditing(taskId: string): void {
-    patchTask(taskId, { editing: true, expanded: true });
+    void setScheduleUiAction(taskId, { editing: true, expanded: true });
   }
 
   function finishEditing(taskId: string): void {
-    patchTask(taskId, { editing: false, expanded: false });
+    void setScheduleUiAction(taskId, { editing: false, expanded: false });
   }
 
   function toggleEditing(task: ScheduledTask): void {
@@ -200,36 +193,16 @@
   }
 
   function deleteTask(taskId: string): void {
-    commitScheduler({
-      ...$appState.scheduler,
-      tasks: scheduledTasks.filter((task) => task.id !== taskId)
-    });
+    void removeScheduleAction(taskId);
   }
 
   function updateRuntime(key: SchedulerRuntimeKey, value: string): void {
-    commitScheduler({
-      ...$appState.scheduler,
-      runtimes: {
-        ...$appState.scheduler.runtimes,
-        [key]: value
-      }
-    });
+    void setRuntimeAction(key, value);
   }
 
   async function refreshRuntimes(): Promise<void> {
-    try {
-      const resolved = await resolveExecutorPaths();
-      commitScheduler({
-        ...$appState.scheduler,
-        runtimes: {
-          ...$appState.scheduler.runtimes,
-          ...Object.fromEntries(schedulerRuntimeKeys.map((key) => [key, $appState.scheduler.runtimes[key] || resolved[key] || ""]))
-        } as Record<SchedulerRuntimeKey, string>
-      });
-      showToast("已从环境变量刷新执行器路径");
-    } catch (error) {
-      showToast(`刷新执行器路径失败：${String(error)}`);
-    }
+    await detectRuntimesAction();
+    showToast("已从环境变量刷新执行器路径");
   }
 
   async function browseRuntime(key: SchedulerRuntimeKey): Promise<void> {
@@ -244,11 +217,7 @@
   }
 
   function clearOutput(taskId: string): void {
-    patchTask(taskId, {
-      lastExitCode: undefined,
-      lastStdout: "",
-      lastStderr: ""
-    });
+    void clearScheduleOutputAction(taskId);
   }
 
   function textValue(event: Event): string {

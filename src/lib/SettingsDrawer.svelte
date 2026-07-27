@@ -1,14 +1,14 @@
 <script lang="ts">
   import {
-    appSettings, commitSettings, showSettings, showToast, showNotification, fileToDataUrl
+    appSettings, showSettings, showToast, showNotification, fileToDataUrl
   } from "./stores";
+  import { setConfig as setConfigAction } from "./actions";
   import {
     uiScaleValue, scalePercentValue, clampNumber, isNumberInRange,
     buildSettingsDrawerStyle, avatarStyle, avatarInitial
   } from "./styles";
   import { defaultSettings } from "./defaults";
   import {
-    setCloseToTray, setAutostart, registerGlobalShortcut,
     isTauriRuntime, pickImageFile, saveAvatarImage, avatarImageUrl
   } from "./backend";
   import { avatarCache, resolveAvatarSrc } from "./images";
@@ -30,24 +30,15 @@
   $: avInitial = avatarInitial($appSettings.profile.displayName);
 
   function updateProfile(field: keyof Settings["profile"], value: string): void {
-    commitSettings({
-      ...$appSettings,
-      profile: { ...$appSettings.profile, [field]: value }
-    });
+    void setConfigAction(`profile.${field}`, value);
   }
 
   function updateAppearance<K extends keyof Settings["appearance"]>(field: K, value: Settings["appearance"][K]): void {
-    commitSettings({
-      ...$appSettings,
-      appearance: { ...$appSettings.appearance, [field]: value }
-    });
+    void setConfigAction(`appearance.${field}`, value);
   }
 
   function updateNotifications<K extends keyof Settings["notifications"]>(field: K, value: Settings["notifications"][K]): void {
-    commitSettings({
-      ...$appSettings,
-      notifications: { ...$appSettings.notifications, [field]: value }
-    });
+    void setConfigAction(`notifications.${field}`, value);
   }
 
   function updateScalePercent(value: number): void {
@@ -94,35 +85,23 @@
   }
 
   async function updateLifecycle<K extends keyof Settings["lifecycle"]>(field: K, value: Settings["lifecycle"][K]): Promise<void> {
-    try {
-      if (field === "closeToTray") await setCloseToTray(Boolean(value));
-      if (field === "launchAtStartup") await setAutostart(Boolean(value));
-      commitSettings({
-        ...$appSettings,
-        lifecycle: { ...$appSettings.lifecycle, [field]: value }
-      });
-    } catch (error) {
-      showToast(`系统设置更新失败：${String(error)}`);
+    // 原生副作用由 Host 在 config.set 时同步应用（§3.6）。
+    const ok = await setConfigAction(`lifecycle.${field}`, Boolean(value));
+    if (!ok) {
+      showToast("系统设置更新失败");
     }
   }
 
   function updateShortcut(field: keyof Settings["shortcuts"], value: string): void {
-    const next = {
-      ...$appSettings,
-      shortcuts: { ...$appSettings.shortcuts, [field]: value }
-    };
-    commitSettings(next);
-    if (field === "toggleWindow") {
-      registerGlobalShortcut(value).catch((error) => showToast(`全局快捷键注册失败：${String(error)}`));
-    }
+    void setConfigAction(`shortcuts.${field}`, value);
   }
 
   function updateCloudEndpoint(value: string): void {
-    commitSettings({ ...$appSettings, cloud: { ...$appSettings.cloud, endpoint: value } });
+    void setConfigAction("cloud.endpoint", value);
   }
 
   function updateCloudProvider(value: Settings["cloud"]["provider"]): void {
-    commitSettings({ ...$appSettings, cloud: { ...$appSettings.cloud, provider: value } });
+    void setConfigAction("cloud.provider", value);
   }
 
   async function uploadAvatar(): Promise<void> {
@@ -136,7 +115,7 @@
       const filename = await saveAvatarImage(srcPath);
       const url = await avatarImageUrl(filename);
       avatarCache.update((map) => ({ ...map, [filename]: url }));
-      commitSettings({ ...$appSettings, profile: { ...$appSettings.profile, avatar: filename } });
+      void setConfigAction("profile.avatar", filename);
     } catch (error) {
       showToast(`头像上传失败：${String(error)}`);
     }
@@ -147,7 +126,7 @@
     if (!(target instanceof HTMLInputElement) || !target.files?.[0]) return;
     try {
       const avatar = await fileToDataUrl(target.files[0]);
-      commitSettings({ ...$appSettings, profile: { ...$appSettings.profile, avatar } });
+      void setConfigAction("profile.avatar", avatar);
     } catch (error) {
       showToast(`头像读取失败：${String(error)}`);
     } finally {

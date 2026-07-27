@@ -1,22 +1,28 @@
+# KXToDo release build.
+# Usage:
+#   .\release.ps1                # Windows, version from Cargo.toml
+#   .\release.ps1 win 9.0.1     # Windows, explicit version
+#   .\release.ps1 all            # Windows + Android
 param(
-  [string]$Version = "8.2.1",
-  [ValidateSet("all", "windows", "android")]
+  [Parameter(Position = 0)]
   [string]$Targets = "windows",
-  [switch]$Log
+  [Parameter(Position = 1)]
+  [string]$Version = ""
 )
 
-$ErrorActionPreference = "Stop"
-
-$root = Split-Path -Parent $MyInvocation.MyCommand.Path
-if (-not $Version.Trim()) {
-  $Version = (Get-Content -LiteralPath (Join-Path $root "package.json") -Raw | ConvertFrom-Json).version
+# Shorthand mapping
+$targetMap = @{ win = "windows"; windows = "windows"; droid = "android"; android = "android"; all = "all" }
+if (!$targetMap.ContainsKey($Targets.ToLower())) {
+  Write-Error "Unknown target '$Targets'. Use: win, droid, all"
+  exit 1
 }
+$resolvedTargets = $targetMap[$Targets.ToLower()]
 
-$packageScript = Join-Path $root "scripts\package.ps1"
-$arguments = @("-ExecutionPolicy", "Bypass", "-File", $packageScript, "-Version", $Version, "-Targets", $Targets)
-if ($Log) {
-  $arguments += "-Log"
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$packageScript = Join-Path $scriptDir "scripts\package.ps1"
+
+if ($Version) {
+  & $packageScript -Targets $resolvedTargets -Version $Version
+} else {
+  & $packageScript -Targets $resolvedTargets
 }
-
-& powershell.exe @arguments
-exit $LASTEXITCODE

@@ -1,15 +1,17 @@
 import { writable, derived, get } from "svelte/store";
-import type { AppNotification, AppState, AppNode, EmojiPickerTarget, NotificationTone, SchedulerState, Settings } from "./types";
+import type { AppNotification, AppState, AppNode, EmojiPickerTarget, NotificationTone, SchedulerState, Settings, Task } from "./types";
 import { defaultSchedulerRuntimes, defaultSettings, emptyState, normalizeState, normalizeSettings, schedulerRuntimeKeys } from "./defaults";
 import {
   loadState, saveState, loadSettings, saveSettings, loadScheduler, saveScheduler,
   registerGlobalShortcut, setCloseToTray, setAutostart,
-  setWebviewZoom, isTauriRuntime, resolveExecutorPaths, sendNativeNotification
+  setWebviewZoom, isTauriRuntime, resolveExecutorPaths, sendNativeNotification,
+  hasCoreDispatch, coreSnapshot
 } from "./backend";
 import { buildListCounts, buildVisibleTasks, getBackground } from "./nodes";
 import { accentForNode, uiScaleValue } from "./styles";
+import { entryToUi, type ScheduleEntryV9 } from "./scheduleAdapter";
 
-export const APP_VERSION = "8.3.2";
+export const APP_VERSION = "9.0.0";
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -142,7 +144,7 @@ export const accent = derived(
 export const isSearching = derived(searchQuery, ($q) => $q.trim().length > 0);
 
 // ---------------------------------------------------------------------------
-// Persistence
+// Legacy persistence（mobile / 浏览器预览路径；桌面 v9 走 actions.ts 命令化写入）
 // ---------------------------------------------------------------------------
 
 let stateSaveTimer: number | undefined;
@@ -210,10 +212,135 @@ async function syncNativeLifecycle(nextSettings: Settings): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// v9 core mode：快照刷新 + 领域事件 + 编辑冲突策略（§4.3）
+// ---------------------------------------------------------------------------
+
+/** v9 ScheduleEntry → 侧表（GUI 编辑器据此构建 patch，保留 CLI 专属字段）。 */
+export const scheduleEntries = writable<Map<string, ScheduleEntryV9>>(new Map());
+
+/** 编辑基准：itemId → 开始编辑时的 updatedAt（用于保存冲突检测）。 */
+const editBases = new Map<string, { updatedAt?: string; notified: boolean }>();
+
+export function markEditStart(task: Task): void {
+  editBases.set(task.id, { updatedAt: task.updatedAt, notified: false });
+}
+
+export function clearEditBase(taskId: string): void {
+  editBases.delete(taskId);
+}
+
+export function editBaseUpdatedAt(taskId: string): string | undefined {
+  return editBases.get(taskId)?.updatedAt;
+}
+
+export let coreMode = false;
+
+function applySnapshot(snapshot: Awaited<ReturnType<typeof coreSnapshot>>, domains?: Set<string>): void {
+  const wantAll = !domains;
+  if (wantAll || domains?.has("data")) {
+    const current = get(appState);
+    const normalized = normalizeState({
+      ...snapshot.data,
+      scheduler: current.scheduler
+    });
+    // 编辑冲突：外部版本已变化的编辑中任务保留本地草稿并提示。
+    const previousById = new Map(current.tasks.map((task) => [task.id, task]));
+    normalized.tasks = normalized.tasks.map((task) => {
+      const previous = previousById.get(task.id);
+      if (previous?.editing) {
+        const base = editBases.get(task.id);
+        if (base && base.updatedAt !== task.updatedAt && !base.notified) {
+          base.notified = true;
+          showToast("外部版本已变化，本次未保存", 4200);
+        }
+        return { ...task, editing: true, expanded: previous.expanded };
+      }
+      return task;
+    });
+    // 被外部删除的编辑中任务：退出编辑态并提示
+    for (const previous of previousById.values()) {
+      if (previous.editing && !normalized.tasks.some((task) => task.id === previous.id)) {
+        editBases.delete(previous.id);
+        showToast("正在编辑的任务已被外部删除", 4200);
+      }
+    }
+    appState.set({ ...normalized, scheduler: current.scheduler });
+  }
+  if (wantAll || domains?.has("settings")) {
+    appSettings.set(normalizeSettings(snapshot.settings));
+  }
+  if (wantAll || domains?.has("schedule")) {
+    const current = get(appState);
+    const entries = snapshot.schedule.tasks as ScheduleEntryV9[];
+    scheduleEntries.set(new Map(entries.map((entry) => [entry.id, entry])));
+    const runtimes = schedulerRuntimeKeys.reduce((acc, key) => {
+      acc[key] = snapshot.schedule.runtimes?.[key] || "";
+      return acc;
+    }, { ...defaultSchedulerRuntimes });
+    appState.set({
+      ...get(appState),
+      scheduler: {
+        runtimes,
+        tasks: entries.map(entryToUi)
+      }
+    });
+  }
+}
+
+let snapshotInFlight = false;
+
+/** 从 Host 拉取最新快照并合并（事件驱动刷新的唯一路径）。 */
+export async function refreshFromCore(domains?: string[]): Promise<void> {
+  if (!coreMode || snapshotInFlight) {
+    return;
+  }
+  snapshotInFlight = true;
+  try {
+    const snapshot = await coreSnapshot();
+    applySnapshot(snapshot, domains ? new Set(domains) : undefined);
+  } catch {
+    // Host 暂不可达时忽略，下次事件再试
+  } finally {
+    snapshotInFlight = false;
+  }
+}
+
+async function listenCoreEvents(): Promise<void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  await listen<{ domain?: string }>("kxtodo://domain-changed", (event) => {
+    const domain = event.payload?.domain;
+    void refreshFromCore(domain ? [domain] : undefined);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Hydration
 // ---------------------------------------------------------------------------
 
 export async function hydrate(): Promise<void> {
+  coreMode = await hasCoreDispatch();
+  if (coreMode) {
+    try {
+      const snapshot = await coreSnapshot();
+      applySnapshot(snapshot);
+    } catch {
+      // 首启失败退回默认
+    } finally {
+      isHydrated.set(true);
+    }
+    await listenCoreEvents();
+    const settings = get(appSettings);
+    await syncNativeAppearance(settings);
+    try {
+      await registerGlobalShortcut(settings.shortcuts.toggleWindow);
+    } catch (error) {
+      showToast(`全局快捷键注册失败：${String(error)}`);
+    }
+    await syncNativeLifecycle(settings);
+    return;
+  }
+
+  // Legacy 路径（mobile / 浏览器预览）
   let loadedSettings = clone(defaultSettings);
   try {
     const [storedState, storedScheduler, storedSettings, resolvedExecutors] = await Promise.all([
@@ -252,23 +379,3 @@ export async function hydrate(): Promise<void> {
 
   await syncNativeLifecycle(loadedSettings);
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

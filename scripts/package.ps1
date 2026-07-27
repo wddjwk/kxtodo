@@ -44,25 +44,28 @@ try {
       throw "Version must look like 1.2.3 or 1.2.3-beta.1"
     }
 
+    # Use .NET IO with explicit UTF-8 (no BOM) to avoid PS 5.1 ANSI/GBK corruption.
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+
     $packageJsonPath = Join-Path $root "package.json"
-    $packageJson = Get-Content -LiteralPath $packageJsonPath -Raw | ConvertFrom-Json
+    $packageJson = [System.IO.File]::ReadAllText($packageJsonPath, $utf8NoBom) | ConvertFrom-Json
     $packageJson.version = $Version
-    $packageJson | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $packageJsonPath -Encoding UTF8
+    [System.IO.File]::WriteAllText($packageJsonPath, ($packageJson | ConvertTo-Json -Depth 20), $utf8NoBom)
 
     $tauriConfigPath = Join-Path $root "src-tauri\tauri.conf.json"
-    $tauriConfig = Get-Content -LiteralPath $tauriConfigPath -Raw | ConvertFrom-Json
+    $tauriConfig = [System.IO.File]::ReadAllText($tauriConfigPath, $utf8NoBom) | ConvertFrom-Json
     $tauriConfig.version = $Version
-    $tauriConfig | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $tauriConfigPath -Encoding UTF8
+    [System.IO.File]::WriteAllText($tauriConfigPath, ($tauriConfig | ConvertTo-Json -Depth 20), $utf8NoBom)
 
     $cargoTomlPath = Join-Path $root "src-tauri\Cargo.toml"
-    $cargoToml = Get-Content -LiteralPath $cargoTomlPath -Raw
+    $cargoToml = [System.IO.File]::ReadAllText($cargoTomlPath, $utf8NoBom)
     $cargoToml = $cargoToml -replace '(?m)^version = ".*"$', "version = `"$Version`""
-    Set-Content -LiteralPath $cargoTomlPath -Value $cargoToml -Encoding UTF8
+    [System.IO.File]::WriteAllText($cargoTomlPath, $cargoToml, $utf8NoBom)
 
     $storesPath = Join-Path $root "src\lib\stores.ts"
-    $stores = Get-Content -LiteralPath $storesPath -Raw
+    $stores = [System.IO.File]::ReadAllText($storesPath, $utf8NoBom)
     $stores = $stores -replace 'export const APP_VERSION = ".*";', "export const APP_VERSION = `"$Version`";"
-    Set-Content -LiteralPath $storesPath -Value $stores -Encoding UTF8
+    [System.IO.File]::WriteAllText($storesPath, $stores, $utf8NoBom)
   }
 
   if (!(Test-Path -LiteralPath (Join-Path $root "node_modules"))) {

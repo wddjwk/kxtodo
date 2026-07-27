@@ -236,6 +236,88 @@ export async function saveMdImageFromDataUrl(dataUrl: string, nodeId: string): P
   return invoke<string>("save_md_image_data", { dataUrl, nodeId });
 }
 
+// ---------------------------------------------------------------------------
+// v9 Domain Core bridge (desktop). Mobile/browser fall back to legacy paths.
+// ---------------------------------------------------------------------------
+
+let coreAvailable: boolean | null = null;
+
+export async function hasCoreDispatch(): Promise<boolean> {
+  if (!isTauriRuntime) {
+    return false;
+  }
+  if (coreAvailable !== null) {
+    return coreAvailable;
+  }
+  try {
+    await invoke("core_snapshot");
+    coreAvailable = true;
+  } catch {
+    coreAvailable = false;
+  }
+  return coreAvailable;
+}
+
+export type CoreEnvelope<T = unknown> = {
+  ok: boolean;
+  command: string;
+  data: T;
+  meta: Record<string, unknown>;
+  error?: { code: string; message: string; hint?: string };
+};
+
+export class CoreCommandError extends Error {
+  code: string;
+  hint?: string;
+  constructor(code: string, message: string, hint?: string) {
+    super(message);
+    this.code = code;
+    this.hint = hint;
+  }
+}
+
+/** Invoke a Domain Core command; rejects with CoreCommandError on failure. */
+export async function coreDispatch<T = unknown>(command: string, params: unknown = {}): Promise<CoreEnvelope<T>> {
+  try {
+    return await invoke<CoreEnvelope<T>>("core_dispatch", { command, params });
+  } catch (error) {
+    // core_dispatch returns the error envelope as a serialized string on failure.
+    if (typeof error === "string") {
+      try {
+        const envelope = JSON.parse(error) as CoreEnvelope;
+        if (envelope.error) {
+          throw new CoreCommandError(envelope.error.code, envelope.error.message, envelope.error.hint);
+        }
+      } catch (parseError) {
+        if (parseError instanceof CoreCommandError) {
+          throw parseError;
+        }
+      }
+      throw new CoreCommandError("CORE_ERROR", error);
+    }
+    throw new CoreCommandError("CORE_ERROR", String(error));
+  }
+}
+
+export type CoreSnapshot = {
+  data: {
+    nodes: AppState["nodes"];
+    tasks: AppState["tasks"];
+    backgrounds: AppState["backgrounds"];
+    selectedNodeId: string;
+  };
+  settings: unknown;
+  schedule: {
+    runtimes: SchedulerRuntimePaths;
+    tasks: unknown[];
+  };
+  revisions: { data: number; settings: number; schedule: number };
+};
+
+export async function coreSnapshot(): Promise<CoreSnapshot> {
+  return invoke<CoreSnapshot>("core_snapshot");
+}
+
 export async function registerGlobalShortcut(shortcut: string): Promise<void> {
   if (!isTauriRuntime) {
     return;

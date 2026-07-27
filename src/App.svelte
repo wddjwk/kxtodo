@@ -3,12 +3,12 @@
   import { matchesShortcut } from "./lib/shortcuts";
   import { buildAppShellStyle, buildMobileShellStyle } from "./lib/styles";
   import {
-    appSettings, appState, commit, showSettings, searchQuery,
-    taskEmojiPicker, now,
+    appSettings, appState, showSettings, searchQuery,
+    taskEmojiPicker,
     hydrate as hydrateStores
   } from "./lib/stores";
+  import { replaceTaskEmojis } from "./lib/actions";
   import { isMobile, mobileView } from "./lib/platform";
-  import { startSchedulerRuntime } from "./lib/scheduler";
   import TitleBar from "./lib/TitleBar.svelte";
   import Toast from "./lib/Toast.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
@@ -28,13 +28,10 @@
     : null;
 
   onMount(() => {
-    let stopScheduler: () => void = () => undefined;
-    void hydrateStores().then(() => {
-      stopScheduler = startSchedulerRuntime();
-    });
+    // 调度引擎在 Rust Background Host 中运行，前端不再持有调度循环。
+    void hydrateStores();
     window.addEventListener("keydown", handleShortcut);
     return () => {
-      stopScheduler();
       window.removeEventListener("keydown", handleShortcut);
     };
   });
@@ -63,19 +60,16 @@
     const target = $taskEmojiPicker;
     if (!target) return;
     const { taskId, index } = target;
-    commit({
-      ...$appState,
-      tasks: $appState.tasks.map((task) => {
-        if (task.id !== taskId) return task;
-        const emojis = [...task.emojis];
-        if (index >= 0 && index < emojis.length) {
-          emojis[index] = emoji;
-        } else {
-          emojis.push(emoji);
-        }
-        return { ...task, emojis, updatedAt: now() };
-      })
-    });
+    const task = $appState.tasks.find((item) => item.id === taskId);
+    if (task) {
+      const emojis = [...task.emojis];
+      if (index >= 0 && index < emojis.length) {
+        emojis[index] = emoji;
+      } else {
+        emojis.push(emoji);
+      }
+      void replaceTaskEmojis(taskId, emojis);
+    }
     taskEmojiPicker.set(null);
   }
 </script>
