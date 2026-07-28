@@ -1,0 +1,40 @@
+name: verify
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: npm ci
+      - name: Rust format
+        working-directory: src-tauri
+        run: cargo fmt --all -- --check
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test -- --test-threads=1
+      - name: Frontend check
+        run: npm run check
+      - name: Frontend build
+        run: npm run build
+      - name: CLI schema and embedded skill smoke
+        shell: pwsh
+        run: |
+          cargo run --manifest-path src-tauri/Cargo.toml -- schema schedule.spec --example interval-script | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo run --manifest-path src-tauri/Cargo.toml -- skills validate | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Generated/source consistency
+        shell: pwsh
+        run: |
+          git diff --exit-code

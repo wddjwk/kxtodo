@@ -4,7 +4,7 @@
 mod common;
 
 use common::TestEnv;
-use todo_note_lib::domain::repo::{Repository, RepoLock};
+use todo_note_lib::domain::repo::{RepoLock, Repository};
 
 #[test]
 fn revisions_increment_per_domain_independently() {
@@ -31,7 +31,14 @@ fn revisions_increment_per_domain_independently() {
 fn atomic_write_leaves_no_temp_files() {
     let env = TestEnv::fresh();
     for index in 0..5 {
-        env.ok(&["task", "add", "--type", "category", "--name", &format!("c{index}")]);
+        env.ok(&[
+            "task",
+            "add",
+            "--type",
+            "category",
+            "--name",
+            &format!("c{index}"),
+        ]);
     }
     let leftovers: Vec<_> = std::fs::read_dir(env.path())
         .unwrap()
@@ -48,7 +55,9 @@ fn atomic_write_leaves_no_temp_files() {
 fn concurrent_writers_do_not_lose_updates() {
     let env = TestEnv::fresh();
     env.ok(&["task", "add", "--type", "category", "--name", "seed"]);
-    let base = env.read_file("data.json")["_meta"]["revision"].as_u64().unwrap();
+    let base = env.read_file("data.json")["_meta"]["revision"]
+        .as_u64()
+        .unwrap();
 
     let mut handles = Vec::new();
     for thread_index in 0..4 {
@@ -87,7 +96,9 @@ fn concurrent_writers_do_not_lose_updates() {
     for thread_index in 0..4 {
         for item in 0..5 {
             assert!(
-                nodes.iter().any(|node| node["id"] == format!("t{thread_index}-n{item}")),
+                nodes
+                    .iter()
+                    .any(|node| node["id"] == format!("t{thread_index}-n{item}")),
                 "并发写入丢失"
             );
         }
@@ -132,12 +143,113 @@ fn audit_log_records_writes() {
 }
 
 #[test]
+fn exact_idempotency_replay_precedes_revision_guard() {
+    let env = TestEnv::fresh();
+    let first = env.run(&[
+        "task",
+        "add",
+        "--type",
+        "category",
+        "--name",
+        "once",
+        "--if-revision",
+        "0",
+        "--idempotency-key",
+        "same-request",
+    ]);
+    assert_eq!(first.code, 0, "{}", first.stderr);
+    let replay = env.run(&[
+        "task",
+        "add",
+        "--type",
+        "category",
+        "--name",
+        "once",
+        "--if-revision",
+        "0",
+        "--idempotency-key",
+        "same-request",
+    ]);
+    assert_eq!(replay.code, 0, "{}", replay.stderr);
+    assert_eq!(replay.envelope()["meta"]["replayed"], true);
+}
+
+#[test]
+fn idempotency_is_scoped_by_command() {
+    let env = TestEnv::fresh();
+    let created = env.ok(&[
+        "task",
+        "add",
+        "--type",
+        "category",
+        "--name",
+        "before",
+        "--idempotency-key",
+        "shared-key",
+    ]);
+    let id = created["id"].as_str().unwrap().to_string();
+    let modified = env.ok(&[
+        "task",
+        "modify",
+        "--type",
+        "category",
+        "--id",
+        &id,
+        "--name",
+        "after",
+        "--idempotency-key",
+        "shared-key",
+    ]);
+    assert_eq!(modified["name"], "after");
+}
+
+#[test]
+fn audit_failure_does_not_hide_committed_write() {
+    let env = TestEnv::fresh();
+    env.ok(&["task", "add", "--type", "category", "--name", "seed"]);
+    let audit = env.path().join("history").join("audit.ndjson");
+    std::fs::remove_file(&audit).unwrap();
+    std::fs::create_dir(&audit).unwrap();
+    let result = env.run(&["task", "add", "--type", "category", "--name", "committed"]);
+    assert_eq!(result.code, 0, "{}", result.stderr);
+    let envelope = result.envelope();
+    assert_eq!(
+        envelope["meta"]["warnings"][0]["code"],
+        "AUDIT_WRITE_FAILED"
+    );
+    let data = env.read_file("data.json");
+    assert!(data["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|node| node["name"] == "committed"));
+}
+
+#[test]
 fn backups_created_before_cascade_delete() {
     let env = TestEnv::fresh();
     let entry = env.ok(&["task", "add", "--type", "entry", "--name", "e"]);
     let entry_id = entry["id"].as_str().unwrap().to_string();
-    env.ok(&["task", "add", "--type", "item", "--entry-id", &entry_id, "--markdown", "x"]);
-    env.ok(&["task", "remove", "--type", "entry", "--id", &entry_id, "--cascade", "--yes"]);
+    env.ok(&[
+        "task",
+        "add",
+        "--type",
+        "item",
+        "--entry-id",
+        &entry_id,
+        "--markdown",
+        "x",
+    ]);
+    env.ok(&[
+        "task",
+        "remove",
+        "--type",
+        "entry",
+        "--id",
+        &entry_id,
+        "--cascade",
+        "--yes",
+    ]);
     let backups: Vec<_> = std::fs::read_dir(env.path().join("backups"))
         .unwrap()
         .filter_map(|entry| entry.ok())
@@ -147,16 +259,94 @@ fn backups_created_before_cascade_delete() {
 }
 
 #[test]
+fn cascade_delete_idempotency_replay_does_not_create_backup_again() {
+    let env = TestEnv::fresh();
+    let entry = env.ok(&["task", "add", "--type", "entry", "--name", "e"]);
+    let entry_id = entry["id"].as_str().unwrap().to_string();
+    let args = [
+        "task",
+        "remove",
+        "--type",
+        "entry",
+        "--id",
+        &entry_id,
+        "--cascade",
+        "--yes",
+        "--idempotency-key",
+        "delete-once",
+    ];
+    env.ok(&args);
+    let count_before = std::fs::read_dir(env.path().join("backups"))
+        .unwrap()
+        .count();
+    let replay = env.run(&args);
+    assert_eq!(replay.code, 0, "{}", replay.stderr);
+    assert_eq!(replay.envelope()["meta"]["replayed"], true);
+    let count_after = std::fs::read_dir(env.path().join("backups"))
+        .unwrap()
+        .count();
+    assert_eq!(count_after, count_before);
+}
+
+#[test]
+fn cascade_delete_failure_leaves_durable_recovery_record() {
+    let env = TestEnv::fresh();
+    let entry = env.ok(&["task", "add", "--type", "entry", "--name", "e"]);
+    let entry_id = entry["id"].as_str().unwrap().to_string();
+    let image_path = env.path().join("img").join("data").join(&entry_id);
+    std::fs::create_dir_all(image_path.parent().unwrap()).unwrap();
+    std::fs::write(&image_path, b"not-a-directory").unwrap();
+    let result = env.run(&[
+        "task",
+        "remove",
+        "--type",
+        "entry",
+        "--id",
+        &entry_id,
+        "--cascade",
+        "--yes",
+    ]);
+    assert_eq!(result.code, 0, "{}", result.stderr);
+    assert_eq!(
+        result.envelope()["meta"]["warnings"][0]["code"],
+        "ATTACHMENT_DELETE_PENDING"
+    );
+    let recovery = env.read_file("runtime/recovery.json");
+    assert_eq!(recovery["records"].as_array().unwrap().len(), 1);
+    let doctor = env.ok(&["doctor", "--check", "recovery"]);
+    assert_eq!(doctor["healthy"], false);
+    assert_eq!(doctor["checks"][0]["name"], "recovery");
+}
+
+#[test]
 fn cascade_remove_deletes_image_dir() {
     let env = TestEnv::fresh();
     let entry = env.ok(&["task", "add", "--type", "entry", "--name", "e"]);
     let entry_id = entry["id"].as_str().unwrap().to_string();
-    env.ok(&["task", "add", "--type", "item", "--entry-id", &entry_id, "--markdown", "x"]);
+    env.ok(&[
+        "task",
+        "add",
+        "--type",
+        "item",
+        "--entry-id",
+        &entry_id,
+        "--markdown",
+        "x",
+    ]);
     let img_dir = env.path().join("img").join("data").join(&entry_id);
     std::fs::create_dir_all(&img_dir).unwrap();
     std::fs::write(img_dir.join("md-1.png"), b"png").unwrap();
 
-    env.ok(&["task", "remove", "--type", "entry", "--id", &entry_id, "--cascade", "--yes"]);
+    env.ok(&[
+        "task",
+        "remove",
+        "--type",
+        "entry",
+        "--id",
+        &entry_id,
+        "--cascade",
+        "--yes",
+    ]);
     assert!(!img_dir.exists(), "级联删除必须删除条目图片目录");
     // 背景键也被清理
     let data = env.read_file("data.json");

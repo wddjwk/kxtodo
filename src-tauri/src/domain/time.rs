@@ -1,6 +1,8 @@
 //! Single source of truth for durations, dates and instants (requirements §3.2, §3.5.2).
 
-use chrono::{DateTime, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc};
+use chrono::{
+    DateTime, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc,
+};
 use chrono_tz::Tz;
 
 use crate::domain::error::{CoreError, CoreResult};
@@ -30,9 +32,7 @@ pub fn parse_duration_ms(raw: &str) -> CoreResult<u64> {
         "d" => 86_400_000,
         _ => return Err(bad_duration(raw)),
     };
-    amount
-        .checked_mul(factor)
-        .ok_or_else(|| bad_duration(raw))
+    amount.checked_mul(factor).ok_or_else(|| bad_duration(raw))
 }
 
 fn bad_duration(raw: &str) -> CoreError {
@@ -69,9 +69,7 @@ pub fn parse_date(raw: &str) -> CoreResult<String> {
     let value = raw.trim();
     if let Some(rel) = value.strip_prefix('+') {
         if let Some(days) = rel.strip_suffix('d') {
-            let days: i64 = days
-                .parse()
-                .map_err(|_| bad_date(raw))?;
+            let days: i64 = days.parse().map_err(|_| bad_date(raw))?;
             let date = Local::now().date_naive() + Duration::days(days);
             return Ok(date.format("%Y-%m-%d").to_string());
         }
@@ -234,6 +232,7 @@ pub fn now_in_tz(tz: Tz) -> DateTime<Tz> {
 }
 
 pub fn fixed_offset_now(offset_seconds: i32) -> DateTime<FixedOffset> {
-    let offset = FixedOffset::east_opt(offset_seconds).unwrap_or_else(|| FixedOffset::east_opt(0).unwrap());
+    let offset =
+        FixedOffset::east_opt(offset_seconds).unwrap_or_else(|| FixedOffset::east_opt(0).unwrap());
     Utc::now().with_timezone(&offset)
 }

@@ -39,7 +39,11 @@ pub fn require_node_kind(node: &Node, expected: NodeKind, type_flag: &str) -> Co
     Ok(())
 }
 
-pub fn get_node_typed<'a>(data: &'a DataFile, id: &str, expected: NodeKind) -> CoreResult<&'a Node> {
+pub fn get_node_typed<'a>(
+    data: &'a DataFile,
+    id: &str,
+    expected: NodeKind,
+) -> CoreResult<&'a Node> {
     let node = find_node(data, id).ok_or_else(|| {
         CoreError::not_found(
             "NODE_NOT_FOUND",
@@ -102,7 +106,11 @@ pub fn descendant_node_ids(data: &DataFile, root_id: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut stack = vec![root_id.to_string()];
     while let Some(id) = stack.pop() {
-        for node in data.nodes.iter().filter(|node| node.parent_id.as_deref() == Some(id.as_str())) {
+        for node in data
+            .nodes
+            .iter()
+            .filter(|node| node.parent_id.as_deref() == Some(id.as_str()))
+        {
             out.push(node.id.clone());
             stack.push(node.id.clone());
         }
@@ -138,7 +146,10 @@ fn ensure_entry_target(data: &DataFile, entry_id: &str) -> CoreResult<()> {
     if node.kind != NodeKind::Entry {
         return Err(CoreError::validation(
             "INVALID_ENTRY",
-            format!("{entry_id} 的类型是 {}，item 只能归属 entry", node.kind.as_str()),
+            format!(
+                "{entry_id} 的类型是 {}，item 只能归属 entry",
+                node.kind.as_str()
+            ),
         ));
     }
     Ok(())
@@ -157,7 +168,10 @@ fn ensure_category_target(data: &DataFile, parent_id: Option<&str>) -> CoreResul
     if node.kind != NodeKind::Category {
         return Err(CoreError::validation(
             "INVALID_PARENT",
-            format!("父级 {parent_id} 的类型是 {}，只能归属 root 或 category", node.kind.as_str()),
+            format!(
+                "父级 {parent_id} 的类型是 {}，只能归属 root 或 category",
+                node.kind.as_str()
+            ),
         ));
     }
     Ok(())
@@ -203,7 +217,12 @@ pub fn add_node(data: &mut DataFile, kind: NodeKind, params: AddNodeParams) -> C
     let prefix = match kind {
         NodeKind::Category => "category",
         NodeKind::Entry => "entry",
-        NodeKind::System => return Err(CoreError::validation("SYSTEM_NODE_READONLY", "系统节点不允许创建")),
+        NodeKind::System => {
+            return Err(CoreError::validation(
+                "SYSTEM_NODE_READONLY",
+                "系统节点不允许创建",
+            ))
+        }
     };
     let node = Node {
         id: gen_id(prefix),
@@ -263,7 +282,10 @@ fn build_tag(input: &TagInput) -> Tag {
     Tag {
         id: gen_id("tag"),
         color: input.color,
-        text: input.text.clone().map(|value| value.chars().take(20).collect()),
+        text: input
+            .text
+            .clone()
+            .map(|value| value.chars().take(20).collect()),
         extra: Map::new(),
     }
 }
@@ -376,13 +398,21 @@ pub fn node_counts(data: &DataFile, node: &Node) -> Value {
         }
         NodeKind::System => {
             let count = match node.id.as_str() {
-                "my-day" => data.tasks.iter().filter(|item| item.my_day && !item.completed).count(),
+                "my-day" => data
+                    .tasks
+                    .iter()
+                    .filter(|item| item.my_day && !item.completed)
+                    .count(),
                 "planned" => data
                     .tasks
                     .iter()
                     .filter(|item| item.planned_date.is_some() && !item.completed)
                     .count(),
-                "important" => data.tasks.iter().filter(|item| item.important && !item.completed).count(),
+                "important" => data
+                    .tasks
+                    .iter()
+                    .filter(|item| item.important && !item.completed)
+                    .count(),
                 _ => 0,
             };
             json!({ "items": count })
@@ -628,8 +658,7 @@ pub fn filter_items<'a>(data: &'a DataFile, filter: &ItemFilter) -> CoreResult<V
                 return false;
             }
             if changed_from.is_some() || changed_to.is_some() {
-                let created_ok =
-                    instant_in_range(Some(&item.created_at), changed_from, changed_to);
+                let created_ok = instant_in_range(Some(&item.created_at), changed_from, changed_to);
                 let updated_ok =
                     instant_in_range(item.updated_at.as_deref(), changed_from, changed_to);
                 if !created_ok && !updated_ok {
@@ -743,11 +772,7 @@ pub fn paginate<T>(items: Vec<T>, page: &Page) -> (Vec<T>, Option<String>, usize
         None
     };
     (
-        items
-            .into_iter()
-            .skip(start)
-            .take(end - start)
-            .collect(),
+        items.into_iter().skip(start).take(end - start).collect(),
         next_cursor,
         total,
     )
@@ -816,7 +841,12 @@ pub struct NodeChanges {
     pub collapsed: Option<bool>,
 }
 
-pub fn modify_node(data: &mut DataFile, id: &str, kind: NodeKind, changes: NodeChanges) -> CoreResult<Node> {
+pub fn modify_node(
+    data: &mut DataFile,
+    id: &str,
+    kind: NodeKind,
+    changes: NodeChanges,
+) -> CoreResult<Node> {
     let (kind_now, old_parent) = {
         let node = find_node(data, id).ok_or_else(|| {
             CoreError::not_found("NODE_NOT_FOUND", format!("未找到 {} {id}", kind.as_str()))
@@ -892,8 +922,10 @@ pub struct ItemChanges {
 
 pub fn modify_item(data: &mut DataFile, id: &str, changes: ItemChanges) -> CoreResult<Item> {
     if !data.tasks.iter().any(|item| item.id == id) {
-        return Err(CoreError::not_found("TASK_NOT_FOUND", format!("未找到任务 {id}"))
-            .with_hint("先运行 kxtodo task find --type item --query ..."));
+        return Err(
+            CoreError::not_found("TASK_NOT_FOUND", format!("未找到任务 {id}"))
+                .with_hint("先运行 kxtodo task find --type item --query ..."),
+        );
     }
     if let Some(entry_id) = &changes.entry_id {
         ensure_entry_target(data, entry_id)?;
@@ -912,7 +944,10 @@ pub fn modify_item(data: &mut DataFile, id: &str, changes: ItemChanges) -> CoreR
     }
     if let Some(markdown) = changes.markdown {
         if markdown.trim().is_empty() {
-            return Err(CoreError::validation("MARKDOWN_REQUIRED", "Markdown 内容不能为空"));
+            return Err(CoreError::validation(
+                "MARKDOWN_REQUIRED",
+                "Markdown 内容不能为空",
+            ));
         }
         item.markdown = markdown;
         touched = true;
@@ -1090,7 +1125,13 @@ pub fn tree_view(
     depth: usize,
     include_counts: bool,
 ) -> CoreResult<Value> {
-    fn build_node(data: &DataFile, id: &str, level: usize, depth: usize, include_counts: bool) -> Option<Value> {
+    fn build_node(
+        data: &DataFile,
+        id: &str,
+        level: usize,
+        depth: usize,
+        include_counts: bool,
+    ) -> Option<Value> {
         let node = find_node(data, id)?;
         let mut view = json!({
             "id": node.id,
@@ -1118,7 +1159,10 @@ pub fn tree_view(
     let roots = match root_id {
         Some(id) => {
             if find_node(data, id).is_none() {
-                return Err(CoreError::not_found("NODE_NOT_FOUND", format!("未找到节点 {id}")));
+                return Err(CoreError::not_found(
+                    "NODE_NOT_FOUND",
+                    format!("未找到节点 {id}"),
+                ));
             }
             vec![build_node(data, id, 0, depth, include_counts).expect("node checked above")]
         }

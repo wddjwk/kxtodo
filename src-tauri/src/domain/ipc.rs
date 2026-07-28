@@ -4,16 +4,17 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use interprocess::local_socket::{prelude::*, GenericNamespaced, ListenerOptions, Stream};
+use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::domain::core::{Controls, ExecOutcome};
 use crate::domain::error::{CoreError, CoreResult};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +26,7 @@ pub struct HostDescriptor {
     pub endpoint: String,
     pub mode: String,
     pub started_at: String,
+    pub token: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -33,6 +35,8 @@ pub struct IpcRequest {
     pub protocol_version: u32,
     pub request_id: String,
     pub data_dir: String,
+    pub cwd: String,
+    pub token: String,
     pub command: String,
     pub params: Value,
     pub controls: IpcControls,
@@ -58,13 +62,57 @@ impl From<&Controls> for IpcControls {
     }
 }
 
+pub fn normalize_absolute_path(path: &Path, base: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base.join(path)
+    };
+    let mut out = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+pub fn normalize_data_dir(data_dir: &Path) -> PathBuf {
+    let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    normalize_absolute_path(data_dir, &base)
+}
+
+pub fn same_data_dir(a: &Path, b: &Path) -> bool {
+    let a = normalize_data_dir(a);
+    let b = normalize_data_dir(b);
+    #[cfg(target_os = "windows")]
+    {
+        a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        a == b
+    }
+}
+
+pub fn generate_token() -> String {
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 /// Deterministic IPC endpoint name for a data dir.
 pub fn endpoint_for(data_dir: &Path) -> String {
-    let canonical = data_dir
-        .canonicalize()
-        .unwrap_or_else(|_| data_dir.to_path_buf());
+    let canonical = normalize_data_dir(data_dir);
     let mut hasher = DefaultHasher::new();
+    #[cfg(target_os = "windows")]
     canonical.to_string_lossy().to_lowercase().hash(&mut hasher);
+    #[cfg(not(target_os = "windows"))]
+    canonical.hash(&mut hasher);
     format!("kxtodo-host-{:016x}", hasher.finish())
 }
 
@@ -83,11 +131,21 @@ pub fn read_host_descriptor(path: &Path) -> Option<HostDescriptor> {
 pub fn write_host_descriptor(path: &Path, descriptor: &HostDescriptor) -> CoreResult<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+        }
     }
     let raw = serde_json::to_string_pretty(descriptor)?;
-    crate::domain::repo::atomic_write(path, &raw)
+    crate::domain::repo::atomic_write(path, &raw)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
-
 pub fn remove_host_descriptor(path: &Path) {
     let _ = std::fs::remove_file(path);
 }
@@ -140,20 +198,20 @@ impl IpcClient {
     }
 
     /// Ping: send a `host.ping` request and require an `ok` reply.
-    pub fn ping(&mut self, data_dir: &Path) -> bool {
+    pub fn ping(&mut self, data_dir: &Path, token: &str) -> bool {
+        let normalized = normalize_data_dir(data_dir);
         let request = IpcRequest {
             protocol_version: PROTOCOL_VERSION,
             request_id: crate::domain::ids::request_id(),
-            data_dir: data_dir.to_string_lossy().to_string(),
+            data_dir: normalized.to_string_lossy().to_string(),
+            cwd: normalized.to_string_lossy().to_string(),
+            token: token.to_string(),
             command: "host.ping".to_string(),
             params: Value::Null,
             controls: IpcControls::default(),
         };
         match self.roundtrip(&request) {
-            Ok(response) => response
-                .get("ok")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
+            Ok(response) => response.get("ok").and_then(Value::as_bool).unwrap_or(false),
             Err(_) => false,
         }
     }
@@ -166,9 +224,8 @@ impl IpcClient {
         let payload = serde_json::to_vec(request)?;
         write_frame(&mut self.stream, &payload)?;
         let response = read_frame(&mut self.stream)?;
-        serde_json::from_slice(&response).map_err(|error| {
-            CoreError::io(format!("Host 响应无法解析：{error}"))
-        })
+        serde_json::from_slice(&response)
+            .map_err(|error| CoreError::io(format!("Host 响应无法解析：{error}")))
     }
 }
 
@@ -236,9 +293,9 @@ impl IpcServer {
 
     /// Accept one raw connection (spawn a thread per connection for concurrency).
     pub fn accept_raw(&self) -> CoreResult<Stream> {
-        self.listener.accept().map_err(|error| {
-            CoreError::io(format!("IPC accept 失败：{error}"))
-        })
+        self.listener
+            .accept()
+            .map_err(|error| CoreError::io(format!("IPC accept 失败：{error}")))
     }
 
     /// Accept one connection and serve requests on it until the client
@@ -267,10 +324,7 @@ where
             Err(error) => {
                 let failure = crate::domain::envelope::failure(
                     "ipc",
-                    &CoreError::validation(
-                        "IPC_BAD_REQUEST",
-                        format!("IPC 请求无法解析：{error}"),
-                    ),
+                    &CoreError::validation("IPC_BAD_REQUEST", format!("IPC 请求无法解析：{error}")),
                     crate::domain::envelope::Meta::default(),
                 );
                 let raw = serde_json::to_vec(&failure)?;
@@ -285,7 +339,7 @@ where
 }
 
 /// Validate an incoming request against this host.
-pub fn validate_request(request: &IpcRequest, data_dir: &Path) -> CoreResult<()> {
+pub fn validate_request(request: &IpcRequest, data_dir: &Path, token: &str) -> CoreResult<()> {
     if request.protocol_version != PROTOCOL_VERSION {
         return Err(CoreError::validation(
             "IPC_PROTOCOL_MISMATCH",
@@ -295,20 +349,40 @@ pub fn validate_request(request: &IpcRequest, data_dir: &Path) -> CoreResult<()>
             ),
         ));
     }
-    let expected = data_dir
-        .canonicalize()
-        .unwrap_or_else(|_| data_dir.to_path_buf())
-        .to_string_lossy()
-        .to_lowercase();
-    let got = PathBuf::from(&request.data_dir)
-        .canonicalize()
-        .unwrap_or_else(|_| PathBuf::from(&request.data_dir))
-        .to_string_lossy()
-        .to_lowercase();
-    if expected != got {
+    if request.request_id.trim().is_empty() || request.request_id.len() > 128 {
+        return Err(CoreError::validation(
+            "IPC_REQUEST_ID_INVALID",
+            "IPC requestId 不能为空且不得超过 128 字节",
+        ));
+    }
+    let authenticated = request.token.len() == token.len()
+        && request
+            .token
+            .as_bytes()
+            .iter()
+            .zip(token.as_bytes())
+            .fold(true, |equal, (a, b)| equal & (a == b));
+    if !authenticated {
+        return Err(CoreError::validation(
+            "IPC_UNAUTHORIZED",
+            "IPC 请求未通过 Host 认证",
+        ));
+    }
+    if !same_data_dir(data_dir, &PathBuf::from(&request.data_dir)) {
         return Err(CoreError::validation(
             "IPC_DATA_DIR_MISMATCH",
             "IPC 请求的数据目录与本 Host 不一致",
+        ));
+    }
+    let cwd = PathBuf::from(&request.cwd);
+    if request.cwd.trim().is_empty()
+        || request.cwd.contains('\0')
+        || !cwd.is_absolute()
+        || !cwd.is_dir()
+    {
+        return Err(CoreError::validation(
+            "IPC_CWD_INVALID",
+            "IPC cwd 必须是存在的绝对目录",
         ));
     }
     Ok(())

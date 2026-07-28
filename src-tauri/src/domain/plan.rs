@@ -25,7 +25,10 @@ pub fn normalize_cron(expr: &str) -> CoreResult<String> {
 pub fn validate_cron(expr: &str) -> CoreResult<()> {
     let normalized = normalize_cron(expr)?;
     Schedule::from_str(&normalized).map_err(|error| {
-        CoreError::validation("INVALID_CRON", format!("cron 表达式 `{expr}` 无效：{error}"))
+        CoreError::validation(
+            "INVALID_CRON",
+            format!("cron 表达式 `{expr}` 无效：{error}"),
+        )
     })?;
     Ok(())
 }
@@ -40,7 +43,10 @@ pub fn validate_timezone(tz: &str) -> CoreResult<chrono_tz::Tz> {
 }
 
 /// Next run instant after `now`, or None when the schedule should not run again.
-pub fn compute_next_run(entry: &ScheduleEntry, now: DateTime<Utc>) -> CoreResult<Option<DateTime<Utc>>> {
+pub fn compute_next_run(
+    entry: &ScheduleEntry,
+    now: DateTime<Utc>,
+) -> CoreResult<Option<DateTime<Utc>>> {
     if !entry.spec.enabled {
         return Ok(None);
     }
@@ -52,7 +58,9 @@ pub fn compute_next_run(entry: &ScheduleEntry, now: DateTime<Utc>) -> CoreResult
             let at = parse_stored_instant(at)?;
             Ok(Some(at))
         }
-        Trigger::Interval { every, max_runs, .. } => {
+        Trigger::Interval {
+            every, max_runs, ..
+        } => {
             if let Some(max) = max_runs {
                 if entry.state.run_count >= *max {
                     return Ok(None);
@@ -63,8 +71,16 @@ pub fn compute_next_run(entry: &ScheduleEntry, now: DateTime<Utc>) -> CoreResult
                 .state
                 .last_run_at
                 .as_deref()
-                .or(if entry.updated_at.is_empty() { None } else { Some(entry.updated_at.as_str()) })
-                .or(if entry.created_at.is_empty() { None } else { Some(entry.created_at.as_str()) });
+                .or(if entry.updated_at.is_empty() {
+                    None
+                } else {
+                    Some(entry.updated_at.as_str())
+                })
+                .or(if entry.created_at.is_empty() {
+                    None
+                } else {
+                    Some(entry.created_at.as_str())
+                });
             let base = match base {
                 Some(value) => parse_stored_instant(value)?,
                 None => now,
@@ -81,10 +97,16 @@ pub fn compute_next_run(entry: &ScheduleEntry, now: DateTime<Utc>) -> CoreResult
         Trigger::Calendar { cron, timezone, .. } => {
             let normalized = normalize_cron(cron)?;
             let schedule = Schedule::from_str(&normalized).map_err(|error| {
-                CoreError::validation("INVALID_CRON", format!("cron 表达式 `{cron}` 无效：{error}"))
+                CoreError::validation(
+                    "INVALID_CRON",
+                    format!("cron 表达式 `{cron}` 无效：{error}"),
+                )
             })?;
             let tz = validate_timezone(timezone)?;
-            Ok(schedule.upcoming(tz).next().map(|at| at.with_timezone(&Utc)))
+            Ok(schedule
+                .upcoming(tz)
+                .next()
+                .map(|at| at.with_timezone(&Utc)))
         }
         Trigger::Condition { every, .. } => {
             let every_ms = parse_duration_ms(every)?;
@@ -100,6 +122,9 @@ pub fn compute_next_run(entry: &ScheduleEntry, now: DateTime<Utc>) -> CoreResult
     }
 }
 
-pub fn compute_next_run_iso(entry: &ScheduleEntry, now: DateTime<Utc>) -> CoreResult<Option<String>> {
+pub fn compute_next_run_iso(
+    entry: &ScheduleEntry,
+    now: DateTime<Utc>,
+) -> CoreResult<Option<String>> {
     Ok(compute_next_run(entry, now)?.map(format_instant))
 }

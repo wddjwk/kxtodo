@@ -20,13 +20,19 @@ pub trait HostServices: Send + Sync {
     /// Show a desktop notification; returns the notification id.
     fn show_notification(&self, payload: Value) -> CoreResult<Value>;
     /// Apply native side effects (autostart, shortcuts, zoom, closeToTray).
-    fn apply_native_effect(&self, name: &str, settings: &crate::domain::model::SettingsFile) -> CoreResult<()>;
+    fn apply_native_effect(
+        &self,
+        name: &str,
+        settings: &crate::domain::model::SettingsFile,
+    ) -> CoreResult<()>;
     /// Enqueue an immediate schedule run; waits for completion when `wait`.
     fn run_schedule_now(&self, id: &str, wait: bool) -> CoreResult<Value>;
     /// Stop a running schedule.
     fn stop_schedule(&self, id: &str) -> CoreResult<Value>;
     /// Host/scheduler status snapshot.
     fn host_status(&self) -> Value;
+    /// Actual OS autostart registration when the backend can query it.
+    fn autostart_status(&self) -> Option<bool>;
     /// Emit a domain-changed event to GUI clients.
     fn emit_domain_event(&self, domain: Domain, revision: u64, ids: Vec<String>);
 }
@@ -128,9 +134,8 @@ fn param_bool(params: &Value, key: &str) -> Option<bool> {
 }
 
 fn required_str(params: &Value, key: &str) -> CoreResult<String> {
-    param_str(params, key).ok_or_else(|| {
-        CoreError::validation("MISSING_PARAM", format!("缺少必填参数 --{key}"))
-    })
+    param_str(params, key)
+        .ok_or_else(|| CoreError::validation("MISSING_PARAM", format!("缺少必填参数 --{key}")))
 }
 
 fn parse_kind(raw: &str) -> CoreResult<NodeKind> {
@@ -160,6 +165,31 @@ fn require_confirmation(controls: &Controls, message: String, details: Value) ->
 
 fn idem_summary(resource: &Value) -> Value {
     resource.clone()
+}
+
+fn set_read_revision(meta: &mut Meta, domain: Domain, revision: u64) {
+    meta.revision_domain = Some(domain);
+    meta.revision = Some(revision);
+}
+
+fn warn_custom_startup(meta: &mut Meta, ctx: &ExecContext) {
+    if ctx.custom_data_dir {
+        meta.warnings.push(json!({
+            "code": "CUSTOM_DATA_DIR_NO_AUTOSTART",
+            "message": "自定义 --data-dir 的 Host 不会自动注册系统开机启动；重启后需显式启动该 Host",
+        }));
+    }
+}
+
+fn apply_write_outcome(
+    meta: &mut Meta,
+    domain: Domain,
+    outcome: &crate::domain::repo::WriteOutcome,
+) {
+    meta.revision_domain = Some(domain);
+    meta.revision = Some(outcome.revision);
+    meta.replayed = outcome.replayed;
+    meta.warnings.extend(outcome.warnings.clone());
 }
 
 // ---------------------------------------------------------------------------
@@ -203,9 +233,9 @@ fn cmd_notify(inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> CoreResu
         "position": position,
         "wait": param_bool(params, "wait").unwrap_or(false),
     });
-    let host = ctx.host.ok_or_else(|| {
-        CoreError::internal("notify 必须由 Background Host 执行")
-    })?;
+    let host = ctx
+        .host
+        .ok_or_else(|| CoreError::internal("notify 必须由 Background Host 执行"))?;
     host.show_notification(payload)
 }
 
@@ -268,9 +298,7 @@ fn task_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<
                     Ok(idem_summary(&view))
                 },
             )?;
-            meta.revision_domain = Some(Domain::Data);
-            meta.revision = Some(outcome.revision);
-            meta.replayed = outcome.replayed;
+            apply_write_outcome(meta, Domain::Data, &outcome);
             notify_host(ctx, Domain::Data, outcome.revision, vec![]);
             if outcome.replayed {
                 return Ok(outcome.replay_summary.unwrap_or(created));
@@ -340,9 +368,7 @@ fn task_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<
                     Ok(idem_summary(&view))
                 },
             )?;
-            meta.revision_domain = Some(Domain::Data);
-            meta.revision = Some(outcome.revision);
-            meta.replayed = outcome.replayed;
+            apply_write_outcome(meta, Domain::Data, &outcome);
             notify_host(ctx, Domain::Data, outcome.revision, vec![]);
             let _ = file;
             if outcome.replayed {
@@ -361,11 +387,12 @@ fn task_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<
     }
 }
 
-fn task_get(inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> CoreResult<Value> {
+fn task_get(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
     let params = &inv.params;
     let kind_raw = required_str(params, "type")?;
     let id = required_str(params, "id")?;
     let data = ctx.repo.load_data()?;
+    set_read_revision(meta, Domain::Data, data.meta.revision);
     match kind_raw.as_str() {
         "item" => {
             let item = task_ops::get_item_typed(&data, &id)?;
@@ -391,7 +418,13 @@ fn build_item_filter(params: &Value) -> CoreResult<task_ops::ItemFilter> {
         status: match param_str(params, "status").as_deref() {
             Some("open") => task_ops::StatusFilter::Open,
             Some("completed") => task_ops::StatusFilter::Completed,
-            _ => task_ops::StatusFilter::All,
+            Some("all") | None => task_ops::StatusFilter::All,
+            Some(other) => {
+                return Err(CoreError::validation(
+                    "INVALID_STATUS",
+                    format!("无效 --status `{other}`，支持 open|completed|all"),
+                ))
+            }
         },
         important: param_bool(params, "important"),
         my_day: param_bool(params, "myDay"),
@@ -406,7 +439,16 @@ fn build_item_filter(params: &Value) -> CoreResult<task_ops::ItemFilter> {
             })
             .unwrap_or_default(),
         query: param_str(params, "query"),
-        descending: matches!(param_str(params, "order").as_deref(), Some("desc")),
+        descending: match param_str(params, "order").as_deref() {
+            Some("desc") => true,
+            Some("asc") | None => false,
+            Some(other) => {
+                return Err(CoreError::validation(
+                    "INVALID_ORDER",
+                    format!("无效 --order `{other}`，支持 asc|desc"),
+                ))
+            }
+        },
         ..Default::default()
     };
     macro_rules! time_range {
@@ -428,11 +470,17 @@ fn build_item_filter(params: &Value) -> CoreResult<task_ops::ItemFilter> {
     time_range!(completed_to, "completedTo");
     filter.sort = match param_str(params, "sort").as_deref() {
         Some("createdAt") => task_ops::SortKey::CreatedAt,
+        Some("updatedAt") | None => task_ops::SortKey::UpdatedAt,
         Some("dueDate") => task_ops::SortKey::DueDate,
         Some("completedAt") => task_ops::SortKey::CompletedAt,
         Some("name") => task_ops::SortKey::Name,
         Some("position") => task_ops::SortKey::Position,
-        _ => task_ops::SortKey::UpdatedAt,
+        Some(other) => {
+            return Err(CoreError::validation(
+                "INVALID_SORT",
+                format!("无效 --sort `{other}`"),
+            ))
+        }
     };
     Ok(filter)
 }
@@ -452,6 +500,7 @@ fn task_list(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult
     let params = &inv.params;
     let kind_raw = required_str(params, "type")?;
     let data = ctx.repo.load_data()?;
+    set_read_revision(meta, Domain::Data, data.meta.revision);
     let page = page_from(params)?;
     match kind_raw.as_str() {
         "system" | "category" | "entry" => {
@@ -507,6 +556,7 @@ fn task_find(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult
     }
     let kind_raw = param_str(params, "type").unwrap_or_else(|| "all".to_string());
     let data = ctx.repo.load_data()?;
+    set_read_revision(meta, Domain::Data, data.meta.revision);
     let page = page_from(params)?;
     let mut results: Vec<Value> = Vec::new();
     match kind_raw.as_str() {
@@ -587,10 +637,13 @@ fn task_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResu
                     Ok(idem_summary(&view))
                 },
             )?;
-            meta.revision_domain = Some(Domain::Data);
-            meta.revision = Some(outcome.revision);
-            meta.replayed = outcome.replayed;
-            notify_host(ctx, Domain::Data, outcome.revision, vec![required_str(params, "id")?]);
+            apply_write_outcome(meta, Domain::Data, &outcome);
+            notify_host(
+                ctx,
+                Domain::Data,
+                outcome.revision,
+                vec![required_str(params, "id")?],
+            );
             if outcome.replayed {
                 return Ok(outcome.replay_summary.unwrap_or(updated));
             }
@@ -704,10 +757,13 @@ fn task_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResu
                     Ok(idem_summary(&view))
                 },
             )?;
-            meta.revision_domain = Some(Domain::Data);
-            meta.revision = Some(outcome.revision);
-            meta.replayed = outcome.replayed;
-            notify_host(ctx, Domain::Data, outcome.revision, vec![required_str(params, "id")?]);
+            apply_write_outcome(meta, Domain::Data, &outcome);
+            notify_host(
+                ctx,
+                Domain::Data,
+                outcome.revision,
+                vec![required_str(params, "id")?],
+            );
             if outcome.replayed {
                 return Ok(outcome.replay_summary.unwrap_or(updated));
             }
@@ -729,6 +785,16 @@ fn task_remove(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResu
     let kind_raw = required_str(params, "type")?;
     let id = required_str(params, "id")?;
     let cascade = param_bool(params, "cascade").unwrap_or(false);
+    if !inv.controls.dry_run {
+        if let Some((revision, summary)) = ctx
+            .repo
+            .lookup_data_idempotency(&inv.command, inv.controls.idempotency_key.as_deref())?
+        {
+            set_read_revision(meta, Domain::Data, revision);
+            meta.replayed = true;
+            return Ok(summary);
+        }
+    }
     let data = ctx.repo.load_data()?;
 
     match kind_raw.as_str() {
@@ -753,11 +819,10 @@ fn task_remove(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResu
                 &inv.command,
                 |file| {
                     task_ops::remove_item(file, &id)?;
-                    Ok(plan.clone())
+                    Ok(json!({ "removed": plan }))
                 },
             )?;
-            meta.revision_domain = Some(Domain::Data);
-            meta.revision = Some(outcome.revision);
+            apply_write_outcome(meta, Domain::Data, &outcome);
             notify_host(ctx, Domain::Data, outcome.revision, vec![id.clone()]);
             return Ok(json!({
                 "removed": plan,
@@ -793,41 +858,72 @@ fn task_remove(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResu
             if inv.controls.dry_run {
                 return Ok(json!({ "dryRun": true, "action": "remove", "plan": plan_json }));
             }
-            // Backup before high-impact write (§4.3.6).
-            ctx.repo.backup("cascade-remove")?;
             let image_dirs = plan.image_dirs.clone();
             let removed_ids = plan.node_ids.clone();
-            let (_file, outcome) = ctx.repo.write_data(
+            let recovery = json!({
+                "kind": "delete-entry-images",
+                "resourceId": id,
+                "entryIds": image_dirs.clone(),
+            });
+            let (_file, outcome, recovery_id) = ctx.repo.write_data_with_recovery(
                 inv.controls.if_revision,
                 inv.controls.idempotency_key.as_deref(),
                 &inv.command,
+                recovery,
                 |file| {
                     task_ops::apply_remove_node(file, &plan)?;
-                    Ok(plan_json.clone())
+                    Ok(json!({ "removed": plan_json }))
                 },
             )?;
-            // Markdown image dirs are removed as part of the cascade transaction;
-            // failure here is non-fatal and reported for doctor follow-up.
-            let mut image_warnings = Vec::new();
+            if outcome.replayed {
+                apply_write_outcome(meta, Domain::Data, &outcome);
+                return Ok(outcome
+                    .replay_summary
+                    .clone()
+                    .unwrap_or_else(|| json!({ "removed": plan_json })));
+            }
+            let mut pending_paths = Vec::new();
+            let mut image_errors = Vec::new();
             for entry_id in &image_dirs {
                 let dir = ctx.repo.layout.entry_img_dir(entry_id);
                 if dir.exists() {
                     if let Err(error) = std::fs::remove_dir_all(&dir) {
-                        image_warnings.push(format!("无法删除图片目录 {}：{error}", dir.display()));
+                        pending_paths.push(entry_id.clone());
+                        image_errors.push(format!("无法删除图片目录 {}：{error}", dir.display()));
                     }
                 }
             }
-            meta.revision_domain = Some(Domain::Data);
-            meta.revision = Some(outcome.revision);
+            if let Some(recovery_id) = recovery_id.as_deref() {
+                let recovery_error = if image_errors.is_empty() {
+                    None
+                } else {
+                    Some(image_errors.join("；"))
+                };
+                if let Err(error) =
+                    ctx.repo
+                        .finish_recovery(recovery_id, recovery_error.as_deref(), &pending_paths)
+                {
+                    meta.warnings.push(json!({
+                        "code": "RECOVERY_RECORD_FINALIZE_FAILED",
+                        "message": error.message,
+                        "recoveryId": recovery_id,
+                    }));
+                }
+                if let Some(message) = recovery_error {
+                    meta.warnings.push(json!({
+                        "code": "ATTACHMENT_DELETE_PENDING",
+                        "message": message,
+                        "recoveryId": recovery_id,
+                    }));
+                }
+            }
+            apply_write_outcome(meta, Domain::Data, &outcome);
             notify_host(ctx, Domain::Data, outcome.revision, removed_ids);
-            let mut result = json!({
+            Ok(json!({
                 "removed": plan_json,
                 "revision": outcome.revision,
-            });
-            if !image_warnings.is_empty() {
-                result["warnings"] = json!(image_warnings);
-            }
-            Ok(result)
+                "recoveryId": recovery_id,
+            }))
         }
         "system" => Err(CoreError::validation(
             "SYSTEM_NODE_READONLY",
@@ -840,9 +936,10 @@ fn task_remove(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResu
     }
 }
 
-fn task_tree(inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> CoreResult<Value> {
+fn task_tree(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
     let params = &inv.params;
     let data = ctx.repo.load_data()?;
+    set_read_revision(meta, Domain::Data, data.meta.revision);
     let depth = params
         .get("depth")
         .and_then(Value::as_u64)
@@ -862,9 +959,10 @@ fn task_tree(inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> CoreResul
 // ---------------------------------------------------------------------------
 
 fn read_payload(params: &Value, key: &str) -> CoreResult<Value> {
-    params.get(key).cloned().ok_or_else(|| {
-        CoreError::validation("MISSING_PARAM", format!("缺少 --{key} 输入"))
-    })
+    params
+        .get(key)
+        .cloned()
+        .ok_or_else(|| CoreError::validation("MISSING_PARAM", format!("缺少 --{key} 输入")))
 }
 
 fn schedule_dispatch(
@@ -942,23 +1040,30 @@ fn schedule_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRes
             Ok(view)
         },
     )?;
-    meta.revision_domain = Some(Domain::Schedule);
-    meta.revision = Some(outcome.revision);
-    meta.replayed = outcome.replayed;
-    notify_host(ctx, Domain::Schedule, outcome.revision, vec![created_id.clone()]);
+    apply_write_outcome(meta, Domain::Schedule, &outcome);
     if outcome.replayed {
         return Ok(outcome.replay_summary.unwrap_or(Value::Null));
     }
+    notify_host(
+        ctx,
+        Domain::Schedule,
+        outcome.revision,
+        vec![created_id.clone()],
+    );
     let entry = schedule_ops::require_entry(&file, &created_id)?;
     let mut result = schedule_ops::schedule_view(entry);
+    if entry.spec.enabled {
+        warn_custom_startup(meta, ctx);
+    }
     if !warnings.is_empty() {
         result["warnings"] = json!(warnings);
     }
     Ok(result)
 }
 
-fn schedule_validate(inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> CoreResult<Value> {
+fn schedule_validate(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
     let file = ctx.repo.load_schedule()?;
+    set_read_revision(meta, Domain::Schedule, file.meta.revision);
     if let Some(spec_raw) = inv.params.get("spec") {
         let mut spec_json = spec_raw.clone();
         crate::domain::ops_schedule::normalize_spec_paths(&mut spec_json, &ctx.cwd);
@@ -973,7 +1078,8 @@ fn schedule_validate(inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> C
     let patch = read_payload(&inv.params, "patch")?;
     let entry = schedule_ops::require_entry(&file, &id)?;
     let current = serde_json::to_value(&entry.spec)?;
-    let merged = schedule_ops::apply_patch(&current, &patch)?;
+    let mut merged = schedule_ops::apply_patch(&current, &patch)?;
+    schedule_ops::normalize_spec_paths(&mut merged, &ctx.cwd);
     let validation = schedule_ops::validate_spec_value(&merged, &file.runtimes)?;
     Ok(json!({
         "valid": true,
@@ -982,9 +1088,10 @@ fn schedule_validate(inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> C
     }))
 }
 
-fn schedule_get(inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> CoreResult<Value> {
+fn schedule_get(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
     let id = required_str(&inv.params, "id")?;
     let file = ctx.repo.load_schedule()?;
+    set_read_revision(meta, Domain::Schedule, file.meta.revision);
     let entry = schedule_ops::require_entry(&file, &id)?;
     Ok(schedule_ops::schedule_view(entry))
 }
@@ -997,10 +1104,21 @@ fn schedule_list_find(
 ) -> CoreResult<Value> {
     let params = &inv.params;
     let file = ctx.repo.load_schedule()?;
+    set_read_revision(meta, Domain::Schedule, file.meta.revision);
     let query = if is_find {
         Some(required_str(params, "query")?)
     } else {
         None
+    };
+    let descending = match param_str(params, "order").as_deref() {
+        Some("desc") => true,
+        Some("asc") | None => false,
+        Some(other) => {
+            return Err(CoreError::validation(
+                "INVALID_ORDER",
+                format!("无效 --order `{other}`，支持 asc|desc"),
+            ))
+        }
     };
     let filter = schedule_ops::ScheduleFilter {
         enabled: param_bool(params, "enabled"),
@@ -1008,9 +1126,17 @@ fn schedule_list_find(
         trigger_type: param_str(params, "triggerType"),
         query,
         sort: param_str(params, "sort"),
-        descending: matches!(param_str(params, "order").as_deref(), Some("desc")),
+        descending,
+        created_from: param_str(params, "createdFrom"),
+        created_to: param_str(params, "createdTo"),
+        updated_from: param_str(params, "updatedFrom"),
+        updated_to: param_str(params, "updatedTo"),
+        last_run_from: param_str(params, "lastRunFrom"),
+        last_run_to: param_str(params, "lastRunTo"),
+        next_run_from: param_str(params, "nextRunFrom"),
+        next_run_to: param_str(params, "nextRunTo"),
     };
-    let entries = schedule_ops::filter_schedules(&file, &filter);
+    let entries = schedule_ops::filter_schedules(&file, &filter)?;
     let page = page_from(params)?;
     let (entries, next_cursor, total) = task_ops::paginate(entries, &page);
     meta.count = Some(total);
@@ -1047,16 +1173,17 @@ fn schedule_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> Core
             Ok(schedule_ops::schedule_view(&modified.entry))
         },
     )?;
-    meta.revision_domain = Some(Domain::Schedule);
-    meta.revision = Some(outcome.revision);
-    meta.replayed = outcome.replayed;
-    notify_host(ctx, Domain::Schedule, outcome.revision, vec![id.clone()]);
+    apply_write_outcome(meta, Domain::Schedule, &outcome);
     if outcome.replayed {
         return Ok(outcome.replay_summary.unwrap_or(Value::Null));
     }
+    notify_host(ctx, Domain::Schedule, outcome.revision, vec![id.clone()]);
     let file = ctx.repo.load_schedule()?;
     let entry = schedule_ops::require_entry(&file, &id)?;
     let mut result = schedule_ops::schedule_view(entry);
+    if entry.spec.enabled {
+        warn_custom_startup(meta, ctx);
+    }
     if !warnings.is_empty() {
         result["warnings"] = json!(warnings);
     }
@@ -1065,6 +1192,16 @@ fn schedule_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> Core
 
 fn schedule_remove(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
     let id = required_str(&inv.params, "id")?;
+    if !inv.controls.dry_run {
+        if let Some((revision, summary)) = ctx
+            .repo
+            .lookup_schedule_idempotency(&inv.command, inv.controls.idempotency_key.as_deref())?
+        {
+            set_read_revision(meta, Domain::Schedule, revision);
+            meta.replayed = true;
+            return Ok(summary);
+        }
+    }
     let file = ctx.repo.load_schedule()?;
     let entry = schedule_ops::require_entry(&file, &id)?;
     require_confirmation(
@@ -1079,10 +1216,10 @@ fn schedule_remove(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> Core
             "plan": { "id": id, "name": entry.spec.name },
         }));
     }
-    if entry.state.running {
-        if let Some(host) = ctx.host {
-            host.stop_schedule(&id)?;
-        }
+    if let Some(host) = ctx.host {
+        // Stop the live run slot even if the persisted running flag has not
+        // reached disk yet (run --wait=false returns immediately after queueing).
+        host.stop_schedule(&id)?;
     }
     let (_file, outcome) = ctx.repo.write_schedule(
         inv.controls.if_revision,
@@ -1090,11 +1227,10 @@ fn schedule_remove(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> Core
         &inv.command,
         |file| {
             schedule_ops::remove_schedule(file, &id)?;
-            Ok(json!({ "id": id }))
+            Ok(json!({ "removed": { "id": id } }))
         },
     )?;
-    meta.revision_domain = Some(Domain::Schedule);
-    meta.revision = Some(outcome.revision);
+    apply_write_outcome(meta, Domain::Schedule, &outcome);
     notify_host(ctx, Domain::Schedule, outcome.revision, vec![id.clone()]);
     Ok(json!({ "removed": { "id": id }, "revision": outcome.revision }))
 }
@@ -1125,7 +1261,7 @@ fn schedule_set_enabled(
     let mut warnings = Vec::new();
     let (_file, outcome) = ctx.repo.write_schedule(
         inv.controls.if_revision,
-        None,
+        inv.controls.idempotency_key.as_deref(),
         &inv.command,
         |file| {
             let result = schedule_ops::set_enabled(file, &id, enabled)?;
@@ -1133,22 +1269,28 @@ fn schedule_set_enabled(
             Ok(schedule_ops::schedule_view(&result.entry))
         },
     )?;
-    meta.revision_domain = Some(Domain::Schedule);
-    meta.revision = Some(outcome.revision);
+    apply_write_outcome(meta, Domain::Schedule, &outcome);
+    if outcome.replayed {
+        return Ok(outcome.replay_summary.unwrap_or(Value::Null));
+    }
     notify_host(ctx, Domain::Schedule, outcome.revision, vec![id.clone()]);
     let file = ctx.repo.load_schedule()?;
     let entry = schedule_ops::require_entry(&file, &id)?;
     let mut result = schedule_ops::schedule_view(entry);
+    if enabled {
+        warn_custom_startup(meta, ctx);
+    }
     if !warnings.is_empty() {
         result["warnings"] = json!(warnings);
     }
     Ok(result)
 }
 
-fn schedule_run(inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> CoreResult<Value> {
+fn schedule_run(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
     let id = required_str(&inv.params, "id")?;
     let wait = param_bool(&inv.params, "wait").unwrap_or(false);
     let file = ctx.repo.load_schedule()?;
+    set_read_revision(meta, Domain::Schedule, file.meta.revision);
     let entry = schedule_ops::require_entry(&file, &id)?;
     if entry.spec.action.is_code_execution() {
         require_confirmation(
@@ -1167,7 +1309,13 @@ fn schedule_run(inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> CoreRe
             "schedule run 需要 Background Host 运行",
         )
     })?;
-    host.run_schedule_now(&id, wait)
+    let result = host.run_schedule_now(&id, wait)?;
+    if wait {
+        if let Ok(file) = ctx.repo.load_schedule() {
+            set_read_revision(meta, Domain::Schedule, file.meta.revision);
+        }
+    }
+    Ok(result)
 }
 
 fn schedule_stop(inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> CoreResult<Value> {
@@ -1185,7 +1333,7 @@ fn schedule_stop(inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> CoreR
     host.stop_schedule(&id)
 }
 
-fn schedule_logs(inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> CoreResult<Value> {
+fn schedule_logs(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
     let id = required_str(&inv.params, "id")?;
     let limit = inv
         .params
@@ -1194,6 +1342,7 @@ fn schedule_logs(inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> CoreR
         .map(|value| value as usize)
         .unwrap_or(20);
     let file = ctx.repo.load_schedule()?;
+    set_read_revision(meta, Domain::Schedule, file.meta.revision);
     schedule_ops::require_entry(&file, &id)?;
     let history = crate::domain::history::read_history(&ctx.repo.layout.schedule_history())?;
     let mut runs: Vec<Value> = history
@@ -1211,8 +1360,9 @@ fn schedule_logs(inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> CoreR
     }))
 }
 
-fn schedule_status(inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> CoreResult<Value> {
+fn schedule_status(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
     let file = ctx.repo.load_schedule()?;
+    set_read_revision(meta, Domain::Schedule, file.meta.revision);
     let running: Vec<Value> = file
         .tasks
         .iter()
@@ -1235,12 +1385,58 @@ fn schedule_status(inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> Cor
         .host
         .map(|host| host.host_status())
         .unwrap_or_else(|| json!({ "state": "absent" }));
+    let last_missed_at = file
+        .tasks
+        .iter()
+        .filter_map(|entry| entry.state.last_missed_at.clone())
+        .max();
+    let missed_count: u64 = file
+        .tasks
+        .iter()
+        .map(|entry| entry.state.missed_count)
+        .sum();
+    let settings = ctx.repo.load_settings().ok();
+    let configured = settings
+        .as_ref()
+        .map(|settings| settings.lifecycle.launch_at_startup)
+        .unwrap_or(false);
+    let custom = ctx.custom_data_dir;
+    let registered = if custom {
+        None
+    } else {
+        ctx.host.and_then(|host| host.autostart_status())
+    };
+    let startup_recovery = if custom {
+        json!({
+            "available": false,
+            "configured": false,
+            "registered": null,
+            "dataDirKind": "custom",
+            "limitation": "v9 不会为自定义 --data-dir 自动注册系统开机启动",
+            "hint": "机器重启后请显式使用同一 --data-dir 启动 KXToDo Host",
+        })
+    } else {
+        json!({
+            "available": configured && registered.unwrap_or(false),
+            "configured": configured,
+            "registered": registered,
+            "dataDirKind": "default",
+            "hint": if configured && registered != Some(true) {
+                "在设置中重新启用开机启动，或保持 KXToDo Host 运行"
+            } else {
+                ""
+            },
+        })
+    };
     let _ = inv;
     Ok(json!({
         "host": host_status,
         "running": running,
         "nextWake": next_wake.map(|(id, at)| json!({ "id": id, "at": at })),
         "runtimes": schedule_ops::runtime_view(&file)["runtimes"],
+        "lastMissedAt": last_missed_at,
+        "missedCount": missed_count,
+        "startupRecovery": startup_recovery,
         "tasks": {
             "total": file.tasks.len(),
             "enabled": file.tasks.iter().filter(|entry| entry.spec.enabled).count(),
@@ -1255,20 +1451,27 @@ fn schedule_runtime_dispatch(
     meta: &mut Meta,
 ) -> CoreResult<Value> {
     let file = ctx.repo.load_schedule()?;
+    if action == "list" {
+        set_read_revision(meta, Domain::Schedule, file.meta.revision);
+    }
     match action {
         "list" => Ok(schedule_ops::runtime_view(&file)),
         "detect" => {
             let (_file, outcome) = ctx.repo.write_schedule(
                 inv.controls.if_revision,
-                None,
+                inv.controls.idempotency_key.as_deref(),
                 &inv.command,
                 |file| {
-                    let result = schedule_ops::detect_runtimes(file);
-                    Ok(result)
+                    schedule_ops::detect_runtimes(file);
+                    Ok(json!({
+                        "runtimes": schedule_ops::runtime_view(file)["runtimes"],
+                    }))
                 },
             )?;
-            meta.revision_domain = Some(Domain::Schedule);
-            meta.revision = Some(outcome.revision);
+            apply_write_outcome(meta, Domain::Schedule, &outcome);
+            if outcome.replayed {
+                return Ok(outcome.replay_summary.unwrap_or(Value::Null));
+            }
             notify_host(ctx, Domain::Schedule, outcome.revision, vec![]);
             let file = ctx.repo.load_schedule()?;
             Ok(json!({
@@ -1277,18 +1480,35 @@ fn schedule_runtime_dispatch(
         }
         "set" => {
             let name = required_str(&inv.params, "name")?;
-            let path = required_str(&inv.params, "path")?;
+            let raw_path = required_str(&inv.params, "path")?;
+            let path = if raw_path.trim().is_empty() {
+                String::new()
+            } else if !raw_path.contains('/') && !raw_path.contains('\\') {
+                let found = crate::domain::exec::find_executable(&[raw_path.as_str()], &[]);
+                if found.is_empty() {
+                    schedule_ops::normalize_path(&raw_path, &ctx.cwd)
+                } else {
+                    schedule_ops::normalize_path(&found, &ctx.cwd)
+                }
+            } else {
+                schedule_ops::normalize_path(&raw_path, &ctx.cwd)
+            };
             let (_file, outcome) = ctx.repo.write_schedule(
                 inv.controls.if_revision,
-                None,
+                inv.controls.idempotency_key.as_deref(),
                 &inv.command,
                 |file| {
-                    let result = schedule_ops::set_runtime(file, &name, &path)?;
-                    Ok(result)
+                    let runtime = schedule_ops::set_runtime(file, &name, &path)?;
+                    Ok(json!({
+                        "runtime": runtime,
+                        "runtimes": schedule_ops::runtime_view(file)["runtimes"],
+                    }))
                 },
             )?;
-            meta.revision_domain = Some(Domain::Schedule);
-            meta.revision = Some(outcome.revision);
+            apply_write_outcome(meta, Domain::Schedule, &outcome);
+            if outcome.replayed {
+                return Ok(outcome.replay_summary.unwrap_or(Value::Null));
+            }
             notify_host(ctx, Domain::Schedule, outcome.revision, vec![]);
             let file = ctx.repo.load_schedule()?;
             Ok(json!({
@@ -1310,7 +1530,9 @@ fn schedule_runtime_dispatch(
 // config domain
 // ---------------------------------------------------------------------------
 
-fn load_settings_with_raw(ctx: &ExecContext) -> CoreResult<(crate::domain::model::SettingsFile, Value)> {
+fn load_settings_with_raw(
+    ctx: &ExecContext,
+) -> CoreResult<(crate::domain::model::SettingsFile, Value)> {
     let settings = ctx.repo.load_settings()?;
     let raw = crate::domain::repo::read_json_value(&ctx.repo.layout.settings_file())?;
     Ok((settings, raw))
@@ -1325,6 +1547,7 @@ fn config_dispatch(
     match action {
         "list" => {
             let (settings, raw) = load_settings_with_raw(ctx)?;
+            set_read_revision(meta, Domain::Settings, settings.meta.revision);
             let prefix = param_str(&inv.params, "prefix");
             let items = config_ops::list_values(&settings, &raw, prefix.as_deref())?;
             meta.count = Some(items.len());
@@ -1332,6 +1555,7 @@ fn config_dispatch(
         }
         "get" => {
             let (settings, raw) = load_settings_with_raw(ctx)?;
+            set_read_revision(meta, Domain::Settings, settings.meta.revision);
             let path = required_str(&inv.params, "path")?;
             config_ops::get_value(
                 &settings,
@@ -1350,7 +1574,8 @@ fn config_dispatch(
             let map_key = param_str(&inv.params, "mapKey");
             if inv.controls.dry_run {
                 let (mut preview, _raw) = load_settings_with_raw(ctx)?;
-                let outcome = config_ops::set_value(&mut preview, &path, value, map_key.as_deref())?;
+                let outcome =
+                    config_ops::set_value(&mut preview, &path, value, map_key.as_deref())?;
                 return Ok(json!({
                     "dryRun": true,
                     "action": "set",
@@ -1375,9 +1600,10 @@ fn config_dispatch(
                     }))
                 },
             )?;
-            meta.revision_domain = Some(Domain::Settings);
-            meta.revision = Some(outcome.revision);
-            meta.replayed = outcome.replayed;
+            apply_write_outcome(meta, Domain::Settings, &outcome);
+            if outcome.replayed {
+                return Ok(outcome.replay_summary.unwrap_or(Value::Null));
+            }
             notify_host(ctx, Domain::Settings, outcome.revision, vec![path.clone()]);
             let applied = apply_native_effects(ctx, &file, &native_effects);
             Ok(json!({
@@ -1400,11 +1626,17 @@ fn config_dispatch(
                 &inv.command,
                 |file| {
                     previous = config_ops::unset_value(file, &path, map_key.as_deref())?;
-                    Ok(json!({ "path": path }))
+                    Ok(json!({
+                        "path": path,
+                        "mapKey": map_key,
+                        "previous": previous,
+                    }))
                 },
             )?;
-            meta.revision_domain = Some(Domain::Settings);
-            meta.revision = Some(outcome.revision);
+            apply_write_outcome(meta, Domain::Settings, &outcome);
+            if outcome.replayed {
+                return Ok(outcome.replay_summary.unwrap_or(Value::Null));
+            }
             notify_host(ctx, Domain::Settings, outcome.revision, vec![path.clone()]);
             Ok(json!({
                 "path": path,
@@ -1429,19 +1661,26 @@ fn config_dispatch(
                     "changes": changes,
                 }));
             }
+            if let Some((revision, summary)) = ctx.repo.lookup_settings_idempotency(
+                &inv.command,
+                inv.controls.idempotency_key.as_deref(),
+            )? {
+                set_read_revision(meta, Domain::Settings, revision);
+                meta.replayed = true;
+                return Ok(summary);
+            }
             ctx.repo.backup("config-reset")?;
             let mut changes = Vec::new();
             let (file, outcome) = ctx.repo.write_settings(
                 inv.controls.if_revision,
-                None,
+                inv.controls.idempotency_key.as_deref(),
                 &inv.command,
                 |file| {
                     changes = config_ops::reset_values(file, prefix.as_deref())?;
-                    Ok(json!({ "count": changes.len() }))
+                    Ok(json!({ "changes": changes.clone() }))
                 },
             )?;
-            meta.revision_domain = Some(Domain::Settings);
-            meta.revision = Some(outcome.revision);
+            apply_write_outcome(meta, Domain::Settings, &outcome);
             notify_host(ctx, Domain::Settings, outcome.revision, vec![]);
             let applied = apply_native_effects(
                 ctx,
@@ -1454,9 +1693,14 @@ fn config_dispatch(
                 "revision": outcome.revision,
             }))
         }
-        "path" => crate::domain::doctor::config_paths(ctx),
+        "path" => {
+            let settings = ctx.repo.load_settings()?;
+            set_read_revision(meta, Domain::Settings, settings.meta.revision);
+            crate::domain::doctor::config_paths(ctx)
+        }
         "validate" => {
             let (settings, _raw) = load_settings_with_raw(ctx)?;
+            set_read_revision(meta, Domain::Settings, settings.meta.revision);
             let issues = config_ops::validate_settings(&ctx.repo.layout, &settings);
             Ok(json!({
                 "valid": issues.is_empty(),

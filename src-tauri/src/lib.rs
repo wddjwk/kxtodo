@@ -1,21 +1,14 @@
 use base64::Engine;
-#[cfg(desktop)]
-use std::{
-    io::Read,
-    process::{Child, Command, Stdio},
-    sync::{Arc, Mutex},
-    thread,
-    time::Duration,
-};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
-    env,
-    fs,
+    env, fs,
     path::PathBuf,
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
+#[cfg(desktop)]
+use std::{process::Command, sync::Arc};
 use tauri::{AppHandle, Manager};
 
 #[cfg(desktop)]
@@ -26,8 +19,7 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    LogicalPosition, WebviewUrl, WebviewWindowBuilder,
-    State,
+    LogicalPosition, State, WebviewUrl, WebviewWindowBuilder,
 };
 #[cfg(desktop)]
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
@@ -55,12 +47,6 @@ impl Default for LifecycleState {
             quitting: AtomicBool::new(false),
         }
     }
-}
-
-#[cfg(desktop)]
-#[derive(Default)]
-struct SchedulerProcessState {
-    children: Mutex<HashMap<String, Arc<Mutex<Child>>>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -230,6 +216,7 @@ fn load_state(app: AppHandle) -> Result<Value, String> {
     read_json(data_file(&app)?)
 }
 
+#[cfg(not(desktop))]
 #[tauri::command]
 fn save_state(app: AppHandle, state: Value) -> Result<(), String> {
     write_json(data_file(&app)?, state)
@@ -240,6 +227,7 @@ fn load_settings(app: AppHandle) -> Result<Value, String> {
     read_json(settings_file(&app)?)
 }
 
+#[cfg(not(desktop))]
 #[tauri::command]
 fn save_settings(app: AppHandle, settings: Value) -> Result<(), String> {
     write_json(settings_file(&app)?, settings)
@@ -250,12 +238,13 @@ fn load_scheduler(app: AppHandle) -> Result<Value, String> {
     read_json(scheduler_file(&app)?)
 }
 
+#[cfg(not(desktop))]
 #[tauri::command]
 fn save_scheduler(app: AppHandle, scheduler: Value) -> Result<(), String> {
     write_json(scheduler_file(&app)?, scheduler)
 }
 
-#[cfg_attr(not(desktop), allow(dead_code))]
+#[cfg(not(desktop))]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ScheduledActionCommand {
@@ -279,6 +268,7 @@ struct ScheduledActionCommand {
     working_directory: String,
 }
 
+#[cfg(not(desktop))]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ScheduledActionOutput {
@@ -370,7 +360,10 @@ fn default_executor_paths() -> HashMap<String, String> {
     let mut paths = HashMap::new();
     paths.insert(
         "python".to_string(),
-        find_executable(&["python", "python3", "py"], &["PYTHON", "PYTHON_EXECUTABLE"]),
+        find_executable(
+            &["python", "python3", "py"],
+            &["PYTHON", "PYTHON_EXECUTABLE"],
+        ),
     );
     paths.insert(
         "node".to_string(),
@@ -406,7 +399,11 @@ fn resolve_executable_path(name: String) -> Option<String> {
         return None;
     }
     let path = find_executable(&[name], &[]);
-    if path.is_empty() { None } else { Some(path) }
+    if path.is_empty() {
+        None
+    } else {
+        Some(path)
+    }
 }
 
 fn clamp_notification_duration(duration_ms: u64, fallback: u64) -> u64 {
@@ -472,7 +469,10 @@ fn notification_setting_f64(app: &AppHandle, field: &str, fallback: f64) -> f64 
         .unwrap_or(fallback)
 }
 
-fn normalize_notification(app: &AppHandle, notification: NotificationRequest) -> NotificationRequest {
+fn normalize_notification(
+    app: &AppHandle,
+    notification: NotificationRequest,
+) -> NotificationRequest {
     let title = notification.title.trim();
     let message = notification.message.trim();
     let tone = match notification.tone.trim().to_ascii_lowercase().as_str() {
@@ -554,7 +554,9 @@ fn notification_position(
     };
     let y = match position_kind {
         NotificationPosition::TopLeft | NotificationPosition::TopRight => top + 24.0 + stack_offset,
-        NotificationPosition::BottomLeft | NotificationPosition::BottomRight => top + screen_height - height - 18.0 - stack_offset,
+        NotificationPosition::BottomLeft | NotificationPosition::BottomRight => {
+            top + screen_height - height - 18.0 - stack_offset
+        }
     };
     Some(LogicalPosition::new(x, y))
 }
@@ -655,311 +657,6 @@ fn send_notification(_notification: NotificationRequest) -> Result<(), String> {
 #[cfg(not(desktop))]
 #[tauri::command]
 fn close_notification_window() -> Result<(), String> {
-    Ok(())
-}
-
-#[cfg(desktop)]
-fn split_arguments(raw: &str) -> Result<Vec<String>, String> {
-    let mut args = Vec::new();
-    let mut current = String::new();
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut escaped = false;
-    for ch in raw.chars() {
-        if escaped {
-            current.push(ch);
-            escaped = false;
-            continue;
-        }
-        match ch {
-            '\\' if !in_single => escaped = true,
-            '\'' if !in_double => in_single = !in_single,
-            '"' if !in_single => in_double = !in_double,
-            ch if ch.is_whitespace() && !in_single && !in_double => {
-                if !current.is_empty() {
-                    args.push(current.clone());
-                    current.clear();
-                }
-            }
-            _ => current.push(ch),
-        }
-    }
-    if escaped {
-        current.push('\\');
-    }
-    if in_single || in_double {
-        return Err("Arguments contain an unclosed quote".to_string());
-    }
-    if !current.is_empty() {
-        args.push(current);
-    }
-    Ok(args)
-}
-
-#[cfg(desktop)]
-fn runtime_key_for_language(language: &str) -> Option<&'static str> {
-    match language {
-        "python" => Some("python"),
-        "javascript" => Some("node"),
-        "powershell" => Some("pwsh"),
-        "bash" => Some("bash"),
-        "makefile" => Some("make"),
-        _ => None,
-    }
-}
-
-#[cfg(desktop)]
-fn configured_interpreter(
-    action: &ScheduledActionCommand,
-    runtimes: &HashMap<String, String>,
-) -> String {
-    let custom = action.interpreter.trim();
-    if !custom.is_empty() {
-        return custom.to_string();
-    }
-    let Some(key) = runtime_key_for_language(action.language.as_str()) else {
-        return String::new();
-    };
-    let configured = runtimes.get(key).map(|value| value.trim()).unwrap_or("");
-    if !configured.is_empty() {
-        return configured.to_string();
-    }
-    default_executor_paths()
-        .get(key)
-        .cloned()
-        .unwrap_or_default()
-}
-
-#[cfg(desktop)]
-fn temp_makefile(app: &AppHandle, code: &str) -> Result<PathBuf, String> {
-    let dir = ensure_storage_layout(app)?.join("scheduler-temp");
-    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|value| value.as_nanos())
-        .unwrap_or(0);
-    let counter = IMAGE_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let path = dir.join(format!("Makefile-{stamp}-{counter}.mk"));
-    fs::write(&path, code).map_err(|error| error.to_string())?;
-    Ok(path)
-}
-
-#[cfg(desktop)]
-fn build_scheduled_command(
-    app: &AppHandle,
-    action: &ScheduledActionCommand,
-    runtimes: &HashMap<String, String>,
-) -> Result<(Command, Option<PathBuf>), String> {
-    let mut temp_file = None;
-    if action.action_type == "notification" {
-        return Err("Notification actions are handled by the scheduler".to_string());
-    }
-    let action_args = split_arguments(action.arguments.trim())?;
-    let mut command = if action.action_type == "executable" {
-        let program_raw = action.executable_path.trim();
-        if program_raw.is_empty() {
-            return Err("Executable path is required".to_string());
-        }
-        let program = if program_raw.contains('/') || program_raw.contains('\\') || std::path::Path::new(program_raw).is_absolute() {
-            program_raw.to_string()
-        } else {
-            let resolved = find_executable(&[program_raw], &[]);
-            if resolved.is_empty() { program_raw.to_string() } else { resolved }
-        };
-        let mut command = Command::new(program);
-        command.args(action_args);
-        command
-    } else {
-        let interpreter = configured_interpreter(action, runtimes);
-        if interpreter.trim().is_empty() {
-            return Err(format!("Interpreter for {} was not found", action.language));
-        }
-        let mut command = Command::new(interpreter.trim());
-        if action.script_mode == "path" {
-            let file_path = action.file_path.trim();
-            if file_path.is_empty() {
-                return Err("Script file path is required".to_string());
-            }
-            match action.language.as_str() {
-                "powershell" => {
-                    command.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", file_path]);
-                }
-                "makefile" => {
-                    command.args(["-f", file_path]);
-                }
-                _ => {
-                    command.arg(file_path);
-                }
-            }
-        } else {
-            let code = action.code.as_str();
-            if code.trim().is_empty() {
-                return Err("Inline script code is required".to_string());
-            }
-            match action.language.as_str() {
-                "python" => {
-                    command.args(["-c", code]);
-                }
-                "javascript" => {
-                    command.args(["-e", code]);
-                }
-                "powershell" => {
-                    command.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", code]);
-                }
-                "bash" => {
-                    command.args(["-lc", code]);
-                }
-                "makefile" => {
-                    let path = temp_makefile(app, code)?;
-                    command.arg("-f").arg(&path);
-                    temp_file = Some(path);
-                }
-                _ => {
-                    command.args(["-c", code]);
-                }
-            }
-        }
-        command.args(action_args);
-        command
-    };
-
-    let cwd = action.working_directory.trim();
-    if !cwd.is_empty() {
-        let path = PathBuf::from(cwd);
-        if !path.is_dir() {
-            return Err("Working directory does not exist".to_string());
-        }
-        command.current_dir(path);
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-    }
-
-    Ok((command, temp_file))
-}
-
-#[cfg(desktop)]
-fn mutex_error<T>(error: std::sync::PoisonError<T>) -> String {
-    error.to_string()
-}
-
-#[cfg(desktop)]
-fn read_pipe_to_string<R: Read>(mut reader: R) -> String {
-    let mut bytes = Vec::new();
-    let _ = reader.read_to_end(&mut bytes);
-    match std::str::from_utf8(&bytes) {
-        Ok(s) => s.to_string(),
-        Err(_) => {
-            let (decoded, _, _) = encoding_rs::GBK.decode(&bytes);
-            decoded.into_owned()
-        }
-    }
-}
-
-#[cfg(desktop)]
-fn wait_for_child(child: &Arc<Mutex<Child>>) -> Result<std::process::ExitStatus, String> {
-    loop {
-        if let Some(status) = child
-            .lock()
-            .map_err(mutex_error)?
-            .try_wait()
-            .map_err(|error| error.to_string())?
-        {
-            return Ok(status);
-        }
-        thread::sleep(Duration::from_millis(80));
-    }
-}
-
-#[cfg(desktop)]
-fn run_cancellable_command(
-    mut command: Command,
-    process_state: Arc<SchedulerProcessState>,
-    task_id: Option<String>,
-) -> Result<ScheduledActionOutput, String> {
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|error| error.to_string())?;
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    let stdout_thread = stdout.map(|reader| thread::spawn(move || read_pipe_to_string(reader)));
-    let stderr_thread = stderr.map(|reader| thread::spawn(move || read_pipe_to_string(reader)));
-    let child = Arc::new(Mutex::new(child));
-
-    if let Some(task_id) = task_id.as_ref().filter(|value| !value.trim().is_empty()) {
-        process_state
-            .children
-            .lock()
-            .map_err(mutex_error)?
-            .insert(task_id.to_string(), child.clone());
-    }
-
-    let status = wait_for_child(&child);
-    if let Some(task_id) = task_id.as_ref().filter(|value| !value.trim().is_empty()) {
-        let _ = process_state
-            .children
-            .lock()
-            .map_err(mutex_error)
-            .map(|mut children| children.remove(task_id));
-    }
-    let status = status?;
-    let stdout = stdout_thread
-        .and_then(|handle| handle.join().ok())
-        .unwrap_or_default();
-    let stderr = stderr_thread
-        .and_then(|handle| handle.join().ok())
-        .unwrap_or_default();
-
-    Ok(ScheduledActionOutput {
-        exit_code: status.code(),
-        stdout,
-        stderr,
-    })
-}
-
-#[cfg(desktop)]
-#[tauri::command]
-async fn run_scheduled_action(
-    app: AppHandle,
-    process_state: State<'_, Arc<SchedulerProcessState>>,
-    task_id: Option<String>,
-    action: ScheduledActionCommand,
-    runtimes: HashMap<String, String>,
-) -> Result<ScheduledActionOutput, String> {
-    let process_state = process_state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let (command, temp_file) = build_scheduled_command(&app, &action, &runtimes)?;
-        let output = run_cancellable_command(command, process_state, task_id);
-        if let Some(path) = temp_file {
-            let _ = fs::remove_file(path);
-        }
-        output
-    })
-    .await
-    .map_err(|error| error.to_string())?
-}
-
-#[cfg(desktop)]
-#[tauri::command]
-fn stop_scheduled_action(
-    process_state: State<'_, Arc<SchedulerProcessState>>,
-    task_id: String,
-) -> Result<(), String> {
-    let child = process_state
-        .children
-        .lock()
-        .map_err(mutex_error)?
-        .get(task_id.trim())
-        .cloned();
-    if let Some(child) = child {
-        child
-            .lock()
-            .map_err(mutex_error)?
-            .kill()
-            .map_err(|error| error.to_string())?;
-    }
     Ok(())
 }
 
@@ -1490,6 +1187,7 @@ enum AppMode {
 #[cfg(desktop)]
 struct TauriBackend {
     app: AppHandle,
+    allow_autostart: bool,
 }
 
 #[cfg(desktop)]
@@ -1565,6 +1263,12 @@ impl domain::host::HostBackend for TauriBackend {
     ) -> Result<(), domain::CoreError> {
         match name {
             "autostart" => {
+                if !self.allow_autostart {
+                    return Err(domain::CoreError::validation(
+                        "CUSTOM_DATA_DIR_AUTOSTART_UNSUPPORTED",
+                        "自定义 --data-dir 的 Host 不会注册系统开机启动",
+                    ));
+                }
                 if settings.lifecycle.launch_at_startup {
                     self.app.autolaunch().enable()
                 } else {
@@ -1592,6 +1296,10 @@ impl domain::host::HostBackend for TauriBackend {
     }
 
     fn request_exit(&self) {
+        self.app
+            .state::<LifecycleState>()
+            .quitting
+            .store(true, Ordering::SeqCst);
         self.app.exit(0);
     }
 
@@ -1602,6 +1310,16 @@ impl domain::host::HostBackend for TauriBackend {
     fn show_main_window(&self) -> Result<(), domain::CoreError> {
         self.show_or_create_main_window()
             .map_err(domain::CoreError::internal)
+    }
+
+    fn autostart_enabled(&self) -> Result<bool, domain::CoreError> {
+        if !self.allow_autostart {
+            return Ok(false);
+        }
+        self.app
+            .autolaunch()
+            .is_enabled()
+            .map_err(|error| domain::CoreError::internal(format!("读取开机启动状态失败：{error}")))
     }
 }
 
@@ -1619,14 +1337,18 @@ fn create_main_window(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow> {
 }
 
 #[cfg(desktop)]
-fn init_host_core(app: &AppHandle, mode: AppMode) -> Arc<domain::host::HostCore> {
-    let dir = data_dir(app).unwrap_or_else(|_| PathBuf::from("todo-note-data"));
+fn init_host_core(
+    app: &AppHandle,
+    mode: AppMode,
+    dir: PathBuf,
+) -> Result<Arc<domain::host::HostCore>, String> {
+    let dir = domain::ipc::normalize_data_dir(&dir);
     domain::host::stale_descriptor_cleanup(&dir);
-    let repo = domain::repo::Repository::open(dir.clone())
-        .expect("open repository");
+    let repo = domain::repo::Repository::open(dir.clone()).map_err(|error| error.to_string())?;
     if let Err(error) = repo.load_all() {
         eprintln!("数据迁移失败：{error}");
     }
+    let allow_autostart = domain::host::is_default_data_dir(&dir);
     let core = domain::host::HostCore::new(
         repo,
         dir,
@@ -1635,36 +1357,27 @@ fn init_host_core(app: &AppHandle, mode: AppMode) -> Arc<domain::host::HostCore>
             AppMode::HiddenHost => "hidden",
         },
     );
-    core.set_backend(Box::new(TauriBackend { app: app.clone() }));
-    match domain::host::start_ipc_server(core.clone()) {
-        Ok(endpoint) => {
-            if let Ok(mut slot) = core.ipc_endpoint.write() {
-                *slot = endpoint;
-            }
-        }
-        Err(error) => {
-            eprintln!("IPC 启动失败（单实例冲突？）：{error}");
-        }
+    core.set_backend(Box::new(TauriBackend {
+        app: app.clone(),
+        allow_autostart,
+    }));
+    let endpoint = domain::host::start_ipc_server(core.clone())
+        .map_err(|error| format!("IPC/Host 所有权启动失败：{error}"))?;
+    if let Ok(mut slot) = core.ipc_endpoint.write() {
+        *slot = endpoint;
     }
+    domain::host::retry_pending_recovery(&core);
     core.start_scheduler();
     app.manage(core.clone());
-    core
+    Ok(core)
 }
 
 #[cfg(desktop)]
-fn run_desktop_app(mode: AppMode) {
+fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
+    let host_data_dir = domain::ipc::normalize_data_dir(&host_data_dir);
+    let default_host = domain::host::is_default_data_dir(&host_data_dir);
     let builder = tauri::Builder::default()
         .manage(LifecycleState::default())
-        .manage(Arc::new(SchedulerProcessState::default()))
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            // Second instance forwards its argv here.
-            let wants_host = args.iter().any(|arg| arg == "--kxtodo-host");
-            if wants_host {
-                return; // A host is already running; nothing to do.
-            }
-            let backend = TauriBackend { app: app.clone() };
-            let _ = backend.show_or_create_main_window();
-        }))
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
@@ -1672,6 +1385,21 @@ fn run_desktop_app(mode: AppMode) {
             Some(vec!["--kxtodo-host"]),
         ))
         .plugin(tauri_plugin_dialog::init());
+    let builder = if default_host {
+        builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            let wants_host = args.iter().any(|arg| arg == "--kxtodo-host");
+            if wants_host {
+                return;
+            }
+            let backend = TauriBackend {
+                app: app.clone(),
+                allow_autostart: true,
+            };
+            let _ = backend.show_or_create_main_window();
+        }))
+    } else {
+        builder
+    };
 
     let mut context = tauri::generate_context!();
     if mode == AppMode::HiddenHost {
@@ -1683,15 +1411,10 @@ fn run_desktop_app(mode: AppMode) {
     let builder = builder
         .invoke_handler(tauri::generate_handler![
             load_state,
-            save_state,
             load_settings,
-            save_settings,
             load_scheduler,
-            save_scheduler,
             resolve_executor_paths,
             resolve_executable_path,
-            run_scheduled_action,
-            stop_scheduled_action,
             export_data,
             save_background_image,
             load_background_image,
@@ -1715,20 +1438,23 @@ fn run_desktop_app(mode: AppMode) {
             set_webview_zoom,
             open_url,
             core_dispatch,
-            core_snapshot
+            core_snapshot,
+            core_ping
         ])
         .setup(move |app| {
-            ensure_storage_layout(app.handle()).map_err(|error| {
-                tauri::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, error))
-            })?;
-            let core = init_host_core(app.handle(), mode);
+            let core =
+                init_host_core(app.handle(), mode, host_data_dir.clone()).map_err(|error| {
+                    tauri::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, error))
+                })?;
             if mode == AppMode::HiddenHost {
                 domain::host::start_idle_watchdog(core);
             }
             if let Some(webview) = app.get_webview_window("main") {
                 let _ = webview.set_zoom(1.0);
             }
-            setup_tray(app)?;
+            if default_host {
+                setup_tray(app)?;
+            }
             if mode == AppMode::Gui {
                 show_main_window(app.handle());
             }
@@ -1739,8 +1465,9 @@ fn run_desktop_app(mode: AppMode) {
             {
                 if window.label().starts_with("notification-") {
                     if let tauri::WindowEvent::CloseRequested { .. } = event {
-                        if let Some(core) =
-                            window.app_handle().try_state::<Arc<domain::host::HostCore>>()
+                        if let Some(core) = window
+                            .app_handle()
+                            .try_state::<Arc<domain::host::HostCore>>()
                         {
                             core.notifications.closed(window.label());
                         }
@@ -1759,8 +1486,9 @@ fn run_desktop_app(mode: AppMode) {
                         || !lifecycle.close_to_tray.load(Ordering::SeqCst)
                     {
                         lifecycle.quitting.store(true, Ordering::SeqCst);
-                        if let Some(core) =
-                            window.app_handle().try_state::<Arc<domain::host::HostCore>>()
+                        if let Some(core) = window
+                            .app_handle()
+                            .try_state::<Arc<domain::host::HostCore>>()
                         {
                             domain::host::shutdown_host(&core);
                         }
@@ -1777,15 +1505,18 @@ fn run_desktop_app(mode: AppMode) {
                 }
             }
         });
-    let app = builder
-        .build(context)
-        .expect("failed to build KXToDo");
+    let app = builder.build(context).expect("failed to build KXToDo");
     app.run(move |app_handle, event| {
         match event {
             // Hidden Host 的窗口（通知窗）全部关闭不应退出进程；退出只由看门狗/显式请求触发。
             tauri::RunEvent::ExitRequested { api, .. } => {
                 #[cfg(desktop)]
-                if mode == AppMode::HiddenHost {
+                if mode == AppMode::HiddenHost
+                    && !app_handle
+                        .state::<LifecycleState>()
+                        .quitting
+                        .load(Ordering::SeqCst)
+                {
                     api.prevent_exit();
                 }
             }
@@ -1825,13 +1556,28 @@ fn core_dispatch(
     }
 }
 
+/// Capability probe that never reads business data. Desktop answers true even
+/// when a domain file is corrupt so the frontend fails closed instead of using
+/// legacy full-file writes.
+#[cfg(desktop)]
+#[tauri::command]
+fn core_ping() -> Value {
+    serde_json::json!({ "available": true, "protocolVersion": domain::ipc::PROTOCOL_VERSION })
+}
+
 /// Snapshot read for GUI hydration (replaces full-file load_* paths).
 #[cfg(desktop)]
 #[tauri::command]
 fn core_snapshot(core: State<'_, Arc<domain::host::HostCore>>) -> Result<Value, String> {
     let data = core.repo.load_data().map_err(|error| error.to_string())?;
-    let settings = core.repo.load_settings().map_err(|error| error.to_string())?;
-    let schedule = core.repo.load_schedule().map_err(|error| error.to_string())?;
+    let settings = core
+        .repo
+        .load_settings()
+        .map_err(|error| error.to_string())?;
+    let schedule = core
+        .repo
+        .load_schedule()
+        .map_err(|error| error.to_string())?;
     Ok(serde_json::json!({
         "data": data,
         "settings": settings,
@@ -1853,8 +1599,12 @@ pub fn run() {
             domain::cli::Dispatch::Exit(code) => {
                 std::process::exit(code);
             }
-            domain::cli::Dispatch::HiddenHost => run_desktop_app(AppMode::HiddenHost),
-            domain::cli::Dispatch::Gui => run_desktop_app(AppMode::Gui),
+            domain::cli::Dispatch::HiddenHost { data_dir } => {
+                run_desktop_app(AppMode::HiddenHost, data_dir)
+            }
+            domain::cli::Dispatch::Gui => {
+                run_desktop_app(AppMode::Gui, domain::cli::default_data_dir())
+            }
         }
     }
 

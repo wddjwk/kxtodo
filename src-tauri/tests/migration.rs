@@ -72,17 +72,32 @@ fn schedule_migration_maps_every_trigger_type() {
     assert_eq!(first["spec"]["trigger"]["type"], "interval");
     assert_eq!(first["spec"]["trigger"]["every"], "1h"); // 3600s → 1h
     assert_eq!(first["spec"]["trigger"]["maxRuns"], 10);
-    assert_eq!(first["spec"]["trigger"]["stopWhen"]["pattern"], "DOWNLOAD_DONE");
-    assert!(first["spec"]["trigger"]["cron"].is_null(), "interval 不得残留 cron");
+    assert_eq!(
+        first["spec"]["trigger"]["stopWhen"]["pattern"],
+        "DOWNLOAD_DONE"
+    );
+    assert!(
+        first["spec"]["trigger"]["cron"].is_null(),
+        "interval 不得残留 cron"
+    );
     let action = &first["spec"]["action"];
     assert_eq!(action["type"], "script");
     assert_eq!(action["language"], "python");
-    assert_eq!(action["source"], json!({ "type": "file", "path": "D:\\scripts\\download.py" }));
+    assert_eq!(
+        action["source"],
+        json!({ "type": "file", "path": "D:\\scripts\\download.py" })
+    );
     assert!(action.get("code").is_none(), "path 分支残留 code 必须丢弃");
     assert_eq!(action["args"], json!(["--fast", "quoted arg"]));
-    assert_eq!(action["notifications"]["onComplete"]["message"], "完成：{stdout}");
+    assert_eq!(
+        action["notifications"]["onComplete"]["message"],
+        "完成：{stdout}"
+    );
     assert_eq!(action["notifications"]["onComplete"]["duration"], "5200ms");
-    assert_eq!(action["notifications"]["onOutput"]["when"]["pattern"], "READY");
+    assert_eq!(
+        action["notifications"]["onOutput"]["when"]["pattern"],
+        "READY"
+    );
     // state
     assert_eq!(first["state"]["runCount"], 5);
     assert_eq!(first["state"]["lastStatus"], "stopped");
@@ -92,7 +107,10 @@ fn schedule_migration_maps_every_trigger_type() {
     assert_eq!(first["ui"]["expanded"], true);
     assert_eq!(first["ui"]["editing"], false);
     // 旧 nextRunAt 不直接迁移
-    assert!(first["state"]["nextRunAt"].is_null(), "disabled 任务不重算 nextRunAt");
+    assert!(
+        first["state"]["nextRunAt"].is_null(),
+        "disabled 任务不重算 nextRunAt"
+    );
 
     // 2) once + custom language → executable；running → stopped
     let second = entries.iter().find(|e| e["id"] == "schedule-0002").unwrap();
@@ -103,7 +121,10 @@ fn schedule_migration_maps_every_trigger_type() {
     assert_eq!(action["type"], "executable");
     assert_eq!(action["program"], "D:\\tools\\rscript.exe");
     assert_eq!(action["args"], json!(["-c", "print(1)", "-v"]));
-    assert_eq!(second["state"]["lastStatus"], "stopped", "running 应迁移为 stopped");
+    assert_eq!(
+        second["state"]["lastStatus"], "stopped",
+        "running 应迁移为 stopped"
+    );
     // once 未运行过且 enabled → 重算 nextRunAt
     assert!(second["spec"]["enabled"].is_boolean());
 
@@ -114,7 +135,10 @@ fn schedule_migration_maps_every_trigger_type() {
     assert_eq!(third["spec"]["trigger"]["when"]["pattern"], "READY");
     let probe = &third["spec"]["trigger"]["probe"];
     assert_eq!(probe["type"], "script");
-    assert!(probe.get("notifications").is_none(), "probe 不得携带 notifications");
+    assert!(
+        probe.get("notifications").is_none(),
+        "probe 不得携带 notifications"
+    );
     let action = &third["spec"]["action"];
     assert_eq!(action["type"], "notification");
     assert_eq!(action["notification"]["message"], "资源就绪");
@@ -148,7 +172,12 @@ fn migrated_schedules_queryable_via_cli() {
     assert_eq!(got["spec"]["trigger"]["every"], "1h");
     // spec 可重新校验
     let validate = env.ok(&[
-        "schedule", "validate", "--id", "schedule-0001", "--patch", r#"{"name":"新名"}"#,
+        "schedule",
+        "validate",
+        "--id",
+        "schedule-0001",
+        "--patch",
+        r#"{"name":"新名"}"#,
     ]);
     assert_eq!(validate["valid"], true);
 }
@@ -156,7 +185,10 @@ fn migrated_schedules_queryable_via_cli() {
 #[test]
 fn legacy_local_time_without_offset_uses_host_timezone() {
     let mut tasks = v8_tasks();
-    tasks["tasks"].as_array_mut().unwrap().retain(|task| task["id"] == "schedule-0002");
+    tasks["tasks"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|task| task["id"] == "schedule-0002");
     let env = TestEnv::with_v8_data(v8_data(), v8_settings(), tasks);
     env.ok(&["schedule", "list"]);
     let file = env.read_file("tasks.json");

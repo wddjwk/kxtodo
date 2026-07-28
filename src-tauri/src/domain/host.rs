@@ -11,9 +11,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::domain::cli::Routing;
-use crate::domain::core::{
-    execute, ExecContext, ExecOutcome, HostServices, Invocation,
-};
+use crate::domain::core::{execute, ExecContext, ExecOutcome, HostServices, Invocation};
 use crate::domain::error::{CoreError, CoreResult, ErrorKind};
 use crate::domain::ids::request_id;
 use crate::domain::ipc::{
@@ -32,7 +30,11 @@ use crate::domain::time::now_iso;
 
 pub trait HostBackend: Send + Sync {
     /// Show a notification window; returns its id. `wait_rx` completes on close.
-    fn show_notification(&self, payload: &Value, wait_rx: Option<Receiver<()>>) -> CoreResult<String>;
+    fn show_notification(
+        &self,
+        payload: &Value,
+        wait_rx: Option<Receiver<()>>,
+    ) -> CoreResult<String>;
     /// Emit an event to GUI clients (Tauri emit or test recorder).
     fn emit(&self, event: &str, payload: Value);
     /// Apply native side effects.
@@ -43,6 +45,12 @@ pub trait HostBackend: Send + Sync {
     fn has_gui(&self) -> bool;
     /// Create/show the main window (no-arg launch forwarded to a hidden host).
     fn show_main_window(&self) -> CoreResult<()>;
+    /// Query actual OS autostart registration when available.
+    fn autostart_enabled(&self) -> CoreResult<bool> {
+        Err(CoreError::internal(
+            "当前 Host backend 不支持查询开机启动状态",
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -59,13 +67,15 @@ pub struct HostCore {
     pub notifications: NotificationTracker,
     pub started_at: String,
     pub ipc_endpoint: RwLock<String>,
+    pub ipc_token: String,
+    pub owner_lock: Mutex<Option<crate::domain::repo::HostOwnerLock>>,
 }
 
 impl HostCore {
     pub fn new(repo: Repository, data_dir: PathBuf, mode: &str) -> Arc<Self> {
         Arc::new(Self {
             repo,
-            data_dir,
+            data_dir: crate::domain::ipc::normalize_data_dir(&data_dir),
             processes: Default::default(),
             backend: RwLock::new(None),
             mode: mode.to_string(),
@@ -73,6 +83,8 @@ impl HostCore {
             notifications: NotificationTracker::default(),
             started_at: now_iso(),
             ipc_endpoint: RwLock::new(String::new()),
+            ipc_token: crate::domain::ipc::generate_token(),
+            owner_lock: Mutex::new(None),
         })
     }
 
@@ -149,7 +161,12 @@ impl HostCore {
             Some(raw) => crate::domain::time::parse_duration_ms(raw)?,
             None => settings.notifications.duration_ms,
         };
-        let duration_ms = duration_ms.clamp(1_200, 60_000);
+        if !(1_200..=60_000).contains(&duration_ms) {
+            return Err(CoreError::validation(
+                "DURATION_OUT_OF_RANGE",
+                "通知时长必须在 1200ms 到 60000ms 之间",
+            ));
+        }
         Ok(json!({
             "title": title.filter(|value| !value.trim().is_empty()).unwrap_or("KXToDo"),
             "message": if message.trim().is_empty() { "通知" } else { message },
@@ -178,11 +195,16 @@ impl HostCore {
             (None, None)
         };
         let id = {
-            let backend = self.backend.read().map_err(|error| {
-                CoreError::internal(format!("backend lock：{error}"))
-            })?;
+            let backend = self
+                .backend
+                .read()
+                .map_err(|error| CoreError::internal(format!("backend lock：{error}")))?;
             let backend = backend.as_ref().ok_or_else(|| {
-                CoreError::new(ErrorKind::Execution, "NO_DISPLAY", "当前 Host 无法显示通知窗口")
+                CoreError::new(
+                    ErrorKind::Execution,
+                    "NO_DISPLAY",
+                    "当前 Host 无法显示通知窗口",
+                )
             })?;
             backend.show_notification(&payload, None)?
         };
@@ -211,6 +233,18 @@ impl HostCore {
         if !self.processes.running_ids().is_empty() {
             return false;
         }
+        if self
+            .scheduler
+            .read()
+            .ok()
+            .and_then(|slot| {
+                slot.as_ref()
+                    .map(|scheduler| !scheduler.running_ids().is_empty())
+            })
+            .unwrap_or(false)
+        {
+            return false;
+        }
         if let Ok(backend) = self.backend.read() {
             if let Some(backend) = backend.as_ref() {
                 if backend.has_gui() {
@@ -235,62 +269,61 @@ impl HostServices for HostCore {
             payload.get("duration").and_then(Value::as_str),
             payload.get("tone").and_then(Value::as_str),
             payload.get("position").and_then(Value::as_str),
-            payload.get("wait").and_then(Value::as_bool).unwrap_or(false),
+            payload
+                .get("wait")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         )?;
         self.show_notification_payload(merged)
     }
 
     fn apply_native_effect(&self, name: &str, settings: &SettingsFile) -> CoreResult<()> {
-        let backend = self.backend.read().map_err(|error| {
-            CoreError::internal(format!("backend lock：{error}"))
-        })?;
-        let backend = backend.as_ref().ok_or_else(|| {
-            CoreError::internal("无 Host backend")
-        })?;
+        let backend = self
+            .backend
+            .read()
+            .map_err(|error| CoreError::internal(format!("backend lock：{error}")))?;
+        let backend = backend
+            .as_ref()
+            .ok_or_else(|| CoreError::internal("无 Host backend"))?;
         backend.apply_native_effect(name, settings)
     }
 
     fn run_schedule_now(&self, id: &str, wait: bool) -> CoreResult<Value> {
-        let (tx, rx) = channel();
-        let scheduler = self.scheduler.read().map_err(|error| {
-            CoreError::internal(format!("scheduler lock：{error}"))
-        })?;
+        let scheduler = self
+            .scheduler
+            .read()
+            .map_err(|error| CoreError::internal(format!("scheduler lock：{error}")))?;
         let scheduler = scheduler.as_ref().ok_or_else(|| {
-            CoreError::new(ErrorKind::Execution, "SCHEDULER_UNAVAILABLE", "调度器不可用")
-        })?;
-        scheduler.send(crate::domain::scheduler::SchedulerMsg::RunNow {
-            id: id.to_string(),
-            wait,
-            respond: tx,
-        });
-        rx.recv_timeout(Duration::from_secs(3600)).map_err(|error| {
             CoreError::new(
                 ErrorKind::Execution,
-                "RUN_TIMEOUT",
-                format!("等待执行结果超时：{error}"),
+                "SCHEDULER_UNAVAILABLE",
+                "调度器不可用",
             )
-        })?
+        })?;
+        scheduler.run_now(id, wait)
     }
 
     fn stop_schedule(&self, id: &str) -> CoreResult<Value> {
-        let (tx, rx) = channel();
-        let scheduler = self.scheduler.read().map_err(|error| {
-            CoreError::internal(format!("scheduler lock：{error}"))
-        })?;
+        let scheduler = self
+            .scheduler
+            .read()
+            .map_err(|error| CoreError::internal(format!("scheduler lock：{error}")))?;
         let scheduler = scheduler.as_ref().ok_or_else(|| {
-            CoreError::new(ErrorKind::Execution, "SCHEDULER_UNAVAILABLE", "调度器不可用")
-        })?;
-        scheduler.send(crate::domain::scheduler::SchedulerMsg::Stop {
-            id: id.to_string(),
-            respond: tx,
-        });
-        rx.recv_timeout(Duration::from_secs(30)).map_err(|error| {
             CoreError::new(
                 ErrorKind::Execution,
-                "STOP_TIMEOUT",
-                format!("停止任务超时：{error}"),
+                "SCHEDULER_UNAVAILABLE",
+                "调度器不可用",
             )
-        })?
+        })?;
+        scheduler.stop(id)
+    }
+
+    fn autostart_status(&self) -> Option<bool> {
+        self.backend.read().ok().and_then(|backend| {
+            backend
+                .as_ref()
+                .and_then(|backend| backend.autostart_enabled().ok())
+        })
     }
 
     fn host_status(&self) -> Value {
@@ -353,36 +386,56 @@ impl NotificationTracker {
 // CLI routing
 // ---------------------------------------------------------------------------
 
-fn requires_host(command: &str) -> bool {
-    matches!(command, "notify" | "schedule.run" | "schedule.stop")
+fn requires_host(inv: &Invocation) -> bool {
+    match inv.command.as_str() {
+        "notify" | "schedule.run" | "schedule.stop" | "schedule.enable" => true,
+        "schedule.add" => inv
+            .params
+            .get("spec")
+            .and_then(|spec| spec.get("enabled"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        "schedule.modify" => inv
+            .params
+            .get("patch")
+            .and_then(|patch| patch.get("enabled"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        _ => false,
+    }
 }
 
 pub fn route(inv: &Invocation, data_dir: &Path, cwd: &Path, routing: Routing) -> ExecOutcome {
+    let normalized_data_dir = crate::domain::ipc::normalize_data_dir(data_dir);
+    let data_dir = normalized_data_dir.as_path();
     // IPC-host special commands never leave the host process.
     if routing == Routing::Auto {
         if let Some((descriptor, _)) = discover_host(data_dir) {
-            return invoke_via_ipc(&descriptor.endpoint, inv, data_dir)
-                .unwrap_or_else(|error| ExecOutcome {
+            return invoke_via_ipc(&descriptor, inv, data_dir, cwd).unwrap_or_else(|error| {
+                ExecOutcome {
                     code: error.exit_code(),
                     envelope: crate::domain::envelope::failure(
                         &inv.command,
                         &error,
                         crate::domain::envelope::Meta::default(),
                     ),
-                });
+                }
+            });
         }
-        if requires_host(&inv.command) {
+        if requires_host(inv) {
             return match launch_hidden_host(data_dir) {
-                Ok(endpoint) => invoke_via_ipc(&endpoint, inv, data_dir).unwrap_or_else(|error| {
-                    ExecOutcome {
-                        code: error.exit_code(),
-                        envelope: crate::domain::envelope::failure(
-                            &inv.command,
-                            &error,
-                            crate::domain::envelope::Meta::default(),
-                        ),
-                    }
-                }),
+                Ok(descriptor) => {
+                    invoke_via_ipc(&descriptor, inv, data_dir, cwd).unwrap_or_else(|error| {
+                        ExecOutcome {
+                            code: error.exit_code(),
+                            envelope: crate::domain::envelope::failure(
+                                &inv.command,
+                                &error,
+                                crate::domain::envelope::Meta::default(),
+                            ),
+                        }
+                    })
+                }
                 Err(error) => ExecOutcome {
                     code: error.exit_code(),
                     envelope: crate::domain::envelope::failure(
@@ -393,18 +446,22 @@ pub fn route(inv: &Invocation, data_dir: &Path, cwd: &Path, routing: Routing) ->
                 },
             };
         }
+        if inv.command == "doctor" {
+            return execute_standalone(inv, data_dir, cwd);
+        }
         // Standalone data CRUD under the launch mutex with a host re-check (§4.4).
         return with_launch_mutex(data_dir, || {
             if let Some((descriptor, _)) = discover_host(data_dir) {
-                return invoke_via_ipc(&descriptor.endpoint, inv, data_dir)
-                    .unwrap_or_else(|error| ExecOutcome {
+                return invoke_via_ipc(&descriptor, inv, data_dir, cwd).unwrap_or_else(|error| {
+                    ExecOutcome {
                         code: error.exit_code(),
                         envelope: crate::domain::envelope::failure(
                             &inv.command,
                             &error,
                             crate::domain::envelope::Meta::default(),
                         ),
-                    });
+                    }
+                });
             }
             execute_standalone(inv, data_dir, cwd)
         });
@@ -413,16 +470,20 @@ pub fn route(inv: &Invocation, data_dir: &Path, cwd: &Path, routing: Routing) ->
 }
 
 fn execute_standalone(inv: &Invocation, data_dir: &Path, cwd: &Path) -> ExecOutcome {
-    let repo = match Repository::open(data_dir.to_path_buf()) {
-        Ok(repo) => repo,
-        Err(error) => {
-            return ExecOutcome {
-                code: error.exit_code(),
-                envelope: crate::domain::envelope::failure(
-                    &inv.command,
-                    &error,
-                    crate::domain::envelope::Meta::default(),
-                ),
+    let repo = if inv.command == "doctor" {
+        Repository::open_readonly(data_dir.to_path_buf())
+    } else {
+        match Repository::open(data_dir.to_path_buf()) {
+            Ok(repo) => repo,
+            Err(error) => {
+                return ExecOutcome {
+                    code: error.exit_code(),
+                    envelope: crate::domain::envelope::failure(
+                        &inv.command,
+                        &error,
+                        crate::domain::envelope::Meta::default(),
+                    ),
+                }
             }
         }
     };
@@ -442,18 +503,18 @@ fn execute_standalone(inv: &Invocation, data_dir: &Path, cwd: &Path) -> ExecOutc
     }
     let ctx = ExecContext {
         repo: &repo,
-        cwd: cwd.to_path_buf(),
+        cwd: crate::domain::ipc::normalize_absolute_path(
+            cwd,
+            &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        ),
         host: None,
         custom_data_dir: !is_default_data_dir(data_dir),
     };
     execute(inv, &ctx)
 }
 
-fn is_default_data_dir(data_dir: &Path) -> bool {
-    let default = crate::domain::cli::default_data_dir();
-    let a = data_dir.canonicalize().unwrap_or_else(|_| data_dir.to_path_buf());
-    let b = default.canonicalize().unwrap_or(default);
-    a == b
+pub fn is_default_data_dir(data_dir: &Path) -> bool {
+    crate::domain::ipc::same_data_dir(data_dir, &crate::domain::cli::default_data_dir())
 }
 
 /// Serialize host launches and standalone fallbacks (§4.4 启动互斥).
@@ -486,12 +547,24 @@ where
     }
 }
 
-fn invoke_via_ipc(endpoint: &str, inv: &Invocation, data_dir: &Path) -> CoreResult<ExecOutcome> {
-    let mut client = IpcClient::connect(endpoint)?;
+fn invoke_via_ipc(
+    descriptor: &HostDescriptor,
+    inv: &Invocation,
+    data_dir: &Path,
+    cwd: &Path,
+) -> CoreResult<ExecOutcome> {
+    let mut client = IpcClient::connect(&descriptor.endpoint)?;
+    let normalized_data_dir = crate::domain::ipc::normalize_data_dir(data_dir);
+    let normalized_cwd = crate::domain::ipc::normalize_absolute_path(
+        cwd,
+        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    );
     let request = IpcRequest {
         protocol_version: PROTOCOL_VERSION,
         request_id: request_id(),
-        data_dir: data_dir.to_string_lossy().to_string(),
+        data_dir: normalized_data_dir.to_string_lossy().to_string(),
+        cwd: normalized_cwd.to_string_lossy().to_string(),
+        token: descriptor.token.clone(),
         command: inv.command.clone(),
         params: inv.params.clone(),
         controls: crate::domain::ipc::IpcControls::from(&inv.controls),
@@ -502,34 +575,30 @@ fn invoke_via_ipc(endpoint: &str, inv: &Invocation, data_dir: &Path) -> CoreResu
         .and_then(|meta| meta.get("exitCode"))
         .and_then(Value::as_i64)
         .map(|code| code as i32)
-        .unwrap_or(if envelope.get("ok").and_then(Value::as_bool).unwrap_or(false) {
-            0
-        } else {
-            1
-        });
+        .unwrap_or(
+            if envelope.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+                0
+            } else {
+                1
+            },
+        );
     let mut envelope = envelope;
     if let Some(meta) = envelope.get_mut("meta").and_then(Value::as_object_mut) {
         meta.remove("exitCode");
     }
-    Ok(ExecOutcome {
-        code,
-        envelope,
-    })
+    Ok(ExecOutcome { code, envelope })
 }
 
 /// Spawn this executable as a hidden Host and wait for readiness.
-fn launch_hidden_host(data_dir: &Path) -> CoreResult<String> {
+fn launch_hidden_host(data_dir: &Path) -> CoreResult<HostDescriptor> {
     with_launch_mutex_plain(data_dir, || {
         // Re-check inside the mutex: another launcher may have won the race.
         if let Some((descriptor, _)) = discover_host(data_dir) {
-            return Ok(descriptor.endpoint);
+            return Ok(descriptor);
         }
         let exe = std::env::current_exe()?;
         let mut command = std::process::Command::new(exe);
-        command
-            .arg("--kxtodo-host")
-            .arg("--data-dir")
-            .arg(data_dir);
+        command.arg("--kxtodo-host").arg("--data-dir").arg(data_dir);
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
@@ -547,8 +616,8 @@ fn launch_hidden_host(data_dir: &Path) -> CoreResult<String> {
             thread::sleep(Duration::from_millis(100));
             if let Some((descriptor, _)) = discover_host(data_dir) {
                 if let Ok(mut client) = IpcClient::connect(&descriptor.endpoint) {
-                    if client.ping(data_dir) {
-                        return Ok(descriptor.endpoint);
+                    if client.ping(data_dir, &descriptor.token) {
+                        return Ok(descriptor);
                     }
                 }
             }
@@ -582,25 +651,32 @@ where
 // Host server (shared by GUI host and hidden host)
 // ---------------------------------------------------------------------------
 
-pub fn descriptor_for(data_dir: &Path, mode: &str) -> HostDescriptor {
+pub fn descriptor_for(data_dir: &Path, mode: &str, token: &str) -> HostDescriptor {
+    let data_dir = crate::domain::ipc::normalize_data_dir(data_dir);
     HostDescriptor {
         protocol_version: PROTOCOL_VERSION,
         pid: std::process::id(),
         data_dir: data_dir.to_string_lossy().to_string(),
-        endpoint: endpoint_for(data_dir),
+        endpoint: endpoint_for(&data_dir),
         mode: mode.to_string(),
         started_at: now_iso(),
+        token: token.to_string(),
     }
 }
 
 /// Start the IPC accept loop on a background thread. Returns the bound endpoint.
 pub fn start_ipc_server(core: Arc<HostCore>) -> CoreResult<String> {
+    let owner = crate::domain::repo::HostOwnerLock::acquire(&core.repo.layout)?;
     let server = IpcServer::bind(&core.data_dir)?;
+    *core
+        .owner_lock
+        .lock()
+        .map_err(|error| CoreError::internal(format!("Host owner lock：{error}")))? = Some(owner);
     let endpoint = server.endpoint.clone();
     let data_dir = core.data_dir.clone();
     write_host_descriptor(
         &core.repo.layout.host_descriptor(),
-        &descriptor_for(&data_dir, &core.mode),
+        &descriptor_for(&data_dir, &core.mode, &core.ipc_token),
     )?;
     thread::Builder::new()
         .name("kxtodo-ipc".to_string())
@@ -609,9 +685,10 @@ pub fn start_ipc_server(core: Arc<HostCore>) -> CoreResult<String> {
                 Ok(mut stream) => {
                     let core = core.clone();
                     thread::spawn(move || {
-                        let _ = crate::domain::ipc::serve_connection(&mut stream, &move |request| {
-                            handle_ipc_request(&core, request)
-                        });
+                        let _ =
+                            crate::domain::ipc::serve_connection(&mut stream, &move |request| {
+                                handle_ipc_request(&core, request)
+                            });
                     });
                 }
                 Err(_) => thread::sleep(Duration::from_millis(200)),
@@ -622,7 +699,7 @@ pub fn start_ipc_server(core: Arc<HostCore>) -> CoreResult<String> {
 }
 
 fn handle_ipc_request(core: &Arc<HostCore>, request: IpcRequest) -> Value {
-    if let Err(error) = validate_request(&request, &core.data_dir) {
+    if let Err(error) = validate_request(&request, &core.data_dir, &core.ipc_token) {
         return crate::domain::envelope::failure(
             &request.command,
             &error,
@@ -641,8 +718,7 @@ fn handle_ipc_request(core: &Arc<HostCore>, request: IpcRequest) -> Value {
         }
         "host.show" => {
             let backend = core.backend.read().ok();
-            let result = backend
-                .and_then(|backend| backend.as_ref().map(|b| b.show_main_window()));
+            let result = backend.and_then(|backend| backend.as_ref().map(|b| b.show_main_window()));
             return match result {
                 Some(Ok(())) => json!({
                     "ok": true,
@@ -674,12 +750,12 @@ fn handle_ipc_request(core: &Arc<HostCore>, request: IpcRequest) -> Value {
             if_revision: request.controls.if_revision,
         },
     };
-    let cwd = core.data_dir.clone();
+    let cwd = PathBuf::from(&request.cwd);
     let ctx = ExecContext {
         repo: &core.repo,
         cwd,
         host: Some(core.as_ref()),
-        custom_data_dir: false,
+        custom_data_dir: !is_default_data_dir(&core.data_dir),
     };
     let outcome = execute(&invocation, &ctx);
     outcome_envelope(&outcome)
@@ -706,12 +782,87 @@ pub fn start_idle_watchdog(core: Arc<HostCore>) {
 
 /// Cleanup on host shutdown.
 pub fn shutdown_host(core: &Arc<HostCore>) {
-    if let Ok(slot) = core.scheduler.read() {
-        if let Some(handle) = slot.as_ref() {
-            handle.shutdown();
-        }
+    let scheduler = core
+        .scheduler
+        .read()
+        .ok()
+        .and_then(|slot| slot.as_ref().cloned());
+    if let Some(handle) = scheduler {
+        handle.shutdown();
     }
     remove_host_descriptor(&core.repo.layout.host_descriptor());
+    if let Ok(mut owner) = core.owner_lock.lock() {
+        owner.take();
+    }
+}
+
+/// Retry committed attachment cleanup records. Paths are reconstructed from
+/// entry ids under img/data; persisted arbitrary paths are never trusted.
+pub fn retry_pending_recovery(core: &Arc<HostCore>) {
+    let Ok(records) = core.repo.read_recovery_records() else {
+        return;
+    };
+    let data = core.repo.load_data().ok();
+    for record in records {
+        if record.get("kind").and_then(Value::as_str) != Some("delete-entry-images") {
+            continue;
+        }
+        let Some(id) = record.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let entry_ids: Vec<String> = record
+            .get("pendingPaths")
+            .or_else(|| record.get("entryIds"))
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter(|entry_id| {
+                        !entry_id.is_empty()
+                            && !entry_id.contains('/')
+                            && !entry_id.contains('\\')
+                            && *entry_id != "."
+                            && *entry_id != ".."
+                    })
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let logical_delete_committed = data
+            .as_ref()
+            .map(|data| {
+                entry_ids
+                    .iter()
+                    .all(|entry_id| !data.nodes.iter().any(|node| node.id == *entry_id))
+            })
+            .unwrap_or(false);
+        if !logical_delete_committed {
+            continue;
+        }
+        let mut pending = Vec::new();
+        let mut errors = Vec::new();
+        for entry_id in &entry_ids {
+            let path = core.repo.layout.entry_img_dir(entry_id);
+            let result = if path.is_dir() {
+                std::fs::remove_dir_all(&path)
+            } else if path.exists() {
+                std::fs::remove_file(&path)
+            } else {
+                Ok(())
+            };
+            if let Err(error) = result {
+                pending.push(entry_id.clone());
+                errors.push(format!("{}：{error}", path.display()));
+            }
+        }
+        let error = if errors.is_empty() {
+            None
+        } else {
+            Some(errors.join("；"))
+        };
+        let _ = core.repo.finish_recovery(id, error.as_deref(), &pending);
+    }
 }
 
 pub fn stale_descriptor_cleanup(data_dir: &Path) {

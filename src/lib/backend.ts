@@ -250,9 +250,15 @@ export async function hasCoreDispatch(): Promise<boolean> {
     return coreAvailable;
   }
   try {
-    await invoke("core_snapshot");
-    coreAvailable = true;
-  } catch {
+    const capability = await invoke<{ available: boolean }>("core_ping");
+    coreAvailable = capability.available;
+  } catch (error) {
+    // Tauri desktop must fail closed: an unavailable probe is not permission
+    // to fall back to full-file legacy writes.
+    const mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    if (!mobile) {
+      throw error;
+    }
     coreAvailable = false;
   }
   return coreAvailable;

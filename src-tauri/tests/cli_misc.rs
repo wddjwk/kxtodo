@@ -28,7 +28,12 @@ fn help_exits_zero_at_every_level() {
     ] {
         let result = env.run(&args);
         assert_eq!(result.code, 0, "{args:?} 帮助应退出 0：{}", result.stderr);
-        assert!(result.stderr.contains("Risk") || result.stderr.contains("用法") || result.stderr.contains("Usage") || result.stderr.contains("KXToDo"));
+        assert!(
+            result.stderr.contains("Risk")
+                || result.stderr.contains("用法")
+                || result.stderr.contains("Usage")
+                || result.stderr.contains("KXToDo")
+        );
     }
 }
 
@@ -48,6 +53,26 @@ fn unknown_command_is_exit_2() {
     let env = TestEnv::fresh();
     let result = env.run(&["frobnicate"]);
     assert_eq!(result.code, 2);
+    let envelope = result.stderr_envelope();
+    assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["error"]["code"], "CLI_ARGUMENT_ERROR");
+    assert!(envelope["meta"]["requestId"].is_string());
+}
+
+#[test]
+fn invalid_format_and_jq_syntax_do_not_write() {
+    let env = TestEnv::fresh();
+    let bad_format = env.run(&[
+        "task", "add", "--type", "category", "--name", "bad", "--format", "xml",
+    ]);
+    assert_eq!(bad_format.code, 2);
+    assert!(!env.file_exists("data.json"));
+
+    let bad_jq = env.run(&[
+        "task", "add", "--type", "category", "--name", "bad", "--jq", ".data(",
+    ]);
+    assert_eq!(bad_jq.code, 2);
+    assert!(!env.file_exists("data.json"));
 }
 
 #[test]
@@ -63,9 +88,7 @@ fn schema_spec_and_patch_come_from_model() {
     // patch schema 递归移除了 required
     fn has_required(value: &Value) -> bool {
         match value {
-            Value::Object(map) => {
-                map.contains_key("required") || map.values().any(has_required)
-            }
+            Value::Object(map) => map.contains_key("required") || map.values().any(has_required),
             Value::Array(items) => items.iter().any(has_required),
             _ => false,
         }
@@ -152,7 +175,10 @@ fn skills_commands_work_embedded() {
     assert_eq!(list["skills"][0]["source"], "embedded");
 
     let read = env.ok(&["skills", "read", "kxtodo"]);
-    assert!(read["content"].as_str().unwrap().contains("KXToDo Agent SKILL"));
+    assert!(read["content"]
+        .as_str()
+        .unwrap()
+        .contains("KXToDo Agent SKILL"));
     assert_eq!(read["version"], 1);
     assert_eq!(read["source"], "embedded");
 
@@ -166,6 +192,38 @@ fn skills_commands_work_embedded() {
         validate["valid"].as_bool().unwrap(),
         "SKILL 校验应通过：{validate}"
     );
+
+    let persisted = env.ok(&["skills", "persist", "kxtodo", env.path().to_str().unwrap()]);
+    let expected = env.path().join("skills").join("kxtodo").join("SKILL.md");
+    assert_eq!(persisted["path"], expected.display().to_string());
+    assert_eq!(
+        std::fs::read_to_string(&expected).unwrap(),
+        read["content"].as_str().unwrap()
+    );
+    let persisted_again = env.ok(&[
+        "skills",
+        "persist",
+        "kxtodo",
+        env.path().join("skills").to_str().unwrap(),
+    ]);
+    assert_eq!(persisted_again["path"], expected.display().to_string());
+
+    let blocked_root = env.path().join("blocked-export");
+    let blocked = env.run(&[
+        "skills",
+        "persist",
+        "kxtodo",
+        blocked_root.to_str().unwrap(),
+        "--idempotency-key",
+        "unsupported",
+    ]);
+    assert_eq!(blocked.code, 2);
+    assert!(!blocked_root.exists());
+
+    let echo = env.run(&["skills", "echo", "kxtodo"]);
+    assert_eq!(echo.code, 0);
+    assert_eq!(echo.stdout, read["content"].as_str().unwrap());
+    assert!(serde_json::from_str::<Value>(&echo.stdout).is_err());
 }
 
 #[test]
@@ -173,7 +231,37 @@ fn doctor_on_fresh_dir() {
     let env = TestEnv::fresh();
     let report = env.ok(&["doctor"]);
     assert!(report["checks"].as_array().unwrap().len() >= 8);
-    assert!(report["healthy"].as_bool().unwrap(), "新目录应健康：{report}");
+    assert!(
+        report["healthy"].as_bool().unwrap(),
+        "新目录应健康：{report}"
+    );
+}
+
+#[test]
+fn doctor_check_is_selective_and_read_only() {
+    let env = TestEnv::fresh();
+    env.ok(&["task", "tree"]);
+    for path in [
+        env.path().join("img").join("avator"),
+        env.path().join("img").join("background"),
+        env.path().join("img").join("data"),
+    ] {
+        let _ = std::fs::remove_dir_all(path);
+    }
+    env.ok(&["doctor"]);
+    assert!(!env.path().join("img").join("avator").exists());
+    assert!(!env.path().join("img").join("background").exists());
+    assert!(!env.path().join("img").join("data").exists());
+
+    let temp = env.path().join(".data.json.crash.tmp");
+    std::fs::write(&temp, "sentinel").unwrap();
+    let report = env.ok(&["doctor", "--check", "runtimes"]);
+    let checks = report["checks"].as_array().unwrap();
+    assert_eq!(checks.len(), 1);
+    assert_eq!(checks[0]["name"], "runtimes");
+    assert_eq!(std::fs::read_to_string(&temp).unwrap(), "sentinel");
+    let error = env.err(&["doctor", "--check", "nope"], 2);
+    assert_eq!(error["code"], "UNKNOWN_DOCTOR_CHECK");
 }
 
 #[test]
@@ -195,24 +283,63 @@ fn output_formats_table_pretty_ndjson() {
     let env = TestEnv::fresh();
     let entry = env.ok(&["task", "add", "--type", "entry", "--name", "e"]);
     let entry_id = entry["id"].as_str().unwrap().to_string();
-    env.ok(&["task", "add", "--type", "item", "--entry-id", &entry_id, "--markdown", "任务甲"]);
-    env.ok(&["task", "add", "--type", "item", "--entry-id", &entry_id, "--markdown", "任务乙"]);
+    env.ok(&[
+        "task",
+        "add",
+        "--type",
+        "item",
+        "--entry-id",
+        &entry_id,
+        "--markdown",
+        "任务甲",
+    ]);
+    env.ok(&[
+        "task",
+        "add",
+        "--type",
+        "item",
+        "--entry-id",
+        &entry_id,
+        "--markdown",
+        "任务乙",
+    ]);
 
     let table = env.run(&[
-        "task", "list", "--type", "item", "--entry-id", &entry_id, "--format", "table",
+        "task",
+        "list",
+        "--type",
+        "item",
+        "--entry-id",
+        &entry_id,
+        "--format",
+        "table",
     ]);
     assert_eq!(table.code, 0);
     assert!(table.stdout.contains("MARKDOWN"));
     assert!(table.stdout.contains("任务甲"));
 
     let pretty = env.run(&[
-        "task", "list", "--type", "item", "--entry-id", &entry_id, "--format", "pretty",
+        "task",
+        "list",
+        "--type",
+        "item",
+        "--entry-id",
+        &entry_id,
+        "--format",
+        "pretty",
     ]);
     assert_eq!(pretty.code, 0);
     assert!(pretty.stdout.contains("[ ] 任务甲"));
 
     let ndjson = env.run(&[
-        "task", "list", "--type", "item", "--entry-id", &entry_id, "--format", "ndjson",
+        "task",
+        "list",
+        "--type",
+        "item",
+        "--entry-id",
+        &entry_id,
+        "--format",
+        "ndjson",
     ]);
     assert_eq!(ndjson.code, 0);
     let lines: Vec<&str> = ndjson.stdout.lines().collect();
@@ -223,10 +350,34 @@ fn output_formats_table_pretty_ndjson() {
     }
 
     // 错误信封不受格式影响
-    let error = env.run(&["task", "get", "--type", "item", "--id", "nope", "--format", "table"]);
+    let error = env.run(&[
+        "task", "get", "--type", "item", "--id", "nope", "--format", "table",
+    ]);
     assert_eq!(error.code, 3);
     let parsed: Value = serde_json::from_str(&error.stderr).unwrap();
     assert_eq!(parsed["ok"], false);
+}
+
+#[test]
+fn persisted_read_commands_return_revision_meta() {
+    let env = TestEnv::fresh();
+    env.ok(&["task", "tree"]);
+    for args in [
+        vec!["task", "tree"],
+        vec!["task", "list", "--type", "entry"],
+        vec!["schedule", "list"],
+        vec!["schedule", "status"],
+        vec!["schedule", "runtime", "list"],
+        vec!["config", "list"],
+        vec!["config", "path"],
+        vec!["config", "validate"],
+    ] {
+        let result = env.run(&args);
+        assert_eq!(result.code, 0, "{args:?}: {}", result.stderr);
+        let envelope = result.envelope();
+        assert!(envelope["meta"]["revisionDomain"].is_string(), "{args:?}");
+        assert!(envelope["meta"]["revision"].is_number(), "{args:?}");
+    }
 }
 
 #[test]

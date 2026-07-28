@@ -91,6 +91,12 @@ fn validate_catches_schema_and_semantic_errors() {
     ], 2);
     assert_eq!(error["code"], "INVALID_DURATION");
 
+    let error = env.err(&[
+        "schedule", "validate", "--spec",
+        r#"{"name":"x","trigger":{"type":"interval","every":"1h"},"action":{"type":"notification","notification":{"message":"m","duration":"1199ms"}}}"#,
+    ], 2);
+    assert_eq!(error["code"], "DURATION_OUT_OF_RANGE");
+
     // 无效 cron
     let error = env.err(&[
         "schedule", "validate", "--spec",
@@ -113,7 +119,12 @@ fn validate_catches_schema_and_semantic_errors() {
     assert_eq!(error["code"], "INVALID_SPEC");
 
     // 合法 spec 通过
-    let valid = env.ok(&["schedule", "validate", "--spec", &notification_spec().to_string()]);
+    let valid = env.ok(&[
+        "schedule",
+        "validate",
+        "--spec",
+        &notification_spec().to_string(),
+    ]);
     assert_eq!(valid["valid"], true);
     assert!(valid["normalizedSpec"]["trigger"]["at"].is_string());
 }
@@ -145,35 +156,90 @@ fn patch_semantics() {
     let id = created["id"].as_str().unwrap().to_string();
 
     // 局部合并
-    let modified = env.ok(&["schedule", "modify", "--id", &id, "--patch", r#"{"trigger":{"every":"30m"}}"#]);
+    let modified = env.ok(&[
+        "schedule",
+        "modify",
+        "--id",
+        &id,
+        "--patch",
+        r#"{"trigger":{"every":"30m"}}"#,
+    ]);
     assert_eq!(modified["spec"]["trigger"]["every"], "30m");
     assert_eq!(modified["spec"]["trigger"]["maxRuns"], 5);
 
     // null 清除可选字段
-    let modified = env.ok(&["schedule", "modify", "--id", &id, "--patch", r#"{"trigger":{"maxRuns":null}}"#]);
+    let modified = env.ok(&[
+        "schedule",
+        "modify",
+        "--id",
+        &id,
+        "--patch",
+        r#"{"trigger":{"maxRuns":null}}"#,
+    ]);
     assert!(modified["spec"]["trigger"]["maxRuns"].is_null());
 
     // 运行时字段被拒绝
-    let error = env.err(&["schedule", "modify", "--id", &id, "--patch", r#"{"runCount":9}"#], 2);
+    let error = env.err(
+        &[
+            "schedule",
+            "modify",
+            "--id",
+            &id,
+            "--patch",
+            r#"{"runCount":9}"#,
+        ],
+        2,
+    );
     assert_eq!(error["code"], "PATCH_FORBIDDEN_FIELD");
 
     // 未知字段被拒绝
-    env.err(&["schedule", "modify", "--id", &id, "--patch", r#"{"nope":1}"#], 2);
+    env.err(
+        &[
+            "schedule",
+            "modify",
+            "--id",
+            &id,
+            "--patch",
+            r#"{"nope":1}"#,
+        ],
+        2,
+    );
 
     // discriminator 切换必须完整（once 缺少 at）
-    let error = env.err(&["schedule", "modify", "--id", &id, "--patch", r#"{"trigger":{"type":"once"}}"#], 2);
+    let error = env.err(
+        &[
+            "schedule",
+            "modify",
+            "--id",
+            &id,
+            "--patch",
+            r#"{"trigger":{"type":"once"}}"#,
+        ],
+        2,
+    );
     assert_eq!(error["code"], "INVALID_SPEC");
 
     // 完整切换成功，旧分支字段不残留
     let modified = env.ok(&[
-        "schedule", "modify", "--id", &id,
-        "--patch", r#"{"trigger":{"type":"once","at":"2031-01-01T00:00:00Z"}}"#,
+        "schedule",
+        "modify",
+        "--id",
+        &id,
+        "--patch",
+        r#"{"trigger":{"type":"once","at":"2031-01-01T00:00:00Z"}}"#,
     ]);
     assert_eq!(modified["spec"]["trigger"]["type"], "once");
     assert!(modified["spec"]["trigger"]["every"].is_null());
 
     // patch 校验命令
-    let valid = env.ok(&["schedule", "validate", "--id", &id, "--patch", r#"{"name":"新名字"}"#]);
+    let valid = env.ok(&[
+        "schedule",
+        "validate",
+        "--id",
+        &id,
+        "--patch",
+        r#"{"name":"新名字"}"#,
+    ]);
     assert_eq!(valid["valid"], true);
 }
 
@@ -238,6 +304,26 @@ fn list_find_and_filters() {
 
     let found_notification = env.ok(&["schedule", "find", "--query", "提交周报"]);
     assert_eq!(found_notification["items"].as_array().unwrap().len(), 1);
+
+    let recent = env.ok(&["schedule", "list", "--created-from", "2000-01-01T00:00:00Z"]);
+    assert_eq!(recent["items"].as_array().unwrap().len(), 2);
+    let future = env.ok(&[
+        "schedule",
+        "find",
+        "--query",
+        "下载",
+        "--created-from",
+        "2099-01-01T00:00:00Z",
+    ]);
+    assert_eq!(future["items"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        env.err(&["schedule", "list", "--status", "typo"], 2)["code"],
+        "INVALID_STATUS"
+    );
+    assert_eq!(
+        env.err(&["schedule", "list", "--sort", "typo"], 2)["code"],
+        "INVALID_SORT"
+    );
 }
 
 #[test]
@@ -247,7 +333,10 @@ fn runtime_list_set_detect() {
     assert!(list["runtimes"].as_array().unwrap().len() == 5);
 
     env.err(&["schedule", "runtime", "set", "ruby", "/x"], 2);
-    env.err(&["schedule", "runtime", "set", "python", "/no/such/file"], 2);
+    env.err(
+        &["schedule", "runtime", "set", "python", "/no/such/file"],
+        2,
+    );
 
     let python = todo_note_lib::domain::exec::find_executable(&["python", "python3", "py"], &[]);
     if !python.is_empty() {
@@ -284,6 +373,11 @@ fn status_reports_host_and_counts() {
     assert_eq!(status["tasks"]["total"], 1);
     assert!(status["host"].is_object());
     assert!(status["runtimes"].is_array());
+    assert!(status["lastMissedAt"].is_null());
+    assert_eq!(status["missedCount"], 0);
+    assert_eq!(status["startupRecovery"]["dataDirKind"], "custom");
+    assert_eq!(status["startupRecovery"]["available"], false);
+    assert!(status["startupRecovery"]["hint"].is_string());
 }
 
 #[test]
@@ -299,7 +393,13 @@ fn run_without_host_returns_execution_error() {
 #[test]
 fn spec_example_from_schema_validates() {
     let env = TestEnv::fresh();
-    for name in ["once-notification", "interval-script", "calendar-notification", "condition-script", "executable"] {
+    for name in [
+        "once-notification",
+        "interval-script",
+        "calendar-notification",
+        "condition-script",
+        "executable",
+    ] {
         let output = env.ok(&["schema", "schedule.spec", "--example", name]);
         let example = output["example"].to_string();
         let valid = env.ok(&["schedule", "validate", "--spec", &example]);

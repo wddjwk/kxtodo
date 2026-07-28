@@ -24,6 +24,8 @@ pub const BACKUP_DIR: &str = "backups";
 pub const RUNTIME_DIR: &str = "runtime";
 pub const HOST_DESCRIPTOR: &str = "host.json";
 pub const HOST_LAUNCH_LOCK: &str = "host.launch.lock";
+pub const HOST_OWNER_LOCK: &str = "host.owner.lock";
+pub const RECOVERY_FILE: &str = "recovery.json";
 pub const IMG_DIR: &str = "img";
 
 pub const IDEMPOTENCY_MAX_RECORDS: usize = 1000;
@@ -102,6 +104,12 @@ impl Layout {
     pub fn host_launch_lock(&self) -> PathBuf {
         self.runtime_dir().join(HOST_LAUNCH_LOCK)
     }
+    pub fn host_owner_lock(&self) -> PathBuf {
+        self.runtime_dir().join(HOST_OWNER_LOCK)
+    }
+    pub fn recovery_file(&self) -> PathBuf {
+        self.runtime_dir().join(RECOVERY_FILE)
+    }
     pub fn img_dir(&self) -> PathBuf {
         self.root.join(IMG_DIR)
     }
@@ -144,6 +152,32 @@ impl RepoLock {
         Ok(Self { file })
     }
 
+    /// Read-only diagnostic probe for an already-existing lock file. It never
+    /// creates repository directories or files.
+    pub fn try_acquire_existing(layout: &Layout) -> CoreResult<Option<Self>> {
+        let path = layout.lock_file();
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .map_err(|error| {
+                CoreError::io(format!("无法打开仓库锁 {}：{error}", path.display()))
+            })?;
+        match file.try_lock_exclusive() {
+            Ok(()) => Ok(Some(Self { file })),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    || error.raw_os_error() == Some(33) =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(CoreError::io(format!(
+                "仓库锁不可用 {}：{error}",
+                path.display()
+            ))),
+        }
+    }
+
     /// Non-blocking acquire: Ok(None) when another process holds the lock.
     pub fn try_acquire(layout: &Layout) -> CoreResult<Option<Self>> {
         layout.ensure()?;
@@ -179,6 +213,40 @@ impl Drop for RepoLock {
     }
 }
 
+/// Lifetime ownership guard for one Background Host per normalized data dir.
+pub struct HostOwnerLock {
+    file: File,
+}
+
+impl HostOwnerLock {
+    pub fn acquire(layout: &Layout) -> CoreResult<Self> {
+        layout.ensure()?;
+        fs::create_dir_all(layout.runtime_dir())?;
+        let path = layout.host_owner_lock();
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&path)?;
+        file.try_lock_exclusive().map_err(|error| {
+            CoreError::conflict(
+                "HOST_ALREADY_RUNNING",
+                format!(
+                    "数据目录已有 Background Host：{}（{error}）",
+                    layout.root.display()
+                ),
+            )
+        })?;
+        Ok(Self { file })
+    }
+}
+
+impl Drop for HostOwnerLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
 /// Atomic write: temp file + flush + rename with replace semantics.
 pub fn atomic_write(path: &Path, contents: &str) -> CoreResult<()> {
     let parent = path
@@ -191,9 +259,8 @@ pub fn atomic_write(path: &Path, contents: &str) -> CoreResult<()> {
         .unwrap_or("data");
     let tmp = parent.join(format!(".{file_name}.{}.tmp", std::process::id()));
     {
-        let mut file = File::create(&tmp).map_err(|error| {
-            CoreError::io(format!("无法写临时文件 {}：{error}", tmp.display()))
-        })?;
+        let mut file = File::create(&tmp)
+            .map_err(|error| CoreError::io(format!("无法写临时文件 {}：{error}", tmp.display())))?;
         use std::io::Write;
         file.write_all(contents.as_bytes())?;
         file.sync_all()?;
@@ -237,9 +304,8 @@ pub fn read_json_value(path: &Path) -> CoreResult<Value> {
     if !path.exists() {
         return Ok(Value::Null);
     }
-    let raw = fs::read_to_string(path).map_err(|error| {
-        CoreError::io(format!("无法读取 {}：{error}", path.display()))
-    })?;
+    let raw = fs::read_to_string(path)
+        .map_err(|error| CoreError::io(format!("无法读取 {}：{error}", path.display())))?;
     serde_json::from_str(&raw).map_err(|error| {
         CoreError::new(
             crate::domain::error::ErrorKind::Io,
@@ -263,6 +329,7 @@ pub struct WriteOutcome {
     pub revision: u64,
     pub replayed: bool,
     pub replay_summary: Option<Value>,
+    pub warnings: Vec<Value>,
 }
 
 impl Repository {
@@ -272,11 +339,21 @@ impl Repository {
         Ok(Self { layout })
     }
 
+    pub fn open_readonly(root: PathBuf) -> Self {
+        Self {
+            layout: Layout::new(root),
+        }
+    }
+
     /// Load + migrate (if needed) under exclusive lock. Safe to call on every process start.
     pub fn load_all(&self) -> CoreResult<(DataFile, SettingsFile, ScheduleFile)> {
         let _lock = RepoLock::acquire(&self.layout)?;
         crate::domain::migrate::migrate_if_needed(&self.layout)?;
-        Ok((self.load_data()?, self.load_settings()?, self.load_schedule()?))
+        Ok((
+            self.load_data()?,
+            self.load_settings()?,
+            self.load_schedule()?,
+        ))
     }
 
     pub fn load_data(&self) -> CoreResult<DataFile> {
@@ -337,6 +414,63 @@ impl Repository {
         })
     }
 
+    pub fn lookup_schedule_idempotency(
+        &self,
+        command: &str,
+        key: Option<&str>,
+    ) -> CoreResult<Option<(u64, Value)>> {
+        let Some(key) = key else {
+            return Ok(None);
+        };
+        let _lock = RepoLock::acquire(&self.layout)?;
+        crate::domain::migrate::migrate_if_needed(&self.layout)?;
+        let file = self.load_schedule()?;
+        Ok(file
+            .meta
+            .idempotency
+            .iter()
+            .find(|record| record.command == command && record.key == key)
+            .map(|record| (file.meta.revision, record.summary.clone())))
+    }
+
+    pub fn lookup_settings_idempotency(
+        &self,
+        command: &str,
+        key: Option<&str>,
+    ) -> CoreResult<Option<(u64, Value)>> {
+        let Some(key) = key else {
+            return Ok(None);
+        };
+        let _lock = RepoLock::acquire(&self.layout)?;
+        crate::domain::migrate::migrate_if_needed(&self.layout)?;
+        let file = self.load_settings()?;
+        Ok(file
+            .meta
+            .idempotency
+            .iter()
+            .find(|record| record.command == command && record.key == key)
+            .map(|record| (file.meta.revision, record.summary.clone())))
+    }
+
+    pub fn lookup_data_idempotency(
+        &self,
+        command: &str,
+        key: Option<&str>,
+    ) -> CoreResult<Option<(u64, Value)>> {
+        let Some(key) = key else {
+            return Ok(None);
+        };
+        let _lock = RepoLock::acquire(&self.layout)?;
+        crate::domain::migrate::migrate_if_needed(&self.layout)?;
+        let file = self.load_data()?;
+        Ok(file
+            .meta
+            .idempotency
+            .iter()
+            .find(|record| record.command == command && record.key == key)
+            .map(|record| (file.meta.revision, record.summary.clone())))
+    }
+
     /// Transactional write (§4.3): lock → reload → revision check → idempotency → mutate →
     /// bump revision → append ledger → audit → atomic persist.
     ///
@@ -360,6 +494,7 @@ impl Repository {
             &file.meta,
             expected_revision,
             idempotency_key,
+            command,
         )?;
         if let Some(summary) = outcome.replay_summary.clone() {
             return Ok((file, outcome.with_summary(summary)));
@@ -371,9 +506,173 @@ impl Repository {
         finalize_meta(&mut file.meta, idempotency_key, command, summary.clone());
         let raw = serde_json::to_string_pretty(&file)?;
         atomic_write(&self.layout.data_file(), &raw)?;
-        self.audit(command, Domain::Data, file.meta.revision, &summary)?;
         let revision = file.meta.revision;
-        Ok((file, outcome.finish(revision)))
+        let mut outcome = outcome.finish(revision);
+        if let Err(error) = self.audit(command, Domain::Data, revision, &summary) {
+            outcome.warnings.push(audit_warning(&error));
+        }
+        Ok((file, outcome))
+    }
+
+    /// High-impact data transaction: idempotency check and consistent backup
+    /// happen while the repository lock is held; a durable recovery record is
+    /// published before the logical JSON commit.
+    pub fn write_data_with_recovery<F>(
+        &self,
+        expected_revision: Option<u64>,
+        idempotency_key: Option<&str>,
+        command: &str,
+        mut recovery: Value,
+        mutate: F,
+    ) -> CoreResult<(DataFile, WriteOutcome, Option<String>)>
+    where
+        F: FnOnce(&mut DataFile) -> CoreResult<Value>,
+    {
+        let _lock = RepoLock::acquire(&self.layout)?;
+        crate::domain::migrate::migrate_if_needed(&self.layout)?;
+        let mut file = self.load_data()?;
+        let outcome = self.prepare_write(
+            Domain::Data,
+            &file.meta,
+            expected_revision,
+            idempotency_key,
+            command,
+        )?;
+        if let Some(summary) = outcome.replay_summary.clone() {
+            return Ok((file, outcome.with_summary(summary), None));
+        }
+
+        let backup = self.backup_locked("cascade-remove")?;
+        let summary = mutate(&mut file)?;
+        file.schema_version = DATA_SCHEMA_VERSION;
+        file.meta.revision += 1;
+        file.meta.schema_version = None;
+        finalize_meta(&mut file.meta, idempotency_key, command, summary.clone());
+
+        let recovery_id = recovery
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(crate::domain::ids::request_id);
+        recovery["id"] = Value::String(recovery_id.clone());
+        recovery["command"] = Value::String(command.to_string());
+        recovery["createdAt"] = Value::String(now_iso());
+        recovery["status"] = Value::String("prepared".to_string());
+        recovery["backup"] = Value::String(backup.display().to_string());
+        recovery["targetRevision"] = serde_json::json!(file.meta.revision);
+        self.upsert_recovery_locked(recovery.clone())?;
+
+        let raw = serde_json::to_string_pretty(&file)?;
+        if let Err(error) = atomic_write(&self.layout.data_file(), &raw) {
+            let _ = self.remove_recovery_locked(&recovery_id);
+            return Err(error);
+        }
+
+        let revision = file.meta.revision;
+        let mut outcome = outcome.finish(revision);
+        recovery["status"] = Value::String("committed".to_string());
+        recovery["committedAt"] = Value::String(now_iso());
+        if let Err(error) = self.upsert_recovery_locked(recovery) {
+            outcome.warnings.push(serde_json::json!({
+                "code": "RECOVERY_RECORD_UPDATE_FAILED",
+                "message": format!("业务删除已提交，但恢复记录状态更新失败：{}", error.message),
+                "recoveryId": recovery_id,
+            }));
+        }
+        if let Err(error) = self.audit(command, Domain::Data, revision, &summary) {
+            outcome.warnings.push(audit_warning(&error));
+        }
+        Ok((file, outcome, Some(recovery_id)))
+    }
+
+    pub fn read_recovery_records(&self) -> CoreResult<Vec<Value>> {
+        let path = self.layout.recovery_file();
+        let value = read_json_value(&path)?;
+        if value.is_null() {
+            return Ok(Vec::new());
+        }
+        let version = value.get("version").and_then(Value::as_u64);
+        let records = value
+            .get("records")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                CoreError::new(
+                    crate::domain::error::ErrorKind::Io,
+                    "RECOVERY_CORRUPTED",
+                    format!("恢复记录结构无效：{}", path.display()),
+                )
+            })?;
+        if version != Some(1)
+            || records.iter().any(|record| {
+                !record.is_object()
+                    || record.get("id").and_then(Value::as_str).is_none()
+                    || record.get("kind").and_then(Value::as_str).is_none()
+            })
+        {
+            return Err(CoreError::new(
+                crate::domain::error::ErrorKind::Io,
+                "RECOVERY_CORRUPTED",
+                format!("恢复记录版本或条目无效：{}", path.display()),
+            ));
+        }
+        Ok(records.clone())
+    }
+
+    pub fn finish_recovery(
+        &self,
+        id: &str,
+        error: Option<&str>,
+        pending_paths: &[String],
+    ) -> CoreResult<()> {
+        let _lock = RepoLock::acquire(&self.layout)?;
+        if let Some(message) = error {
+            let mut records = self.read_recovery_records()?;
+            if let Some(record) = records
+                .iter_mut()
+                .find(|record| record.get("id").and_then(Value::as_str) == Some(id))
+            {
+                record["status"] = Value::String("pending".to_string());
+                record["lastError"] = Value::String(message.to_string());
+                record["pendingPaths"] = serde_json::json!(pending_paths);
+                record["updatedAt"] = Value::String(now_iso());
+            }
+            self.write_recovery_records_locked(&records)
+        } else {
+            self.remove_recovery_locked(id)
+        }
+    }
+
+    fn upsert_recovery_locked(&self, record: Value) -> CoreResult<()> {
+        let id = record.get("id").and_then(Value::as_str).unwrap_or_default();
+        let mut records = self.read_recovery_records()?;
+        if let Some(existing) = records
+            .iter_mut()
+            .find(|item| item.get("id").and_then(Value::as_str) == Some(id))
+        {
+            *existing = record;
+        } else {
+            records.push(record);
+        }
+        self.write_recovery_records_locked(&records)
+    }
+
+    fn remove_recovery_locked(&self, id: &str) -> CoreResult<()> {
+        let mut records = self.read_recovery_records()?;
+        records.retain(|record| record.get("id").and_then(Value::as_str) != Some(id));
+        self.write_recovery_records_locked(&records)
+    }
+
+    fn write_recovery_records_locked(&self, records: &[Value]) -> CoreResult<()> {
+        if records.is_empty() {
+            if self.layout.recovery_file().exists() {
+                fs::remove_file(self.layout.recovery_file())?;
+            }
+            return Ok(());
+        }
+        write_json_atomic(
+            &self.layout.recovery_file(),
+            &serde_json::json!({ "version": 1, "records": records }),
+        )
     }
 
     pub fn write_settings<F>(
@@ -394,6 +693,7 @@ impl Repository {
             &file.meta,
             expected_revision,
             idempotency_key,
+            command,
         )?;
         if let Some(summary) = outcome.replay_summary.clone() {
             return Ok((file, outcome.with_summary(summary)));
@@ -404,9 +704,12 @@ impl Repository {
         finalize_meta(&mut file.meta, idempotency_key, command, summary.clone());
         let raw = serde_json::to_string_pretty(&file)?;
         atomic_write(&self.layout.settings_file(), &raw)?;
-        self.audit(command, Domain::Settings, file.meta.revision, &summary)?;
         let revision = file.meta.revision;
-        Ok((file, outcome.finish(revision)))
+        let mut outcome = outcome.finish(revision);
+        if let Err(error) = self.audit(command, Domain::Settings, revision, &summary) {
+            outcome.warnings.push(audit_warning(&error));
+        }
+        Ok((file, outcome))
     }
 
     pub fn write_schedule<F>(
@@ -414,6 +717,33 @@ impl Repository {
         expected_revision: Option<u64>,
         idempotency_key: Option<&str>,
         command: &str,
+        mutate: F,
+    ) -> CoreResult<(ScheduleFile, WriteOutcome)>
+    where
+        F: FnOnce(&mut ScheduleFile) -> CoreResult<Value>,
+    {
+        self.write_schedule_impl(expected_revision, idempotency_key, command, true, mutate)
+    }
+
+    /// Scheduler state-machine bookkeeping is persisted transactionally but is
+    /// intentionally excluded from the user-level audit trail.
+    pub fn write_schedule_internal<F>(
+        &self,
+        command: &str,
+        mutate: F,
+    ) -> CoreResult<(ScheduleFile, WriteOutcome)>
+    where
+        F: FnOnce(&mut ScheduleFile) -> CoreResult<Value>,
+    {
+        self.write_schedule_impl(None, None, command, false, mutate)
+    }
+
+    fn write_schedule_impl<F>(
+        &self,
+        expected_revision: Option<u64>,
+        idempotency_key: Option<&str>,
+        command: &str,
+        audit: bool,
         mutate: F,
     ) -> CoreResult<(ScheduleFile, WriteOutcome)>
     where
@@ -427,6 +757,7 @@ impl Repository {
             &file.meta,
             expected_revision,
             idempotency_key,
+            command,
         )?;
         if let Some(summary) = outcome.replay_summary.clone() {
             return Ok((file, outcome.with_summary(summary)));
@@ -437,9 +768,14 @@ impl Repository {
         finalize_meta(&mut file.meta, idempotency_key, command, summary.clone());
         let raw = serde_json::to_string_pretty(&file)?;
         atomic_write(&self.layout.schedule_file(), &raw)?;
-        self.audit(command, Domain::Schedule, file.meta.revision, &summary)?;
         let revision = file.meta.revision;
-        Ok((file, outcome.finish(revision)))
+        let mut outcome = outcome.finish(revision);
+        if audit {
+            if let Err(error) = self.audit(command, Domain::Schedule, revision, &summary) {
+                outcome.warnings.push(audit_warning(&error));
+            }
+        }
+        Ok((file, outcome))
     }
 
     fn prepare_write(
@@ -448,7 +784,24 @@ impl Repository {
         meta: &DomainMeta,
         expected_revision: Option<u64>,
         idempotency_key: Option<&str>,
+        command: &str,
     ) -> CoreResult<WriteOutcome> {
+        // Exact replays win over the original revision guard: a successful
+        // first request necessarily advanced the domain revision.
+        if let Some(key) = idempotency_key {
+            if let Some(record) = meta
+                .idempotency
+                .iter()
+                .find(|item| item.key == key && item.command == command)
+            {
+                return Ok(WriteOutcome {
+                    revision: meta.revision,
+                    replayed: true,
+                    replay_summary: Some(record.summary.clone()),
+                    warnings: Vec::new(),
+                });
+            }
+        }
         if let Some(expected) = expected_revision {
             if expected != meta.revision {
                 return Err(CoreError::conflict(
@@ -463,19 +816,11 @@ impl Repository {
                 .with_hint("重新读取最新数据后重试"));
             }
         }
-        if let Some(key) = idempotency_key {
-            if let Some(record) = meta.idempotency.iter().find(|item| item.key == key) {
-                return Ok(WriteOutcome {
-                    revision: meta.revision,
-                    replayed: true,
-                    replay_summary: Some(record.summary.clone()),
-                });
-            }
-        }
         Ok(WriteOutcome {
             revision: meta.revision,
             replayed: false,
             replay_summary: None,
+            warnings: Vec::new(),
         })
     }
 
@@ -503,6 +848,11 @@ impl Repository {
 
     /// Full JSON backup set of the three domain files (§4.2.3).
     pub fn backup(&self, reason: &str) -> CoreResult<PathBuf> {
+        let _lock = RepoLock::acquire(&self.layout)?;
+        self.backup_locked(reason)
+    }
+
+    fn backup_locked(&self, reason: &str) -> CoreResult<PathBuf> {
         let stamp = now_iso().replace([':', '.'], "-");
         let dir = self.layout.backup_dir().join(format!("{stamp}-{reason}"));
         fs::create_dir_all(&dir)?;
@@ -530,8 +880,16 @@ impl WriteOutcome {
             revision,
             replayed: false,
             replay_summary: None,
+            warnings: self.warnings,
         }
     }
+}
+
+fn audit_warning(error: &CoreError) -> Value {
+    serde_json::json!({
+        "code": "AUDIT_WRITE_FAILED",
+        "message": format!("业务数据已提交，但审计日志写入失败：{}", error.message),
+    })
 }
 
 fn compact_audit_summary(summary: &Value) -> Value {
@@ -578,7 +936,10 @@ fn prune_idempotency(meta: &mut DomainMeta) {
             .map(|at| at > cutoff)
             .unwrap_or(false)
     });
-    let overflow = meta.idempotency.len().saturating_sub(IDEMPOTENCY_MAX_RECORDS);
+    let overflow = meta
+        .idempotency
+        .len()
+        .saturating_sub(IDEMPOTENCY_MAX_RECORDS);
     if overflow > 0 {
         meta.idempotency.drain(0..overflow);
     }
@@ -600,20 +961,28 @@ fn prune_backups(dir: &Path, keep: usize) -> CoreResult<()> {
     Ok(())
 }
 
-/// Clean crash leftovers: stale temp files from interrupted atomic writes (§4.2.3).
-pub fn cleanup_temp_files(root: &Path) -> CoreResult<Vec<PathBuf>> {
-    let mut removed = Vec::new();
+/// List crash leftovers without mutating the repository (doctor is read-only).
+pub fn list_temp_files(root: &Path) -> CoreResult<Vec<PathBuf>> {
+    let mut paths = Vec::new();
     if !root.is_dir() {
-        return Ok(removed);
+        return Ok(paths);
     }
     for entry in fs::read_dir(root)? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().to_string();
         if name.starts_with('.') && name.ends_with(".tmp") {
-            let path = entry.path();
-            if fs::remove_file(&path).is_ok() {
-                removed.push(path);
-            }
+            paths.push(entry.path());
+        }
+    }
+    Ok(paths)
+}
+
+/// Explicit cleanup primitive; callers must enforce high-risk confirmation.
+pub fn cleanup_temp_files(root: &Path) -> CoreResult<Vec<PathBuf>> {
+    let mut removed = Vec::new();
+    for path in list_temp_files(root)? {
+        if fs::remove_file(&path).is_ok() {
+            removed.push(path);
         }
     }
     Ok(removed)

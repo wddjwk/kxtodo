@@ -8,14 +8,14 @@ use serde_json::{json, Map, Value};
 use crate::domain::error::CoreResult;
 use crate::domain::history::truncate;
 use crate::domain::ids::gen_id;
-use crate::domain::model::{
-    DATA_SCHEMA_VERSION, SCHEDULE_SCHEMA_VERSION, SETTINGS_SCHEMA_VERSION,
-};
+use crate::domain::model::{DATA_SCHEMA_VERSION, SCHEDULE_SCHEMA_VERSION, SETTINGS_SCHEMA_VERSION};
 use crate::domain::repo::{
-    atomic_write, read_json_value, Layout, DATA_FILE, SCHEDULE_FILE, SETTINGS_FILE,
-    SCHEDULE_OUTPUT_MAX_BYTES,
+    atomic_write, read_json_value, Layout, DATA_FILE, SCHEDULE_FILE, SCHEDULE_OUTPUT_MAX_BYTES,
+    SETTINGS_FILE,
 };
-use crate::domain::time::{format_duration, local_timezone, migrate_legacy_local_time, now_iso, parse_stored_instant};
+use crate::domain::time::{
+    format_duration, local_timezone, migrate_legacy_local_time, now_iso, parse_stored_instant,
+};
 
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,15 +61,31 @@ pub fn migrate_if_needed(layout: &Layout) -> CoreResult<MigrationReport> {
 
     let needs_data = data_raw
         .as_ref()
-        .map(|value| value.get("schemaVersion").and_then(Value::as_u64).unwrap_or(0) < DATA_SCHEMA_VERSION as u64)
+        .map(|value| {
+            value
+                .get("schemaVersion")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                < DATA_SCHEMA_VERSION as u64
+        })
         .unwrap_or(false);
     let needs_settings = settings_raw
         .as_ref()
-        .map(|value| value.get("_meta").and_then(|m| m.get("schemaVersion")).is_none())
+        .map(|value| {
+            value
+                .get("_meta")
+                .and_then(|m| m.get("schemaVersion"))
+                .is_none()
+        })
         .unwrap_or(false);
     let needs_schedule = schedule_raw
         .as_ref()
-        .map(|value| value.get("_meta").and_then(|m| m.get("schemaVersion")).is_none())
+        .map(|value| {
+            value
+                .get("_meta")
+                .and_then(|m| m.get("schemaVersion"))
+                .is_none()
+        })
         .unwrap_or(false);
 
     if !needs_data && !needs_settings && !needs_schedule {
@@ -189,11 +205,7 @@ fn migrate_settings(value: &mut Value) -> Vec<String> {
             root.entry("appearance")
                 .or_insert_with(|| json!({}))
                 .as_object_mut()
-                .map(|appearance| {
-                    appearance
-                        .entry("linkOpenMode".to_string())
-                        .or_insert(mode)
-                });
+                .map(|appearance| appearance.entry("linkOpenMode".to_string()).or_insert(mode));
         }
     }
     if let Some(display) = root.remove("display") {
@@ -355,13 +367,15 @@ fn migrate_schedule_task(
     let mut enabled = raw.get("enabled").and_then(Value::as_bool).unwrap_or(false);
 
     let created_at = normalize_instant_field(raw.get("createdAt"), now, &mut warnings, "createdAt");
-    let updated_at = normalize_instant_field(raw.get("updatedAt"), &created_at, &mut warnings, "updatedAt");
+    let updated_at = normalize_instant_field(
+        raw.get("updatedAt"),
+        &created_at,
+        &mut warnings,
+        "updatedAt",
+    );
 
     // ----- state -----
-    let run_count = raw
-        .get("runCount")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
+    let run_count = raw.get("runCount").and_then(Value::as_u64).unwrap_or(0);
     let last_run_at = raw
         .get("lastRunAt")
         .and_then(Value::as_str)
@@ -377,7 +391,10 @@ fn migrate_schedule_task(
         }
         _ => "idle",
     };
-    let last_exit_code = raw.get("lastExitCode").cloned().filter(|v| v.is_i64() || v.is_u64());
+    let last_exit_code = raw
+        .get("lastExitCode")
+        .cloned()
+        .filter(|v| v.is_i64() || v.is_u64());
     let last_stdout = raw
         .get("lastStdout")
         .and_then(Value::as_str)
@@ -400,7 +417,10 @@ fn migrate_schedule_task(
     let mut trigger_ok = true;
     let trigger = match trigger_type.as_str() {
         "once" => {
-            let run_at = trigger_raw.get("runAt").and_then(Value::as_str).unwrap_or("");
+            let run_at = trigger_raw
+                .get("runAt")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             match tz {
                 Some(zone) => {
                     let (at, mut w) = migrate_legacy_local_time(run_at, zone);
@@ -502,7 +522,9 @@ fn migrate_schedule_task(
                 }
                 (_, None, _) => {
                     trigger_ok = false;
-                    warnings.push("condition 的 probeAction 无法迁移（仅支持 script/executable）".to_string());
+                    warnings.push(
+                        "condition 的 probeAction 无法迁移（仅支持 script/executable）".to_string(),
+                    );
                     placeholder_trigger(now)
                 }
                 (_, _, None) => {
@@ -594,20 +616,25 @@ fn migrate_schedule_task(
     if spec["enabled"].as_bool().unwrap_or(false) {
         let entry_stub = crate::domain::model::ScheduleEntry {
             id: id.clone(),
-            spec: serde_json::from_value(spec.clone()).unwrap_or_else(|_| crate::domain::model::ScheduleSpec {
-                name: name.clone(),
-                enabled: false,
-                trigger: crate::domain::model::Trigger::Once { at: now.to_string(), missed_policy: None },
-                action: crate::domain::model::Action::Notification {
-                    notification: crate::domain::model::Notification {
-                        title: None,
-                        message: String::new(),
-                        duration: None,
-                        tone: None,
-                        position: None,
-                        extra: Map::new(),
+            spec: serde_json::from_value(spec.clone()).unwrap_or_else(|_| {
+                crate::domain::model::ScheduleSpec {
+                    name: name.clone(),
+                    enabled: false,
+                    trigger: crate::domain::model::Trigger::Once {
+                        at: now.to_string(),
+                        missed_policy: None,
                     },
-                },
+                    action: crate::domain::model::Action::Notification {
+                        notification: crate::domain::model::Notification {
+                            title: None,
+                            message: String::new(),
+                            duration: None,
+                            tone: None,
+                            position: None,
+                            extra: Map::new(),
+                        },
+                    },
+                }
             }),
             state: serde_json::from_value(state.clone()).unwrap_or_default(),
             ui: Default::default(),
@@ -739,7 +766,10 @@ fn migrate_probe(raw: Option<&Value>, warnings: &mut Vec<String>) -> Option<Valu
 /// v8 action → v9 action. Returns (action, ok); ok=false → caller disables the task.
 fn migrate_action(raw: &Value, warnings: &mut Vec<String>) -> (Value, bool) {
     let action_type = raw.get("type").and_then(Value::as_str).unwrap_or("script");
-    let script_mode = raw.get("scriptMode").and_then(Value::as_str).unwrap_or("inline");
+    let script_mode = raw
+        .get("scriptMode")
+        .and_then(Value::as_str)
+        .unwrap_or("inline");
     let language = raw
         .get("language")
         .and_then(Value::as_str)
@@ -915,7 +945,10 @@ fn migrate_action_notifications(raw: &Value, warnings: &mut Vec<String>) -> Opti
     if notify_on_complete {
         notifications.insert(
             "onComplete".to_string(),
-            migrate_notification(raw.get("completionNotification"), "任务 {taskName} 执行完成"),
+            migrate_notification(
+                raw.get("completionNotification"),
+                "任务 {taskName} 执行完成",
+            ),
         );
     }
     if let Some(stdout_notification) = raw.get("stdoutNotification") {

@@ -4,7 +4,7 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -16,6 +16,25 @@ use crate::domain::render::{render, Format};
 // Globals
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum OutputFormat {
+    Json,
+    Pretty,
+    Table,
+    Ndjson,
+}
+
+impl From<OutputFormat> for Format {
+    fn from(value: OutputFormat) -> Self {
+        match value {
+            OutputFormat::Json => Format::Json,
+            OutputFormat::Pretty => Format::Pretty,
+            OutputFormat::Table => Format::Table,
+            OutputFormat::Ndjson => Format::Ndjson,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Args)]
 pub struct GlobalArgs {
     /// 本次命令使用指定数据目录（默认可执行文件同级 todo-note-data/）
@@ -23,11 +42,16 @@ pub struct GlobalArgs {
     pub data_dir: Option<PathBuf>,
 
     /// 输出格式
-    #[arg(long, global = true, value_name = "json|pretty|table|ndjson")]
-    pub format: Option<String>,
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        value_name = "json|pretty|table|ndjson"
+    )]
+    pub format: Option<OutputFormat>,
 
     /// --format json 的简写
-    #[arg(long, global = true)]
+    #[arg(long, global = true, conflicts_with = "format")]
     pub json: bool,
 
     /// 对成功 JSON 结果应用 jq 表达式（子集见 kxtodo schema jq）
@@ -69,18 +93,11 @@ impl GlobalArgs {
         }
     }
 
-    fn format(&self) -> CoreResult<Format> {
+    fn format(&self) -> Format {
         if self.json {
-            return Ok(Format::Json);
-        }
-        match self.format.as_deref() {
-            None => Ok(Format::Json),
-            Some(raw) => Format::parse(raw).ok_or_else(|| {
-                CoreError::validation(
-                    "INVALID_FORMAT",
-                    format!("无效 --format `{raw}`，支持 json|pretty|table|ndjson"),
-                )
-            }),
+            Format::Json
+        } else {
+            self.format.map(Into::into).unwrap_or_default()
         }
     }
 }
@@ -114,28 +131,38 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Commands {
     /// 发送桌面通知（Risk: write）
-    #[command(long_about = "Risk: write\n\n发送桌面通知。通知由与目标数据目录匹配的 Background Host 持有；\n默认在 Host 确认创建后立即返回，--wait 等待通知窗口关闭。\n\n输出：{ notificationId, delivered, wait }。\n\n示例：\n  kxtodo notify \"构建完成\" --title \"CI\" --tone success --duration 5s")]
+    #[command(
+        long_about = "Risk: write\n\n发送桌面通知。通知由与目标数据目录匹配的 Background Host 持有；\n默认在 Host 确认创建后立即返回，--wait 等待通知窗口关闭。\n\n输出：{ notificationId, delivered, wait }。\n\n示例：\n  kxtodo notify \"构建完成\" --title \"CI\" --tone success --duration 5s"
+    )]
     Notify(Box<NotifyArgs>),
     /// 管理分类、左栏条目和具体任务
-    #[command(long_about = "管理 category（分类）、entry（条目）、item（具体任务）；system 为只读内置视图。\n\n动作：\n  add      新增\n  get      按稳定 ID 读取\n  list     结构化列表\n  find     关键词搜索\n  modify   修改/移动\n  remove   删除（high-risk-write）\n  tree     层级树\n\n逐级帮助：kxtodo task <动作> --help")]
+    #[command(
+        long_about = "管理 category（分类）、entry（条目）、item（具体任务）；system 为只读内置视图。\n\n动作：\n  add      新增\n  get      按稳定 ID 读取\n  list     结构化列表\n  find     关键词搜索\n  modify   修改/移动\n  remove   删除（high-risk-write）\n  tree     层级树\n\n逐级帮助：kxtodo task <动作> --help"
+    )]
     Task {
         #[command(subcommand)]
         action: TaskAction,
     },
     /// 管理和运行定时任务
-    #[command(long_about = "定时任务的完整定义只能通过 --spec/--patch JSON 输入（结构见 kxtodo schema schedule.spec）。\n\n动作：\n  add/validate/get/list/find/modify/remove  定义管理\n  enable/disable/run/stop/logs/status       运行控制\n  runtime list/detect/set                   脚本运行时\n\n示例流程见 kxtodo skills read kxtodo。")]
+    #[command(
+        long_about = "定时任务的完整定义只能通过 --spec/--patch JSON 输入（结构见 kxtodo schema schedule.spec）。\n\n动作：\n  add/validate/get/list/find/modify/remove  定义管理\n  enable/disable/run/stop/logs/status       运行控制\n  runtime list/detect/set                   脚本运行时\n\n示例流程见 kxtodo skills read kxtodo。"
+    )]
     Schedule {
         #[command(subcommand)]
         action: ScheduleAction,
     },
     /// 查询和修改 KXTodo 设置
-    #[command(long_about = "使用与 settings.json 一致的点路径；动态 map（appearance.uiColors）用 --map-key 指定键。\n\n动作：list/get/set/unset/reset/path/validate\n\n示例：\n  kxtodo config get appearance.uiScale\n  kxtodo config set notifications.position top-right\n  kxtodo config set appearance.uiColors \"#dfe8df\" --map-key \"entry-xxxx\"")]
+    #[command(
+        long_about = "使用与 settings.json 一致的点路径；动态 map（appearance.uiColors）用 --map-key 指定键。\n\n动作：list/get/set/unset/reset/path/validate\n\n示例：\n  kxtodo config get appearance.uiScale\n  kxtodo config set notifications.position top-right\n  kxtodo config set appearance.uiColors \"#dfe8df\" --map-key \"entry-xxxx\""
+    )]
     Config {
         #[command(subcommand)]
         action: ConfigAction,
     },
     /// 查看命令的机器可读输入结构（Risk: read）
-    #[command(long_about = "Risk: read\n\n返回由当前版本模型/命令树生成的 JSON Schema、示例与 jq 子集说明。\n\n目标：\n  task.add / task.list / ...   任意命令的参数结构\n  schedule.spec                ScheduleSpec JSON Schema\n  schedule.patch               SchedulePatch JSON Schema（自动派生）\n  notification / match         复用结构\n  jq                           --jq 支持的子集\n\n示例：\n  kxtodo schema schedule.spec --example interval-script")]
+    #[command(
+        long_about = "Risk: read\n\n返回由当前版本模型/命令树生成的 JSON Schema、示例与 jq 子集说明。\n\n目标：\n  task.add / task.list / ...   任意命令的参数结构\n  schedule.spec                ScheduleSpec JSON Schema\n  schedule.patch               SchedulePatch JSON Schema（自动派生）\n  notification / match         复用结构\n  jq                           --jq 支持的子集\n\n示例：\n  kxtodo schema schedule.spec --example interval-script"
+    )]
     Schema(SchemaArgs),
     /// 列出或读取随版本发布的 Agent SKILL（Risk: read）
     Skills {
@@ -189,10 +216,14 @@ pub enum TaskAction {
     )]
     Add(TaskAddArgs),
     /// 按稳定 ID 获取完整对象（Risk: read）
-    #[command(long_about = "Risk: read\n\n按 --type 与 --id 精确读取；--type 与实际类型不符时返回冲突错误。\n\n输出：完整资源；item 含 Markdown 全文与位置上下文；category/entry 含计数摘要。")]
+    #[command(
+        long_about = "Risk: read\n\n按 --type 与 --id 精确读取；--type 与实际类型不符时返回冲突错误。\n\n输出：完整资源；item 含 Markdown 全文与位置上下文；category/entry 含计数摘要。"
+    )]
     Get(TypeIdArgs),
     /// 结构化列表（Risk: read）
-    #[command(long_about = "Risk: read\n\n无关键词的结构化查询。category/entry 用 --parent-id <id|root>（--recursive 含后代）；\nitem 用 --entry-id / --category-id [--recursive]，并可叠加状态、标签、时间范围、排序与分页。\n\n时间范围：--created-from/to、--updated-from/to、--changed-from/to、--planned-from/to、--due-from/to、--completed-from/to\n（changed = 创建或修改落入范围；值为 ISO 时间或 YYYY-MM-DD）。\n排序：--sort createdAt|updatedAt|dueDate|completedAt|name|position，--order asc|desc。\n分页：--limit（默认 50）、--cursor、--all。\n\n示例：\n  kxtodo task list --type item --entry-id entry-xxxx --status all\n  kxtodo task list --type item --changed-from 2026-07-20 --changed-to 2026-07-27 --all")]
+    #[command(
+        long_about = "Risk: read\n\n无关键词的结构化查询。category/entry 用 --parent-id <id|root>（--recursive 含后代）；\nitem 用 --entry-id / --category-id [--recursive]，并可叠加状态、标签、时间范围、排序与分页。\n\n时间范围：--created-from/to、--updated-from/to、--changed-from/to、--planned-from/to、--due-from/to、--completed-from/to\n（changed = 创建或修改落入范围；值为 ISO 时间或 YYYY-MM-DD）。\n排序：--sort createdAt|updatedAt|dueDate|completedAt|name|position，--order asc|desc。\n分页：--limit（默认 50）、--cursor、--all。\n\n示例：\n  kxtodo task list --type item --entry-id entry-xxxx --status all\n  kxtodo task list --type item --changed-from 2026-07-20 --changed-to 2026-07-27 --all"
+    )]
     List(TaskListArgs),
     /// 关键词搜索（Risk: read）
     #[command(
@@ -213,7 +244,9 @@ pub enum TaskAction {
     )]
     Remove(TaskRemoveArgs),
     /// 查看 category/entry 层级树及任务计数（Risk: read）
-    #[command(long_about = "Risk: read\n\n输出层级树（不内嵌 item）；需要任务详情时用 task list --type item --entry-id ...。\n\n示例：kxtodo task tree --root-id category-xxxx --depth 3 --include-counts")]
+    #[command(
+        long_about = "Risk: read\n\n输出层级树（不内嵌 item）；需要任务详情时用 task list --type item --entry-id ...。\n\n示例：kxtodo task tree --root-id category-xxxx --depth 3 --include-counts"
+    )]
     Tree(TaskTreeArgs),
 }
 
@@ -339,7 +372,10 @@ pub struct TaskListArgs {
     #[arg(long, value_name = "time")]
     pub completed_to: Option<String>,
     /// 排序键
-    #[arg(long, value_name = "createdAt|updatedAt|dueDate|completedAt|name|position")]
+    #[arg(
+        long,
+        value_name = "createdAt|updatedAt|dueDate|completedAt|name|position"
+    )]
     pub sort: Option<String>,
     /// 排序方向
     #[arg(long, value_name = "asc|desc")]
@@ -385,8 +421,35 @@ pub struct TaskFindArgs {
     /// 标签文本或 ID（可重复）
     #[arg(long = "tag", value_name = "text-or-id")]
     pub tags: Vec<String>,
+    #[arg(long, value_name = "time")]
+    pub created_from: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub created_to: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub updated_from: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub updated_to: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub changed_from: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub changed_to: Option<String>,
+    #[arg(long, value_name = "date")]
+    pub planned_from: Option<String>,
+    #[arg(long, value_name = "date")]
+    pub planned_to: Option<String>,
+    #[arg(long, value_name = "date")]
+    pub due_from: Option<String>,
+    #[arg(long, value_name = "date")]
+    pub due_to: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub completed_from: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub completed_to: Option<String>,
     /// 排序键
-    #[arg(long, value_name = "createdAt|updatedAt|dueDate|completedAt|name|position")]
+    #[arg(
+        long,
+        value_name = "createdAt|updatedAt|dueDate|completedAt|name|position"
+    )]
     pub sort: Option<String>,
     /// 排序方向
     #[arg(long, value_name = "asc|desc")]
@@ -504,33 +567,52 @@ pub struct TaskTreeArgs {
 #[derive(Debug, Subcommand)]
 pub enum ScheduleAction {
     /// 使用完整 ScheduleSpec 新增定时任务（Risk: write；enabled+代码执行为 high-risk-write）
-    #[command(long_about = "Risk: write（spec.enabled=true 且含代码执行时 high-risk-write，需要 --yes）\n\n唯一完整输入为 --spec JSON（'<json>' | @file | -）。结构见 kxtodo schema schedule.spec。\n默认创建为 disabled；spec 中显式 \"enabled\": true 才启用。\n相对路径以当前工作目录解析后保存。\n\n示例：\n  kxtodo schedule add --spec @schedule.json --yes --idempotency-key weekly-v1")]
+    #[command(
+        long_about = "Risk: write（spec.enabled=true 且含代码执行时 high-risk-write，需要 --yes）\n\n唯一完整输入为 --spec JSON（'<json>' | @file | -）。结构见 kxtodo schema schedule.spec。\n默认创建为 disabled；spec 中显式 \"enabled\": true 才启用。\n相对路径以当前工作目录解析后保存。\n\n示例：\n  kxtodo schedule add --spec @schedule.json --yes --idempotency-key weekly-v1"
+    )]
     Add(ScheduleSpecArgs),
     /// 校验 spec 或 patch，不写入、不执行（Risk: read）
-    #[command(long_about = "Risk: read\n\n校验 --spec（完整定义）或 --id + --patch（结合当前 spec 校验最终对象）。\n检查 schema、路径、runtime、cron/时区与模板变量；输出规范化 spec 与 warnings。")]
+    #[command(
+        long_about = "Risk: read\n\n校验 --spec（完整定义）或 --id + --patch（结合当前 spec 校验最终对象）。\n检查 schema、路径、runtime、cron/时区与模板变量；输出规范化 spec 与 warnings。"
+    )]
     Validate(ScheduleValidateArgs),
     /// 获取完整 spec 和运行状态（Risk: read）
     Get(ScheduleIdArgs),
     /// 结构化列出定时任务（Risk: read）
-    #[command(long_about = "Risk: read\n\n过滤：--enabled、--status、--trigger-type；排序 --sort name|createdAt|updatedAt|lastRunAt|nextRunAt；\n分页 --limit/--cursor/--all。默认 JSON 返回完整 spec 与 state。")]
+    #[command(
+        long_about = "Risk: read\n\n过滤：--enabled、--status、--trigger-type；排序 --sort name|createdAt|updatedAt|lastRunAt|nextRunAt；\n分页 --limit/--cursor/--all。默认 JSON 返回完整 spec 与 state。"
+    )]
     List(ScheduleListArgs),
     /// 按关键词搜索定时任务（Risk: read）
-    #[command(alias = "search", long_about = "Risk: read\n\n搜索名称、脚本路径与通知文本；其余过滤同 schedule list。")]
+    #[command(
+        alias = "search",
+        long_about = "Risk: read\n\n搜索名称、脚本路径与通知文本；其余过滤同 schedule list。"
+    )]
     Find(ScheduleFindArgs),
     /// 使用 SchedulePatch 修改定时任务（Risk: write）
-    #[command(long_about = "Risk: write\n\n--patch 使用统一 patch 语义：缺省不变、null 清除、数组合并整体替换；\n修改 trigger.type/action.type/source.type 时需提供该分支完整对象；\n不允许 id/runCount/lastStatus 等运行时字段。结构见 kxtodo schema schedule.patch。\n\n示例：kxtodo schedule modify --id schedule-xxxx --patch '{\"trigger\":{\"every\":\"30m\"}}'")]
+    #[command(
+        long_about = "Risk: write\n\n--patch 使用统一 patch 语义：缺省不变、null 清除、数组合并整体替换；\n修改 trigger.type/action.type/source.type 时需提供该分支完整对象；\n不允许 id/runCount/lastStatus 等运行时字段。结构见 kxtodo schema schedule.patch。\n\n示例：kxtodo schedule modify --id schedule-xxxx --patch '{\"trigger\":{\"every\":\"30m\"}}'"
+    )]
     Modify(SchedulePatchArgs),
     /// 删除定时任务（Risk: high-risk-write）
-    #[command(long_about = "Risk: high-risk-write\n\n删除定义；正在运行时先停止并回收子进程。需要 --yes；--dry-run 预览。")]
+    #[command(
+        long_about = "Risk: high-risk-write\n\n删除定义；正在运行时先停止并回收子进程。需要 --yes；--dry-run 预览。"
+    )]
     Remove(ScheduleIdArgs),
     /// 启用任务（Risk: write；代码执行需 --yes）
-    #[command(long_about = "Risk: write（script/executable 需 --yes）\n\n启用前重新校验 spec/runtime/path；重算 nextRunAt。")]
+    #[command(
+        long_about = "Risk: write（script/executable 需 --yes）\n\n启用前重新校验 spec/runtime/path；重算 nextRunAt。"
+    )]
     Enable(ScheduleIdArgs),
     /// 禁用任务（Risk: write）
-    #[command(long_about = "Risk: write\n\n阻止后续运行但不终止当前实例；立即终止用 schedule stop。")]
+    #[command(
+        long_about = "Risk: write\n\n阻止后续运行但不终止当前实例；立即终止用 schedule stop。"
+    )]
     Disable(ScheduleIdArgs),
     /// 立即执行一次（Risk: high-risk-write）
-    #[command(long_about = "Risk: high-risk-write\n\n默认入队后立即返回；--wait 等待最终退出码与输出。代码执行需要 --yes。")]
+    #[command(
+        long_about = "Risk: high-risk-write\n\n默认入队后立即返回；--wait 等待最终退出码与输出。代码执行需要 --yes。"
+    )]
     Run(ScheduleRunArgs),
     /// 终止正在运行的任务（Risk: write）
     Stop(ScheduleIdArgs),
@@ -557,7 +639,12 @@ pub struct ScheduleSpecArgs {
 #[serde(rename_all = "camelCase")]
 pub struct ScheduleValidateArgs {
     /// 完整 ScheduleSpec
-    #[arg(long, value_name = "json|@file|-", conflicts_with = "patch", required_unless_present = "patch")]
+    #[arg(
+        long,
+        value_name = "json|@file|-",
+        conflicts_with = "patch",
+        required_unless_present = "patch"
+    )]
     pub spec: Option<String>,
     /// 目标任务 ID（校验 patch 时必填）
     #[arg(long, value_name = "id", requires = "patch")]
@@ -587,6 +674,22 @@ pub struct ScheduleListArgs {
     /// 触发器类型过滤
     #[arg(long, value_name = "once|interval|calendar|condition")]
     pub trigger_type: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub created_from: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub created_to: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub updated_from: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub updated_to: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub last_run_from: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub last_run_to: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub next_run_from: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub next_run_to: Option<String>,
     /// 排序键
     #[arg(long, value_name = "name|createdAt|updatedAt|lastRunAt|nextRunAt")]
     pub sort: Option<String>,
@@ -619,6 +722,22 @@ pub struct ScheduleFindArgs {
     /// 触发器类型过滤
     #[arg(long, value_name = "once|interval|calendar|condition")]
     pub trigger_type: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub created_from: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub created_to: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub updated_from: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub updated_to: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub last_run_from: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub last_run_to: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub next_run_from: Option<String>,
+    #[arg(long, value_name = "time")]
+    pub next_run_to: Option<String>,
     /// 排序键
     #[arg(long, value_name = "name|createdAt|updatedAt|lastRunAt|nextRunAt")]
     pub sort: Option<String>,
@@ -697,12 +816,16 @@ pub enum ConfigAction {
     /// 获取一个配置项（Risk: read）
     Get(ConfigPathArgs),
     /// 设置一个配置项（Risk: write）
-    #[command(long_about = "Risk: write\n\n值来源三选一：位置值、--json-value、--value-file。\nset 先完整校验再原子写入；涉及开机启动/全局快捷键/缩放时由运行主机同步应用。\n\n示例：\n  kxtodo config set appearance.uiScale 0.85\n  kxtodo config set appearance.uiColors \"#dfe8df\" --map-key \"entry-xxxx\"\n  kxtodo config set appearance.themePresets --json-value '[{\"name\":\"项目蓝\",\"color\":\"#dbeafe\"}]'")]
+    #[command(
+        long_about = "Risk: write\n\n值来源三选一：位置值、--json-value、--value-file。\nset 先完整校验再原子写入；涉及开机启动/全局快捷键/缩放时由运行主机同步应用。\n\n示例：\n  kxtodo config set appearance.uiScale 0.85\n  kxtodo config set appearance.uiColors \"#dfe8df\" --map-key \"entry-xxxx\"\n  kxtodo config set appearance.themePresets --json-value '[{\"name\":\"项目蓝\",\"color\":\"#dbeafe\"}]'"
+    )]
     Set(ConfigSetArgs),
     /// 清除可选配置（map 项），恢复默认继承（Risk: write）
     Unset(ConfigPathArgs),
     /// 将一个配置分支或全部设置恢复默认值（Risk: high-risk-write）
-    #[command(long_about = "Risk: high-risk-write\n\n恢复默认值；需要 --yes；--dry-run 返回将恢复的字段及前后值。\n\n示例：kxtodo config reset appearance --yes")]
+    #[command(
+        long_about = "Risk: high-risk-write\n\n恢复默认值；需要 --yes；--dry-run 返回将恢复的字段及前后值。\n\n示例：kxtodo config reset appearance --yes"
+    )]
     Reset(ConfigResetArgs),
     /// 显示数据目录及各数据文件的实际路径（Risk: read）
     Path,
@@ -773,10 +896,15 @@ pub enum SkillsAction {
     List,
     /// 读取 SKILL 正文（Risk: read）
     Read(SkillsReadArgs),
-    /// 返回 SKILL 文件实际路径（Risk: read）
+    /// 返回嵌入来源说明（Risk: read）
     Path,
     /// 校验 SKILL 与当前 CLI 的一致性（Risk: read）
     Validate,
+    /// 将嵌入的 SKILL 落地到指定 skills 根目录（Risk: write）
+    #[command(alias = "persistant")]
+    Persist(SkillsPersistArgs),
+    /// 原样输出嵌入的 SKILL Markdown（Risk: read）
+    Echo(SkillsReadArgs),
 }
 
 #[derive(Debug, Args)]
@@ -787,6 +915,17 @@ pub struct SkillsReadArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct SkillsPersistArgs {
+    /// SKILL 名称（当前版本为 kxtodo）
+    #[arg(value_name = "name")]
+    pub name: String,
+    /// 目标目录；非 skills 目录会自动追加 skills
+    #[arg(value_name = "path")]
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DoctorArgs {
     /// 只运行指定检查项
     #[arg(long, value_name = "name")]
@@ -799,7 +938,7 @@ pub struct DoctorArgs {
 
 pub enum Dispatch {
     Gui,
-    HiddenHost,
+    HiddenHost { data_dir: PathBuf },
     Exit(i32),
 }
 
@@ -820,32 +959,43 @@ pub fn dispatch(args: &[String]) -> Dispatch {
     if args.is_empty() {
         return Dispatch::Gui;
     }
-    let cli = match Cli::try_parse_from(std::iter::once("kxtodo").chain(args.iter().map(String::as_str))) {
-        Ok(cli) => cli,
-        Err(error) => {
-            // GUI 子系统 exe 的 stdout/stderr 未连接控制台，
-            // 必须经 AttachConsole + WriteConsoleW 输出。
-            let rendered = format!("{error}");
-            print_cli_text(&rendered, error.use_stderr());
-            let code = match error.kind() {
-                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => 0,
-                _ => 2,
-            };
-            return Dispatch::Exit(code);
-        }
-    };
+    let cli =
+        match Cli::try_parse_from(std::iter::once("kxtodo").chain(args.iter().map(String::as_str)))
+        {
+            Ok(cli) => cli,
+            Err(error) => {
+                let output = clap_error_output(error);
+                print_output(&output);
+                return Dispatch::Exit(output.code);
+            }
+        };
     if cli.globals.kxtodo_host {
-        return Dispatch::HiddenHost;
+        let data_dir = cli
+            .globals
+            .data_dir
+            .clone()
+            .unwrap_or_else(default_data_dir);
+        return Dispatch::HiddenHost {
+            data_dir: crate::domain::ipc::normalize_data_dir(&data_dir),
+        };
     }
     if cli.version && cli.command.is_none() {
-        let output = run_cli(args, &std::env::current_dir().unwrap_or_default(), Routing::Auto);
+        let output = run_cli(
+            args,
+            &std::env::current_dir().unwrap_or_default(),
+            Routing::Auto,
+        );
         print_output(&output);
         return Dispatch::Exit(output.code);
     }
     if cli.command.is_none() {
         return Dispatch::Gui;
     }
-    let output = run_cli(args, &std::env::current_dir().unwrap_or_default(), Routing::Auto);
+    let output = run_cli(
+        args,
+        &std::env::current_dir().unwrap_or_default(),
+        Routing::Auto,
+    );
     print_output(&output);
     Dispatch::Exit(output.code)
 }
@@ -857,11 +1007,15 @@ pub fn print_cli_text(message: &str, is_stderr: bool) {
     use std::io::Write;
     if is_stderr {
         let _ = std::io::stderr().write_all(message.as_bytes());
-        let _ = std::io::stderr().write_all(b"\n");
+        if !message.ends_with('\n') {
+            let _ = std::io::stderr().write_all(b"\n");
+        }
         let _ = std::io::stderr().flush();
     } else {
         let _ = std::io::stdout().write_all(message.as_bytes());
-        let _ = std::io::stdout().write_all(b"\n");
+        if !message.ends_with('\n') {
+            let _ = std::io::stdout().write_all(b"\n");
+        }
         let _ = std::io::stdout().flush();
     }
 }
@@ -879,25 +1033,118 @@ fn print_output(output: &CliOutput) {
 // run_cli (also used by tests)
 // ---------------------------------------------------------------------------
 
+fn error_output(command: &str, error: &CoreError) -> CliOutput {
+    let envelope =
+        crate::domain::envelope::failure(command, error, crate::domain::envelope::Meta::default());
+    CliOutput {
+        code: error.exit_code(),
+        stdout: String::new(),
+        stderr: serde_json::to_string_pretty(&envelope).unwrap_or_default(),
+    }
+}
+
+fn clap_error_output(error: clap::Error) -> CliOutput {
+    if matches!(
+        error.kind(),
+        clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+    ) {
+        return CliOutput {
+            code: 0,
+            stdout: String::new(),
+            stderr: error.to_string(),
+        };
+    }
+    let message = error.to_string();
+    error_output(
+        "cli",
+        &CoreError::validation("CLI_ARGUMENT_ERROR", message)
+            .with_hint("运行 kxtodo <command> --help 查看用法"),
+    )
+}
+
+fn supports_idempotency(command: &str) -> bool {
+    matches!(
+        command,
+        "task.add"
+            | "task.modify"
+            | "task.remove"
+            | "schedule.add"
+            | "schedule.modify"
+            | "schedule.remove"
+            | "schedule.enable"
+            | "schedule.disable"
+            | "schedule.runtime.detect"
+            | "schedule.runtime.set"
+            | "config.set"
+            | "config.unset"
+            | "config.reset"
+    )
+}
+
 pub fn run_cli(args: &[String], cwd: &Path, routing: Routing) -> CliOutput {
-    let cli = match Cli::try_parse_from(std::iter::once("kxtodo").chain(args.iter().map(String::as_str))) {
-        Ok(cli) => cli,
-        Err(error) => {
-            return CliOutput {
-                code: match error.kind() {
-                    clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => 0,
-                    _ => 2,
-                },
-                stdout: String::new(),
-                stderr: error.to_string(),
-            };
-        }
+    let cli =
+        match Cli::try_parse_from(std::iter::once("kxtodo").chain(args.iter().map(String::as_str)))
+        {
+            Ok(cli) => cli,
+            Err(error) => return clap_error_output(error),
+        };
+    if matches!(
+        &cli.command,
+        Some(Commands::Skills {
+            action: SkillsAction::Persist(_)
+        })
+    ) && (cli.globals.idempotency_key.is_some() || cli.globals.if_revision.is_some())
+    {
+        return error_output(
+            "skills.persist",
+            &CoreError::validation(
+                "CONTROL_UNSUPPORTED",
+                "skills persist 不支持 --idempotency-key 或 --if-revision",
+            ),
+        );
+    }
+    let jq = match cli
+        .globals
+        .jq
+        .as_deref()
+        .map(crate::domain::jq::compile)
+        .transpose()
+    {
+        Ok(program) => program,
+        Err(error) => return error_output("cli", &error),
     };
-    match build_invocation(&cli) {
+    match build_invocation(&cli, cwd) {
         Ok(Some((invocation, payload_note))) => {
-            let _ = payload_note;
+            if cli.globals.idempotency_key.is_some() && !supports_idempotency(&invocation.command) {
+                return error_output(
+                    &invocation.command,
+                    &CoreError::validation(
+                        "IDEMPOTENCY_UNSUPPORTED",
+                        format!("命令 {} 不支持 --idempotency-key", invocation.command),
+                    ),
+                );
+            }
+            if payload_note.as_deref() == Some("raw") {
+                if jq.is_some() || cli.globals.format.is_some() || cli.globals.json {
+                    return error_output(
+                        &invocation.command,
+                        &CoreError::validation(
+                            "RAW_OUTPUT_CONFLICT",
+                            "skills echo 输出纯 Markdown，不支持 --format/--json/--jq",
+                        ),
+                    );
+                }
+                return CliOutput {
+                    code: 0,
+                    stdout: invocation.params.as_str().unwrap_or_default().to_string(),
+                    stderr: String::new(),
+                };
+            }
             // Pure local commands (schema/skills) carry prebuilt data; render directly.
-            if invocation.command.starts_with("schema.") || invocation.command.starts_with("skills.") {
+            if invocation.command == "version"
+                || invocation.command.starts_with("schema.")
+                || invocation.command.starts_with("skills.")
+            {
                 let outcome = ExecOutcome {
                     code: 0,
                     envelope: crate::domain::envelope::success(
@@ -906,7 +1153,7 @@ pub fn run_cli(args: &[String], cwd: &Path, routing: Routing) -> CliOutput {
                         crate::domain::envelope::Meta::default(),
                     ),
                 };
-                return finish(outcome, &cli.globals);
+                return finish(outcome, cli.globals.format(), jq.as_ref());
             }
             let data_dir = cli
                 .globals
@@ -914,45 +1161,23 @@ pub fn run_cli(args: &[String], cwd: &Path, routing: Routing) -> CliOutput {
                 .clone()
                 .unwrap_or_else(default_data_dir);
             let outcome = crate::domain::host::route(&invocation, &data_dir, cwd, routing);
-            finish(outcome, &cli.globals)
+            finish(outcome, cli.globals.format(), jq.as_ref())
         }
         Ok(None) => CliOutput {
             code: 0,
             stdout: String::new(),
             stderr: "无命令".to_string(),
         },
-        Err(error) => {
-            let envelope = crate::domain::envelope::failure(
-                "cli",
-                &error,
-                crate::domain::envelope::Meta::default(),
-            );
-            CliOutput {
-                code: error.exit_code(),
-                stdout: String::new(),
-                stderr: serde_json::to_string_pretty(&envelope).unwrap_or_default(),
-            }
-        }
+        Err(error) => error_output("cli", &error),
     }
 }
 
-fn finish(outcome: ExecOutcome, globals: &GlobalArgs) -> CliOutput {
-    let format = match globals.format() {
-        Ok(format) => format,
-        Err(error) => {
-            let envelope = crate::domain::envelope::failure(
-                "cli",
-                &error,
-                crate::domain::envelope::Meta::default(),
-            );
-            return CliOutput {
-                code: error.exit_code(),
-                stdout: String::new(),
-                stderr: serde_json::to_string_pretty(&envelope).unwrap_or_default(),
-            };
-        }
-    };
-    let (code, stdout, stderr) = render(&outcome, format, globals.jq.as_deref());
+fn finish(
+    outcome: ExecOutcome,
+    format: Format,
+    jq: Option<&crate::domain::jq::CompiledJq>,
+) -> CliOutput {
+    let (code, stdout, stderr) = render(&outcome, format, jq);
     CliOutput {
         code,
         stdout,
@@ -982,16 +1207,27 @@ fn serialize_args<T: Serialize>(args: &T) -> Value {
     value
 }
 
-fn build_invocation(cli: &Cli) -> CoreResult<Option<(Invocation, Option<String>)>> {
+fn version_data() -> Value {
+    serde_json::json!({
+        "version": crate::domain::core::APP_VERSION,
+        "schemaVersions": {
+            "data": crate::domain::model::DATA_SCHEMA_VERSION,
+            "settings": crate::domain::model::SETTINGS_SCHEMA_VERSION,
+            "schedule": crate::domain::model::SCHEDULE_SCHEMA_VERSION,
+        }
+    })
+}
+
+fn build_invocation(cli: &Cli, cwd: &Path) -> CoreResult<Option<(Invocation, Option<String>)>> {
     let Some(command) = &cli.command else {
         if cli.version {
-            return Ok(Some((Invocation::new("version", Value::Null), None)));
+            return Ok(Some((Invocation::new("version", version_data()), None)));
         }
         return Ok(None);
     };
     let controls = cli.globals.controls();
     let mut invocation = match command {
-        Commands::Version => Invocation::new("version", Value::Null),
+        Commands::Version => Invocation::new("version", version_data()),
         Commands::Notify(args) => {
             let mut params = serialize_args(&**args);
             let message = args
@@ -1013,8 +1249,8 @@ fn build_invocation(cli: &Cli) -> CoreResult<Option<(Invocation, Option<String>)
         Commands::Schedule { action } => build_schedule_invocation(action)?,
         Commands::Config { action } => build_config_invocation(action)?,
         Commands::Schema(args) => return build_schema_output(cli, args).map(Some),
-        Commands::Skills { action } => return build_skills_output(cli, action).map(Some),
-        Commands::Doctor(_args) => Invocation::new("doctor", Value::Null),
+        Commands::Skills { action } => return build_skills_output(cli, action, cwd).map(Some),
+        Commands::Doctor(args) => Invocation::new("doctor", serialize_args(args)),
     };
     invocation.controls = controls;
     Ok(Some((invocation, None)))
@@ -1061,29 +1297,68 @@ fn build_schema_output(cli: &Cli, args: &SchemaArgs) -> CoreResult<(Invocation, 
             }
         }
     };
-    let invocation = local_pure_output(
-        &format!("schema.{target}"),
-        data,
-    );
+    let invocation = local_pure_output(&format!("schema.{target}"), data);
     let _ = cli;
     Ok((invocation, Some("pure".to_string())))
 }
 
-fn build_skills_output(cli: &Cli, action: &SkillsAction) -> CoreResult<(Invocation, Option<String>)> {
-    let (command, data) = match action {
-        SkillsAction::List => ("skills.list", crate::domain::skills::cmd_list()?),
-        SkillsAction::Read(args) => ("skills.read", crate::domain::skills::cmd_read(&args.name)?),
-        SkillsAction::Path => ("skills.path", crate::domain::skills::cmd_path()?),
+fn build_skills_output(
+    cli: &Cli,
+    action: &SkillsAction,
+    cwd: &Path,
+) -> CoreResult<(Invocation, Option<String>)> {
+    let (command, data, mode) = match action {
+        SkillsAction::List => ("skills.list", crate::domain::skills::cmd_list()?, "pure"),
+        SkillsAction::Read(args) => (
+            "skills.read",
+            crate::domain::skills::cmd_read(&args.name)?,
+            "pure",
+        ),
+        SkillsAction::Path => ("skills.path", crate::domain::skills::cmd_path()?, "pure"),
         SkillsAction::Validate => {
             let catalog = command_catalog();
-            ("skills.validate", crate::domain::skills::cmd_validate(&catalog)?)
+            let flags = flag_catalog();
+            (
+                "skills.validate",
+                crate::domain::skills::cmd_validate(&catalog, &flags)?,
+                "pure",
+            )
         }
+        SkillsAction::Persist(args) => (
+            "skills.persist",
+            crate::domain::skills::cmd_persist(&args.name, &args.path, cwd, cli.globals.dry_run)?,
+            "pure",
+        ),
+        SkillsAction::Echo(args) => (
+            "skills.echo",
+            Value::String(crate::domain::skills::content(&args.name)?.to_string()),
+            "raw",
+        ),
     };
-    let _ = cli;
-    Ok((local_pure_output(command, data), Some("pure".to_string())))
+    Ok((local_pure_output(command, data), Some(mode.to_string())))
 }
 
 /// Dotted names of every executable command (for skills validate + schema lookup).
+pub fn flag_catalog() -> Vec<String> {
+    let root = Cli::command();
+    let mut flags = Vec::new();
+    fn walk(cmd: &clap::Command, out: &mut Vec<String>) {
+        for arg in cmd.get_arguments() {
+            if let Some(long) = arg.get_long() {
+                out.push(long.to_string());
+            }
+        }
+        for sub in cmd.get_subcommands() {
+            walk(sub, out);
+        }
+    }
+    walk(&root, &mut flags);
+    flags.extend(["help".to_string(), "version".to_string()]);
+    flags.sort();
+    flags.dedup();
+    flags
+}
+
 pub fn command_catalog() -> Vec<String> {
     use clap::CommandFactory;
     let root = Cli::command();
@@ -1110,7 +1385,10 @@ fn build_task_invocation(action: &TaskAction) -> CoreResult<Invocation> {
             if args.r#type == "item" {
                 let markdown = resolve_markdown(args.markdown.clone(), args.markdown_file.clone())?
                     .ok_or_else(|| {
-                        CoreError::validation("MARKDOWN_REQUIRED", "--type item 需要 --markdown 或 --markdown-file")
+                        CoreError::validation(
+                            "MARKDOWN_REQUIRED",
+                            "--type item 需要 --markdown 或 --markdown-file",
+                        )
                     })?;
                 params["markdown"] = Value::String(markdown);
             } else if args.markdown.is_some() || args.markdown_file.is_some() {
@@ -1209,14 +1487,20 @@ fn build_config_invocation(action: &ConfigAction) -> CoreResult<Invocation> {
                 crate::domain::ops_config::parse_cli_value(raw)?
             } else if let Some(raw) = &args.json_value {
                 serde_json::from_str(raw).map_err(|error| {
-                    CoreError::validation("INVALID_JSON", format!("--json-value 不是有效 JSON：{error}"))
+                    CoreError::validation(
+                        "INVALID_JSON",
+                        format!("--json-value 不是有效 JSON：{error}"),
+                    )
                 })?
             } else if let Some(path) = &args.value_file {
                 let raw = std::fs::read_to_string(path).map_err(|error| {
                     CoreError::validation("PAYLOAD_FILE_ERROR", format!("无法读取 {path}：{error}"))
                 })?;
                 serde_json::from_str(&raw).map_err(|error| {
-                    CoreError::validation("INVALID_JSON", format!("--value-file 不是有效 JSON：{error}"))
+                    CoreError::validation(
+                        "INVALID_JSON",
+                        format!("--value-file 不是有效 JSON：{error}"),
+                    )
                 })?
             } else {
                 unreachable!()
@@ -1253,7 +1537,9 @@ pub fn resolve_text_payload(raw: &str) -> CoreResult<String> {
         let mut buffer = String::new();
         std::io::stdin()
             .read_to_string(&mut buffer)
-            .map_err(|error| CoreError::validation("STDIN_ERROR", format!("无法读取标准输入：{error}")))?;
+            .map_err(|error| {
+                CoreError::validation("STDIN_ERROR", format!("无法读取标准输入：{error}"))
+            })?;
         return Ok(buffer);
     }
     Ok(raw.to_string())
@@ -1261,12 +1547,14 @@ pub fn resolve_text_payload(raw: &str) -> CoreResult<String> {
 
 pub fn resolve_json_payload(raw: &str) -> CoreResult<Value> {
     let text = resolve_text_payload(raw)?;
-    serde_json::from_str(&text).map_err(|error| {
-        CoreError::validation("INVALID_JSON", format!("JSON 输入无效：{error}"))
-    })
+    serde_json::from_str(&text)
+        .map_err(|error| CoreError::validation("INVALID_JSON", format!("JSON 输入无效：{error}")))
 }
 
-fn resolve_markdown(markdown: Option<String>, markdown_file: Option<String>) -> CoreResult<Option<String>> {
+fn resolve_markdown(
+    markdown: Option<String>,
+    markdown_file: Option<String>,
+) -> CoreResult<Option<String>> {
     if let Some(markdown) = markdown {
         return Ok(Some(markdown));
     }

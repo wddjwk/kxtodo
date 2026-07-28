@@ -16,32 +16,162 @@ pub struct FieldMeta {
 }
 
 pub const KNOWN_FIELDS: &[FieldMeta] = &[
-    FieldMeta { path: "profile.displayName", kind: "string", description: "用户显示名", is_map: false },
-    FieldMeta { path: "profile.email", kind: "string", description: "用户邮箱", is_map: false },
-    FieldMeta { path: "profile.avatar", kind: "string", description: "头像（文件名或 data URL）", is_map: false },
-    FieldMeta { path: "appearance.linkOpenMode", kind: "enum(app|system)", description: "链接打开方式", is_map: false },
-    FieldMeta { path: "appearance.uiScale", kind: "number(0.5-1.5)", description: "界面缩放", is_map: false },
-    FieldMeta { path: "appearance.uiFontSize", kind: "integer(14-22)", description: "界面字号", is_map: false },
-    FieldMeta { path: "appearance.markdownFontSize", kind: "integer(14-26)", description: "Markdown 字号", is_map: false },
-    FieldMeta { path: "appearance.editorFontSize", kind: "integer(14-26)", description: "编辑器字号", is_map: false },
-    FieldMeta { path: "appearance.tagFontSize", kind: "integer(11-30)", description: "标签字号", is_map: false },
-    FieldMeta { path: "appearance.themePresets", kind: "array<{name,color}>", description: "配色盘预设", is_map: false },
-    FieldMeta { path: "appearance.uiColors", kind: "map<entryId,color>", description: "条目自定义颜色（需 --map-key）", is_map: true },
-    FieldMeta { path: "lifecycle.closeToTray", kind: "boolean", description: "关闭时最小化到托盘", is_map: false },
-    FieldMeta { path: "lifecycle.launchAtStartup", kind: "boolean", description: "开机自启（默认数据目录）", is_map: false },
-    FieldMeta { path: "notifications.durationMs", kind: "integer(1200-60000)", description: "通知默认时长（毫秒）", is_map: false },
-    FieldMeta { path: "notifications.position", kind: "enum(bottom-right|top-right|bottom-left|top-left)", description: "通知默认位置", is_map: false },
-    FieldMeta { path: "notifications.width", kind: "integer(280-600)", description: "通知窗口宽度", is_map: false },
-    FieldMeta { path: "notifications.height", kind: "integer(50-200)", description: "通知窗口高度", is_map: false },
-    FieldMeta { path: "notifications.titleFontSize", kind: "integer(10-24)", description: "通知标题字号", is_map: false },
-    FieldMeta { path: "notifications.bodyFontSize", kind: "integer(8-20)", description: "通知正文字号", is_map: false },
-    FieldMeta { path: "shortcuts.newTask", kind: "string", description: "新建任务快捷键", is_map: false },
-    FieldMeta { path: "shortcuts.focusSearch", kind: "string", description: "搜索快捷键", is_map: false },
-    FieldMeta { path: "shortcuts.toggleWindow", kind: "string", description: "全局唤起快捷键", is_map: false },
-    FieldMeta { path: "shortcuts.openSettings", kind: "string", description: "打开设置快捷键", is_map: false },
-    FieldMeta { path: "cloud.provider", kind: "enum(none|webdav|s3|custom)", description: "云同步提供商", is_map: false },
-    FieldMeta { path: "cloud.endpoint", kind: "string", description: "云同步端点", is_map: false },
-    FieldMeta { path: "cloud.enabled", kind: "boolean", description: "启用云同步", is_map: false },
+    FieldMeta {
+        path: "profile.displayName",
+        kind: "string",
+        description: "用户显示名",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "profile.email",
+        kind: "string",
+        description: "用户邮箱",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "profile.avatar",
+        kind: "string",
+        description: "头像（文件名或 data URL）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "appearance.linkOpenMode",
+        kind: "enum(app|system)",
+        description: "链接打开方式",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "appearance.uiScale",
+        kind: "number(0.5-1.5)",
+        description: "界面缩放",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "appearance.uiFontSize",
+        kind: "integer(14-22)",
+        description: "界面字号",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "appearance.markdownFontSize",
+        kind: "integer(14-26)",
+        description: "Markdown 字号",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "appearance.editorFontSize",
+        kind: "integer(14-26)",
+        description: "编辑器字号",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "appearance.tagFontSize",
+        kind: "integer(11-30)",
+        description: "标签字号",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "appearance.themePresets",
+        kind: "array<{name,color}>",
+        description: "配色盘预设",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "appearance.uiColors",
+        kind: "map<entryId,color>",
+        description: "条目自定义颜色（需 --map-key）",
+        is_map: true,
+    },
+    FieldMeta {
+        path: "lifecycle.closeToTray",
+        kind: "boolean",
+        description: "关闭时最小化到托盘",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "lifecycle.launchAtStartup",
+        kind: "boolean",
+        description: "开机自启（默认数据目录）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "notifications.durationMs",
+        kind: "integer(1200-60000)",
+        description: "通知默认时长（毫秒）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "notifications.position",
+        kind: "enum(bottom-right|top-right|bottom-left|top-left)",
+        description: "通知默认位置",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "notifications.width",
+        kind: "integer(280-600)",
+        description: "通知窗口宽度",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "notifications.height",
+        kind: "integer(50-200)",
+        description: "通知窗口高度",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "notifications.titleFontSize",
+        kind: "integer(10-24)",
+        description: "通知标题字号",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "notifications.bodyFontSize",
+        kind: "integer(8-20)",
+        description: "通知正文字号",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "shortcuts.newTask",
+        kind: "string",
+        description: "新建任务快捷键",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "shortcuts.focusSearch",
+        kind: "string",
+        description: "搜索快捷键",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "shortcuts.toggleWindow",
+        kind: "string",
+        description: "全局唤起快捷键",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "shortcuts.openSettings",
+        kind: "string",
+        description: "打开设置快捷键",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "cloud.provider",
+        kind: "enum(none|webdav|s3|custom)",
+        description: "云同步提供商",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "cloud.endpoint",
+        kind: "string",
+        description: "云同步端点",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "cloud.enabled",
+        kind: "boolean",
+        description: "启用云同步",
+        is_map: false,
+    },
 ];
 
 pub fn field_meta(path: &str) -> Option<&'static FieldMeta> {
@@ -61,7 +191,10 @@ fn is_hex_color(raw: &str) -> bool {
 }
 
 fn invalid_value(path: &str, reason: impl Into<String>) -> CoreError {
-    CoreError::validation("INVALID_CONFIG_VALUE", format!("配置 {path} 无效：{}", reason.into()))
+    CoreError::validation(
+        "INVALID_CONFIG_VALUE",
+        format!("配置 {path} 无效：{}", reason.into()),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -162,7 +295,11 @@ pub fn get_value(
         ));
     }
     let value = get_typed(settings, path)?;
-    let source = if raw_contains(raw, path) { "user" } else { "default" };
+    let source = if raw_contains(raw, path) {
+        "user"
+    } else {
+        "default"
+    };
     Ok(json!({
         "path": path,
         "value": value,
@@ -172,7 +309,11 @@ pub fn get_value(
     }))
 }
 
-pub fn list_values(settings: &SettingsFile, raw: &Value, prefix: Option<&str>) -> CoreResult<Vec<Value>> {
+pub fn list_values(
+    settings: &SettingsFile,
+    raw: &Value,
+    prefix: Option<&str>,
+) -> CoreResult<Vec<Value>> {
     let mut out = Vec::new();
     for field in KNOWN_FIELDS {
         if let Some(prefix) = prefix {
@@ -181,7 +322,11 @@ pub fn list_values(settings: &SettingsFile, raw: &Value, prefix: Option<&str>) -
             }
         }
         let value = get_typed(settings, field.path)?;
-        let source = if raw_contains(raw, field.path) { "user" } else { "default" };
+        let source = if raw_contains(raw, field.path) {
+            "user"
+        } else {
+            "default"
+        };
         out.push(json!({
             "path": field.path,
             "value": value,
@@ -312,7 +457,10 @@ pub fn set_value(
             CoreError::validation("MAP_KEY_REQUIRED", format!("{path} 需要 --map-key"))
         })?;
         if key.trim().is_empty() {
-            return Err(CoreError::validation("MAP_KEY_REQUIRED", "--map-key 不能为空"));
+            return Err(CoreError::validation(
+                "MAP_KEY_REQUIRED",
+                "--map-key 不能为空",
+            ));
         }
         let color = expect_color(path, &value)?;
         outcome.previous = settings
@@ -343,10 +491,11 @@ pub fn set_value(
         "profile.email" => settings.profile.email = expect_string(path, &value)?,
         "profile.avatar" => settings.profile.avatar = expect_string(path, &value)?,
         "appearance.linkOpenMode" => {
-            settings.appearance.link_open_mode = match expect_enum(path, &value, &["app", "system"])?.as_str() {
-                "system" => LinkOpenMode::System,
-                _ => LinkOpenMode::App,
-            };
+            settings.appearance.link_open_mode =
+                match expect_enum(path, &value, &["app", "system"])?.as_str() {
+                    "system" => LinkOpenMode::System,
+                    _ => LinkOpenMode::App,
+                };
         }
         "appearance.uiScale" => {
             settings.appearance.ui_scale = expect_scale(path, &value)?;
@@ -421,12 +570,13 @@ pub fn set_value(
             outcome.native_effects.push("shortcuts");
         }
         "cloud.provider" => {
-            settings.cloud.provider = match expect_enum(path, &value, &["none", "webdav", "s3", "custom"])?.as_str() {
-                "webdav" => CloudProvider::Webdav,
-                "s3" => CloudProvider::S3,
-                "custom" => CloudProvider::Custom,
-                _ => CloudProvider::None,
-            };
+            settings.cloud.provider =
+                match expect_enum(path, &value, &["none", "webdav", "s3", "custom"])?.as_str() {
+                    "webdav" => CloudProvider::Webdav,
+                    "s3" => CloudProvider::S3,
+                    "custom" => CloudProvider::Custom,
+                    _ => CloudProvider::None,
+                };
         }
         "cloud.endpoint" => settings.cloud.endpoint = expect_string(path, &value)?,
         "cloud.enabled" => settings.cloud.enabled = expect_bool(path, &value)?,
@@ -445,7 +595,11 @@ fn expect_shortcut(path: &str, value: &Value) -> CoreResult<String> {
     Ok(trimmed.to_string())
 }
 
-pub fn unset_value(settings: &mut SettingsFile, path: &str, map_key: Option<&str>) -> CoreResult<Value> {
+pub fn unset_value(
+    settings: &mut SettingsFile,
+    path: &str,
+    map_key: Option<&str>,
+) -> CoreResult<Value> {
     let meta = field_meta(path).ok_or_else(|| unknown_field(path))?;
     if !meta.is_map {
         return Err(CoreError::validation(
@@ -502,24 +656,34 @@ pub fn reset_values(settings: &mut SettingsFile, prefix: Option<&str>) -> CoreRe
 
 fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -> CoreResult<()> {
     match path {
-        "profile.displayName" => target.profile.display_name = defaults.profile.display_name.clone(),
+        "profile.displayName" => {
+            target.profile.display_name = defaults.profile.display_name.clone()
+        }
         "profile.email" => target.profile.email = defaults.profile.email.clone(),
         "profile.avatar" => target.profile.avatar = defaults.profile.avatar.clone(),
-        "appearance.linkOpenMode" => target.appearance.link_open_mode = defaults.appearance.link_open_mode,
+        "appearance.linkOpenMode" => {
+            target.appearance.link_open_mode = defaults.appearance.link_open_mode
+        }
         "appearance.uiScale" => target.appearance.ui_scale = defaults.appearance.ui_scale,
-        "appearance.uiFontSize" => target.appearance.ui_font_size = defaults.appearance.ui_font_size,
+        "appearance.uiFontSize" => {
+            target.appearance.ui_font_size = defaults.appearance.ui_font_size
+        }
         "appearance.markdownFontSize" => {
             target.appearance.markdown_font_size = defaults.appearance.markdown_font_size
         }
         "appearance.editorFontSize" => {
             target.appearance.editor_font_size = defaults.appearance.editor_font_size
         }
-        "appearance.tagFontSize" => target.appearance.tag_font_size = defaults.appearance.tag_font_size,
+        "appearance.tagFontSize" => {
+            target.appearance.tag_font_size = defaults.appearance.tag_font_size
+        }
         "appearance.themePresets" => {
             target.appearance.theme_presets = defaults.appearance.theme_presets.clone()
         }
         "appearance.uiColors" => target.appearance.ui_colors = Map::new(),
-        "lifecycle.closeToTray" => target.lifecycle.close_to_tray = defaults.lifecycle.close_to_tray,
+        "lifecycle.closeToTray" => {
+            target.lifecycle.close_to_tray = defaults.lifecycle.close_to_tray
+        }
         "lifecycle.launchAtStartup" => {
             target.lifecycle.launch_at_startup = defaults.lifecycle.launch_at_startup
         }
@@ -563,7 +727,10 @@ pub fn parse_cli_value(raw: &str) -> CoreResult<Value> {
 }
 
 /// Settings validation report (config validate + doctor).
-pub fn validate_settings(layout: &crate::domain::repo::Layout, settings: &SettingsFile) -> Vec<Value> {
+pub fn validate_settings(
+    layout: &crate::domain::repo::Layout,
+    settings: &SettingsFile,
+) -> Vec<Value> {
     let mut issues = Vec::new();
     if !(0.5..=1.5).contains(&settings.appearance.ui_scale) {
         issues.push(json!({
@@ -573,7 +740,10 @@ pub fn validate_settings(layout: &crate::domain::repo::Layout, settings: &Settin
         }));
     }
     if !settings.profile.avatar.trim().is_empty() && !settings.profile.avatar.starts_with("data:") {
-        let avatar_path = layout.img_dir().join("avator").join(settings.profile.avatar.trim());
+        let avatar_path = layout
+            .img_dir()
+            .join("avator")
+            .join(settings.profile.avatar.trim());
         if !avatar_path.is_file() {
             issues.push(json!({
                 "path": "profile.avatar",

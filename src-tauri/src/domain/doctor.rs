@@ -7,8 +7,8 @@ use crate::domain::envelope::Meta;
 use crate::domain::error::CoreResult;
 use crate::domain::model::{NodeKind, ScheduleSpec};
 use crate::domain::repo::{
-    cleanup_temp_files, read_json_value, AUDIT_MAX_BYTES, BACKUP_KEEP,
-    SCHEDULE_HISTORY_MAX_BYTES, SCHEDULE_HISTORY_PER_TASK, SCHEDULE_OUTPUT_MAX_BYTES,
+    list_temp_files, read_json_value, AUDIT_MAX_BYTES, BACKUP_KEEP, SCHEDULE_HISTORY_MAX_BYTES,
+    SCHEDULE_HISTORY_PER_TASK, SCHEDULE_OUTPUT_MAX_BYTES,
 };
 
 /// `config path` — full layout descriptor with live status (§3.6, §4.2.3).
@@ -48,6 +48,8 @@ pub fn config_paths(ctx: &ExecContext) -> CoreResult<Value> {
             "historyAudit": entry(layout.audit_history(), "history"),
             "backups": entry(layout.backup_dir(), "backups"),
             "runtimeHost": entry(host, "host-descriptor"),
+            "runtimeRecovery": entry(layout.recovery_file(), "recovery-outbox"),
+            "hostOwnerLock": entry(layout.host_owner_lock(), "host-owner-lock"),
             "lock": entry(layout.lock_file(), "lock"),
         },
         "limits": {
@@ -65,8 +67,76 @@ pub fn config_paths(ctx: &ExecContext) -> CoreResult<Value> {
 }
 
 /// `doctor` — read-only diagnostics.
-pub fn run_doctor(_inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> CoreResult<Value> {
+pub fn run_doctor(inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> CoreResult<Value> {
+    const CHECKS: &[&str] = &[
+        "data-dir",
+        "data",
+        "settings",
+        "schedule",
+        "integrity",
+        "schedules",
+        "lock",
+        "temp-files",
+        "backups",
+        "history",
+        "host",
+        "runtimes",
+        "recovery",
+    ];
+    let selected = inv.params.get("check").and_then(Value::as_str);
+    if let Some(name) = selected {
+        if !CHECKS.contains(&name) {
+            return Err(crate::domain::error::CoreError::validation(
+                "UNKNOWN_DOCTOR_CHECK",
+                format!("未知 doctor 检查 `{name}`，支持 {}", CHECKS.join(", ")),
+            ));
+        }
+    }
     let layout = &ctx.repo.layout;
+    if selected == Some("runtimes") {
+        let mut checks = Vec::new();
+        match ctx.repo.load_schedule() {
+            Ok(file) => {
+                let view = crate::domain::ops_schedule::runtime_view(&file);
+                let runtimes = view["runtimes"].as_array().cloned().unwrap_or_default();
+                let missing: Vec<String> = runtimes
+                    .iter()
+                    .filter(|item| item.get("available").and_then(Value::as_bool) == Some(false))
+                    .filter_map(|item| item.get("name").and_then(Value::as_str).map(str::to_string))
+                    .collect();
+                checks.push(check(
+                    "runtimes",
+                    true,
+                    if missing.is_empty() {
+                        "全部运行时可用".to_string()
+                    } else {
+                        format!("缺失运行时：{}（仅影响对应脚本任务）", missing.join(", "))
+                    },
+                    if missing.is_empty() {
+                        None
+                    } else {
+                        Some("kxtodo schedule runtime detect 或 runtime set <name> <path>")
+                    },
+                ));
+            }
+            Err(error) => checks.push(check(
+                "runtimes",
+                false,
+                format!("无法读取定时任务运行时配置：{error}"),
+                Some("先修复 tasks.json，再重试运行时诊断"),
+            )),
+        }
+        let failed = checks
+            .iter()
+            .filter(|item| item.get("ok").and_then(Value::as_bool) == Some(false))
+            .count();
+        return Ok(json!({
+            "healthy": failed == 0,
+            "failedChecks": failed,
+            "checks": checks,
+            "note": "doctor 只诊断不修复；任何清理均为独立 high-risk-write",
+        }));
+    }
     let mut checks: Vec<Value> = Vec::new();
 
     // 1. Data dir writability.
@@ -80,17 +150,38 @@ pub fn run_doctor(_inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> Cor
         "data-dir",
         writable,
         format!("数据目录 {}", layout.root.display()),
-        if writable { None } else { Some("目录不存在或只读") },
+        if writable {
+            None
+        } else {
+            Some("目录不存在或只读")
+        },
     ));
 
     // 2. Domain files: presence, parse, schema versions, revisions.
     for (name, path, expected) in [
-        ("data", layout.data_file(), crate::domain::model::DATA_SCHEMA_VERSION),
-        ("settings", layout.settings_file(), crate::domain::model::SETTINGS_SCHEMA_VERSION),
-        ("schedule", layout.schedule_file(), crate::domain::model::SCHEDULE_SCHEMA_VERSION),
+        (
+            "data",
+            layout.data_file(),
+            crate::domain::model::DATA_SCHEMA_VERSION,
+        ),
+        (
+            "settings",
+            layout.settings_file(),
+            crate::domain::model::SETTINGS_SCHEMA_VERSION,
+        ),
+        (
+            "schedule",
+            layout.schedule_file(),
+            crate::domain::model::SCHEDULE_SCHEMA_VERSION,
+        ),
     ] {
         if !path.exists() {
-            checks.push(check(name, true, format!("{} 不存在（首次使用时创建）", path.display()), None));
+            checks.push(check(
+                name,
+                true,
+                format!("{} 不存在（首次使用时创建）", path.display()),
+                None,
+            ));
             continue;
         }
         match read_json_value(&path) {
@@ -178,7 +269,11 @@ pub fn run_doctor(_inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> Cor
             "dangling-parents",
             dangling.is_empty(),
             format!("父级悬空节点：{} 个", dangling.len()),
-            if dangling.is_empty() { None } else { Some("检查 nodes 的 parentId") },
+            if dangling.is_empty() {
+                None
+            } else {
+                Some("检查 nodes 的 parentId")
+            },
         ));
         // Orphan images (report only, §4.2).
         let img_data = layout.img_dir().join("data");
@@ -198,7 +293,10 @@ pub fn run_doctor(_inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> Cor
             checks.push(check(
                 "orphan-images",
                 true,
-                format!("未被条目引用的图片目录：{} 个（仅报告，不自动删除）", orphan_dirs.len()),
+                format!(
+                    "未被条目引用的图片目录：{} 个（仅报告，不自动删除）",
+                    orphan_dirs.len()
+                ),
                 None,
             ));
         }
@@ -217,7 +315,11 @@ pub fn run_doctor(_inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> Cor
             "schedule-specs",
             invalid.is_empty(),
             format!("定时任务定义无效：{} 个", invalid.len()),
-            if invalid.is_empty() { None } else { Some("kxtodo schedule validate --id <id> --patch ...") },
+            if invalid.is_empty() {
+                None
+            } else {
+                Some("kxtodo schedule validate --id <id> --patch ...")
+            },
         ));
         let enabled = file.tasks.iter().filter(|entry| entry.spec.enabled).count();
         checks.push(check(
@@ -229,24 +331,40 @@ pub fn run_doctor(_inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> Cor
     }
 
     // 5. Lock health + stale temp files.
-    match crate::domain::repo::RepoLock::try_acquire(layout) {
-        Ok(Some(_lock)) => checks.push(check("lock", true, "仓库锁可用".to_string(), None)),
-        Ok(None) => checks.push(check(
-            "lock",
-            false,
-            "仓库锁被其他进程持有".to_string(),
-            Some("若有 KXToDo 进程正常运行则属正常；否则检查是否有卡死进程"),
-        )),
-        Err(error) => checks.push(check("lock", false, format!("锁错误：{error}"), None)),
+    if !layout.lock_file().exists() {
+        checks.push(check("lock", true, "仓库锁文件尚未创建".to_string(), None));
+    } else {
+        match crate::domain::repo::RepoLock::try_acquire_existing(layout) {
+            Ok(Some(_lock)) => checks.push(check("lock", true, "仓库锁可用".to_string(), None)),
+            Ok(None) => checks.push(check(
+                "lock",
+                false,
+                "仓库锁被其他进程持有".to_string(),
+                Some("若有 KXToDo 进程正常运行则属正常；否则检查是否有卡死进程"),
+            )),
+            Err(error) => checks.push(check("lock", false, format!("锁错误：{error}"), None)),
+        }
     }
-    match cleanup_temp_files(&layout.root) {
-        Ok(removed) => checks.push(check(
+    match list_temp_files(&layout.root) {
+        Ok(paths) => checks.push(check(
             "temp-files",
-            true,
-            format!("清理原子写残留临时文件 {} 个", removed.len()),
+            paths.is_empty(),
+            format!(
+                "原子写残留临时文件 {} 个（仅报告，不自动删除）",
+                paths.len()
+            ),
+            if paths.is_empty() {
+                None
+            } else {
+                Some("使用显式修复流程清理")
+            },
+        )),
+        Err(error) => checks.push(check(
+            "temp-files",
+            false,
+            format!("临时文件检查失败：{error}"),
             None,
         )),
-        Err(error) => checks.push(check("temp-files", false, format!("临时文件清理失败：{error}"), None)),
     }
 
     // 6. Backups.
@@ -267,7 +385,11 @@ pub fn run_doctor(_inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> Cor
 
     // 7. History bounds.
     for (name, path, max) in [
-        ("history-schedule", layout.schedule_history(), SCHEDULE_HISTORY_MAX_BYTES),
+        (
+            "history-schedule",
+            layout.schedule_history(),
+            SCHEDULE_HISTORY_MAX_BYTES,
+        ),
         ("history-audit", layout.audit_history(), AUDIT_MAX_BYTES),
     ] {
         let size = path.metadata().map(|meta| meta.len()).unwrap_or(0);
@@ -275,7 +397,11 @@ pub fn run_doctor(_inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> Cor
             name,
             size <= max,
             format!("{}：{} / {} 字节", path.display(), size, max),
-            if size <= max { None } else { Some("将在下次写入时截断") },
+            if size <= max {
+                None
+            } else {
+                Some("将在下次写入时截断")
+            },
         ));
     }
 
@@ -291,7 +417,11 @@ pub fn run_doctor(_inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> Cor
                     "Host 描述符：pid={} endpoint={}（{}）",
                     descriptor.pid,
                     descriptor.endpoint,
-                    if alive { "存活" } else { "已失效，将按需清理" }
+                    if alive {
+                        "存活"
+                    } else {
+                        "已失效，将按需清理"
+                    }
                 ),
                 None,
             ));
@@ -324,7 +454,27 @@ pub fn run_doctor(_inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> Cor
         ));
     }
 
-    // 10. Settings validation.
+    // 10. Durable file-operation recovery outbox.
+    match ctx.repo.read_recovery_records() {
+        Ok(records) => checks.push(check(
+            "recovery",
+            records.is_empty(),
+            format!("未完成附属文件恢复记录：{} 个", records.len()),
+            if records.is_empty() {
+                None
+            } else {
+                Some("保留记录并在下次显式恢复流程中继续清理")
+            },
+        )),
+        Err(error) => checks.push(check(
+            "recovery",
+            false,
+            format!("恢复记录无法读取：{error}"),
+            None,
+        )),
+    }
+
+    // 11. Settings validation.
     if let Ok(settings) = ctx.repo.load_settings() {
         let issues = crate::domain::ops_config::validate_settings(layout, &settings);
         checks.push(check(
@@ -338,6 +488,20 @@ pub fn run_doctor(_inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> Cor
         }
     }
 
+    if let Some(name) = selected {
+        checks.retain(|item| {
+            let check_name = item.get("name").and_then(Value::as_str).unwrap_or_default();
+            match name {
+                "integrity" => matches!(
+                    check_name,
+                    "orphan-items" | "orphan-items-detail" | "dangling-parents" | "orphan-images"
+                ),
+                "schedules" => matches!(check_name, "schedule-specs" | "schedule-summary"),
+                "history" => check_name.starts_with("history-"),
+                other => check_name == other,
+            }
+        });
+    }
     let failed = checks
         .iter()
         .filter(|item| item.get("ok").and_then(Value::as_bool) == Some(false))

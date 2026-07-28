@@ -3,6 +3,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 
 use serde_json::Value;
 
@@ -16,17 +17,22 @@ pub fn append_bounded_jsonl(
     max_bytes: u64,
     per_task_cap: Option<usize>,
 ) -> CoreResult<()> {
+    static HISTORY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let _guard = HISTORY_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|error| crate::domain::error::CoreError::internal(error.to_string()))?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let line = serde_json::to_string(entry)?;
+    let mut line = serde_json::to_vec(entry)?;
+    line.push(b'\n');
     {
         let mut file = fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(path)?;
-        file.write_all(line.as_bytes())?;
-        file.write_all(b"\n")?;
+        file.write_all(&line)?;
     }
     trim_history(path, max_bytes, per_task_cap)
 }
@@ -40,18 +46,15 @@ pub fn trim_history(path: &Path, max_bytes: u64, per_task_cap: Option<usize>) ->
 
     if let Some(cap) = per_task_cap {
         // Keep only the newest `cap` entries per taskId.
-        let mut counts: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
+        let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         let mut keep: Vec<bool> = vec![true; lines.len()];
         for (index, line) in lines.iter().enumerate().rev() {
-            let task_id = serde_json::from_str::<Value>(line)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .get("taskId")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                });
+            let task_id = serde_json::from_str::<Value>(line).ok().and_then(|value| {
+                value
+                    .get("taskId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            });
             if let Some(task_id) = task_id {
                 let count = counts.entry(task_id).or_insert(0);
                 *count += 1;
@@ -109,11 +112,17 @@ pub fn schedule_run_record(
     exit_code: Option<i32>,
     stdout: &str,
     stderr: &str,
+    stdout_was_truncated: bool,
+    stderr_was_truncated: bool,
     stop_reason: Option<&str>,
     missed_count: u64,
 ) -> Value {
-    let (stdout_out, stdout_truncated) = truncate(stdout, crate::domain::repo::SCHEDULE_OUTPUT_MAX_BYTES);
-    let (stderr_out, stderr_truncated) = truncate(stderr, crate::domain::repo::SCHEDULE_OUTPUT_MAX_BYTES);
+    let (stdout_out, stdout_truncated) =
+        truncate(stdout, crate::domain::repo::SCHEDULE_OUTPUT_MAX_BYTES);
+    let (stderr_out, stderr_truncated) =
+        truncate(stderr, crate::domain::repo::SCHEDULE_OUTPUT_MAX_BYTES);
+    let stdout_truncated = stdout_was_truncated || stdout_truncated;
+    let stderr_truncated = stderr_was_truncated || stderr_truncated;
     serde_json::json!({
         "taskId": task_id,
         "kind": kind,

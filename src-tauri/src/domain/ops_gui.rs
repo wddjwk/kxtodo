@@ -224,7 +224,10 @@ pub fn gui_dispatch(
                     .map(|(index, id)| (id.as_str(), index))
                     .collect();
                 file.nodes.sort_by_key(|node| {
-                    position.get(node.id.as_str()).copied().unwrap_or(usize::MAX)
+                    position
+                        .get(node.id.as_str())
+                        .copied()
+                        .unwrap_or(usize::MAX)
                 });
                 Ok(json!({ "count": ordered_ids.len() }))
             })?;
@@ -282,7 +285,10 @@ fn ensure_category_target(data: &DataFile, parent_id: Option<&str>) -> CoreResul
     if node.kind != NodeKind::Category {
         return Err(CoreError::validation(
             "INVALID_PARENT",
-            format!("父级 {parent_id} 的类型是 {}，只能归属 root 或 category", node.kind.as_str()),
+            format!(
+                "父级 {parent_id} 的类型是 {}，只能归属 root 或 category",
+                node.kind.as_str()
+            ),
         ));
     }
     Ok(())

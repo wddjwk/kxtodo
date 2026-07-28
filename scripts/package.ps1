@@ -52,6 +52,16 @@ try {
     $packageJson.version = $Version
     [System.IO.File]::WriteAllText($packageJsonPath, ($packageJson | ConvertTo-Json -Depth 20), $utf8NoBom)
 
+    $packageLockPath = Join-Path $root "package-lock.json"
+    $packageLockRaw = [System.IO.File]::ReadAllText($packageLockPath, $utf8NoBom)
+    $versionRegex = New-Object System.Text.RegularExpressions.Regex '(?m)("version"\s*:\s*")[^"]+("\s*,)'
+    $versionEvaluator = [System.Text.RegularExpressions.MatchEvaluator]{
+      param($match)
+      $match.Groups[1].Value + $Version + $match.Groups[2].Value
+    }
+    $packageLockRaw = $versionRegex.Replace($packageLockRaw, $versionEvaluator, 2)
+    [System.IO.File]::WriteAllText($packageLockPath, $packageLockRaw, $utf8NoBom)
+
     $tauriConfigPath = Join-Path $root "src-tauri\tauri.conf.json"
     $tauriConfig = [System.IO.File]::ReadAllText($tauriConfigPath, $utf8NoBom) | ConvertFrom-Json
     $tauriConfig.version = $Version

@@ -27,7 +27,11 @@ impl Format {
 
 /// Render the final CLI output: (exit code, stdout, stderr).
 /// Errors always render as the JSON envelope to stderr.
-pub fn render(outcome: &ExecOutcome, format: Format, jq: Option<&str>) -> (i32, String, String) {
+pub fn render(
+    outcome: &ExecOutcome,
+    format: Format,
+    jq: Option<&crate::domain::jq::CompiledJq>,
+) -> (i32, String, String) {
     if outcome.code != 0 {
         return (
             outcome.code,
@@ -36,8 +40,8 @@ pub fn render(outcome: &ExecOutcome, format: Format, jq: Option<&str>) -> (i32, 
         );
     }
     let envelope = outcome.envelope.clone();
-    if let Some(expr) = jq {
-        match crate::domain::jq::apply(expr, &envelope) {
+    if let Some(program) = jq {
+        match crate::domain::jq::evaluate(program, &envelope) {
             Ok(filtered) => {
                 return (
                     0,
@@ -88,7 +92,10 @@ pub fn render(outcome: &ExecOutcome, format: Format, jq: Option<&str>) -> (i32, 
 }
 
 fn command_of(envelope: &Value) -> &str {
-    envelope.get("command").and_then(Value::as_str).unwrap_or("")
+    envelope
+        .get("command")
+        .and_then(Value::as_str)
+        .unwrap_or("")
 }
 
 fn items_of(envelope: &Value) -> Option<&Vec<Value>> {
@@ -141,8 +148,16 @@ fn render_table(envelope: &Value) -> String {
                         out.push(format!(
                             "{:<22} {:<4} {:<4} {:<10} {:<40} {}",
                             item["id"].as_str().unwrap_or(""),
-                            if item["completed"].as_bool().unwrap_or(false) { "✓" } else { "" },
-                            if item["important"].as_bool().unwrap_or(false) { "★" } else { "" },
+                            if item["completed"].as_bool().unwrap_or(false) {
+                                "✓"
+                            } else {
+                                ""
+                            },
+                            if item["important"].as_bool().unwrap_or(false) {
+                                "★"
+                            } else {
+                                ""
+                            },
                             item["dueDate"].as_str().unwrap_or(""),
                             truncate(item["markdown"].as_str().unwrap_or(""), 40),
                             item["entry"]["name"].as_str().unwrap_or(""),
@@ -255,7 +270,11 @@ fn render_pretty(envelope: &Value) -> String {
                 for item in items {
                     out.push(format!(
                         "{} {} [{}] {} 下次: {}",
-                        if item["spec"]["enabled"].as_bool().unwrap_or(false) { "▶" } else { "⏸" },
+                        if item["spec"]["enabled"].as_bool().unwrap_or(false) {
+                            "▶"
+                        } else {
+                            "⏸"
+                        },
                         item["spec"]["name"].as_str().unwrap_or(""),
                         item["spec"]["trigger"]["type"].as_str().unwrap_or(""),
                         item["id"].as_str().unwrap_or(""),
@@ -273,7 +292,11 @@ fn render_pretty(envelope: &Value) -> String {
                         "{} = {}{}",
                         item["path"].as_str().unwrap_or(""),
                         truncate(&value, 60),
-                        if item["source"].as_str() == Some("default") { "  (默认)" } else { "" },
+                        if item["source"].as_str() == Some("default") {
+                            "  (默认)"
+                        } else {
+                            ""
+                        },
                     ));
                 }
             }
@@ -290,9 +313,21 @@ fn render_pretty(envelope: &Value) -> String {
                 out.push(format!("任务 {}", data["id"].as_str().unwrap_or("")));
                 out.push(format!(
                     "  状态: {}{}{}",
-                    if data["completed"].as_bool().unwrap_or(false) { "已完成" } else { "未完成" },
-                    if data["important"].as_bool().unwrap_or(false) { "，重要" } else { "" },
-                    if data["myDay"].as_bool().unwrap_or(false) { "，我的一天" } else { "" },
+                    if data["completed"].as_bool().unwrap_or(false) {
+                        "已完成"
+                    } else {
+                        "未完成"
+                    },
+                    if data["important"].as_bool().unwrap_or(false) {
+                        "，重要"
+                    } else {
+                        ""
+                    },
+                    if data["myDay"].as_bool().unwrap_or(false) {
+                        "，我的一天"
+                    } else {
+                        ""
+                    },
                 ));
                 if let Some(entry) = data["entry"]["path"].as_str() {
                     out.push(format!("  位置: {entry}"));

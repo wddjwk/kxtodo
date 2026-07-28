@@ -20,10 +20,6 @@ pub const RUNTIME_KEYS: [&str; 5] = ["python", "node", "pwsh", "bash", "make"];
 // Path normalization (CLI cwd based, §3.5.2)
 // ---------------------------------------------------------------------------
 
-fn looks_like_path(raw: &str) -> bool {
-    raw.contains('/') || raw.contains('\\') || raw.starts_with('.')
-}
-
 pub fn normalize_path(raw: &str, cwd: &Path) -> String {
     let path = PathBuf::from(raw);
     let absolute = if path.is_absolute() {
@@ -67,11 +63,21 @@ fn normalize_action_paths(action: &mut Map<String, Value>, cwd: &Path) {
     }
     for key in ["program", "interpreter", "workingDirectory"] {
         if let Some(raw) = action.get(key).and_then(Value::as_str) {
-            let should = key == "workingDirectory" || looks_like_path(raw);
-            if should && !raw.trim().is_empty() {
-                let normalized = normalize_path(raw, cwd);
-                action.insert(key.to_string(), json!(normalized));
+            if raw.trim().is_empty() {
+                continue;
             }
+            let normalized =
+                if key != "workingDirectory" && !raw.contains('/') && !raw.contains('\\') {
+                    let found = crate::domain::exec::find_executable(&[raw], &[]);
+                    if found.is_empty() {
+                        normalize_path(raw, cwd)
+                    } else {
+                        normalize_path(&found, cwd)
+                    }
+                } else {
+                    normalize_path(raw, cwd)
+                };
+            action.insert(key.to_string(), json!(normalized));
         }
     }
 }
@@ -89,9 +95,9 @@ pub struct SpecValidation {
 /// serde 的内部标签枚举不拒绝分支外字段，这里按 discriminator 白名单手动检查
 ///（§3.5.2：未属于当前分支的字段一律非法）。
 fn check_branch_fields(raw: &Value) -> CoreResult<()> {
-    let spec = raw.as_object().ok_or_else(|| {
-        CoreError::validation("INVALID_SPEC", "ScheduleSpec 必须是对象")
-    })?;
+    let spec = raw
+        .as_object()
+        .ok_or_else(|| CoreError::validation("INVALID_SPEC", "ScheduleSpec 必须是对象"))?;
     for key in spec.keys() {
         if !matches!(key.as_str(), "name" | "enabled" | "trigger" | "action") {
             return Err(branch_error("spec", key));
@@ -132,18 +138,38 @@ fn check_branch_fields(raw: &Value) -> CoreResult<()> {
     Ok(())
 }
 
-fn check_action_like_fields(action: &Map<String, Value>, allow_notifications: bool) -> CoreResult<()> {
+fn check_action_like_fields(
+    action: &Map<String, Value>,
+    allow_notifications: bool,
+) -> CoreResult<()> {
     let kind = action.get("type").and_then(Value::as_str).unwrap_or("");
     let allowed: &[&str] = match (kind, allow_notifications) {
         ("script", true) => &[
-            "type", "language", "source", "args", "interpreter", "workingDirectory", "timeout",
+            "type",
+            "language",
+            "source",
+            "args",
+            "interpreter",
+            "workingDirectory",
+            "timeout",
             "notifications",
         ],
         ("script", false) => &[
-            "type", "language", "source", "args", "interpreter", "workingDirectory", "timeout",
+            "type",
+            "language",
+            "source",
+            "args",
+            "interpreter",
+            "workingDirectory",
+            "timeout",
         ],
         ("executable", true) => &[
-            "type", "program", "args", "workingDirectory", "timeout", "notifications",
+            "type",
+            "program",
+            "args",
+            "workingDirectory",
+            "timeout",
+            "notifications",
         ],
         ("executable", false) => &["type", "program", "args", "workingDirectory", "timeout"],
         ("notification", true) => &["type", "notification"],
@@ -235,7 +261,10 @@ fn branch_error(scope: &str, key: &str) -> CoreError {
     )
 }
 
-pub fn validate_spec_value(raw: &Value, runtimes: &crate::domain::model::Runtimes) -> CoreResult<SpecValidation> {
+pub fn validate_spec_value(
+    raw: &Value,
+    runtimes: &crate::domain::model::Runtimes,
+) -> CoreResult<SpecValidation> {
     check_branch_fields(raw)?;
     let spec: ScheduleSpec = serde_json::from_value(raw.clone()).map_err(|error| {
         CoreError::validation("INVALID_SPEC", format!("ScheduleSpec 校验失败：{error}"))
@@ -255,7 +284,10 @@ fn validate_spec_semantics(
     warnings: &mut Vec<String>,
 ) -> CoreResult<()> {
     if spec.name.trim().is_empty() {
-        return Err(CoreError::validation("NAME_REQUIRED", "定时任务 name 不能为空"));
+        return Err(CoreError::validation(
+            "NAME_REQUIRED",
+            "定时任务 name 不能为空",
+        ));
     }
     match &spec.trigger {
         Trigger::Once { at, .. } => {
@@ -263,7 +295,12 @@ fn validate_spec_semantics(
                 CoreError::validation("INVALID_TIME", format!("once.at 无效：{at}"))
             })?;
         }
-        Trigger::Interval { every, max_runs, stop_when, .. } => {
+        Trigger::Interval {
+            every,
+            max_runs,
+            stop_when,
+            ..
+        } => {
             parse_duration_ms(every)?;
             if let Some(max) = max_runs {
                 if *max == 0 {
@@ -281,7 +318,9 @@ fn validate_spec_semantics(
             crate::domain::plan::validate_cron(cron)?;
             crate::domain::plan::validate_timezone(timezone)?;
         }
-        Trigger::Condition { every, probe, when, .. } => {
+        Trigger::Condition {
+            every, probe, when, ..
+        } => {
             parse_duration_ms(every)?;
             validate_match(when)?;
             if when.pattern.trim().is_empty() {
@@ -317,7 +356,10 @@ fn validate_spec_semantics(
             match source {
                 Source::File { path } => {
                     if path.trim().is_empty() {
-                        return Err(CoreError::validation("SCRIPT_PATH_REQUIRED", "脚本文件路径为空"));
+                        return Err(CoreError::validation(
+                            "SCRIPT_PATH_REQUIRED",
+                            "脚本文件路径为空",
+                        ));
                     }
                     if !Path::new(path).is_file() {
                         warnings.push(format!("脚本文件当前不存在：{path}"));
@@ -325,7 +367,10 @@ fn validate_spec_semantics(
                 }
                 Source::Inline { code } => {
                     if code.trim().is_empty() {
-                        return Err(CoreError::validation("SCRIPT_CODE_REQUIRED", "inline 脚本内容为空"));
+                        return Err(CoreError::validation(
+                            "SCRIPT_CODE_REQUIRED",
+                            "inline 脚本内容为空",
+                        ));
                     }
                 }
             }
@@ -364,7 +409,10 @@ fn validate_spec_semantics(
             ..
         } => {
             if program.trim().is_empty() {
-                return Err(CoreError::validation("PROGRAM_REQUIRED", "可执行程序路径为空"));
+                return Err(CoreError::validation(
+                    "PROGRAM_REQUIRED",
+                    "可执行程序路径为空",
+                ));
             }
             if let Some(raw) = timeout {
                 parse_duration_ms(raw)?;
@@ -402,7 +450,10 @@ fn validate_executable_like_probe(
             match source {
                 Source::File { path } => {
                     if path.trim().is_empty() {
-                        return Err(CoreError::validation("SCRIPT_PATH_REQUIRED", "probe 脚本路径为空"));
+                        return Err(CoreError::validation(
+                            "SCRIPT_PATH_REQUIRED",
+                            "probe 脚本路径为空",
+                        ));
                     }
                     if !Path::new(path).is_file() {
                         warnings.push(format!("probe 脚本文件当前不存在：{path}"));
@@ -410,7 +461,10 @@ fn validate_executable_like_probe(
                 }
                 Source::Inline { code } => {
                     if code.trim().is_empty() {
-                        return Err(CoreError::validation("SCRIPT_CODE_REQUIRED", "probe inline 内容为空"));
+                        return Err(CoreError::validation(
+                            "SCRIPT_CODE_REQUIRED",
+                            "probe inline 内容为空",
+                        ));
                     }
                 }
             }
@@ -441,7 +495,10 @@ fn validate_executable_like_probe(
             ..
         } => {
             if program.trim().is_empty() {
-                return Err(CoreError::validation("PROGRAM_REQUIRED", "probe 可执行程序路径为空"));
+                return Err(CoreError::validation(
+                    "PROGRAM_REQUIRED",
+                    "probe 可执行程序路径为空",
+                ));
             }
             if let Some(raw) = timeout {
                 parse_duration_ms(raw)?;
@@ -458,7 +515,10 @@ fn validate_executable_like_probe(
 
 fn validate_match(matcher: &crate::domain::model::Match) -> CoreResult<()> {
     if matcher.pattern.is_empty() {
-        return Err(CoreError::validation("INVALID_MATCH", "Match.pattern 不能为空"));
+        return Err(CoreError::validation(
+            "INVALID_MATCH",
+            "Match.pattern 不能为空",
+        ));
     }
     if matcher.mode == crate::domain::model::MatchMode::Regex {
         Regex::new(&matcher.pattern).map_err(|error| {
@@ -489,7 +549,13 @@ fn validate_notification(notification: &crate::domain::model::Notification) -> C
         ));
     }
     if let Some(raw) = &notification.duration {
-        parse_duration_ms(raw)?;
+        let duration_ms = parse_duration_ms(raw)?;
+        if !(1_200..=60_000).contains(&duration_ms) {
+            return Err(CoreError::validation(
+                "DURATION_OUT_OF_RANGE",
+                "通知时长必须在 1200ms 到 60000ms 之间",
+            ));
+        }
     }
     validate_template_vars(notification.message.as_str())?;
     if let Some(title) = &notification.title {
@@ -498,7 +564,9 @@ fn validate_notification(notification: &crate::domain::model::Notification) -> C
     Ok(())
 }
 
-fn validate_action_notifications(notifications: &crate::domain::model::ActionNotifications) -> CoreResult<()> {
+fn validate_action_notifications(
+    notifications: &crate::domain::model::ActionNotifications,
+) -> CoreResult<()> {
     if let Some(on_complete) = &notifications.on_complete {
         validate_notification(on_complete)?;
     }
@@ -516,7 +584,10 @@ pub fn validate_template_vars(template: &str) -> CoreResult<()> {
         if !ALLOWED_TEMPLATE_VARS.contains(&name) {
             return Err(CoreError::validation(
                 "UNKNOWN_TEMPLATE_VAR",
-                format!("未知模板变量 {{{name}}}，允许 {}", ALLOWED_TEMPLATE_VARS.join("/")),
+                format!(
+                    "未知模板变量 {{{name}}}，允许 {}",
+                    ALLOWED_TEMPLATE_VARS.join("/")
+                ),
             ));
         }
     }
@@ -556,9 +627,9 @@ const FORBIDDEN_PATCH_KEYS: [&str; 13] = [
 /// - objects merge recursively, arrays replace wholesale;
 /// - changing a `type` discriminator replaces the whole object.
 pub fn apply_patch(current: &Value, patch: &Value) -> CoreResult<Value> {
-    let patch_obj = patch.as_object().ok_or_else(|| {
-        CoreError::validation("INVALID_PATCH", "patch 必须是 JSON 对象")
-    })?;
+    let patch_obj = patch
+        .as_object()
+        .ok_or_else(|| CoreError::validation("INVALID_PATCH", "patch 必须是 JSON 对象"))?;
     for key in patch_obj.keys() {
         if FORBIDDEN_PATCH_KEYS.contains(&key.as_str()) {
             return Err(CoreError::validation(
@@ -672,7 +743,8 @@ pub fn add_schedule(
         extra: Map::new(),
     };
     if entry.spec.enabled {
-        entry.state.next_run_at = crate::domain::plan::compute_next_run_iso(&entry, chrono::Utc::now())?;
+        entry.state.next_run_at =
+            crate::domain::plan::compute_next_run_iso(&entry, chrono::Utc::now())?;
     }
     file.tasks.push(entry.clone());
     Ok(AddOutcome {
@@ -701,8 +773,8 @@ pub fn modify_schedule(
     let spec = validation.spec.expect("validated");
 
     let entry = &mut file.tasks[index];
-    let trigger_changed = serde_json::to_value(&entry.spec)?["trigger"]
-        != serde_json::to_value(&spec)?["trigger"];
+    let trigger_changed =
+        serde_json::to_value(&entry.spec)?["trigger"] != serde_json::to_value(&spec)?["trigger"];
     entry.spec = spec;
     entry.updated_at = now_iso();
     if trigger_changed || entry.spec.enabled {
@@ -732,7 +804,8 @@ pub fn set_enabled(file: &mut ScheduleFile, id: &str, enabled: bool) -> CoreResu
         let entry = &mut file.tasks[index];
         entry.spec.enabled = true;
         entry.updated_at = now_iso();
-        entry.state.next_run_at = crate::domain::plan::compute_next_run_iso(entry, chrono::Utc::now())?;
+        entry.state.next_run_at =
+            crate::domain::plan::compute_next_run_iso(entry, chrono::Utc::now())?;
         return Ok(AddOutcome {
             entry: entry.clone(),
             warnings: validation.warnings,
@@ -771,9 +844,87 @@ pub struct ScheduleFilter {
     pub query: Option<String>,
     pub sort: Option<String>,
     pub descending: bool,
+    pub created_from: Option<String>,
+    pub created_to: Option<String>,
+    pub updated_from: Option<String>,
+    pub updated_to: Option<String>,
+    pub last_run_from: Option<String>,
+    pub last_run_to: Option<String>,
+    pub next_run_from: Option<String>,
+    pub next_run_to: Option<String>,
 }
 
-pub fn filter_schedules<'a>(file: &'a ScheduleFile, filter: &ScheduleFilter) -> Vec<&'a ScheduleEntry> {
+fn schedule_range(
+    from: &Option<String>,
+    to: &Option<String>,
+) -> CoreResult<(Option<i64>, Option<i64>)> {
+    let from = from
+        .as_deref()
+        .map(|raw| crate::domain::ops_task::parse_range_bound(raw, false))
+        .transpose()?;
+    let to = to
+        .as_deref()
+        .map(|raw| crate::domain::ops_task::parse_range_bound(raw, true))
+        .transpose()?;
+    if matches!((from, to), (Some(start), Some(end)) if start > end) {
+        return Err(CoreError::validation(
+            "INVALID_TIME_RANGE",
+            "时间范围 from 不得晚于 to",
+        ));
+    }
+    Ok((from, to))
+}
+
+fn schedule_in_range(value: Option<&str>, range: (Option<i64>, Option<i64>)) -> bool {
+    if range.0.is_none() && range.1.is_none() {
+        return true;
+    }
+    let Some(ms) = value
+        .and_then(|raw| parse_stored_instant(raw).ok())
+        .map(|instant| instant.timestamp_millis())
+    else {
+        return false;
+    };
+    range.0.map(|from| ms >= from).unwrap_or(true) && range.1.map(|to| ms <= to).unwrap_or(true)
+}
+
+pub fn filter_schedules<'a>(
+    file: &'a ScheduleFile,
+    filter: &ScheduleFilter,
+) -> CoreResult<Vec<&'a ScheduleEntry>> {
+    if let Some(status) = filter.status.as_deref() {
+        if !matches!(
+            status,
+            "idle" | "running" | "success" | "failed" | "stopped" | "all"
+        ) {
+            return Err(CoreError::validation(
+                "INVALID_STATUS",
+                format!("无效 --status `{status}`"),
+            ));
+        }
+    }
+    if let Some(kind) = filter.trigger_type.as_deref() {
+        if !matches!(kind, "once" | "interval" | "calendar" | "condition") {
+            return Err(CoreError::validation(
+                "INVALID_TRIGGER_TYPE",
+                format!("无效 --trigger-type `{kind}`"),
+            ));
+        }
+    }
+    let sort = filter.sort.as_deref().unwrap_or("createdAt");
+    if !matches!(
+        sort,
+        "name" | "createdAt" | "updatedAt" | "lastRunAt" | "nextRunAt"
+    ) {
+        return Err(CoreError::validation(
+            "INVALID_SORT",
+            format!("无效 --sort `{sort}`"),
+        ));
+    }
+    let created_range = schedule_range(&filter.created_from, &filter.created_to)?;
+    let updated_range = schedule_range(&filter.updated_from, &filter.updated_to)?;
+    let last_run_range = schedule_range(&filter.last_run_from, &filter.last_run_to)?;
+    let next_run_range = schedule_range(&filter.next_run_from, &filter.next_run_to)?;
     let mut entries: Vec<&ScheduleEntry> = file
         .tasks
         .iter()
@@ -793,22 +944,25 @@ pub fn filter_schedules<'a>(file: &'a ScheduleFile, filter: &ScheduleFilter) -> 
                     return false;
                 }
             }
+            if !schedule_in_range(Some(&entry.created_at), created_range)
+                || !schedule_in_range(Some(&entry.updated_at), updated_range)
+                || !schedule_in_range(entry.state.last_run_at.as_deref(), last_run_range)
+                || !schedule_in_range(entry.state.next_run_at.as_deref(), next_run_range)
+            {
+                return false;
+            }
             if let Some(query) = &filter.query {
                 let needle = query.trim().to_lowercase();
                 if needle.is_empty() {
                     return true;
                 }
-                let mut haystacks: Vec<String> = vec![
-                    entry.spec.name.to_lowercase(),
-                    entry.id.to_lowercase(),
-                ];
+                let mut haystacks: Vec<String> =
+                    vec![entry.spec.name.to_lowercase(), entry.id.to_lowercase()];
                 match &entry.spec.action {
-                    Action::Script { source, .. } => {
-                        match source {
-                            Source::File { path } => haystacks.push(path.to_lowercase()),
-                            Source::Inline { .. } => {}
-                        }
-                    }
+                    Action::Script { source, .. } => match source {
+                        Source::File { path } => haystacks.push(path.to_lowercase()),
+                        Source::Inline { .. } => {}
+                    },
                     Action::Executable { program, .. } => haystacks.push(program.to_lowercase()),
                     Action::Notification { notification } => {
                         haystacks.push(notification.message.to_lowercase());
@@ -824,7 +978,6 @@ pub fn filter_schedules<'a>(file: &'a ScheduleFile, filter: &ScheduleFilter) -> 
             true
         })
         .collect();
-    let sort = filter.sort.as_deref().unwrap_or("createdAt");
     entries.sort_by(|a, b| {
         let ordering = match sort {
             "name" => a.spec.name.cmp(&b.spec.name),
@@ -849,7 +1002,7 @@ pub fn filter_schedules<'a>(file: &'a ScheduleFile, filter: &ScheduleFilter) -> 
             ordering
         }
     });
-    entries
+    Ok(entries)
 }
 
 // ---------------------------------------------------------------------------
@@ -906,17 +1059,43 @@ pub fn set_runtime(file: &mut ScheduleFile, name: &str, path: &str) -> CoreResul
 pub fn detect_runtimes(file: &mut ScheduleFile) -> Value {
     let detected = crate::domain::exec::detect_runtimes();
     let mut updated = Vec::new();
-    let fill = |key: &str, configured: &mut String, detected_value: &str, updated: &mut Vec<String>| {
-        if configured.trim().is_empty() && !detected_value.is_empty() {
-            *configured = detected_value.to_string();
-            updated.push(key.to_string());
-        }
-    };
-    fill("python", &mut file.runtimes.python, &detected.python, &mut updated);
-    fill("node", &mut file.runtimes.node, &detected.node, &mut updated);
-    fill("pwsh", &mut file.runtimes.pwsh, &detected.pwsh, &mut updated);
-    fill("bash", &mut file.runtimes.bash, &detected.bash, &mut updated);
-    fill("make", &mut file.runtimes.make, &detected.make, &mut updated);
+    let fill =
+        |key: &str, configured: &mut String, detected_value: &str, updated: &mut Vec<String>| {
+            if configured.trim().is_empty() && !detected_value.is_empty() {
+                *configured = detected_value.to_string();
+                updated.push(key.to_string());
+            }
+        };
+    fill(
+        "python",
+        &mut file.runtimes.python,
+        &detected.python,
+        &mut updated,
+    );
+    fill(
+        "node",
+        &mut file.runtimes.node,
+        &detected.node,
+        &mut updated,
+    );
+    fill(
+        "pwsh",
+        &mut file.runtimes.pwsh,
+        &detected.pwsh,
+        &mut updated,
+    );
+    fill(
+        "bash",
+        &mut file.runtimes.bash,
+        &detected.bash,
+        &mut updated,
+    );
+    fill(
+        "make",
+        &mut file.runtimes.make,
+        &detected.make,
+        &mut updated,
+    );
     json!({ "updated": updated })
 }
 

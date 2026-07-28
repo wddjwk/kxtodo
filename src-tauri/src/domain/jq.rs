@@ -53,9 +53,19 @@ struct PathCondition {
     literal: Value,
 }
 
-pub fn apply(expr: &str, input: &Value) -> CoreResult<Value> {
-    let stages = parse_pipeline(expr)?;
-    let results = eval_stages(&stages, vec![input.clone()])?;
+#[derive(Debug, Clone)]
+pub struct CompiledJq {
+    stages: Vec<Stage>,
+}
+
+pub fn compile(expr: &str) -> CoreResult<CompiledJq> {
+    Ok(CompiledJq {
+        stages: parse_pipeline(expr)?,
+    })
+}
+
+pub fn evaluate(program: &CompiledJq, input: &Value) -> CoreResult<Value> {
+    let results = eval_stages(&program.stages, vec![input.clone()])?;
     // Multiple values (from iteration) are serialized as an array; a single
     // value is returned as-is.
     if results.len() == 1 {
@@ -63,6 +73,10 @@ pub fn apply(expr: &str, input: &Value) -> CoreResult<Value> {
     } else {
         Ok(Value::Array(results))
     }
+}
+
+pub fn apply(expr: &str, input: &Value) -> CoreResult<Value> {
+    evaluate(&compile(expr)?, input)
 }
 
 fn parse_pipeline(expr: &str) -> CoreResult<Vec<Stage>> {
@@ -144,7 +158,10 @@ fn parse_stage(expr: &str) -> CoreResult<Stage> {
     if let Some(inner) = expr.strip_prefix("map(").and_then(|v| v.strip_suffix(')')) {
         return Ok(Stage::Map(parse_pipeline(inner)?));
     }
-    if let Some(inner) = expr.strip_prefix("select(").and_then(|v| v.strip_suffix(')')) {
+    if let Some(inner) = expr
+        .strip_prefix("select(")
+        .and_then(|v| v.strip_suffix(')'))
+    {
         return Ok(Stage::Select(parse_condition(inner)?));
     }
     if expr.starts_with('.') {
@@ -185,7 +202,9 @@ fn parse_accessors(expr: &str) -> CoreResult<Vec<Accessor>> {
                 }
                 let mut key = String::new();
                 while index < chars.len()
-                    && (chars[index].is_alphanumeric() || chars[index] == '_' || chars[index] == '-')
+                    && (chars[index].is_alphanumeric()
+                        || chars[index] == '_'
+                        || chars[index] == '-')
                 {
                     key.push(chars[index]);
                     index += 1;
@@ -225,7 +244,8 @@ fn parse_accessors(expr: &str) -> CoreResult<Vec<Accessor>> {
                     continue;
                 }
                 let mut number = String::new();
-                while index < chars.len() && (chars[index].is_ascii_digit() || chars[index] == '-') {
+                while index < chars.len() && (chars[index].is_ascii_digit() || chars[index] == '-')
+                {
                     number.push(chars[index]);
                     index += 1;
                 }
@@ -279,7 +299,9 @@ fn parse_literal(raw: &str) -> CoreResult<Value> {
         || (raw.starts_with('\'') && raw.ends_with('\''))
     {
         let inner = &raw[1..raw.len() - 1];
-        return Ok(Value::String(inner.replace("\\\"", "\"").replace("\\'", "'")));
+        return Ok(Value::String(
+            inner.replace("\\\"", "\"").replace("\\'", "'"),
+        ));
     }
     if let Ok(number) = raw.parse::<i64>() {
         return Ok(json!(number));

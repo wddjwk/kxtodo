@@ -15,6 +15,7 @@ pub struct Meta {
     pub revision: Option<u64>,
     pub replayed: bool,
     pub data_dir: Option<String>,
+    pub warnings: Vec<Value>,
 }
 
 impl Default for Meta {
@@ -27,6 +28,7 @@ impl Default for Meta {
             revision: None,
             replayed: false,
             data_dir: None,
+            warnings: Vec::new(),
         }
     }
 }
@@ -51,6 +53,9 @@ impl Meta {
         }
         if let Some(dir) = &self.data_dir {
             meta["dataDir"] = json!(dir);
+        }
+        if !self.warnings.is_empty() {
+            meta["warnings"] = json!(self.warnings);
         }
         meta
     }

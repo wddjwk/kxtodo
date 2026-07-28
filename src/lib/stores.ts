@@ -11,7 +11,7 @@ import { buildListCounts, buildVisibleTasks, getBackground } from "./nodes";
 import { accentForNode, uiScaleValue } from "./styles";
 import { entryToUi, type ScheduleEntryV9 } from "./scheduleAdapter";
 
-export const APP_VERSION = "9.0.0";
+export const APP_VERSION = "9.2.0";
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -288,18 +288,44 @@ function applySnapshot(snapshot: Awaited<ReturnType<typeof coreSnapshot>>, domai
 }
 
 let snapshotInFlight = false;
+let snapshotPending = false;
+let pendingAllDomains = false;
+const pendingDomains = new Set<string>();
 
-/** 从 Host 拉取最新快照并合并（事件驱动刷新的唯一路径）。 */
-export async function refreshFromCore(domains?: string[]): Promise<void> {
-  if (!coreMode || snapshotInFlight) {
+function queueSnapshot(domains?: string[]): void {
+  snapshotPending = true;
+  if (!domains) {
+    pendingAllDomains = true;
+    pendingDomains.clear();
     return;
   }
+  if (!pendingAllDomains) {
+    domains.forEach((domain) => pendingDomains.add(domain));
+  }
+}
+
+/** 从 Host 拉取最新快照；in-flight 期间的事件合并后立即再拉取。 */
+export async function refreshFromCore(domains?: string[]): Promise<void> {
+  if (!coreMode) return;
+  queueSnapshot(domains);
+  if (snapshotInFlight) return;
   snapshotInFlight = true;
   try {
-    const snapshot = await coreSnapshot();
-    applySnapshot(snapshot, domains ? new Set(domains) : undefined);
-  } catch {
-    // Host 暂不可达时忽略，下次事件再试
+    while (snapshotPending) {
+      const all = pendingAllDomains;
+      const requested = all ? undefined : new Set(pendingDomains);
+      snapshotPending = false;
+      pendingAllDomains = false;
+      pendingDomains.clear();
+      try {
+        const snapshot = await coreSnapshot();
+        applySnapshot(snapshot, requested);
+      } catch {
+        // 保留一次 pending；后续领域事件会重新触发，不丢失并发事件。
+        snapshotPending = true;
+        break;
+      }
+    }
   } finally {
     snapshotInFlight = false;
   }
@@ -318,17 +344,28 @@ async function listenCoreEvents(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function hydrate(): Promise<void> {
-  coreMode = await hasCoreDispatch();
+  try {
+    coreMode = await hasCoreDispatch();
+  } catch (error) {
+    // Desktop capability failures fail closed: never enter legacy full-save mode.
+    coreMode = true;
+    isHydrated.set(true);
+    showToast(`Domain Core 初始化失败，已禁止写入以保护数据：${String(error)}`, 10_000);
+    return;
+  }
   if (coreMode) {
+    await listenCoreEvents();
+    let snapshotLoaded = false;
     try {
       const snapshot = await coreSnapshot();
       applySnapshot(snapshot);
-    } catch {
-      // 首启失败退回默认
+      snapshotLoaded = true;
+    } catch (error) {
+      showToast(`数据加载失败，已禁止 legacy 覆盖；请运行 kxtodo doctor：${String(error)}`, 10_000);
     } finally {
       isHydrated.set(true);
     }
-    await listenCoreEvents();
+    if (!snapshotLoaded) return;
     const settings = get(appSettings);
     await syncNativeAppearance(settings);
     try {

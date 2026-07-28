@@ -234,9 +234,17 @@ pub fn risk_for(command: &str) -> &'static str {
         "task.remove" | "schedule.remove" | "schedule.enable" | "schedule.run" | "config.reset" => {
             "high-risk-write"
         }
-        "task.add" | "task.modify" | "schedule.add" | "schedule.modify" | "schedule.disable"
-        | "schedule.stop" | "schedule.runtime.detect" | "schedule.runtime.set" | "config.set"
-        | "config.unset" | "notify" => "write",
+        "task.add"
+        | "task.modify"
+        | "schedule.add"
+        | "schedule.modify"
+        | "schedule.disable"
+        | "schedule.stop"
+        | "schedule.runtime.detect"
+        | "schedule.runtime.set"
+        | "config.set"
+        | "config.unset"
+        | "notify" => "write",
         _ => "read",
     }
 }

@@ -59,6 +59,8 @@ pub struct ExecOutput {
     pub stderr: String,
     pub timed_out: bool,
     pub cancelled: bool,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
 }
 
 #[cfg(target_os = "windows")]
@@ -117,7 +119,10 @@ pub fn find_executable(names: &[&str], env_names: &[&str]) -> String {
 
 pub fn detect_runtimes() -> Runtimes {
     Runtimes {
-        python: find_executable(&["python", "python3", "py"], &["PYTHON", "PYTHON_EXECUTABLE"]),
+        python: find_executable(
+            &["python", "python3", "py"],
+            &["PYTHON", "PYTHON_EXECUTABLE"],
+        ),
         node: find_executable(&["node"], &["NODE", "NODE_EXECUTABLE"]),
         pwsh: find_executable(
             &["pwsh", "powershell"],
@@ -163,7 +168,11 @@ pub struct ExecSpec {
 fn temp_makefile(code: &str) -> CoreResult<PathBuf> {
     let dir = std::env::temp_dir().join("kxtodo-make");
     fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("Makefile-{}-{}.mk", std::process::id(), uuid_suffix()));
+    let path = dir.join(format!(
+        "Makefile-{}-{}.mk",
+        std::process::id(),
+        uuid_suffix()
+    ));
     fs::write(&path, code)?;
     Ok(path)
 }
@@ -204,11 +213,20 @@ pub fn build_script_spec(
     match source {
         Source::File { path } => {
             if path.trim().is_empty() {
-                return Err(CoreError::validation("SCRIPT_PATH_REQUIRED", "脚本文件路径为空"));
+                return Err(CoreError::validation(
+                    "SCRIPT_PATH_REQUIRED",
+                    "脚本文件路径为空",
+                ));
             }
             match language {
                 ScriptLanguage::Powershell => {
-                    argv.extend(["-NoProfile".to_string(), "-ExecutionPolicy".to_string(), "Bypass".to_string(), "-File".to_string(), path.clone()]);
+                    argv.extend([
+                        "-NoProfile".to_string(),
+                        "-ExecutionPolicy".to_string(),
+                        "Bypass".to_string(),
+                        "-File".to_string(),
+                        path.clone(),
+                    ]);
                 }
                 ScriptLanguage::Makefile => {
                     argv.extend(["-f".to_string(), path.clone()]);
@@ -218,7 +236,10 @@ pub fn build_script_spec(
         }
         Source::Inline { code } => {
             if code.trim().is_empty() {
-                return Err(CoreError::validation("SCRIPT_CODE_REQUIRED", "inline 脚本内容为空"));
+                return Err(CoreError::validation(
+                    "SCRIPT_CODE_REQUIRED",
+                    "inline 脚本内容为空",
+                ));
             }
             match language {
                 ScriptLanguage::Python => argv.extend(["-c".to_string(), code.clone()]),
@@ -280,10 +301,13 @@ pub fn build_action_spec(action: &Action, runtimes: &Runtimes) -> CoreResult<Opt
             ..
         } => {
             if program.trim().is_empty() {
-                return Err(CoreError::validation("PROGRAM_REQUIRED", "可执行程序路径为空"));
+                return Err(CoreError::validation(
+                    "PROGRAM_REQUIRED",
+                    "可执行程序路径为空",
+                ));
             }
             Ok(Some(ExecSpec {
-                program: resolve_program(program),
+                program: program.trim().to_string(),
                 args: args.clone(),
                 working_directory: working_directory.clone(),
                 timeout_ms: match timeout {
@@ -324,10 +348,13 @@ pub fn build_probe_spec(probe: &Probe, runtimes: &Runtimes) -> CoreResult<ExecSp
             timeout,
         } => {
             if program.trim().is_empty() {
-                return Err(CoreError::validation("PROGRAM_REQUIRED", "probe 可执行程序路径为空"));
+                return Err(CoreError::validation(
+                    "PROGRAM_REQUIRED",
+                    "probe 可执行程序路径为空",
+                ));
             }
             Ok(ExecSpec {
-                program: resolve_program(program),
+                program: program.trim().to_string(),
                 args: args.clone(),
                 working_directory: working_directory.clone(),
                 timeout_ms: match timeout {
@@ -340,20 +367,6 @@ pub fn build_probe_spec(probe: &Probe, runtimes: &Runtimes) -> CoreResult<ExecSp
     }
 }
 
-fn resolve_program(program: &str) -> String {
-    let raw = program.trim();
-    if raw.contains('/') || raw.contains('\\') || Path::new(raw).is_absolute() {
-        raw.to_string()
-    } else {
-        let resolved = find_executable(&[raw], &[]);
-        if resolved.is_empty() {
-            raw.to_string()
-        } else {
-            resolved
-        }
-    }
-}
-
 /// Registry of running children so `stop` can kill them (§3.5.5).
 #[derive(Default)]
 pub struct ProcessRegistry {
@@ -362,7 +375,7 @@ pub struct ProcessRegistry {
 
 struct ChildHandle {
     child: Mutex<Child>,
-    cancelled: AtomicBool,
+    cancelled: Arc<AtomicBool>,
 }
 
 impl ProcessRegistry {
@@ -395,6 +408,26 @@ impl ProcessRegistry {
             .unwrap_or(false)
     }
 
+    pub fn stop_all(&self) -> Vec<String> {
+        let handles: Vec<(String, Arc<ChildHandle>)> = self
+            .children
+            .lock()
+            .map(|children| {
+                children
+                    .iter()
+                    .map(|(id, handle)| (id.clone(), handle.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (_, handle) in &handles {
+            handle.cancelled.store(true, Ordering::SeqCst);
+            if let Ok(mut child) = handle.child.lock() {
+                let _ = child.kill();
+            }
+        }
+        handles.into_iter().map(|(id, _)| id).collect()
+    }
+
     pub fn running_ids(&self) -> Vec<String> {
         self.children
             .lock()
@@ -404,6 +437,29 @@ impl ProcessRegistry {
 
     /// Run to completion with timeout, cancellation and output capture.
     pub fn run(&self, task_id: &str, spec: ExecSpec) -> CoreResult<ExecOutput> {
+        self.run_with_cancel(task_id, spec, Arc::new(AtomicBool::new(false)))
+    }
+
+    pub fn run_with_cancel(
+        &self,
+        task_id: &str,
+        spec: ExecSpec,
+        cancelled: Arc<AtomicBool>,
+    ) -> CoreResult<ExecOutput> {
+        if cancelled.load(Ordering::SeqCst) {
+            return Err(CoreError::execution("RUN_CANCELLED", "任务在启动前已取消"));
+        }
+        if self
+            .children
+            .lock()
+            .map_err(|error| CoreError::internal(error.to_string()))?
+            .contains_key(task_id)
+        {
+            return Err(CoreError::conflict(
+                "PROCESS_ALREADY_RUNNING",
+                format!("任务进程 {task_id} 已在运行"),
+            ));
+        }
         let mut command = Command::new(&spec.program);
         command.args(&spec.args);
         if let Some(dir) = &spec.working_directory {
@@ -435,14 +491,23 @@ impl ProcessRegistry {
 
         let handle = Arc::new(ChildHandle {
             child: Mutex::new(child),
-            cancelled: AtomicBool::new(false),
+            cancelled,
         });
         self.children
             .lock()
             .map_err(|error| CoreError::internal(error.to_string()))?
             .insert(task_id.to_string(), handle.clone());
+        // Close the stop-before-registration race: stop may set the shared
+        // run-slot token after the pre-spawn check but before registry insert.
+        if handle.cancelled.load(Ordering::SeqCst) {
+            if let Ok(mut child) = handle.child.lock() {
+                let _ = child.kill();
+            }
+        }
 
-        let deadline = spec.timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
+        let deadline = spec
+            .timeout_ms
+            .map(|ms| Instant::now() + Duration::from_millis(ms));
         let mut timed_out = false;
         let status = loop {
             {
@@ -453,7 +518,9 @@ impl ProcessRegistry {
                 match guard.try_wait() {
                     Ok(Some(status)) => break Ok(status),
                     Ok(None) => {}
-                    Err(error) => break Err(CoreError::execution("WAIT_FAILED", error.to_string())),
+                    Err(error) => {
+                        break Err(CoreError::execution("WAIT_FAILED", error.to_string()))
+                    }
                 }
             }
             if let Some(deadline) = deadline {
@@ -485,22 +552,69 @@ impl ProcessRegistry {
 
         Ok(ExecOutput {
             exit_code: status.code(),
-            stdout,
-            stderr,
+            stdout: stdout.text,
+            stderr: stderr.text,
             timed_out,
             cancelled: handle.cancelled.load(Ordering::SeqCst),
+            stdout_truncated: stdout.truncated,
+            stderr_truncated: stderr.truncated,
         })
     }
 }
 
-fn read_pipe<R: Read>(mut reader: R) -> String {
-    let mut bytes = Vec::new();
-    let _ = reader.read_to_end(&mut bytes);
-    match std::str::from_utf8(&bytes) {
+#[derive(Default)]
+struct PipeCapture {
+    text: String,
+    truncated: bool,
+}
+
+fn read_pipe<R: Read>(mut reader: R) -> PipeCapture {
+    let limit = crate::domain::repo::SCHEDULE_OUTPUT_MAX_BYTES;
+    let mut retained = Vec::with_capacity(limit);
+    let mut chunk = [0u8; 8192];
+    let mut truncated = false;
+    loop {
+        let read = match reader.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => read,
+        };
+        let remaining = limit.saturating_sub(retained.len());
+        let keep = remaining.min(read);
+        retained.extend_from_slice(&chunk[..keep]);
+        if keep < read {
+            truncated = true;
+        }
+    }
+    let text = match std::str::from_utf8(&retained) {
         Ok(text) => text.to_string(),
         Err(_) => {
-            let (decoded, _, _) = encoding_rs::GBK.decode(&bytes);
+            let (decoded, _, _) = encoding_rs::GBK.decode(&retained);
             decoded.into_owned()
         }
+    };
+    let (text, expanded) = crate::domain::history::truncate(&text, limit);
+    PipeCapture {
+        text,
+        truncated: truncated || expanded,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_pipe;
+
+    #[test]
+    fn pipe_capture_is_bounded_and_drains_input() {
+        let bytes = vec![b'x'; crate::domain::repo::SCHEDULE_OUTPUT_MAX_BYTES * 8];
+        let capture = read_pipe(std::io::Cursor::new(bytes));
+        assert!(capture.truncated);
+        assert!(capture.text.len() <= crate::domain::repo::SCHEDULE_OUTPUT_MAX_BYTES);
+    }
+
+    #[test]
+    fn pipe_capture_preserves_small_output() {
+        let capture = read_pipe(std::io::Cursor::new("你好\n".as_bytes()));
+        assert!(!capture.truncated);
+        assert_eq!(capture.text, "你好\n");
     }
 }
