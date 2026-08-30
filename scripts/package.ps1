@@ -1,5 +1,4 @@
 param(
-  [string]$Version = "",
   [ValidateSet("all", "windows", "android")]
   [string]$Targets = "all",
   [switch]$Log
@@ -10,6 +9,47 @@ $ErrorActionPreference = "Stop"
 $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Resolve-Path (Join-Path $scriptPath "..")
 Set-Location $root
+
+# 版本号唯一来源是 git：最近的 v* tag 优先，其次最近一条 vX.Y.Z 开头的 commit message。
+function Get-GitVersion {
+  # pwsh 7 的 PSNativeCommandUseErrorActionPreference 会让 git 的非零退出码变成
+  # 终止性 NativeCommandError；这里局部降级并吞掉，缺 tag 是正常情况。
+  $saved = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  $tag = $null
+  $subjects = @()
+  try {
+    $tag = git describe --tags --match "v*" --abbrev=0 2>$null
+    $subjects = @(git log -30 --pretty=%s 2>$null)
+  } catch {
+  }
+  $ErrorActionPreference = $saved
+  if ($tag) {
+    return $tag.Trim().TrimStart("v")
+  }
+  foreach ($subject in $subjects) {
+    if ($subject -match '^v(\d+\.\d+\.\d+)') {
+      return $Matches[1]
+    }
+  }
+  return "0.0.0-dev"
+}
+$script:GitVersion = Get-GitVersion
+
+# MSVC 环境自举：cl.exe 不在 PATH 时，尝试从本机已知的 setup bat 导入环境变量。
+if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
+  $msvcSetup = "D:\env\MSVC\msvc\setup_x64.bat"
+  if (Test-Path -LiteralPath $msvcSetup) {
+    Write-Host "cl.exe not in PATH; importing MSVC environment from $msvcSetup" -ForegroundColor DarkGray
+    cmd /c "`"$msvcSetup`" >nul 2>&1 && set" | ForEach-Object {
+      if ($_ -match "^([^=]+)=(.*)$") {
+        [Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
+      }
+    }
+  } else {
+    Write-Warning "cl.exe not found in PATH and no known MSVC setup script; the Rust build may fail."
+  }
+}
 
 $env:CARGO_HOME = Join-Path $root ".cargo-home"
 $env:CARGO_TARGET_DIR = Join-Path $root "src-tauri\target"
@@ -36,48 +76,6 @@ if ($Log) {
 }
 
 try {
-  # -------------------------------------------------------------------------
-  # Version bump (package.json, tauri.conf.json, Cargo.toml, stores.ts APP_VERSION)
-  # -------------------------------------------------------------------------
-  if ($Version.Trim().Length -gt 0) {
-    if ($Version -notmatch '^\d+\.\d+\.\d+([-.+][0-9A-Za-z.-]+)?$') {
-      throw "Version must look like 1.2.3 or 1.2.3-beta.1"
-    }
-
-    # Use .NET IO with explicit UTF-8 (no BOM) to avoid PS 5.1 ANSI/GBK corruption.
-    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-
-    $packageJsonPath = Join-Path $root "package.json"
-    $packageJson = [System.IO.File]::ReadAllText($packageJsonPath, $utf8NoBom) | ConvertFrom-Json
-    $packageJson.version = $Version
-    [System.IO.File]::WriteAllText($packageJsonPath, ($packageJson | ConvertTo-Json -Depth 20), $utf8NoBom)
-
-    $packageLockPath = Join-Path $root "package-lock.json"
-    $packageLockRaw = [System.IO.File]::ReadAllText($packageLockPath, $utf8NoBom)
-    $versionRegex = New-Object System.Text.RegularExpressions.Regex '(?m)("version"\s*:\s*")[^"]+("\s*,)'
-    $versionEvaluator = [System.Text.RegularExpressions.MatchEvaluator]{
-      param($match)
-      $match.Groups[1].Value + $Version + $match.Groups[2].Value
-    }
-    $packageLockRaw = $versionRegex.Replace($packageLockRaw, $versionEvaluator, 2)
-    [System.IO.File]::WriteAllText($packageLockPath, $packageLockRaw, $utf8NoBom)
-
-    $tauriConfigPath = Join-Path $root "src-tauri\tauri.conf.json"
-    $tauriConfig = [System.IO.File]::ReadAllText($tauriConfigPath, $utf8NoBom) | ConvertFrom-Json
-    $tauriConfig.version = $Version
-    [System.IO.File]::WriteAllText($tauriConfigPath, ($tauriConfig | ConvertTo-Json -Depth 20), $utf8NoBom)
-
-    $cargoTomlPath = Join-Path $root "src-tauri\Cargo.toml"
-    $cargoToml = [System.IO.File]::ReadAllText($cargoTomlPath, $utf8NoBom)
-    $cargoToml = $cargoToml -replace '(?m)^version = ".*"$', "version = `"$Version`""
-    [System.IO.File]::WriteAllText($cargoTomlPath, $cargoToml, $utf8NoBom)
-
-    $storesPath = Join-Path $root "src\lib\stores.ts"
-    $stores = [System.IO.File]::ReadAllText($storesPath, $utf8NoBom)
-    $stores = $stores -replace 'export const APP_VERSION = ".*";', "export const APP_VERSION = `"$Version`";"
-    [System.IO.File]::WriteAllText($storesPath, $stores, $utf8NoBom)
-  }
-
   if (!(Test-Path -LiteralPath (Join-Path $root "node_modules"))) {
     npm install
   }
@@ -100,25 +98,31 @@ try {
   npm run build
   if ($LASTEXITCODE -ne 0) { throw "Frontend build failed" }
 
-  $effectiveVersion = if ($Version.Trim().Length -gt 0) {
-    $Version
-  } else {
-    (Get-Content -LiteralPath (Join-Path $root "package.json") -Raw | ConvertFrom-Json).version
-  }
+  $effectiveVersion = $script:GitVersion
 
   # -------------------------------------------------------------------------
   # Windows desktop build
   # -------------------------------------------------------------------------
   if ($buildWindows) {
-    Write-Host "==> Building Windows desktop binary..." -ForegroundColor Cyan
-    $binaryPath = Join-Path $root "src-tauri\target\release\todo-note.exe"
+    Write-Host "==> Building Windows GUI binary (kxtodo.exe)..." -ForegroundColor Cyan
+    $binaryPath = Join-Path $root "src-tauri\target\release\kxtodo.exe"
     Remove-Item -LiteralPath $binaryPath -Force -ErrorAction SilentlyContinue
     npx tauri build --no-bundle $verboseFlag
-    if ($LASTEXITCODE -ne 0) { throw "Windows build failed" }
+    if ($LASTEXITCODE -ne 0) { throw "Windows GUI build failed" }
 
     $releaseBinary = Join-Path $releaseDir "KXToDo-$effectiveVersion.exe"
     Copy-Item -LiteralPath $binaryPath -Destination $releaseBinary -Force
-    Write-Host "Built Windows binary: $releaseBinary" -ForegroundColor Green
+    Write-Host "Built Windows GUI binary: $releaseBinary" -ForegroundColor Green
+
+    Write-Host "==> Building Windows CLI binary (kxtodo-cli.exe)..." -ForegroundColor Cyan
+    $cliBinaryPath = Join-Path $root "src-tauri\target\release\kxtodo-cli.exe"
+    Remove-Item -LiteralPath $cliBinaryPath -Force -ErrorAction SilentlyContinue
+    cargo build --release -p kxtodo-cli --manifest-path (Join-Path $root "src-tauri\Cargo.toml")
+    if ($LASTEXITCODE -ne 0) { throw "Windows CLI build failed" }
+
+    $releaseCliBinary = Join-Path $releaseDir "KXToDo-CLI-$effectiveVersion.exe"
+    Copy-Item -LiteralPath $cliBinaryPath -Destination $releaseCliBinary -Force
+    Write-Host "Built Windows CLI binary: $releaseCliBinary" -ForegroundColor Green
   }
 
   # -------------------------------------------------------------------------

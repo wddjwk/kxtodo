@@ -1,8 +1,10 @@
 <script lang="ts">
   import {
-    appSettings, showSettings, showToast, showNotification, fileToDataUrl
+    appSettings, showSettings, showToast, showNotification, fileToDataUrl, appVersion
   } from "./stores";
   import { setConfig as setConfigAction } from "./actions";
+  import { checkForUpdate, downloadUpdate, applyUpdate, type UpdateInfo } from "./updater";
+  import { isMobile } from "./platform";
   import {
     uiScaleValue, scalePercentValue, clampNumber, isNumberInRange,
     buildSettingsDrawerStyle, avatarStyle, avatarInitial
@@ -104,6 +106,44 @@
     void setConfigAction("cloud.provider", value);
   }
 
+  // ---- 更新 ----
+  let checkingUpdate = false;
+  let downloading = false;
+  let downloadPercent = 0;
+  let pendingUpdate: UpdateInfo | null = null;
+
+  async function checkUpdates(): Promise<void> {
+    if (checkingUpdate || downloading) return;
+    checkingUpdate = true;
+    pendingUpdate = null;
+    const result = await checkForUpdate($appVersion || "0.0.0");
+    checkingUpdate = false;
+    if (result.status === "up-to-date") {
+      showToast("当前已是最新版本");
+    } else if (result.status === "available") {
+      pendingUpdate = result.info;
+    } else {
+      showToast(result.message);
+    }
+  }
+
+  async function downloadAndApply(): Promise<void> {
+    if (!pendingUpdate || downloading) return;
+    downloading = true;
+    downloadPercent = 0;
+    try {
+      await downloadUpdate(pendingUpdate, (percent) => (downloadPercent = percent));
+      await applyUpdate();
+    } catch (error) {
+      downloading = false;
+      showToast(`更新失败：${String(error)}`);
+    }
+  }
+
+  function updateAutoCheck(value: boolean): void {
+    void setConfigAction("updates.autoCheck", value);
+  }
+
   async function uploadAvatar(): Promise<void> {
     if (!isTauriRuntime) {
       avatarFileInput.click();
@@ -147,7 +187,7 @@
     <h3>个人资料</h3>
     <div class="avatar-setting">
       <span class="avatar large" style={avStyle}>{$appSettings.profile.avatar ? "" : avInitial}</span>
-      <button type="button" on:click={uploadAvatar}>上传头像</button>
+      <button class="settings-button" type="button" on:click={uploadAvatar}>上传头像</button>
       <input bind:this={avatarFileInput} class="hidden-file" type="file" accept="image/*" on:change={uploadAvatarFromInput} />
     </div>
     <label class="settings-row">
@@ -405,4 +445,36 @@
       <p class="muted">当前版本只保留配置结构，不执行任何网络同步。</p>
     </div>
   </section>
+
+  {#if !$isMobile}
+    <section>
+      <h3>关于与更新</h3>
+      <div class="settings-row">
+        <span>当前版本</span>
+        <span class="muted">v{$appVersion || "…"}</span>
+      </div>
+      <div class="settings-row">
+        <span>自动检查更新</span>
+        <input
+          type="checkbox"
+          checked={$appSettings.updates.autoCheck}
+          on:change={(event) => updateAutoCheck(event.currentTarget.checked)}
+        />
+      </div>
+      <div class="settings-row">
+        <span>检查更新</span>
+        <button class="settings-button" style="justify-self: start" type="button" disabled={checkingUpdate || downloading} on:click={checkUpdates}>
+          {checkingUpdate ? "检查中…" : "检查更新"}
+        </button>
+      </div>
+      {#if pendingUpdate}
+        <div class="update-available">
+          <p>发现新版本 <strong>v{pendingUpdate.version}</strong></p>
+          <button class="settings-button primary" type="button" disabled={downloading} on:click={downloadAndApply}>
+            {downloading ? `下载中 ${downloadPercent}%` : "下载并重启更新"}
+          </button>
+        </div>
+      {/if}
+    </section>
+  {/if}
 </aside>

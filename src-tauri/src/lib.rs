@@ -8,11 +8,11 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 #[cfg(desktop)]
-use std::{process::Command, sync::Arc};
+use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 
 #[cfg(desktop)]
-pub mod domain;
+use kxtodo_core as domain;
 
 #[cfg(desktop)]
 use tauri::{
@@ -25,6 +25,8 @@ use tauri::{
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 #[cfg(desktop)]
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+#[cfg(desktop)]
+use tauri_plugin_window_state::StateFlags;
 
 const DEFAULT_UI_SCALE: f64 = 0.75;
 const IMG_DIR: &str = "img";
@@ -55,6 +57,17 @@ enum NotificationPosition {
     TopRight,
     BottomLeft,
     TopLeft,
+}
+
+/// GUI 的默认数据目录（便携模式：exe 同级 todo-note-data/）。
+#[cfg(desktop)]
+fn default_data_dir() -> PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            return dir.join("todo-note-data");
+        }
+    }
+    PathBuf::from("todo-note-data")
 }
 
 fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -546,10 +559,12 @@ fn notification_position(
     let screen_width = f64::from(work_area.size.width) / scale;
     let screen_height = f64::from(work_area.size.height) / scale;
     let stack_offset = (stack_index % 5) as f64 * (height + 10.0);
+    // 窗口外框含 DWM 阴影（左右各约 7px），水平边距 +7 补偿，让卡片本体的
+    // 视觉右/左边距与底部 18px 一致。
     let x = match position_kind {
-        NotificationPosition::BottomLeft | NotificationPosition::TopLeft => left + 22.0,
+        NotificationPosition::BottomLeft | NotificationPosition::TopLeft => left + 25.0,
         NotificationPosition::BottomRight | NotificationPosition::TopRight => {
-            left + screen_width - width - 22.0
+            left + screen_width - width - 25.0
         }
     };
     let y = match position_kind {
@@ -569,14 +584,42 @@ fn show_notification_window(
     let notification = normalize_notification(app, notification);
     let counter = NOTIFICATION_COUNTER.fetch_add(1, Ordering::SeqCst);
     let label = format!("notification-{counter}");
+    // 建窗/定位/显示全部放主线程执行：调用方是 IPC/命令工作线程，跨线程
+    // dispatch 在事件循环繁忙时丢过 show 与 position（窗口建好却不可见）。
+    let app_clone = app.clone();
+    let label_clone = label.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(build_notification_window(
+            &app_clone,
+            label_clone,
+            notification,
+            counter,
+        ));
+    })
+    .map_err(|error| error.to_string())?;
+    rx.recv().map_err(|error| error.to_string())?
+}
+
+#[cfg(desktop)]
+fn build_notification_window(
+    app: &AppHandle,
+    label: String,
+    notification: NotificationRequest,
+    counter: u64,
+) -> Result<String, String> {
     let payload = serde_json::to_vec(&notification).map_err(|error| error.to_string())?;
     let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
     let url = WebviewUrl::App(format!("notification.html?payload={encoded}").into());
     let position_kind = parse_notification_position(&notification.position);
     let width = notification_setting_f64(app, "width", 400.0);
     let height = notification_setting_f64(app, "height", 68.0);
+    let position = notification_position(app, width, height, counter, position_kind);
+    let duration_ms = notification.duration_ms;
 
-    let window = WebviewWindowBuilder::new(app, label.clone(), url)
+    // 隐藏创建，内容首帧渲染后由 notification_ready 命令显示（消除白帧闪烁）；
+    // JS 若没跑起来，900ms 兜底 show + duration+4s 看门狗强关，窗口绝不僵死。
+    let mut builder = WebviewWindowBuilder::new(app, label.clone(), url)
         .title("KXToDo 通知")
         .inner_size(width, height)
         .min_inner_size(width, height)
@@ -587,16 +630,35 @@ fn show_notification_window(
         .skip_taskbar(true)
         .transparent(true)
         .shadow(true)
-        .visible(false)
-        .build()
-        .map_err(|error| error.to_string())?;
-
-    if let Some(position) = notification_position(app, width, height, counter, position_kind) {
-        let _ = window.set_position(position);
+        .visible(false);
+    if let Some(position) = position {
+        builder = builder.position(position.x, position.y);
     }
-    window.show().map_err(|error| error.to_string())?;
+    builder.build().map_err(|error| error.to_string())?;
+
+    let app_clone = app.clone();
+    let label_clone = label.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(900));
+        if let Some(window) = app_clone.get_webview_window(&label_clone) {
+            let _ = window.show();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(duration_ms.saturating_add(4000)));
+        if let Some(window) = app_clone.get_webview_window(&label_clone) {
+            let _ = window.close();
+        }
+    });
 
     Ok(label)
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn notification_ready(window: tauri::Window) -> Result<(), String> {
+    if window.label().starts_with("notification-") {
+        let _ = window.show();
+    }
+    Ok(())
 }
 
 #[cfg(desktop)]
@@ -1133,36 +1195,93 @@ fn set_webview_zoom(scale: f64) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn app_version() -> String {
+    env!("KXTODO_VERSION").to_string()
+}
+
 #[cfg(desktop)]
 #[tauri::command]
-fn open_url(url: String) -> Result<(), String> {
-    if !(url.starts_with("http://") || url.starts_with("https://") || url.starts_with("mailto:")) {
-        return Err("Unsupported link protocol".to_string());
+fn write_update_package(app: AppHandle, chunk: String, append: bool) -> Result<String, String> {
+    use base64::Engine;
+    use std::io::Write;
+    let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| "无法定位程序目录".to_string())?;
+    let path = dir.join("KXToDo-update.exe.tmp");
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(chunk)
+        .map_err(|error| error.to_string())?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(append)
+        .truncate(!append)
+        .open(&path)
+        .map_err(|error| error.to_string())?;
+    file.write_all(&bytes).map_err(|error| error.to_string())?;
+    let _ = app;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn apply_update_and_restart(app: AppHandle) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+    let dir = exe.parent().ok_or_else(|| "无法定位程序目录".to_string())?;
+    let tmp = dir.join("KXToDo-update.exe.tmp");
+    if !tmp.is_file() {
+        return Err("更新包不存在".to_string());
     }
-
-    #[cfg(target_os = "windows")]
-    let result = Command::new("rundll32")
-        .arg("url.dll,FileProtocolHandler")
-        .arg(&url)
-        .spawn();
-
-    #[cfg(target_os = "macos")]
-    let result = Command::new("open").arg(&url).spawn();
-
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let result = Command::new("xdg-open").arg(&url).spawn();
-
-    #[cfg(not(any(target_os = "windows", target_os = "macos", unix)))]
-    {
-        return Err(
-            "Opening links in the system browser is not supported on this platform".to_string(),
-        );
-    }
-
-    result.map(|_| ()).map_err(|error| error.to_string())
+    let pid = std::process::id();
+    let bat = dir.join("kxtodo-update.bat");
+    let script = format!(
+        "@echo off\r\n:wait\r\ntasklist /FI \"PID eq {pid}\" | findstr /C:\" {pid} \" >nul\r\nif %errorlevel%==0 (timeout /t 1 /nobreak >nul & goto wait)\r\nmove /y \"{tmp}\" \"{exe}\"\r\nstart \"\" \"{exe}\"\r\ndel \"%~f0\"\r\n",
+        pid = pid,
+        tmp = tmp.display(),
+        exe = exe.display()
+    );
+    std::fs::write(&bat, script).map_err(|error| error.to_string())?;
+    std::process::Command::new("cmd")
+        .args(["/c", "start", "/min", ""])
+        .arg(&bat)
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    app.exit(0);
+    Ok(())
 }
 
 #[cfg(not(desktop))]
+#[tauri::command]
+fn write_update_package(chunk: String, append: bool) -> Result<String, String> {
+    let _ = (chunk, append);
+    Err("当前平台不支持应用内更新".to_string())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+fn apply_update_and_restart() -> Result<(), String> {
+    Err("当前平台不支持应用内更新".to_string())
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+fn reveal_main_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+    Ok(())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+fn reveal_main_window() -> Result<(), String> {
+    Ok(())
+}
+
 #[tauri::command]
 fn open_url(app: AppHandle, url: String) -> Result<(), String> {
     if !(url.starts_with("http://") || url.starts_with("https://") || url.starts_with("mailto:")) {
@@ -1348,7 +1467,11 @@ fn init_host_core(
     if let Err(error) = repo.load_all() {
         eprintln!("数据迁移失败：{error}");
     }
-    let allow_autostart = domain::host::is_default_data_dir(&dir);
+    if let Err(error) = repo.ensure_initialized() {
+        eprintln!("数据初始化失败：{error}");
+    }
+    let custom_data_dir = !domain::ipc::same_data_dir(&dir, &default_data_dir());
+    let allow_autostart = !custom_data_dir;
     let core = domain::host::HostCore::new(
         repo,
         dir,
@@ -1356,6 +1479,7 @@ fn init_host_core(
             AppMode::Gui => "gui",
             AppMode::HiddenHost => "hidden",
         },
+        custom_data_dir,
     );
     core.set_backend(Box::new(TauriBackend {
         app: app.clone(),
@@ -1375,16 +1499,26 @@ fn init_host_core(
 #[cfg(desktop)]
 fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
     let host_data_dir = domain::ipc::normalize_data_dir(&host_data_dir);
-    let default_host = domain::host::is_default_data_dir(&host_data_dir);
+    let default_host = domain::ipc::same_data_dir(&host_data_dir, &default_data_dir());
     let builder = tauri::Builder::default()
         .manage(LifecycleState::default())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // 通知窗标签按进程内计数器复用（notification-0/1/…），window-state 会把
+        // 历史"不可见/旧位置"状态恢复到新通知窗上，导致通知建了却看不见，必须排除。
+        // VISIBLE 也不持久化：主窗口可见性由 visible:false + reveal_main_window 接管，
+        // 否则恢复可见会让 WebView2 初始化的黑帧直接可见。
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_filter(|label| !label.starts_with("notification-"))
+                .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
+                .build(),
+        )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             Some(vec!["--kxtodo-host"]),
         ))
-        .plugin(tauri_plugin_dialog::init());
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init());
     let builder = if default_host {
         builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             let wants_host = args.iter().any(|arg| arg == "--kxtodo-host");
@@ -1431,11 +1565,16 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
             save_md_image_data,
             send_notification,
             close_notification_window,
+            notification_ready,
             register_global_shortcut,
             set_close_to_tray,
             set_autostart,
             get_autostart_enabled,
             set_webview_zoom,
+            reveal_main_window,
+            app_version,
+            write_update_package,
+            apply_update_and_restart,
             open_url,
             core_dispatch,
             core_snapshot,
@@ -1456,7 +1595,19 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
                 setup_tray(app)?;
             }
             if mode == AppMode::Gui {
-                show_main_window(app.handle());
+                // 窗口创建时保持隐藏（conf visible:false），由前端首帧渲染后
+                // invoke reveal_main_window 显示，避免 WebView2 初始化黑边。
+                // 前端异常时 4 秒兜底强制显示，保证进程不成为无窗僵尸。
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(4));
+                    if let Some(window) = handle.get_webview_window("main") {
+                        if !window.is_visible().unwrap_or(true) {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                });
             }
             Ok(())
         })
@@ -1541,12 +1692,14 @@ fn core_dispatch(
     command: String,
     params: Value,
 ) -> Result<Value, String> {
-    let invocation = domain::core::Invocation::new(command, params);
+    let mut invocation = domain::core::Invocation::new(command, params);
+    // GUI 操作本身就是用户在界面上的确认行为，跳过 CLI 的 --yes 确认门。
+    invocation.controls.yes = true;
     let ctx = domain::core::ExecContext {
         repo: &core.repo,
         cwd: core.data_dir.clone(),
         host: Some(core.as_ref()),
-        custom_data_dir: false,
+        custom_data_dir: core.custom_data_dir,
     };
     let outcome = domain::core::execute(&invocation, &ctx);
     if outcome.code == 0 {
@@ -1590,21 +1743,35 @@ fn core_snapshot(core: State<'_, Arc<domain::host::HostCore>>) -> Result<Value, 
     }))
 }
 
+/// 内部启动参数：`--kxtodo-host [--data-dir <path>]` → 隐藏 Host 模式。
+/// 由 CLI（notify/schedule run）或开机自启拉起；不是用户接口。
+#[cfg(desktop)]
+fn parse_host_mode_args(args: &[String]) -> Option<PathBuf> {
+    if !args.iter().any(|arg| arg == "--kxtodo-host") {
+        return None;
+    }
+    let mut data_dir = default_data_dir();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--data-dir" {
+            if let Some(value) = iter.next() {
+                data_dir = PathBuf::from(value);
+            }
+        } else if let Some(value) = arg.strip_prefix("--data-dir=") {
+            data_dir = PathBuf::from(value);
+        }
+    }
+    Some(data_dir)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(desktop)]
     {
         let args: Vec<String> = env::args().skip(1).collect();
-        match domain::cli::dispatch(&args) {
-            domain::cli::Dispatch::Exit(code) => {
-                std::process::exit(code);
-            }
-            domain::cli::Dispatch::HiddenHost { data_dir } => {
-                run_desktop_app(AppMode::HiddenHost, data_dir)
-            }
-            domain::cli::Dispatch::Gui => {
-                run_desktop_app(AppMode::Gui, domain::cli::default_data_dir())
-            }
+        match parse_host_mode_args(&args) {
+            Some(data_dir) => run_desktop_app(AppMode::HiddenHost, data_dir),
+            None => run_desktop_app(AppMode::Gui, default_data_dir()),
         }
     }
 
@@ -1649,6 +1816,10 @@ pub fn run() {
                 set_autostart,
                 get_autostart_enabled,
                 set_webview_zoom,
+                reveal_main_window,
+                app_version,
+                write_update_package,
+                apply_update_and_restart,
                 open_url
             ])
             .setup(move |app| {

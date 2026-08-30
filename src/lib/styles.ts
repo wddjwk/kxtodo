@@ -126,10 +126,3 @@ export function buildMainStyle(background: ListBackground, accentColor: string, 
   return `--accent: ${accentColor}; --bg-image: ${image}; --bg-opacity: ${opacity}; background: ${background.color};`;
 }
 
-export function buildMenuStyle(clientX: number, clientY: number, width: number, height: number, scale: number): string {
-  const viewportWidth = typeof window === "undefined" ? 1200 : window.innerWidth / scale;
-  const viewportHeight = typeof window === "undefined" ? 800 : window.innerHeight / scale;
-  const left = Math.max(8, Math.min(clientX / scale, viewportWidth - width - 10));
-  const top = Math.max(8, Math.min(clientY / scale, viewportHeight - height - 10));
-  return `left: ${left}px; top: ${top}px;`;
-}

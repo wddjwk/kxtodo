@@ -23,6 +23,3 @@ export function matchesShortcut(event: KeyboardEvent, shortcut: string): boolean
   );
 }
 
-export function shortcutLabel(combo: string): string {
-  return combo.replace(/\+/g, " + ");
-}

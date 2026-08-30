@@ -86,6 +86,9 @@ export const defaultSettings: Settings = {
     provider: "none",
     endpoint: "",
     enabled: false
+  },
+  updates: {
+    autoCheck: true
   }
 };
 
@@ -309,7 +312,6 @@ function normalizeTask(raw: unknown, fallbackNodeId: string): Task | null {
     tags: normalizeTags(source.tags),
     emojis: normalizeEmojis(source.emojis, source.emoji),
     expanded: Boolean(source.expanded),
-    editing: Boolean(source.editing),
     createdAt: typeof source.createdAt === "string" ? source.createdAt : now(),
     updatedAt: typeof source.updatedAt === "string" ? source.updatedAt : now()
   };
@@ -638,6 +640,9 @@ export function normalizeSettings(raw: unknown): Settings {
             : "none",
       endpoint: typeof source?.cloud?.endpoint === "string" ? source.cloud.endpoint : typeof source?.cloudSync?.endpoint === "string" ? source.cloudSync.endpoint : "",
       enabled: Boolean(source?.cloud?.enabled ?? source?.cloudSync?.enabled)
+    },
+    updates: {
+      autoCheck: typeof source?.updates?.autoCheck === "boolean" ? source.updates.autoCheck : true
     }
   };
 }

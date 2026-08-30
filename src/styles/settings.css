@@ -1,5 +1,16 @@
 /* settings.css — settings drawer */
 
+.settings-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1499;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: default;
+}
+
 .settings-drawer {
   position: fixed;
   z-index: 1500;
@@ -37,7 +48,7 @@
 
 .settings-row {
   display: grid;
-  grid-template-columns: 86px minmax(0, 1fr);
+  grid-template-columns: 7em minmax(0, 1fr);
   gap: 10px;
   align-items: center;
   margin-bottom: 9px;
@@ -125,13 +136,6 @@
   align-items: center;
   gap: 14px;
   margin-bottom: 14px;
-}
-
-.avatar-setting button {
-  border: 1px solid #dfdfdf;
-  border-radius: 8px;
-  background: #f8f8f8;
-  padding: 8px 12px;
 }
 
 .muted,
@@ -254,4 +258,70 @@
   height: 16px;
   flex-shrink: 0;
   color: var(--accent);
+}
+
+/* Dropdown 上翻（窗口下缘空间不足时） */
+.dropdown-menu.flip-up {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
+.update-available {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f0f7ff;
+}
+
+.update-available p {
+  margin: 0 0 8px;
+  color: #1f2937;
+  font-size: 13px;
+}
+
+.settings-row > span:first-child {
+  white-space: nowrap;
+}
+
+/* 统一按钮：次要操作白底细边框（与菜单按钮同一语言），主操作 accent 填充 */
+.settings-button {
+  padding: 7px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #1f2937;
+  font-size: inherit;
+  cursor: pointer;
+  transition: background 0.12s ease-out, border-color 0.12s ease-out;
+}
+
+.settings-button:hover {
+  background: #f2f4f7;
+  border-color: #dde1e6;
+}
+
+.settings-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.settings-button:disabled:hover {
+  background: #ffffff;
+}
+
+.settings-button.primary {
+  border-color: transparent;
+  background: var(--accent, #2564cf);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.settings-button.primary:hover {
+  background: var(--accent, #2564cf);
+  filter: brightness(1.07);
+}
+
+.update-available .settings-button {
+  margin-top: 2px;
 }

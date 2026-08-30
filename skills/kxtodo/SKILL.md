@@ -1,17 +1,18 @@
 ---
 name: kxtodo
 version: 1
-cliHelp: kxtodo --help
+cliHelp: kxtodo-cli --help
 description: 通过 KXToDo CLI 查询、创建、修改、删除待办数据，管理定时任务与设置。
 ---
 
 # KXToDo Agent SKILL
 
 KXToDo v9 提供脚本化 CLI。本 SKILL 说明**何时调用、按什么步骤调用、如何处理风险与错误**。
-字段结构、枚举、默认值一律以当前版本的 `kxtodo --help` 与 `kxtodo schema <目标>` 为准，本文件不复制。
+字段结构、枚举、默认值一律以当前版本的 `kxtodo-cli --help` 与 `kxtodo-cli schema <目标>` 为准，本文件不复制。
 
 ## 核心约定
 
+- 数据目录：`--data-dir` > 环境变量 `KXTODO_HOME` > 当前目录（含其 `todo-note-data` 子目录）；目录中没有数据（缺 data.json）会报错退出码 3。GUI（kxtodo.exe）数据在其同级 `todo-note-data/`。
 - 输出协议：成功写 stdout，`{ "ok": true, "command", "data", "meta" }`；错误写 stderr，`{ "ok": false, "error": { "type", "code", "message", "hint?" } }`。判断成功以退出码 0 或 `ok == true` 为准。
 - 退出码：0 成功；2 参数/校验错误；3 资源不存在；4 歧义或状态冲突；5 数据/锁/文件系统错误；10 高风险需确认；20 执行失败。
 - `--dry-run` 永不触发确认门禁，适合先向用户展示影响范围。
@@ -41,11 +42,11 @@ KXToDo v9 提供脚本化 CLI。本 SKILL 说明**何时调用、按什么步骤
 
 完整定义只走 JSON：
 
-1. `kxtodo schema schedule.spec --example interval-script --jq '.data.example' > schedule.json`
+1. `kxtodo-cli schema schedule.spec --example interval-script --jq '.data.example' > schedule.json`
 2. 编辑业务值（名称、脚本路径、时间）。
-3. `kxtodo schedule validate --spec @schedule.json`
-4. `kxtodo schedule add --spec @schedule.json --dry-run`
-5. `kxtodo schedule add --spec @schedule.json --yes --idempotency-key <唯一键>`
+3. `kxtodo-cli schedule validate --spec @schedule.json`
+4. `kxtodo-cli schedule add --spec @schedule.json --dry-run`
+5. `kxtodo-cli schedule add --spec @schedule.json --yes --idempotency-key <唯一键>`
 
 修改用 `schedule modify --id ... --patch '<json>'`；运行控制用 enable/disable/run/stop/logs/status。
 
@@ -77,4 +78,4 @@ KXToDo v9 提供脚本化 CLI。本 SKILL 说明**何时调用、按什么步骤
 - 退出码 3：资源不存在 → 先 find 获取真实 ID。
 - 退出码 4：类型不符/状态冲突 → 检查 --type 与对象真实类型；非空删除需 --cascade。
 - 退出码 10：高风险未确认 → 向用户说明影响后加 --yes。
-- 退出码 2：参数问题 → 看 error.hint，并对照 `kxtodo <领域> <动作> --help`。
+- 退出码 2：参数问题 → 看 error.hint，并对照 `kxtodo-cli <领域> <动作> --help`。

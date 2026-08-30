@@ -1,86 +1,59 @@
 <script lang="ts">
   import { tick } from "svelte";
   import {
-    ArrowLeft, ArrowUpDown, Calendar, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
-    ChevronsDown, ChevronsUp, Download, Eraser, FolderInput, Image,
-    Lightbulb, MoreHorizontal, Palette, PenLine, Plus, RotateCcw, Search, Settings as SettingsIcon, SmilePlus, Star, Sun, Tag, Trash2, Upload, X
+    ArrowLeft, Calendar, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
+    ChevronsDown, ChevronsUp, FolderInput,
+    Lightbulb, MoreHorizontal, PenLine, Plus, Search, Settings as SettingsIcon, SmilePlus, Star, Sun, Tag, Trash2, X
   } from "@lucide/svelte";
   import {
     appState, appSettings, showToast,
     searchQuery, selectedNode, visibleTasks, selectedBackground,
-    accent, isSearching, now, todayIso, yesterdayIso, dateOnly,
-    safeFileName, fileToDataUrl, APP_VERSION, taskEmojiPicker, markEditStart
+    accent, isSearching, todayIso, yesterdayIso, dateOnly,
+    taskEmojiPicker, editorTaskId, fileToDataUrl
   } from "./stores";
   import {
     updateTask as updateTaskAction, deleteTask as deleteTaskAction,
     addTask as addTaskAction, setItemUi as setItemUiAction,
     setItemsUi as setItemsUiAction, replaceTaskTags as replaceTaskTagsAction,
-    replaceTaskEmojis as replaceTaskEmojisAction, saveTaskMarkdown as saveTaskMarkdownAction,
-    setBackground as setBackgroundAction, setConfig as setConfigAction,
-    setUiColor as setUiColorAction, unsetUiColor as unsetUiColorAction,
-    deleteNodeCascade as deleteNodeCascadeAction, applyTreeOrder as applyTreeOrderAction,
-    importState as importStateAction
+    replaceTaskEmojis as replaceTaskEmojisAction,
+    renameNode as renameNodeAction
   } from "./actions";
-  import { moveTargetOptions, nodeAndDescendantIds, exportStateForNode, getBackground, taskMoveTargets } from "./nodes";
-  import { buildMainStyle, buildMenuStyle, uiScaleValue } from "./styles";
-  import { normalizeState, normalizeSettings, defaultBackground, themePresets, createEntryNode } from "./defaults";
+  import { taskMoveTargets } from "./nodes";
+  import { buildMainStyle } from "./styles";
   import { hasMultipleMarkdownLines } from "./markdown";
-  import { exportData, openExternalUrl, isTauriRuntime, deleteBackgroundImage, pickImageFile, importBackgroundImage, backgroundImageUrl, deleteNodeImages, saveMdImageFromDataUrl, mdImageUrl } from "./backend";
-  import {
-    imageCache, resolveImageSrc, isLocalImageRef, localImageRef, localImageFilename, primeImageCache,
-    mdImageCache, resolveMarkdownImages, primeMdImageCache
-  } from "./images";
+  import { openExternalUrl, isTauriRuntime, saveMdImageFromDataUrl, mdImageUrl } from "./backend";
+  import { imageCache, resolveImageSrc, mdImageCache, primeMdImageCache } from "./images";
   import IconGlyph from "./IconGlyph.svelte";
   import TaskCard from "./TaskCard.svelte";
   import ScheduledTasksView from "./ScheduledTasksView.svelte";
   import DatePicker from "./DatePicker.svelte";
+  import ContextMenu from "./menu/ContextMenu.svelte";
+  import MenuItem from "./menu/MenuItem.svelte";
+  import MenuSeparator from "./menu/MenuSeparator.svelte";
+  import ListMenu from "./workspace/ListMenu.svelte";
+  import { sortTasks, type SortMode } from "./sort";
   import { showMobileList, isMobile } from "./platform";
-  import type { AppNode, AppState, ListBackground, TagColor, Task } from "./types";
-
-  type SortMode = "created-desc" | "created-asc" | "alpha-asc" | "alpha-desc" | "due-asc" | "due-desc" | "importance";
-
-  const sortLabels: Record<SortMode, string> = {
-    "created-desc": "创建时间 ↓ 最新",
-    "created-asc": "创建时间 ↑ 最早",
-    "alpha-asc": "字母顺序 A → Z",
-    "alpha-desc": "字母顺序 Z → A",
-    "due-asc": "截止时间 ↑ 最近",
-    "due-desc": "截止时间 ↓ 最远",
-    "importance": "重要性优先"
-  };
+  import type { AppNode, TagColor, Task } from "./types";
 
   let newTaskDraft = "";
   let selectedTaskId: string | null = null;
   let showCompleted = true;
-  let showListMenu = false;
-  let showSortOptions = false;
-  let showMoveOptions = false;
   let showSuggestions = false;
   let showCalendar = false;
   let sortMode: SortMode = "created-desc";
-  let allExpanded = false;
-  let taskMenu: { taskId: string; x: number; y: number; showDate: boolean } | null = null;
-  let showTagOptions = false;
-  let showMoveTargets = false;
+  let taskMenu: { taskId: string; x: number; y: number } | null = null;
+  let listMenuAt: { x: number; y: number } | null = null;
   let tagInputText = "";
   let selectedTagColor: TagColor = "yellow";
   let editingTagIdInMenu = "";
   let editingTagTextInMenu = "";
-  let taskMenuHeight = 0;
-  let taskMenuWidth = 0;
-  let backgroundLinkDraft = "";
-  let backgroundDraftNodeId = "";
+  let headerRenaming = false;
+  let headerRenameDraft = "";
+  let headerRenameInput: HTMLInputElement;
   let taskInput: HTMLTextAreaElement;
-  let importInput: HTMLInputElement;
-  let backgroundFileInput: HTMLInputElement;
-  let colorPickerInput: HTMLInputElement;
   let schedulerViewRef: ScheduledTasksView;
   let showMobileHeaderActions = false;
-  let editingPresetIndex: number | null = null;
-  let presetNameDraft = "";
-  let presetColorDraft = "";
   let linkPreviewUrl = "";
-  let presetEditOriginalColor = "";
 
   // Calendar state
   let calViewMode: "month" | "week" = "month";
@@ -103,18 +76,9 @@
         ? sortTasks(completedByDate[myDayViewDate] ?? [], sortMode)
         : sortedTasks.filter((task) => task.completed && dateOnly(task.completedAt) === todayIso()))
     : sortedTasks.filter((task) => task.completed);
-  $: selectedMoveTargets = $selectedNode ? moveTargetOptions($selectedNode.id, $appState.nodes) : [];
-  $: taskMenuStyle = taskMenu ? buildMenuStyle(taskMenu.x, taskMenu.y, taskMenuWidth || 264, taskMenuHeight || (taskMenu.showDate ? 620 : 300), uiScaleValue($appSettings.appearance.uiScale)) : "";
   $: taskMenuTask = taskMenu ? $appState.tasks.find((task) => task.id === taskMenu?.taskId) : null;
   $: taskMoveTargetList = taskMenu ? taskMoveTargets($appState.nodes, taskMenuTask?.nodeId ?? "") : [];
-  $: presets = $appSettings.appearance.themePresets.length
-    ? $appSettings.appearance.themePresets
-    : themePresets;
-  $: if (!taskMenu) { showTagOptions = false; showMoveTargets = false; tagInputText = ""; selectedTagColor = "yellow"; editingTagIdInMenu = ""; editingTagTextInMenu = ""; }
-  $: if (($selectedNode?.id ?? "") !== backgroundDraftNodeId) {
-    backgroundDraftNodeId = $selectedNode?.id ?? "";
-    backgroundLinkDraft = isLocalImageRef($selectedBackground.image) ? "" : ($selectedBackground.image ?? "");
-  }
+  $: if (!taskMenu) { tagInputText = ""; selectedTagColor = "yellow"; editingTagIdInMenu = ""; editingTagTextInMenu = ""; }
 
   // My Day suggestions
   $: suggestedTasks = (() => {
@@ -228,15 +192,12 @@
   }
 
   export function closeOverlays(): void {
-    showListMenu = false;
-    showSortOptions = false;
-    showMoveOptions = false;
     showSuggestions = false;
     showCalendar = false;
     showMobileHeaderActions = false;
-    cancelPresetEdit();
     schedulerViewRef?.closeOverlays();
     taskMenu = null;
+    listMenuAt = null;
     linkPreviewUrl = "";
     taskEmojiPicker.set(null);
   }
@@ -257,26 +218,20 @@
   }
 
   function handleTaskSetDate(event: CustomEvent<{ id: string; date: string }>): void {
-    const dateVal = event.detail.date ? event.detail.date.slice(0, 10) : null;
-    const task = $appState.tasks.find((item) => item.id === event.detail.id);
-    void updateTaskAction(event.detail.id, {
-      dueDate: dateVal,
-      plannedDate: dateVal,
-      myDay: dateVal === todayIso() ? true : task?.myDay
-    });
+    setTaskDate(event.detail.id, event.detail.date);
   }
 
   function toggleSuggestions(): void {
     showSuggestions = !showSuggestions;
     showCalendar = false;
-    showListMenu = false;
+    listMenuAt = null;
     taskMenu = null;
   }
 
   function toggleCalendar(): void {
     showCalendar = !showCalendar;
     showSuggestions = false;
-    showListMenu = false;
+    listMenuAt = null;
     taskMenu = null;
     if (showCalendar) {
       const d = new Date();
@@ -285,50 +240,18 @@
     }
   }
 
-  function sortTasks(tasks: Task[], mode: SortMode): Task[] {
-    return [...tasks].sort((a, b) => {
-      switch (mode) {
-        case "created-desc": return b.createdAt.localeCompare(a.createdAt);
-        case "created-asc": return a.createdAt.localeCompare(b.createdAt);
-        case "alpha-asc": return a.markdown.localeCompare(b.markdown, "zh");
-        case "alpha-desc": return b.markdown.localeCompare(a.markdown, "zh");
-        case "due-asc": {
-          if (!a.dueDate && !b.dueDate) return 0;
-          if (!a.dueDate) return 1;
-          if (!b.dueDate) return -1;
-          return a.dueDate.localeCompare(b.dueDate);
-        }
-        case "due-desc": {
-          if (!a.dueDate && !b.dueDate) return 0;
-          if (!a.dueDate) return 1;
-          if (!b.dueDate) return -1;
-          return b.dueDate.localeCompare(a.dueDate);
-        }
-        case "importance": return (b.important ? 1 : 0) - (a.important ? 1 : 0);
-        default: return 0;
-      }
-    });
-  }
-
-  function setSortMode(mode: SortMode): void {
-    sortMode = mode;
-    showSortOptions = false;
-  }
-
-  function toggleExpandAll(): void {
-    allExpanded = !allExpanded;
-    const expandTarget = allExpanded;
+  /** 展开全部 / 收起全部（两个独立动作，非 toggle）。 */
+  function expandAll(expanded: boolean): void {
     const ids = $visibleTasks
-      .filter((task) => !expandTarget || hasMultipleMarkdownLines(task.markdown))
+      .filter((task) => !expanded || hasMultipleMarkdownLines(task.markdown))
       .map((task) => task.id);
     if (ids.length > 0) {
-      void setItemsUiAction(ids, expandTarget);
+      void setItemsUiAction(ids, expanded);
     }
   }
 
   function toggleTaskExpansion(taskId: string): void {
     selectedTaskId = taskId;
-    taskMenu = null;
     const task = $appState.tasks.find((item) => item.id === taskId);
     if (!task) return;
     void setItemUiAction(taskId, {
@@ -336,18 +259,10 @@
     });
   }
 
-  function startTaskEditing(taskId: string): void {
+  function openTaskEditor(taskId: string): void {
     selectedTaskId = taskId;
     taskMenu = null;
-    const task = $appState.tasks.find((item) => item.id === taskId);
-    if (task) {
-      markEditStart(task);
-    }
-    void setItemUiAction(taskId, { editing: true, expanded: true });
-  }
-
-  function commitTaskMarkdown(taskId: string, markdown: string): void {
-    void saveTaskMarkdownAction(taskId, markdown, hasMultipleMarkdownLines(markdown));
+    editorTaskId.set(taskId);
   }
 
   function deleteTask(taskId: string): void {
@@ -369,7 +284,6 @@
     const text = tagInputText.trim();
     addTagToTask(taskMenuTask.id, selectedTagColor, text);
     tagInputText = "";
-    taskMenu = null;
   }
 
   function submitTagEditInMenu(): void {
@@ -398,7 +312,6 @@
 
   function moveTaskToNode(taskId: string, targetNodeId: string): void {
     void updateTaskAction(taskId, { entryId: targetNodeId });
-    showMoveTargets = false;
     taskMenu = null;
   }
 
@@ -470,8 +383,8 @@
   }
 
   function openTaskMenu(event: CustomEvent<{ id: string; x: number; y: number }>): void {
-    taskMenu = { taskId: event.detail.id, x: event.detail.x, y: event.detail.y, showDate: false };
-    showListMenu = false;
+    taskMenu = { taskId: event.detail.id, x: event.detail.x, y: event.detail.y };
+    listMenuAt = null;
   }
 
   function setTaskDate(taskId: string, date: string): void {
@@ -485,311 +398,53 @@
     taskMenu = null;
   }
 
-  function setBackground(patch: Partial<ListBackground>): void {
-    if (!$selectedNode) return;
-    void setBackgroundAction($selectedNode.id, {
-      color: patch.color,
-      image: patch.image === undefined ? undefined : patch.image ?? null,
-      imageOpacity: patch.imageOpacity
-    });
-  }
-
-  function updateBackgroundLink(event: Event): void {
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLInputElement)) return;
-    const previous = $selectedBackground.image;
-    backgroundLinkDraft = target.value;
-    const next = target.value.trim() || undefined;
-    setBackground({ image: next });
-    if (isLocalImageRef(previous) && previous !== next) void deleteBackgroundImage(localImageFilename(previous));
-  }
-
-  function updateBackgroundOpacity(event: Event): void {
-    const target = event.currentTarget;
-    if (target instanceof HTMLInputElement) {
-      setBackground({ imageOpacity: Number(target.value) / 100 });
-    }
-  }
-
-  function applyTheme(color: string): void {
-    setBackground({ color });
-  }
-
-  function beginPresetEdit(index: number): void {
-    const preset = presets[index];
-    if (!preset) return;
-    editingPresetIndex = index;
-    presetNameDraft = preset.name;
-    presetColorDraft = preset.color;
-    presetEditOriginalColor = $selectedBackground.color;
-  }
-
-  function cancelPresetEdit(): void {
-    if (editingPresetIndex !== null && presetEditOriginalColor) {
-      setBackground({ color: presetEditOriginalColor });
-    }
-    editingPresetIndex = null;
-    presetNameDraft = "";
-    presetColorDraft = "";
-    presetEditOriginalColor = "";
-  }
-
-  function normalizeHexColor(value: string, fallback: string): string {
-    const color = value.trim();
-    return /^#[0-9a-f]{6}$/i.test(color) ? color : fallback;
-  }
-
-  function updatePresetName(event: Event): void {
-    const target = event.currentTarget;
-    if (target instanceof HTMLInputElement) {
-      presetNameDraft = target.value;
-    }
-  }
-
-  function updatePresetColor(event: Event): void {
-    const target = event.currentTarget;
-    if (target instanceof HTMLInputElement) {
-      presetColorDraft = target.value;
-      const validColor = normalizeHexColor(target.value, "");
-      if (validColor) {
-        setBackground({ color: validColor });
-      }
-    }
-  }
-
-  function savePresetEdit(): void {
-    if (editingPresetIndex === null) return;
-    const nextPresets = presets.map((preset) => ({ ...preset }));
-    const current = nextPresets[editingPresetIndex];
-    if (!current) return;
-    const finalColor = normalizeHexColor(presetColorDraft, current.color);
-    nextPresets[editingPresetIndex] = {
-      name: presetNameDraft.trim().slice(0, 24) || current.name,
-      color: finalColor
-    };
-    void setConfigAction("appearance.themePresets", nextPresets);
-    setBackground({ color: finalColor });
-    editingPresetIndex = null;
-    presetNameDraft = "";
-    presetColorDraft = "";
-    presetEditOriginalColor = "";
-  }
-
-  function setUiColor(color: string): void {
-    if (!$selectedNode) return;
-    void setUiColorAction($selectedNode.id, color);
-  }
-
-  function handleUiColorPick(event: Event): void {
-    const target = event.currentTarget;
-    if (target instanceof HTMLInputElement) {
-      setUiColor(target.value);
-    }
-  }
-
-  function resetUiColor(): void {
-    if (!$selectedNode) return;
-    void unsetUiColorAction($selectedNode.id);
-  }
-
-  function handleColorPick(event: Event): void {
-    const target = event.currentTarget;
-    if (target instanceof HTMLInputElement) {
-      applyTheme(target.value);
-    }
-  }
-
-  function openColorPicker(): void {
-    colorPickerInput?.click();
-  }
-
-  async function pickColorFromScreen(): Promise<void> {
-    try {
-      const EyeDropperCtor = (window as unknown as Record<string, unknown>).EyeDropper as { new(): { open(): Promise<{ sRGBHex: string }> } } | undefined;
-      if (!EyeDropperCtor) {
-        showToast("当前环境不支持取色器");
-        return;
-      }
-      const dropper = new EyeDropperCtor();
-      const result = await dropper.open();
-      applyTheme(result.sRGBHex);
-    } catch {
-      // User cancelled
-    }
-  }
-
-  function resetBackgroundToDefault(): void {
-    void setConfigAction("appearance.themePresets", themePresets.map((preset) => ({ ...preset })));
-    setBackground({ color: defaultBackground.color });
-  }
-
-  async function pickBackgroundImage(): Promise<void> {
-    if (!isTauriRuntime) {
-      backgroundFileInput.click();
-      return;
-    }
-    try {
-      const path = await pickImageFile();
-      if (!path) return;
-      const previous = $selectedBackground.image;
-      const filename = await importBackgroundImage(path);
-      const url = await backgroundImageUrl(filename);
-      primeImageCache(filename, url);
-      setBackground({ image: localImageRef(filename) });
-      backgroundLinkDraft = "";
-      if (isLocalImageRef(previous)) void deleteBackgroundImage(localImageFilename(previous));
-    } catch (error) {
-      showToast(`背景图片读取失败：${String(error)}`);
-    }
-  }
-
-  async function uploadBackgroundImage(event: Event): Promise<void> {
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLInputElement) || !target.files?.[0]) return;
-    try {
-      const dataUrl = await fileToDataUrl(target.files[0]);
-      setBackground({ image: dataUrl });
-      backgroundLinkDraft = "";
-    } catch (error) {
-      showToast(`背景图片读取失败：${String(error)}`);
-    } finally {
-      target.value = "";
-    }
-  }
-
-  function clearBackground(): void {
-    const previous = $selectedBackground.image;
-    backgroundLinkDraft = "";
-    setBackground({ image: undefined });
-    if (isLocalImageRef(previous)) void deleteBackgroundImage(localImageFilename(previous));
-  }
-
-  function deleteCurrentNode(): void {
-    if (!$selectedNode || $selectedNode.kind === "system") {
-      showToast("内置列表不能删除");
-      return;
-    }
-    const id = $selectedNode.id;
-    const ids = nodeAndDescendantIds(id, $appState.nodes);
-    for (const delId of ids) {
-      const bg = $appState.backgrounds[delId];
-      if (bg?.image && isLocalImageRef(bg.image)) {
-        void deleteBackgroundImage(localImageFilename(bg.image));
-      }
-      void deleteNodeImages(delId);
-    }
-    void deleteNodeCascadeAction(id);
-    showListMenu = false;
-    showMobileList();
-  }
-
-  async function exportCurrentList(): Promise<void> {
-    if (!$selectedNode) return;
-    const payload = {
-      version: APP_VERSION,
-      exportedAt: now(),
-      scope: "node",
-      nodeId: $selectedNode.id,
-      state: exportStateForNode($selectedNode, $appState)
-    };
-    await exportData(payload, `${safeFileName($selectedNode.name)}-${APP_VERSION}.json`);
-    showListMenu = false;
-    showToast("导出完成");
-  }
-
-  async function exportAll(): Promise<void> {
-    const payload = {
-      version: APP_VERSION,
-      exportedAt: now(),
-      scope: "all",
-      state: $appState,
-      settings: $appSettings
-    };
-    await exportData(payload, `kxtodo-${APP_VERSION}-all.json`);
-    showListMenu = false;
-    showToast("全部数据已导出");
-  }
-
-  async function importFromFile(event: Event): Promise<void> {
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLInputElement) || !target.files?.[0]) return;
-    try {
-      const payload = JSON.parse(await target.files[0].text()) as { state?: unknown; settings?: unknown };
-      const normalizedState = normalizeState(payload.state ?? payload);
-      await importStateAction(
-        normalizedState,
-        payload.settings ? normalizeSettings(payload.settings) : null
-      );
-    } catch (error) {
-      showToast(`导入失败：${String(error)}`);
-    } finally {
-      target.value = "";
-      showListMenu = false;
-    }
-  }
-
-  function toggleListMenu(): void {
-    showListMenu = !showListMenu;
-    showSortOptions = false;
-    showMoveOptions = false;
-    cancelPresetEdit();
+  function openListMenu(event: MouseEvent): void {
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    listMenuAt = { x: rect.right - 300, y: rect.bottom + 6 };
     showSuggestions = false;
     showCalendar = false;
     taskMenu = null;
   }
 
-  function handleListMenuKeydown(event: KeyboardEvent): void {
-    if (event.key !== "Enter" && event.key !== " ") return;
-    event.preventDefault();
-    toggleListMenu();
+  function beginHeaderRename(): void {
+    if (!$selectedNode || $selectedNode.kind === "system") return;
+    listMenuAt = null;
+    headerRenaming = true;
+    headerRenameDraft = $selectedNode.name;
+    void tick().then(() => {
+      headerRenameInput?.focus();
+      headerRenameInput?.select();
+    });
   }
 
-  function startRename(id: string): void {
-    showListMenu = false;
+  function commitHeaderRename(): void {
+    if (!headerRenaming) return;
+    const name = headerRenameDraft.trim();
+    headerRenaming = false;
+    if (!name || !$selectedNode) return;
+    void renameNodeAction($selectedNode.id, name);
   }
 
-  function moveNodeToGroup(nodeId: string, parentId: string | null): void {
-    const source = $appState.nodes.find((n) => n.id === nodeId);
-    if (!source || source.kind === "system" || source.parentId === parentId) {
-      showListMenu = false;
-      return;
+  function handleHeaderRenameKeydown(event: KeyboardEvent): void {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commitHeaderRename();
+    } else if (event.key === "Escape") {
+      headerRenaming = false;
     }
-    const nextParentId = parentId;
-    const targetParent = nextParentId ? $appState.nodes.find((n) => n.id === nextParentId && n.kind === "category") : null;
-    if (nextParentId && !targetParent) {
-      showToast("目标分组不存在");
-      return;
-    }
-    if (source.kind === "category" && nextParentId && nodeAndDescendantIds(source.id, $appState.nodes).has(nextParentId)) {
-      showToast("不能移动到自身或自己的子分类中");
-      return;
-    }
-    const withoutSource = $appState.nodes.filter((n) => n.id !== nodeId);
-    const sourceWithParent = { ...source, parentId: nextParentId };
-    let insertIndex = withoutSource.length;
-    if (nextParentId) {
-      const siblingIndexes = withoutSource.map((n, i) => ({ n, i })).filter((item) => item.n.parentId === nextParentId).map((item) => item.i);
-      const parentIndex = withoutSource.findIndex((n) => n.id === nextParentId);
-      insertIndex = siblingIndexes.length ? Math.max(...siblingIndexes) + 1 : parentIndex >= 0 ? parentIndex + 1 : withoutSource.length;
-    }
-    const nodes = [...withoutSource];
-    nodes.splice(insertIndex, 0, sourceWithParent);
-    const ordered = nodes.map((n) => (nextParentId && n.id === nextParentId ? { ...n, collapsed: false } : n));
-    void applyTreeOrderAction(ordered, { [nodeId]: nextParentId });
-    showListMenu = false;
   }
 
-  async function openTaskLink(event: CustomEvent<string>): Promise<void> {
-    const url = event.detail;
+  /** 供 App（编辑器浮窗）与 TaskCard 复用的链接打开入口。 */
+  export function openLinkUrl(url: string): void {
     if ($appSettings.appearance.linkOpenMode === "system") {
-      try {
-        await openExternalUrl(url);
-      } catch (error) {
-        showToast(`打开链接失败：${String(error)}`);
-      }
+      void openExternalUrl(url).catch((error) => showToast(`打开链接失败：${String(error)}`));
     } else {
       linkPreviewUrl = url;
     }
+  }
+
+  function openTaskLink(event: CustomEvent<string>): void {
+    openLinkUrl(event.detail);
   }
 
   function closeLinkPreview(): void {
@@ -828,10 +483,22 @@
           <IconGlyph icon={$selectedNode?.icon ?? "notebook"} size={34} />
         {/if}
       </span>
-      <h1
-        class:mobile-title-tap={$isMobile}
-        on:click|stopPropagation={() => { if ($isMobile) showMobileHeaderActions = !showMobileHeaderActions; }}
-      >{$isSearching ? `搜索结果：${$searchQuery}` : $selectedNode?.name ?? "KXToDo"}</h1>
+      {#if headerRenaming}
+        <input
+          bind:this={headerRenameInput}
+          bind:value={headerRenameDraft}
+          class="header-rename-input"
+          maxlength="60"
+          on:blur={commitHeaderRename}
+          on:keydown={handleHeaderRenameKeydown}
+          on:click|stopPropagation
+        />
+      {:else}
+        <h1
+          class:mobile-title-tap={$isMobile}
+          on:click|stopPropagation={() => { if ($isMobile) showMobileHeaderActions = !showMobileHeaderActions; }}
+        >{$isSearching ? `搜索结果：${$searchQuery}` : $selectedNode?.name ?? "KXToDo"}</h1>
+      {/if}
     </div>
     <div class="header-actions" class:mobile-hidden={$isMobile && !showMobileHeaderActions} on:click|stopPropagation>
       {#if isScheduled}
@@ -850,9 +517,14 @@
         {/if}
         <button
           type="button"
-          title={allExpanded ? "收起全部" : "展开全部"}
-          on:click|stopPropagation={toggleExpandAll}
-        >{#if allExpanded}<ChevronsUp size={21} />{:else}<ChevronsDown size={21} />{/if}</button>
+          title="展开全部"
+          on:click|stopPropagation={() => expandAll(true)}
+        ><ChevronsDown size={21} /></button>
+        <button
+          type="button"
+          title="收起全部"
+          on:click|stopPropagation={() => expandAll(false)}
+        ><ChevronsUp size={21} /></button>
 
         {#if showSuggestions}
         <section class="suggestion-panel" on:click|stopPropagation>
@@ -934,110 +606,25 @@
 
       <button
         type="button"
-        title="分类/条目菜单"
-        on:mousedown|preventDefault|stopPropagation={toggleListMenu}
+        title="列表菜单"
+        on:mousedown|preventDefault|stopPropagation={openListMenu}
         on:click|stopPropagation
-        on:keydown={handleListMenuKeydown}
       ><MoreHorizontal size={23} /></button>
-
-        {#if showListMenu}
-        <section class="list-menu">
-          <button type="button" disabled={!$selectedNode || $selectedNode.kind === "system"} on:click={() => $selectedNode && startRename($selectedNode.id)}>
-            <PenLine size={15} /> 重命名
-          </button>
-          {#if $selectedNode && $selectedNode.kind !== "system"}
-            <button type="button" class="has-submenu" on:click={() => showMoveOptions = !showMoveOptions}>
-              <FolderInput size={15} /> 移动到分组
-            </button>
-            {#if showMoveOptions}
-              <div class="menu-submenu">
-                {#each selectedMoveTargets as target}
-                  <button
-                    type="button"
-                    class:active={($selectedNode.parentId ?? "") === target.id}
-                    on:click={() => { moveNodeToGroup($selectedNode.id, target.id || null); showMoveOptions = false; }}
-                  >{target.name}</button>
-                {/each}
-              </div>
-            {/if}
-          {/if}
-          {#if !isScheduled}
-            <button type="button" on:click={() => showSortOptions = !showSortOptions}>
-              <ArrowUpDown size={15} /> 排序方式
-            </button>
-            {#if showSortOptions}
-              <div class="sort-submenu">
-                {#each Object.entries(sortLabels) as [mode, label]}
-                  <button type="button" class:active={sortMode === mode} on:click={() => setSortMode(mode as SortMode)}>{label}</button>
-                {/each}
-              </div>
-            {/if}
-          {/if}
-          {#if $selectedNode && $selectedNode.kind !== "system"}
-            <button class="danger" type="button" on:click={deleteCurrentNode}>
-              <Trash2 size={15} /> 删除当前条目
-            </button>
-          {/if}
-          <button type="button" on:click={exportCurrentList}><Upload size={15} /> 导出当前</button>
-          <button type="button" on:click={exportAll}><Upload size={15} /> 一键全部导出</button>
-          <button type="button" on:click={() => importInput.click()}><Download size={15} /> 导入 JSON</button>
-          <div class="menu-section-title">UI颜色</div>
-          <div class="ui-color-row">
-            <label class="ui-color-picker" title="修改当前界面的标题和控件颜色">
-              <span style={`--swatch: ${$accent}`}></span>
-              <input type="color" value={$accent} on:input={handleUiColorPick} />
-            </label>
-            <span class="ui-color-value">{$accent}</span>
-            <button type="button" on:click={resetUiColor}>默认</button>
-          </div>
-          <div class="menu-section-title">背景颜色</div>
-          <div class="color-grid">
-            {#each presets as preset, index}
-              <button
-                type="button"
-                title={`${preset.name}（右键编辑）`}
-                class:editing={editingPresetIndex === index}
-                style={`--swatch: ${preset.color}; --accent-color: ${preset.color}`}
-                on:click={() => applyTheme(preset.color)}
-                on:contextmenu|preventDefault|stopPropagation={() => beginPresetEdit(index)}
-              ></button>
-            {/each}
-            <button type="button" class="palette-button" title="自定义颜色" on:click={openColorPicker}></button>
-            <button type="button" class="reset-bg-button" title="恢复默认配色" on:click={resetBackgroundToDefault}>
-              <RotateCcw size={14} />
-            </button>
-          </div>
-          {#if editingPresetIndex !== null}
-            <div class="preset-editor">
-              <div class="preset-editor-title">编辑预设颜色</div>
-              <input value={presetNameDraft} maxlength="24" placeholder="颜色名称" on:input={updatePresetName} />
-              <div class="preset-color-line">
-                <input type="color" value={presetColorDraft} on:input={updatePresetColor} />
-                <input value={presetColorDraft} placeholder="#dfe8df" on:input={updatePresetColor} />
-              </div>
-              <div class="preset-editor-actions">
-                <button type="button" on:click={savePresetEdit}>保存</button>
-                <button type="button" on:click={cancelPresetEdit}>取消</button>
-              </div>
-            </div>
-          {/if}
-          <input bind:this={colorPickerInput} class="hidden-file" type="color" value={$selectedBackground.color} on:input={handleColorPick} />
-          <label class="background-link">
-            背景图片链接
-            <input value={backgroundLinkDraft} placeholder="https://..." on:input={updateBackgroundLink} />
-          </label>
-          <label class="opacity-row">
-            图片透明度
-            <input type="range" min="0" max="80" value={Math.round(($selectedBackground.imageOpacity ?? 0.28) * 100)} on:input={updateBackgroundOpacity} />
-          </label>
-          <div class="menu-inline two">
-            <button type="button" on:click={pickBackgroundImage}><Image size={15} /> 上传图片</button>
-            <button type="button" on:click={clearBackground}><Eraser size={15} /> 清除背景</button>
-          </div>
-        </section>
-        {/if}
     </div>
   </section>
+
+  {#if listMenuAt}
+    <ListMenu
+      x={listMenuAt.x}
+      y={listMenuAt.y}
+      node={$selectedNode}
+      {isScheduled}
+      {sortMode}
+      onSortMode={(mode) => (sortMode = mode)}
+      onRenameRequest={beginHeaderRename}
+      onClose={() => (listMenuAt = null)}
+    />
+  {/if}
 
   {#if isScheduled}
     <ScheduledTasksView bind:this={schedulerViewRef} />
@@ -1051,20 +638,15 @@
     </p>
   {/if}
 
-  <input bind:this={importInput} class="hidden-file" type="file" accept="application/json,.json" on:change={importFromFile} />
-  <input bind:this={backgroundFileInput} class="hidden-file" type="file" accept="image/*" on:change={uploadBackgroundImage} />
-
   <section class="task-list">
     {#each incompleteTasks as task (task.id)}
       <TaskCard
         {task}
         nodeId={task.nodeId}
         selected={taskMenu?.taskId === task.id || selectedTaskId === task.id}
-        linkOpenMode={$appSettings.appearance.linkOpenMode}
         on:toggle={(event) => toggleCompletion(event.detail)}
         on:expand={(event) => toggleTaskExpansion(event.detail)}
-        on:edit={(event) => startTaskEditing(event.detail)}
-        on:commit={(event) => commitTaskMarkdown(event.detail.id, event.detail.markdown)}
+        on:edit={(event) => openTaskEditor(event.detail)}
         on:context={openTaskMenu}
         on:openLink={openTaskLink}
         on:setDate={handleTaskSetDate}
@@ -1087,11 +669,9 @@
               {task}
               nodeId={task.nodeId}
               selected={taskMenu?.taskId === task.id || selectedTaskId === task.id}
-              linkOpenMode={$appSettings.appearance.linkOpenMode}
-              on:toggle={(event) => toggleCompletion(event.detail)}
+                    on:toggle={(event) => toggleCompletion(event.detail)}
               on:expand={(event) => toggleTaskExpansion(event.detail)}
-              on:edit={(event) => startTaskEditing(event.detail)}
-              on:commit={(event) => commitTaskMarkdown(event.detail.id, event.detail.markdown)}
+              on:edit={(event) => openTaskEditor(event.detail)}
               on:context={openTaskMenu}
               on:openLink={openTaskLink}
               on:setDate={handleTaskSetDate}
@@ -1116,37 +696,28 @@
   </section>
 
   {#if taskMenu && taskMenuTask}
-    <div
-      class="task-context-menu"
-      style={taskMenuStyle}
-      bind:clientHeight={taskMenuHeight}
-      bind:clientWidth={taskMenuWidth}
-      on:click|stopPropagation
-    >
-      <button type="button" on:click={() => { void updateTaskAction(taskMenuTask.id, { myDay: !taskMenuTask.myDay }); taskMenu = null; }}>
-        <Sun size={16} /> {taskMenuTask.myDay ? "从我的一天中移除" : "添加到我的一天"}
-      </button>
-      <button type="button" on:click={() => taskMenu && (taskMenu = { ...taskMenu, showDate: !taskMenu.showDate })}>
-        <CalendarDays size={16} /> 添加日期
-      </button>
-      {#if taskMenu.showDate}
-        <div class="task-menu-date">
+    <ContextMenu x={taskMenu.x} y={taskMenu.y} minWidth={236} onClose={() => (taskMenu = null)}>
+      <MenuItem
+        icon={Sun}
+        label={taskMenuTask.myDay ? "从我的一天中移除" : "添加到我的一天"}
+        onSelect={() => { void updateTaskAction(taskMenuTask.id, { myDay: !taskMenuTask.myDay }); taskMenu = null; }}
+      />
+      <MenuItem icon={CalendarDays} label="添加日期">
+        <div slot="submenu" class="task-menu-date">
           <DatePicker
             value={taskMenuTask.dueDate?.slice(0, 10) ?? ""}
             on:select={(event) => setTaskDate(taskMenuTask.id, event.detail)}
             on:clear={() => setTaskDate(taskMenuTask.id, "")}
           />
         </div>
-      {/if}
-      <button type="button" on:click={() => { void updateTaskAction(taskMenuTask.id, { important: !taskMenuTask.important }); taskMenu = null; }}>
-        <Star size={16} /> {taskMenuTask.important ? "取消收藏" : "收藏"}
-      </button>
-      <!-- Tags submenu -->
-      <button on:click={() => { showTagOptions = !showTagOptions; showMoveTargets = false; }}>
-        <Tag size={16} /> 标签
-      </button>
-      {#if showTagOptions}
-        <div class="tag-editor-panel" on:click|stopPropagation={() => { editingTagIdInMenu = ""; }}>
+      </MenuItem>
+      <MenuItem
+        icon={Star}
+        label={taskMenuTask.important ? "取消收藏" : "收藏"}
+        onSelect={() => { void updateTaskAction(taskMenuTask.id, { important: !taskMenuTask.important }); taskMenu = null; }}
+      />
+      <MenuItem icon={Tag} label="标签">
+        <div slot="submenu" class="tag-editor-panel" on:click|stopPropagation={() => { editingTagIdInMenu = ""; }}>
           {#if taskMenuTask.tags.length > 0}
             {#each taskMenuTask.tags as tag (tag.id)}
               {#if editingTagIdInMenu === tag.id}
@@ -1200,41 +771,26 @@
             {/each}
           </div>
           {#if taskMenuTask.tags.length > 0}
-            <button class="danger tag-clear-all" on:click|stopPropagation={() => clearTagsFromTask(taskMenuTask.id)}>
+            <button class="menu-item menu-item-button danger tag-clear-all" on:click|stopPropagation={() => clearTagsFromTask(taskMenuTask.id)}>
               <Trash2 size={14} /> 清除所有标签
             </button>
           {/if}
         </div>
-      {/if}
-
-      <!-- Emoji -->
-      <button type="button" on:click={() => openEmojiPickerForTask(taskMenuTask.id)}>
-        <SmilePlus size={16} /> 添加表情
-      </button>
-
-      <!-- Move to submenu -->
-      <button on:click={() => { showMoveTargets = !showMoveTargets; showTagOptions = false; }}>
-        <FolderInput size={16} /> 移动到
-      </button>
-      {#if showMoveTargets}
-        <div class="menu-submenu">
-          {#each taskMoveTargetList as target}
-            <button on:click|stopPropagation={() => moveTaskToNode(taskMenuTask.id, target.id)}>
-              {target.name}
-            </button>
+      </MenuItem>
+      <MenuItem icon={SmilePlus} label="添加表情" onSelect={() => openEmojiPickerForTask(taskMenuTask.id)} />
+      <MenuItem icon={FolderInput} label="移动到">
+        <div slot="submenu" class="submenu-list">
+          {#each taskMoveTargetList as target (target.id)}
+            <MenuItem label={target.name} onSelect={() => moveTaskToNode(taskMenuTask.id, target.id)} />
+          {:else}
+            <div class="menu-empty">没有可移动的目标</div>
           {/each}
-          {#if taskMoveTargetList.length === 0}
-            <button disabled>没有可移动的目标</button>
-          {/if}
         </div>
-      {/if}
-      <button type="button" on:click={() => startTaskEditing(taskMenuTask.id)}>
-        <PenLine size={16} /> 编辑
-      </button>
-      <button class="danger" type="button" on:click={() => deleteTask(taskMenuTask.id)}>
-        <Trash2 size={16} /> 删除
-      </button>
-    </div>
+      </MenuItem>
+      <MenuSeparator />
+      <MenuItem icon={PenLine} label="编辑" onSelect={() => openTaskEditor(taskMenuTask.id)} />
+      <MenuItem icon={Trash2} danger label="删除" onSelect={() => deleteTask(taskMenuTask.id)} />
+    </ContextMenu>
   {/if}
 
   {#if !isMyDayHistory}
@@ -1266,4 +822,5 @@
       <iframe class="link-preview-frame" src={linkPreviewUrl} title="链接预览" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
     </div>
   {/if}
+
 </main>

@@ -8,8 +8,8 @@ import { get } from "svelte/store";
 import type { AppNode, AppState, ScheduledTask, SchedulerState, Settings, Tag, TagColor, Task } from "./types";
 import {
   appState, appSettings, commit, commitScheduler, commitSettings,
-  coreMode, createTaskId, editBaseUpdatedAt, markEditStart, clearEditBase,
-  scheduleEntries, showToast
+  coreMode, createTaskId, editBaseUpdatedAt, markEditStart, clearEditBase, rebaseEditBase,
+  refreshFromCore, scheduleEntries, showToast
 } from "./stores";
 import { coreDispatch, CoreCommandError } from "./backend";
 import {
@@ -174,7 +174,7 @@ export async function deleteNodeCascade(nodeId: string): Promise<void> {
   if (!node || node.kind === "system") return;
   if (coreMode) {
     try {
-      await coreDispatch("task.remove", { type: node.kind, id: nodeId, cascade: true, yes: true });
+      await coreDispatch("task.remove", { type: node.kind, id: nodeId, cascade: true });
     } catch (error) {
       await report(error, "删除失败");
       return;
@@ -273,7 +273,6 @@ export async function addTask(entryId: string, draft: TaskDraft): Promise<Task |
         tags: draft.tags ?? [],
         emojis: draft.emojis ?? [],
         expanded: false,
-        editing: false,
         createdAt: response.data.createdAt ?? new Date().toISOString(),
         updatedAt: response.data.createdAt ?? new Date().toISOString()
       };
@@ -296,7 +295,6 @@ export async function addTask(entryId: string, draft: TaskDraft): Promise<Task |
     tags: draft.tags ?? [],
     emojis: draft.emojis ?? [],
     expanded: false,
-    editing: false,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -389,7 +387,7 @@ function legacyLocalTaskPatch(id: string, changes: TaskChanges): void {
 export async function deleteTask(id: string): Promise<void> {
   if (coreMode) {
     try {
-      await coreDispatch("task.remove", { type: "item", id, yes: true });
+      await coreDispatch("task.remove", { type: "item", id });
     } catch (error) {
       await report(error, "删除失败");
       return;
@@ -438,7 +436,7 @@ export async function replaceTaskEmojis(id: string, emojis: string[]): Promise<v
   legacyUpdateTask(id, (task) => ({ ...task, emojis, updatedAt: new Date().toISOString() }));
 }
 
-export async function setItemUi(id: string, ui: { expanded?: boolean; editing?: boolean }): Promise<void> {
+export async function setItemUi(id: string, ui: { expanded?: boolean }): Promise<void> {
   appState.update((s) => ({
     ...s,
     tasks: s.tasks.map((task) => (task.id === id ? { ...task, ...ui } : task))
@@ -457,7 +455,7 @@ export async function setItemUi(id: string, ui: { expanded?: boolean; editing?: 
 export async function setItemsUi(ids: string[], expanded: boolean): Promise<void> {
   appState.update((s) => ({
     ...s,
-    tasks: s.tasks.map((task) => (ids.includes(task.id) ? { ...task, expanded, editing: false } : task))
+    tasks: s.tasks.map((task) => (ids.includes(task.id) ? { ...task, expanded } : task))
   }));
   if (coreMode) {
     try {
@@ -470,7 +468,7 @@ export async function setItemsUi(ids: string[], expanded: boolean): Promise<void
   commit(state());
 }
 
-/** 编辑保存：携带编辑基准 updatedAt，冲突时保持草稿并提示（§4.3）。 */
+/** 编辑保存：携带编辑基准 updatedAt；冲突时重置基准，再次保存将覆盖外部更改（§4.3）。 */
 export async function saveTaskMarkdown(id: string, markdown: string, expanded: boolean): Promise<boolean> {
   if (coreMode) {
     try {
@@ -482,7 +480,8 @@ export async function saveTaskMarkdown(id: string, markdown: string, expanded: b
       });
     } catch (error) {
       if (error instanceof CoreCommandError && error.code === "ITEM_CONFLICT") {
-        showToast("外部版本已变化，本次未保存", 4200);
+        rebaseEditBase(id, findTask(id)?.updatedAt);
+        showToast("内容已被外部修改，再次保存将覆盖外部更改", 4200);
       } else {
         await report(error, "保存失败");
       }
@@ -493,12 +492,12 @@ export async function saveTaskMarkdown(id: string, markdown: string, expanded: b
       ...s,
       tasks: s.tasks.map((task) =>
         task.id === id
-          ? { ...task, markdown, editing: false, expanded, updatedAt: new Date().toISOString() }
+          ? { ...task, markdown, expanded, updatedAt: new Date().toISOString() }
           : task
       )
     }));
     try {
-      await coreDispatch("gui.set-item-ui", { id, editing: false, expanded });
+      await coreDispatch("gui.set-item-ui", { id, expanded });
     } catch {
       // 忽略
     }
@@ -507,7 +506,6 @@ export async function saveTaskMarkdown(id: string, markdown: string, expanded: b
   legacyUpdateTask(id, (task) => ({
     ...task,
     markdown,
-    editing: false,
     expanded,
     updatedAt: new Date().toISOString()
   }));
@@ -652,11 +650,19 @@ export async function addSchedule(): Promise<ScheduledTask | null> {
       });
       const entry = response.data;
       scheduleEntries.update((map) => new Map(map).set(entry.id, entry));
-      const created: ScheduledTask = { ...ui, id: entry.id };
+      // 新建的定时任务停留在配置界面（持久化 UI 态，快照刷新不会冲掉）
+      try {
+        await coreDispatch("gui.set-schedule-ui", { id: entry.id, editing: true, expanded: true });
+      } catch {
+        // 忽略
+      }
+      const created: ScheduledTask = { ...ui, id: entry.id, editing: true, expanded: true };
       appState.update((s) => ({
         ...s,
         scheduler: { ...s.scheduler, tasks: [...s.scheduler.tasks, created] }
       }));
+      // schedule.add 的 domain-changed 回刷可能先于本地追加落地，显式再刷一次保证收敛到磁盘权威快照
+      await refreshFromCore(["schedule"]);
       return created;
     } catch (error) {
       return report(error, "新建定时任务失败");
@@ -700,7 +706,7 @@ export async function modifySchedule(id: string, ui: ScheduledTask): Promise<voi
 export async function removeSchedule(id: string): Promise<void> {
   if (coreMode) {
     try {
-      await coreDispatch("schedule.remove", { id, yes: true });
+      await coreDispatch("schedule.remove", { id });
     } catch (error) {
       await report(error, "删除失败");
       return;
@@ -722,7 +728,7 @@ export async function removeSchedule(id: string): Promise<void> {
 export async function setScheduleEnabled(id: string, enabled: boolean): Promise<void> {
   if (coreMode) {
     try {
-      const response = await coreDispatch<ScheduleEntryV9>(enabled ? "schedule.enable" : "schedule.disable", { id, yes: true });
+      const response = await coreDispatch<ScheduleEntryV9>(enabled ? "schedule.enable" : "schedule.disable", { id });
       scheduleEntries.update((map) => new Map(map).set(id, response.data));
     } catch (error) {
       await report(error, enabled ? "启用失败" : "禁用失败");
@@ -740,19 +746,6 @@ export async function setScheduleEnabled(id: string, enabled: boolean): Promise<
   legacyCommitSchedulerTasks(
     scheduleState().tasks.map((task) => (task.id === id ? { ...task, enabled } : task))
   );
-}
-
-export async function runSchedule(id: string): Promise<void> {
-  if (coreMode) {
-    try {
-      await coreDispatch("schedule.run", { id, yes: true });
-      showToast("已加入执行队列");
-    } catch (error) {
-      await report(error, "执行失败");
-    }
-    return;
-  }
-  showToast("当前环境不支持执行");
 }
 
 export async function stopSchedule(id: string): Promise<void> {

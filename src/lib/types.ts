@@ -31,7 +31,6 @@ export type Task = {
   tags: Tag[];
   emojis: string[];
   expanded?: boolean;
-  editing?: boolean;
   createdAt: string;
   updatedAt?: string;
 };
@@ -86,6 +85,9 @@ export type Settings = {
     provider: "none" | "webdav" | "s3" | "custom";
     endpoint: string;
     enabled: boolean;
+  };
+  updates: {
+    autoCheck: boolean;
   };
 };
 

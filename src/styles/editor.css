@@ -1,0 +1,191 @@
+/* editor.css — Markdown 编辑器浮窗（CodeMirror 宿主 + 预览） */
+
+.editor-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  display: grid;
+  place-items: center;
+  background: rgb(15 23 42 / 32%);
+  backdrop-filter: blur(3px);
+  animation: editor-fade-in 0.14s ease-out;
+}
+
+@keyframes editor-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.editor-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(920px, 84%);
+  height: min(88vh, 940px);
+  overflow: hidden;
+  border: 1px solid rgb(0 0 0 / 8%);
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 24px 64px rgb(0 0 0 / 24%), 0 4px 16px rgb(0 0 0 / 12%);
+  animation: editor-pop-in 0.16s ease-out;
+}
+
+@keyframes editor-pop-in {
+  from { transform: translateY(10px) scale(0.985); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
+.editor-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #eceff3;
+  background: #fafbfc;
+}
+
+.editor-mode-switch {
+  display: inline-flex;
+  flex-shrink: 0;
+  padding: 3px;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  background: #f1f4f8;
+}
+
+.editor-mode-switch button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #64748b;
+  font-size: var(--font-control);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.editor-mode-switch button:hover {
+  color: #334155;
+}
+
+.editor-mode-switch button.active {
+  background: #ffffff;
+  color: var(--accent, #2564cf);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 10%);
+  font-weight: 600;
+}
+
+.editor-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: #64748b;
+  font-size: var(--font-control);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.editor-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.editor-icon-button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.editor-icon-button:hover {
+  background: #eef1f5;
+  color: #1f2937;
+}
+
+.editor-icon-button.primary {
+  background: var(--accent, #2564cf);
+  color: #ffffff;
+}
+
+.editor-icon-button.primary:hover {
+  filter: brightness(1.08);
+  color: #ffffff;
+}
+
+.editor-body {
+  position: relative;
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.editor-cm-host {
+  min-height: 0;
+  flex: 1;
+}
+
+.editor-cm-host.hidden-host {
+  display: none;
+}
+
+.editor-cm-host .cm-editor {
+  height: 100%;
+  background: #ffffff;
+  color: #1f2937;
+  font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  font-size: var(--editor-font-size);
+  line-height: 1.62;
+}
+
+.editor-cm-host .cm-editor.cm-focused {
+  outline: none;
+}
+
+.editor-cm-host .cm-scroller {
+  overflow: auto;
+  padding: 14px 6px;
+}
+
+.editor-cm-host .cm-content {
+  padding: 0 18px 24px;
+}
+
+.editor-cm-host .cm-cursor {
+  border-left: 2px solid var(--accent, #2564cf);
+}
+
+.editor-cm-host .cm-selectionBackground,
+.editor-cm-host.cm-focused .cm-selectionBackground {
+  background: rgb(37 100 207 / 16%) !important;
+}
+
+.editor-cm-host .cm-placeholder {
+  color: #9ca3af;
+}
+
+.editor-preview {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 26px 30px;
+  font-size: var(--markdown-font-size);
+}
+
+/* 移动端：编辑器全屏 */
+.app-shell.mobile .editor-dialog {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+}

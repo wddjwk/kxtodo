@@ -160,6 +160,14 @@
         messageElement.style.fontSize = payload.bodyFontSize + "px";
       }
 
+      // 首帧绘制完成后通知 Rust 显示窗口（窗口隐藏创建，消除白帧闪烁）
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const invoke = window.__TAURI_INTERNALS__?.invoke;
+          if (invoke) invoke("notification_ready").catch(() => {});
+        });
+      });
+
       function invokeCommand(command, args = {}) {
         const invoke = window.__TAURI_INTERNALS__?.invoke;
         if (invoke) {

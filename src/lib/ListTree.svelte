@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
+  import { createEventDispatcher, onDestroy } from "svelte";
   import { ChevronDown } from "@lucide/svelte";
   import { isMobile } from "./platform";
   import type { AppNode } from "./types";
@@ -15,7 +15,6 @@
   export let renamingId: string | null = null;
   export let renameDraft = "";
   export let draggingId: string | null = null;
-  export let requestIconPicker: (id: string) => void = () => {};
 
   const dispatch = createEventDispatcher<{
     selectEntry: string;
@@ -26,14 +25,25 @@
     pickIcon: string;
     dragStart: string;
     dropNode: { id: string; targetId: string; position: DropPosition };
+    dropRootEnd: string;
+    dragEnd: void;
   }>();
+
+  const DRAG_THRESHOLD_PX = 6;
+  const AUTO_SCROLL_ZONE_PX = 30;
+  const AUTO_SCROLL_SPEED_PX = 14;
+  const HOVER_EXPAND_MS = 600;
 
   let dropTargetId: string | null = null;
   let dropPosition: DropPosition | null = null;
+  let dropRootEnd = false;
   let suppressNextClick = false;
   let pointerDrag: { id: string; startX: number; startY: number; active: boolean } | null = null;
   let longPressTimer: number | null = null;
   let longPressFired = false;
+  let scrollContainer: HTMLElement | null = null;
+  let hoverExpandTimer: number | null = null;
+  let hoverExpandTarget = "";
 
   $: children = nodes.filter((node) => node.parentId === parentId && node.kind !== "system");
 
@@ -41,32 +51,23 @@
     return `--depth: ${levelValue}; padding-left: ${levelValue * 18 + 10}px;`;
   }
 
-  function isIconZone(event: MouseEvent | PointerEvent, node: AppNode): boolean {
-    const target = event.target;
-    if (!(target instanceof Element) || node.kind === "system") {
-      return false;
-    }
-    return Boolean(target.closest(".tree-icon"));
-  }
-
   function handlePointerDown(event: PointerEvent, node: AppNode): void {
-    if (!isIconZone(event, node)) {
-      startPointerDrag(event, node);
+    const target = event.target;
+    if (event.button !== 0 || node.kind === "system" || (target instanceof Element && target.closest("button, input"))) {
       return;
     }
-    event.preventDefault();
-    event.stopPropagation();
-    suppressNextClick = true;
-    openIconPicker(node.id);
+    pointerDrag = { id: node.id, startX: event.clientX, startY: event.clientY, active: false };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp, { once: true });
+    window.addEventListener("keydown", handleDragKeydown, true);
   }
 
   function handleClick(event: MouseEvent, node: AppNode): void {
-    if (suppressNextClick || isIconZone(event, node) || longPressFired) {
+    if (suppressNextClick || longPressFired) {
       event.preventDefault();
       event.stopPropagation();
       suppressNextClick = false;
       longPressFired = false;
-      if (isIconZone(event, node)) openIconPicker(node.id);
       return;
     }
     suppressNextClick = false;
@@ -108,11 +109,6 @@
     handleTouchEnd();
   }
 
-  function openIconPicker(id: string): void {
-    requestIconPicker(id);
-    dispatch("pickIcon", id);
-  }
-
   function focusRename(node: HTMLInputElement): { destroy(): void } {
     const frame = requestAnimationFrame(() => {
       node.focus();
@@ -129,110 +125,132 @@
     const rect = row.getBoundingClientRect();
     const ratio = (clientY - rect.top) / Math.max(1, rect.height);
     if (target.kind === "category") {
-      if (ratio < 0.25) {
-        return "before";
-      }
-      if (ratio > 0.75) {
-        return "after";
-      }
+      if (ratio < 0.25) return "before";
+      if (ratio > 0.75) return "after";
       return "inside";
     }
     return ratio < 0.5 ? "before" : "after";
   }
 
-  function positionFromPointer(event: DragEvent, target: AppNode): DropPosition {
-    const row = event.currentTarget;
-    if (!(row instanceof HTMLElement)) {
-      return target.kind === "category" ? "inside" : "after";
-    }
-    return positionFromClientY(event.clientY, row, target);
-  }
-
-  function startPointerDrag(event: PointerEvent, node: AppNode): void {
-    const target = event.target;
-    if (event.button !== 0 || node.kind === "system" || (target instanceof Element && target.closest("button, input"))) {
-      return;
-    }
-    pointerDrag = { id: node.id, startX: event.clientX, startY: event.clientY, active: false };
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", handlePointerUp, { once: true });
-  }
-
   function handlePointerMove(event: PointerEvent): void {
-    if (!pointerDrag) {
-      return;
-    }
+    if (!pointerDrag) return;
     const distance = Math.hypot(event.clientX - pointerDrag.startX, event.clientY - pointerDrag.startY);
     if (!pointerDrag.active) {
-      if (distance < 6) {
-        return;
-      }
+      if (distance < DRAG_THRESHOLD_PX) return;
       pointerDrag.active = true;
       suppressNextClick = true;
+      scrollContainer = (event.target as Element | null)?.closest?.(".custom-nav") ?? document.querySelector(".custom-nav");
       dispatch("dragStart", pointerDrag.id);
     }
 
     event.preventDefault();
+    autoScroll(event.clientY);
+
     const targetElement = document.elementFromPoint(event.clientX, event.clientY);
     const row = targetElement?.closest<HTMLElement>(".tree-row[data-node-id]");
     const targetId = row?.dataset.nodeId ?? "";
     const target = nodes.find((node) => node.id === targetId);
     if (!row || !target || target.kind === "system" || target.id === pointerDrag.id) {
-      clearDropTarget();
+      // 落在空白区域：拖到列表末尾（root）
+      if (targetElement?.closest(".custom-nav") && !row) {
+        setRootEndTarget();
+      } else {
+        clearDropTarget();
+      }
       return;
     }
+    dropRootEnd = false;
     dropTargetId = target.id;
     dropPosition = positionFromClientY(event.clientY, row, target);
+    scheduleHoverExpand(target);
+  }
+
+  function setRootEndTarget(): void {
+    dropRootEnd = true;
+    dropTargetId = null;
+    dropPosition = null;
+    clearHoverExpand();
+  }
+
+  function scheduleHoverExpand(target: AppNode): void {
+    if (target.kind !== "category" || !target.collapsed || target.id === pointerDrag?.id) {
+      clearHoverExpand();
+      return;
+    }
+    if (hoverExpandTarget === target.id) return;
+    clearHoverExpand();
+    hoverExpandTarget = target.id;
+    hoverExpandTimer = window.setTimeout(() => {
+      dispatch("toggleCategory", target.id);
+      clearHoverExpand();
+    }, HOVER_EXPAND_MS);
+  }
+
+  function clearHoverExpand(): void {
+    if (hoverExpandTimer !== null) {
+      window.clearTimeout(hoverExpandTimer);
+      hoverExpandTimer = null;
+    }
+    hoverExpandTarget = "";
+  }
+
+  function autoScroll(clientY: number): void {
+    if (!scrollContainer) return;
+    const rect = scrollContainer.getBoundingClientRect();
+    if (clientY < rect.top + AUTO_SCROLL_ZONE_PX) {
+      scrollContainer.scrollTop -= AUTO_SCROLL_SPEED_PX;
+    } else if (clientY > rect.bottom - AUTO_SCROLL_ZONE_PX) {
+      scrollContainer.scrollTop += AUTO_SCROLL_SPEED_PX;
+    }
   }
 
   function handlePointerUp(): void {
-    if (pointerDrag?.active && dropTargetId && dropPosition && dropTargetId !== pointerDrag.id) {
-      dispatch("dropNode", { id: pointerDrag.id, targetId: dropTargetId, position: dropPosition });
+    if (pointerDrag?.active) {
+      if (dropRootEnd) {
+        dispatch("dropRootEnd", pointerDrag.id);
+      } else if (dropTargetId && dropPosition && dropTargetId !== pointerDrag.id) {
+        dispatch("dropNode", { id: pointerDrag.id, targetId: dropTargetId, position: dropPosition });
+      }
     }
     cleanupPointerDrag();
+  }
+
+  function handleDragKeydown(event: KeyboardEvent): void {
+    if (event.key === "Escape" && pointerDrag) {
+      event.preventDefault();
+      event.stopPropagation();
+      cleanupPointerDrag();
+    }
   }
 
   function cleanupPointerDrag(): void {
     window.removeEventListener("pointermove", handlePointerMove);
     window.removeEventListener("pointerup", handlePointerUp);
+    window.removeEventListener("keydown", handleDragKeydown, true);
+    if (pointerDrag?.active) {
+      dispatch("dragEnd");
+    }
     pointerDrag = null;
+    scrollContainer = null;
     clearDropTarget();
-    dispatch("dragStart", "");
-  }
-
-  function handleDragOver(event: DragEvent, target: AppNode): void {
-    const id = event.dataTransfer?.getData("application/x-todo-node") || event.dataTransfer?.getData("text/plain") || draggingId || "";
-    if (!id || id === target.id) {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    if (event.dataTransfer) {
-      event.dataTransfer.dropEffect = "move";
-    }
-    dropTargetId = target.id;
-    dropPosition = positionFromPointer(event, target);
+    clearHoverExpand();
   }
 
   function clearDropTarget(): void {
     dropTargetId = null;
     dropPosition = null;
+    dropRootEnd = false;
   }
 
-  function handleDrop(event: DragEvent, target: AppNode): void {
-    event.preventDefault();
-    event.stopPropagation();
-    const id = event.dataTransfer?.getData("application/x-todo-node") || event.dataTransfer?.getData("text/plain") || draggingId || "";
-    if (!id || id === target.id) {
-      clearDropTarget();
-      return;
-    }
-    dispatch("dropNode", { id, targetId: target.id, position: dropPosition ?? positionFromPointer(event, target) });
-    clearDropTarget();
-  }
+  onDestroy(() => {
+    cleanupPointerDrag();
+    handleTouchEnd();
+  });
 </script>
 
 {#each children as node (node.id)}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class:selected={node.id === selectedNodeId}
     class:category={node.kind === "category"}
@@ -244,45 +262,20 @@
     data-node-id={node.id}
     data-level={level}
     style={rowStyle(level)}
-    draggable={false}
     on:pointerdown={(event) => handlePointerDown(event, node)}
     on:click={(event) => handleClick(event, node)}
     on:contextmenu={(event) => openMenu(event, node)}
     on:touchstart={(event) => handleTouchStart(event, node)}
     on:touchend={handleTouchEnd}
     on:touchmove={handleTouchMove}
-    on:dragstart={(event) => {
-      const target = event.target;
-      if (target instanceof Element && target.closest("button, input")) {
-        event.preventDefault();
-        return;
-      }
-      event.dataTransfer?.setData("application/x-todo-node", node.id);
-      event.dataTransfer?.setData("text/plain", node.id);
-      if (event.dataTransfer) {
-        event.dataTransfer.effectAllowed = "move";
-      }
-      dispatch("dragStart", node.id);
-    }}
-    on:dragend={() => {
-      clearDropTarget();
-      dispatch("dragStart", "");
-      cleanupPointerDrag();
-    }}
-    on:dragover={(event) => handleDragOver(event, node)}
-    on:dragleave={(event) => {
-      if (!(event.currentTarget as HTMLElement).contains(event.relatedTarget as Node | null)) {
-        clearDropTarget();
-      }
-    }}
-    on:drop={(event) => handleDrop(event, node)}
   >
     <button
       class="tree-icon"
       type="button"
       aria-label="选择图标"
-      on:mousedown|preventDefault|stopPropagation={() => openIconPicker(node.id)}
-      on:click|preventDefault|stopPropagation={() => openIconPicker(node.id)}
+      on:mousedown|preventDefault|stopPropagation
+      on:pointerdown|stopPropagation
+      on:click|preventDefault|stopPropagation={() => dispatch("pickIcon", node.id)}
     >
       <IconGlyph icon={node.kind === "category" ? node.icon || "folder" : node.icon || "notebook"} size={18} />
     </button>
@@ -295,6 +288,7 @@
         value={renameDraft}
         autofocus
         on:click|stopPropagation
+        on:pointerdown|stopPropagation
         on:input={(event) => dispatch("renameInput", event.currentTarget.value)}
         on:blur={() => dispatch("renameCommit", node.id)}
         on:keydown={(event) => event.key === "Enter" && dispatch("renameCommit", node.id)}
@@ -321,7 +315,6 @@
       {renamingId}
       {renameDraft}
       {draggingId}
-      {requestIconPicker}
       on:selectEntry={(event) => dispatch("selectEntry", event.detail)}
       on:toggleCategory={(event) => dispatch("toggleCategory", event.detail)}
       on:renameInput={(event) => dispatch("renameInput", event.detail)}
@@ -330,6 +323,12 @@
       on:pickIcon={(event) => dispatch("pickIcon", event.detail)}
       on:dragStart={(event) => dispatch("dragStart", event.detail)}
       on:dropNode={(event) => dispatch("dropNode", event.detail)}
+      on:dropRootEnd={(event) => dispatch("dropRootEnd", event.detail)}
+      on:dragEnd={() => dispatch("dragEnd")}
     />
   {/if}
 {/each}
+
+{#if level === 0 && dropRootEnd}
+  <div class="tree-root-drop-line" aria-hidden="true"></div>
+{/if}

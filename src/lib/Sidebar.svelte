@@ -1,11 +1,12 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
   import {
-    FilePlus2, FolderInput, FolderPlus, Pencil, Search, Star, Trash2
+    ChevronsDownUp, ChevronsUpDown, FilePlus2, FolderInput, FolderPlus, Pencil, Search, Shapes, Trash2, Upload
   } from "@lucide/svelte";
   import {
     appState, appSettings, showToast, showSettings,
-    searchQuery, listCounts, isSearching
+    searchQuery, listCounts, isSearching,
+    now, safeFileName, appVersion
   } from "./stores";
   import {
     selectNode as selectNodeAction, toggleCategory as toggleCategoryAction,
@@ -13,20 +14,17 @@
     deleteNodeCascade as deleteNodeCascadeAction, applyTreeOrder as applyTreeOrderAction,
     setNodeIcon as setNodeIconAction
   } from "./actions";
-  import {
-    nodeAndDescendantIds, moveTargetOptions
-  } from "./nodes";
-  import {
-    createEntryNode, defaultBackground
-  } from "./defaults";
-  import { uiScaleValue, buildMenuStyle, avatarStyle, avatarInitial } from "./styles";
+  import { nodeAndDescendantIds, moveTargetOptions, exportStateForNode } from "./nodes";
+  import { uiScaleValue, avatarStyle, avatarInitial } from "./styles";
   import { avatarCache, resolveAvatarSrc, isLocalImageRef, localImageFilename } from "./images";
-  import { deleteBackgroundImage, deleteNodeImages } from "./backend";
+  import { deleteBackgroundImage, deleteNodeImages, exportData } from "./backend";
   import IconGlyph from "./IconGlyph.svelte";
   import IconPicker from "./IconPicker.svelte";
   import ListTree from "./ListTree.svelte";
+  import ContextMenu from "./menu/ContextMenu.svelte";
+  import MenuItem from "./menu/MenuItem.svelte";
+  import MenuSeparator from "./menu/MenuSeparator.svelte";
   import { showMobileContent } from "./platform";
-  import type { AppNode } from "./types";
 
   const dispatch = createEventDispatcher<{ suppressClose: void }>();
 
@@ -36,13 +34,12 @@
   let renameDraft = "";
   let iconPickerListId: string | null = null;
   let treeMenu: { id: string; x: number; y: number } | null = null;
-  let showTreeMove = false;
+  let emptyAreaMenu: { x: number; y: number } | null = null;
   let draggingId: string | null = null;
   let ignoreOverlayCloseOnce = false;
 
   $: treeMenuNode = treeMenu ? $appState.nodes.find((n) => n.id === treeMenu?.id) : null;
   $: treeMoveTargets = treeMenuNode ? moveTargetOptions(treeMenuNode.id, $appState.nodes) : [];
-  $: treeMenuStyle = treeMenu ? buildMenuStyle(treeMenu.x, treeMenu.y, 248, treeMenuNode?.kind === "category" ? 300 : 252, uiScaleValue($appSettings.appearance.uiScale)) : "";
   $: selectedIconPickerList = iconPickerListId ? $appState.nodes.find((n) => n.id === iconPickerListId) : null;
   $: resolvedAvatar = resolveAvatarSrc($appSettings.profile.avatar, $avatarCache);
   $: avStyle = avatarStyle(resolvedAvatar);
@@ -54,6 +51,7 @@
       return;
     }
     treeMenu = null;
+    emptyAreaMenu = null;
     iconPickerListId = null;
   }
 
@@ -73,6 +71,7 @@
     searchQuery.set("");
     void selectNodeAction(id);
     treeMenu = null;
+    emptyAreaMenu = null;
     iconPickerListId = null;
     showMobileContent();
   }
@@ -105,6 +104,7 @@
       }
     });
     treeMenu = null;
+    emptyAreaMenu = null;
   }
 
   function startRename(id: string): void {
@@ -145,6 +145,21 @@
     treeMenu = null;
   }
 
+  async function exportNode(id: string): Promise<void> {
+    const node = $appState.nodes.find((n) => n.id === id);
+    if (!node) return;
+    const payload = {
+      version: $appVersion || "0.0.0",
+      exportedAt: now(),
+      scope: "node",
+      nodeId: node.id,
+      state: exportStateForNode(node, $appState)
+    };
+    await exportData(payload, `${safeFileName(node.name)}-${$appVersion || "dev"}.json`);
+    treeMenu = null;
+    showToast("导出完成");
+  }
+
   function moveNode(id: string, targetId: string, position: "before" | "after" | "inside"): void {
     const source = $appState.nodes.find((n) => n.id === id);
     const target = $appState.nodes.find((n) => n.id === targetId);
@@ -174,6 +189,22 @@
     nodes.splice(insertIndex, 0, sourceWithParent);
     const ordered = nodes.map((n) => (position === "inside" && n.id === target.id ? { ...n, collapsed: false } : n));
     void applyTreeOrderAction(ordered, { [id]: nextParentId });
+    draggingId = null;
+  }
+
+  /** 拖到空白区：移动为根级最后一项。 */
+  function moveNodeToRootEnd(id: string): void {
+    const source = $appState.nodes.find((n) => n.id === id);
+    if (!source || source.kind === "system") return;
+    const withoutSource = $appState.nodes.filter((n) => n.id !== id);
+    const rootIndexes = withoutSource
+      .map((n, i) => ({ n, i }))
+      .filter((item) => !item.n.parentId && item.n.kind !== "system")
+      .map((item) => item.i);
+    const insertIndex = rootIndexes.length ? Math.max(...rootIndexes) + 1 : withoutSource.length;
+    const nodes = [...withoutSource];
+    nodes.splice(insertIndex, 0, { ...source, parentId: null });
+    void applyTreeOrderAction(nodes, { [id]: null });
     draggingId = null;
   }
 
@@ -213,6 +244,7 @@
   function openIconPicker(id: string): void {
     iconPickerListId = id;
     treeMenu = null;
+    emptyAreaMenu = null;
     showSettings.set(false);
     ignoreOverlayCloseOnce = true;
     dispatch("suppressClose");
@@ -227,26 +259,13 @@
     iconPickerListId = null;
   }
 
-  function handleTreePointerDownCapture(event: PointerEvent): void {
-    openIconPickerFromTreeEvent(event);
-  }
-
-  function handleTreeClickCapture(event: MouseEvent): void {
-    openIconPickerFromTreeEvent(event);
-  }
-
-  function openIconPickerFromTreeEvent(event: MouseEvent | PointerEvent): void {
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-    if (!target.closest(".tree-icon")) return;
-    const row = target.closest<HTMLElement>(".tree-row[data-node-id]");
-    if (!row) return;
-    const id = row.dataset.nodeId;
-    const node = $appState.nodes.find((item) => item.id === id);
-    if (!node || node.kind === "system") return;
+  /** 空白区右键：新建入口（事件来自 ListTree 之外的容器区域）。 */
+  function openEmptyAreaMenu(event: MouseEvent): void {
+    const target = event.target as HTMLElement | null;
+    if (target?.closest(".tree-row")) return;
     event.preventDefault();
-    event.stopPropagation();
-    openIconPicker(node.id);
+    treeMenu = null;
+    emptyAreaMenu = { x: event.clientX, y: event.clientY };
   }
 
   function startSidebarResize(event: MouseEvent): void {
@@ -298,52 +317,69 @@
 
   <div class="nav-divider"></div>
 
-  <nav class="custom-nav" on:pointerdown|capture={handleTreePointerDownCapture} on:click|capture={handleTreeClickCapture} on:click|stopPropagation>
+  <nav class="custom-nav" class:root-drop-active={draggingId !== null} on:contextmenu={openEmptyAreaMenu} on:click|stopPropagation>
     <ListTree
       nodes={$appState.nodes}
       selectedNodeId={$appState.selectedNodeId}
       counts={$listCounts}
       {renamingId}
       {renameDraft}
+      {draggingId}
       on:selectEntry={(e) => selectNode(e.detail)}
       on:toggleCategory={(e) => toggleCategory(e.detail)}
       on:renameInput={(e) => (renameDraft = e.detail)}
       on:renameCommit={(e) => commitRename(e.detail)}
-      on:openMenu={(e) => { treeMenu = e.detail; showTreeMove = false; }}
-      requestIconPicker={openIconPicker}
+      on:openMenu={(e) => { treeMenu = e.detail; emptyAreaMenu = null; }}
       on:pickIcon={(e) => openIconPicker(e.detail)}
       on:dragStart={(e) => (draggingId = e.detail || null)}
       on:dropNode={(e) => moveNode(e.detail.id, e.detail.targetId, e.detail.position)}
-      {draggingId}
+      on:dropRootEnd={(e) => moveNodeToRootEnd(e.detail)}
+      on:dragEnd={() => (draggingId = null)}
     />
   </nav>
 
   {#if treeMenu && treeMenuNode}
-    <section class="tree-context-menu" style={treeMenuStyle} on:click|stopPropagation>
+    <ContextMenu x={treeMenu.x} y={treeMenu.y} minWidth={208} onClose={() => (treeMenu = null)}>
       {#if treeMenuNode.kind === "category"}
-        <button type="button" on:click={() => addNode(treeMenuNode.id, "entry")}><FilePlus2 size={15} /> 创建条目</button>
-        <button type="button" on:click={() => addNode(treeMenuNode.id, "category")}><FolderPlus size={15} /> 创建子分类</button>
+        <MenuItem icon={FilePlus2} label="新建条目" onSelect={() => addNode(treeMenuNode.id, "entry")} />
+        <MenuItem icon={FolderPlus} label="新建子分类" onSelect={() => addNode(treeMenuNode.id, "category")} />
+        <MenuSeparator />
       {/if}
-      <button type="button" disabled={treeMenuNode.kind === "system"} on:click={() => startRename(treeMenuNode.id)}><Pencil size={15} /> 重命名</button>
-      <button type="button" disabled={treeMenuNode.kind === "system"} on:click={() => openIconPicker(treeMenuNode.id)}><Star size={15} /> 选择图标</button>
       {#if treeMenuNode.kind !== "system"}
-        <button type="button" class="has-submenu" on:click={() => (showTreeMove = !showTreeMove)}>
-          <FolderInput size={15} /> 移动到分组
-        </button>
-        {#if showTreeMove}
-          <div class="menu-submenu">
-            {#each treeMoveTargets as target}
-              <button
-                type="button"
-                class:active={(treeMenuNode.parentId ?? "") === target.id}
-                on:click={() => moveNodeToGroup(treeMenuNode.id, target.id || null)}
-              >{target.name}</button>
+        <MenuItem icon={Pencil} label="重命名" onSelect={() => startRename(treeMenuNode.id)} />
+        <MenuItem icon={Shapes} label="选择图标" onSelect={() => openIconPicker(treeMenuNode.id)} />
+        {#if treeMenuNode.kind === "category"}
+          <MenuItem
+            icon={treeMenuNode.collapsed ? ChevronsUpDown : ChevronsDownUp}
+            label={treeMenuNode.collapsed ? "展开" : "收起"}
+            onSelect={() => toggleCategory(treeMenuNode.id)}
+          />
+        {/if}
+        <MenuItem icon={FolderInput} label="移动到分组">
+          <div slot="submenu" class="submenu-list">
+            {#each treeMoveTargets as target (target.id)}
+              <MenuItem
+                label={target.name}
+                active={(treeMenuNode.parentId ?? "") === target.id}
+                onSelect={() => moveNodeToGroup(treeMenuNode.id, target.id || null)}
+              />
+            {:else}
+              <div class="menu-empty">没有可移动的目标</div>
             {/each}
           </div>
-        {/if}
+        </MenuItem>
+        <MenuItem icon={Upload} label="导出" onSelect={() => void exportNode(treeMenuNode.id)} />
+        <MenuSeparator />
+        <MenuItem icon={Trash2} danger label="删除" onSelect={() => deleteNode(treeMenuNode.id)} />
       {/if}
-      <button class="danger" type="button" disabled={treeMenuNode.kind === "system"} on:click={() => deleteNode(treeMenuNode.id)}><Trash2 size={15} /> 删除</button>
-    </section>
+    </ContextMenu>
+  {/if}
+
+  {#if emptyAreaMenu}
+    <ContextMenu x={emptyAreaMenu.x} y={emptyAreaMenu.y} minWidth={208} onClose={() => (emptyAreaMenu = null)}>
+      <MenuItem icon={FilePlus2} label="新建条目" onSelect={() => addNode(currentCategoryId(), "entry")} />
+      <MenuItem icon={FolderPlus} label="新建分类" onSelect={() => addNode(null, "category")} />
+    </ContextMenu>
   {/if}
 
   {#if selectedIconPickerList}

@@ -1,6 +1,6 @@
 {
   "name": "todo-note-rs",
-  "version": "9.2.0",
+  "version": "10.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -16,9 +16,14 @@
     "package": "powershell -ExecutionPolicy Bypass -File .\\scripts\\package.ps1"
   },
   "dependencies": {
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/language-data": "^6.5.2",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.9",
     "@lucide/svelte": "^1.17.0",
     "@tauri-apps/api": "^2.5.0",
     "@tauri-apps/plugin-dialog": "^2.7.1",
+    "codemirror": "^6.0.2",
     "dompurify": "^3.2.4",
     "emoji-picker-element": "^1.29.1",
     "github-markdown-css": "^5.9.0",

@@ -5,13 +5,14 @@ import {
   loadState, saveState, loadSettings, saveSettings, loadScheduler, saveScheduler,
   registerGlobalShortcut, setCloseToTray, setAutostart,
   setWebviewZoom, isTauriRuntime, resolveExecutorPaths, sendNativeNotification,
-  hasCoreDispatch, coreSnapshot
+  hasCoreDispatch, coreSnapshot, getAppVersion
 } from "./backend";
 import { buildListCounts, buildVisibleTasks, getBackground } from "./nodes";
 import { accentForNode, uiScaleValue } from "./styles";
 import { entryToUi, type ScheduleEntryV9 } from "./scheduleAdapter";
 
-export const APP_VERSION = "9.2.0";
+/** 运行时版本号：构建期由 build.rs 从 git tag/commit 注入（KXTODO_VERSION），hydrate 时填充。 */
+export const appVersion = writable("");
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -68,6 +69,8 @@ export const isHydrated = writable(false);
 export const showSettings = writable(false);
 export const searchQuery = writable("");
 export const taskEmojiPicker = writable<EmojiPickerTarget | null>(null);
+/** 正在浮窗编辑器中编辑的任务 ID（null = 编辑器关闭）。 */
+export const editorTaskId = writable<string | null>(null);
 
 // ---------------------------------------------------------------------------
 // Toast
@@ -219,18 +222,24 @@ async function syncNativeLifecycle(nextSettings: Settings): Promise<void> {
 export const scheduleEntries = writable<Map<string, ScheduleEntryV9>>(new Map());
 
 /** 编辑基准：itemId → 开始编辑时的 updatedAt（用于保存冲突检测）。 */
-const editBases = new Map<string, { updatedAt?: string; notified: boolean }>();
+const editBases = new Map<string, string | undefined>();
 
 export function markEditStart(task: Task): void {
-  editBases.set(task.id, { updatedAt: task.updatedAt, notified: false });
+  editBases.set(task.id, task.updatedAt);
 }
 
 export function clearEditBase(taskId: string): void {
   editBases.delete(taskId);
 }
 
+export function rebaseEditBase(taskId: string, updatedAt?: string): void {
+  if (editBases.has(taskId)) {
+    editBases.set(taskId, updatedAt);
+  }
+}
+
 export function editBaseUpdatedAt(taskId: string): string | undefined {
-  return editBases.get(taskId)?.updatedAt;
+  return editBases.get(taskId);
 }
 
 export let coreMode = false;
@@ -243,27 +252,6 @@ function applySnapshot(snapshot: Awaited<ReturnType<typeof coreSnapshot>>, domai
       ...snapshot.data,
       scheduler: current.scheduler
     });
-    // 编辑冲突：外部版本已变化的编辑中任务保留本地草稿并提示。
-    const previousById = new Map(current.tasks.map((task) => [task.id, task]));
-    normalized.tasks = normalized.tasks.map((task) => {
-      const previous = previousById.get(task.id);
-      if (previous?.editing) {
-        const base = editBases.get(task.id);
-        if (base && base.updatedAt !== task.updatedAt && !base.notified) {
-          base.notified = true;
-          showToast("外部版本已变化，本次未保存", 4200);
-        }
-        return { ...task, editing: true, expanded: previous.expanded };
-      }
-      return task;
-    });
-    // 被外部删除的编辑中任务：退出编辑态并提示
-    for (const previous of previousById.values()) {
-      if (previous.editing && !normalized.tasks.some((task) => task.id === previous.id)) {
-        editBases.delete(previous.id);
-        showToast("正在编辑的任务已被外部删除", 4200);
-      }
-    }
     appState.set({ ...normalized, scheduler: current.scheduler });
   }
   if (wantAll || domains?.has("settings")) {
@@ -344,6 +332,11 @@ async function listenCoreEvents(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function hydrate(): Promise<void> {
+  try {
+    appVersion.set(await getAppVersion());
+  } catch {
+    // 版本号缺失不阻塞启动
+  }
   try {
     coreMode = await hasCoreDispatch();
   } catch (error) {

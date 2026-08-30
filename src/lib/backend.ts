@@ -1,7 +1,7 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { defaultSettings, emptySchedulerState, emptyState, normalizeSchedulerState, normalizeSettings, normalizeState } from "./defaults";
-import type { AppNotification, AppState, ScheduledTaskAction, SchedulerRuntimePaths, SchedulerState, Settings } from "./types";
+import type { AppNotification, AppState, SchedulerRuntimePaths, SchedulerState, Settings } from "./types";
 
 const stateKey = "todo-note-state-v3";
 const settingsKey = "todo-note-settings-v3";
@@ -71,12 +71,6 @@ export async function saveScheduler(scheduler: SchedulerState): Promise<void> {
   localStorage.setItem(schedulerKey, JSON.stringify(scheduler));
 }
 
-export type ScheduledActionOutput = {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-};
-
 export async function resolveExecutorPaths(): Promise<SchedulerRuntimePaths> {
   const empty = emptySchedulerState().runtimes;
   if (!isTauriRuntime) {
@@ -85,25 +79,37 @@ export async function resolveExecutorPaths(): Promise<SchedulerRuntimePaths> {
   return { ...empty, ...(await invoke<Partial<SchedulerRuntimePaths>>("resolve_executor_paths")) };
 }
 
-export async function runScheduledAction(action: ScheduledTaskAction, runtimes: SchedulerRuntimePaths, taskId?: string): Promise<ScheduledActionOutput> {
-  if (!isTauriRuntime) {
-    throw new Error("浏览器预览模式不支持执行定时任务");
-  }
-  return invoke<ScheduledActionOutput>("run_scheduled_action", { action, runtimes, taskId });
-}
-
-export async function stopScheduledAction(taskId: string): Promise<void> {
-  if (!isTauriRuntime) {
-    return;
-  }
-  await invoke("stop_scheduled_action", { taskId });
-}
-
 export async function sendNativeNotification(notification: AppNotification): Promise<void> {
   if (!isTauriRuntime) {
     return;
   }
   await invoke("send_notification", { notification });
+}
+
+/** 主窗口创建时隐藏（避免黑边），前端挂载后调用显示。 */
+export async function revealMainWindow(): Promise<void> {
+  if (!isTauriRuntime) {
+    return;
+  }
+  await invoke("reveal_main_window");
+}
+
+/** 构建期由 build.rs 从 git tag/commit 注入的版本号。 */
+export async function getAppVersion(): Promise<string> {
+  if (!isTauriRuntime) {
+    return "dev";
+  }
+  return invoke<string>("app_version");
+}
+
+/** 增量写入更新包（base64 分块），返回临时文件路径。 */
+export async function writeUpdatePackage(chunk: string, append: boolean): Promise<string> {
+  return invoke<string>("write_update_package", { chunk, append });
+}
+
+/** 启动更新脚本并退出当前进程（脚本等待退出后替换 exe 并重启）。 */
+export async function applyUpdateAndRestart(): Promise<void> {
+  await invoke("apply_update_and_restart");
 }
 
 export async function exportData(payload: unknown, defaultName: string): Promise<void> {
@@ -126,20 +132,6 @@ export async function exportData(payload: unknown, defaultName: string): Promise
   link.download = defaultName;
   link.click();
   URL.revokeObjectURL(url);
-}
-
-export async function saveBackgroundImage(dataUrl: string): Promise<string> {
-  if (isTauriRuntime) {
-    return invoke<string>("save_background_image", { dataUrl });
-  }
-  return dataUrl;
-}
-
-export async function loadBackgroundImage(filename: string): Promise<string> {
-  if (!isTauriRuntime) {
-    return filename;
-  }
-  return invoke<string>("load_background_image", { filename });
 }
 
 export async function deleteBackgroundImage(filename: string): Promise<void> {
@@ -196,12 +188,6 @@ export async function saveAvatarImage(srcPath: string): Promise<string> {
   return invoke<string>("save_avatar_image", { srcPath });
 }
 
-/** Delete the avatar image file. */
-export async function deleteAvatarImage(filename: string): Promise<void> {
-  if (!isTauriRuntime) return;
-  await invoke("delete_avatar_image", { filename });
-}
-
 /** Resolve avatar filename to asset URL. */
 export async function avatarImageUrl(filename: string): Promise<string> {
   const path = await invoke<string>("avatar_image_path", { filename });
@@ -211,12 +197,6 @@ export async function avatarImageUrl(filename: string): Promise<string> {
 /** Copy a picked file into img/<nodeId>/ for markdown. Returns stored filename. */
 export async function saveMdImage(srcPath: string, nodeId: string): Promise<string> {
   return invoke<string>("save_md_image", { srcPath, nodeId });
-}
-
-/** Delete a single markdown image file. */
-export async function deleteMdImage(nodeId: string, filename: string): Promise<void> {
-  if (!isTauriRuntime) return;
-  await invoke("delete_md_image", { nodeId, filename });
 }
 
 /** Delete all markdown images for a node. */
@@ -343,13 +323,6 @@ export async function setAutostart(enabled: boolean): Promise<void> {
     return;
   }
   await invoke("set_autostart", { enabled });
-}
-
-export async function getAutostartEnabled(): Promise<boolean> {
-  if (!isTauriRuntime) {
-    return false;
-  }
-  return invoke<boolean>("get_autostart_enabled");
 }
 
 export async function setWebviewZoom(scale: number): Promise<void> {

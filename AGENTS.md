@@ -1,309 +1,110 @@
-# Todo Note 开发者指南
+# KXToDo 开发者指南
 
-## 产品目标
+KXToDo（Todo Note）是一款本地优先的待办 + 快捷笔记桌面应用：左侧分类/条目树、右侧 Markdown 卡片画布（交互参考 Microsoft To Do，品牌与实现完全原创），外加 CLI、定时任务与系统通知。技术栈：Rust + Tauri 2（桌面壳与后端）、Svelte 4 + TypeScript + Vite（前端）、CodeMirror 6（编辑器）、marked + DOMPurify + highlight.js（渲染）。
 
-Todo Note 是一款快速、本地优先的待办与快捷笔记桌面应用，交互模式参考 Microsoft To Do 的左导航/右内容工作流，但使用完全原创的品牌、素材和实现。核心特点是将分层的分类/条目树与实时渲染的 Markdown 卡片结合，让每个条目既是行动项集合，也是轻量笔记。
+## 系统架构
 
-## 核心原则
-
-- **本地优先 & 便携**：应用数据、设置、快捷键、导出文件存放在可执行文件同级目录下（目录可写时），开发环境有安全回退路径。
-- **跨平台桌面 + 移动**：当前主要目标为 Windows，自 v7.0.0 起通过 Tauri 2 mobile 支持 Android；保留 Linux / iOS 的可能性，不耦合 Windows 专有 API。
-- **快速启动**：前端保持精简，通过 Tauri 命令直接持久化 JSON，不引入后台服务。
-- **原创外观 + 熟悉的操作**：保持左导航/右卡片画布的经典布局和柔和卡片风格，不复制微软的专有资源或品牌。
-- **未来可同步**：同步功能作为适配器边界保留，不将云服务商绑定到任务模型中。
-
-## 技术栈
-
-- **Rust + Tauri 2**：桌面壳、持久化、导入/导出、原生集成。前端为 `src-tauri/src/lib.rs` 中的 `run()`（`#[cfg_attr(mobile, tauri::mobile_entry_point)]`），`main.rs` 仅调用它；桌面专有插件（托盘、全局快捷键、窗口状态、单实例、开机自启）通过 `#[cfg(desktop)]` 和 `cfg(not(android/ios))` 目标依赖隔离，Android 不会编译它们。
-- **Svelte 4 + TypeScript + Vite**：前端 UI，桌面与移动共用同一套组件。
-- **Markdown 渲染**：客户端使用 GitHub 风格 Markdown 样式，支持标题、强调、高亮语法、链接、列表、任务列表、行内代码，以及 highlight.js 驱动的代码块（GitHub 浅色主题）。
-
-## 架构（v6.0.0+）
-
-前端采用模块化组件架构 + 集中式状态管理：
-
-### 状态层（`src/lib/stores.ts`）
-- **Svelte writable stores**：`appState`、`appSettings`、`isHydrated`、`showSettings`、`searchQuery`、`toastMessage`。
-- **Derived stores**（计算值）：`selectedNode`、`listCounts`、`visibleTasks`、`accent`、`selectedBackground`、`isSearching`。
-- `commit()` 更新 `appState` 并排队防抖保存；`commitSettings()` 对设置做同样操作，并在缩放变化时触发原生副作用（zoom、autostart）。
-- `hydrate()` 加载持久化数据、同步原生外观、注册全局快捷键、同步生命周期设置。
-- `isHydrated` 防护机制防止初始加载时触发保存。
-
-### 纯逻辑模块
-- **`src/lib/nodes.ts`**：树遍历与查询函数（`descendantEntryIds`、`nodeAndDescendantIds`、`ancestorIds`、`tasksForNode`、`buildListCounts`、`buildVisibleTasks`、`moveTargetOptions`、`getBackground`、`exportStateForNode`）。所有函数为纯函数，接受显式参数，不访问 store。
-- **`src/lib/styles.ts`**：样式计算（`buildAppShellStyle`、`buildSettingsDrawerStyle`、`buildMainStyle`、`buildMenuStyle`、`accentForNode`、`uiScaleValue` 等）。
-
-### 组件
-- **`App.svelte`**：精简协调器（~60 行），挂载子组件、处理全局键盘快捷键、协调子组件间的 overlay 关闭。
-- **`TitleBar.svelte`**：窗口标题栏 + 最小化/最大化/关闭按钮。
-- **`Toast.svelte`**：浮动通知。
-- **`Sidebar.svelte`**：左侧面板——个人资料卡片、搜索框、系统导航、自定义树（ListTree）、右键菜单、图标选择器、底部新建按钮、调整宽度手柄。
-- **`Workspace.svelte`**：主内容区——列表头、列表菜单（排序/背景/主题/导出/导入）、任务列表（TaskCard）、任务右键菜单、添加事项栏、展开/收起全部按钮。
-- **`SettingsDrawer.svelte`**：设置面板——个人资料、外观、生命周期、快捷键、云同步占位。
-- **`TaskCard.svelte`**：单个任务卡片，支持 Markdown 渲染、编辑、展开/收起。
-- **`ListTree.svelte`**：递归树组件，支持拖放。
-- **`IconGlyph.svelte`**：Lucide 图标或 emoji 渲染。
-- **`IconPicker.svelte`**：图标/emoji 选择器浮层。
-
-### CSS 架构
-样式拆分为 7 个全局 CSS 文件，在 `src/main.ts` 中按级联顺序导入：
-- `src/styles/base.css`：根变量、重置、滚动条、app-shell、布局。
-- `src/styles/titlebar.css`：标题栏 + 窗口控制按钮。
-- `src/styles/sidebar.css`：侧边栏、个人资料、搜索、导航、树、图标选择器、右键菜单。
-- `src/styles/workspace.css`：工作区、列表头、任务卡片、Markdown、菜单、排序子菜单、添加事项栏。
-- `src/styles/settings.css`：设置抽屉。
-- `src/styles/shared.css`：浮动通知、工具类。
-- `src/styles/mobile.css`：Android/移动端堆叠布局（仅在 `.app-shell.mobile` 下生效，桌面无副作用）。
-
-**为什么使用全局 CSS 而非 Svelte 作用域 `<style>`**：Markdown 内容通过 `{@html}` 渲染，没有 Svelte 作用域属性，作用域样式无法触及 Markdown 元素。`.collapse-button` 在侧边栏（树分类）和工作区（任务卡片）中使用同一类名但不同样式，通过 `.sidebar .collapse-button` 和 `.workspace .collapse-button` 选择器区分。
-
-### 辅助模块
-- `src/lib/types.ts`：数据模型类型（`AppNode`、`Task`、`Settings`、`AppState`、`ListBackground`）。
-- `src/lib/defaults.ts`：默认值、数据规范化、莫奈配色预设、节点工厂函数。
-- `src/lib/backend.ts`：Tauri 命令桥接层，带浏览器开发模式回退。
-- `src/lib/markdown.ts`：Markdown 渲染与消毒。
-- `src/lib/shortcuts.ts`：键盘快捷键匹配。
-- `src/lib/platform.ts`：移动端检测（`isMobile`，基于 userAgent，保证 Windows 不受影响）与移动端导航状态（`mobileView`、`showMobileContent`、`showMobileList`，含 Android 硬件返回键 History 处理）。
-- `src/lib/sync.ts`：同步适配器接口（占位）。
-
-### 移动端（Android，v7.0.0+）
-- **交互模型**：参考 Microsoft To Do 的 Android 版。打开应用只显示分类区域（桌面版左侧栏）；点击条目后推入正文区（桌面版右侧栏），顶部出现返回按钮。
-- **检测**：`isMobile` 仅基于 `navigator.userAgent`（Android/iPhone/iPad）。Windows 桌面窗口有大尺寸最小宽度，永不命中，桌面体验保持不变。
-- **布局**：`App.svelte` 在 `.app-shell` 上加 `mobile` + `view-list`/`view-content` 类；`src/styles/mobile.css` 将侧边栏与工作区绝对定位铺满屏幕并切换显隐，移动端缩放固定为 1（`buildMobileShellStyle`），隐藏标题栏与宽度手柄，设置抽屉全屏。
-- **硬件返回键**：进入正文时 `history.pushState`，`popstate` 返回分类列表而非退出应用。
-- **Rust 隔离**：托盘、全局快捷键、窗口状态、单实例、开机自启、`set_webview_zoom` 等命令在 Android 上为 `#[cfg(not(desktop))]` 的空实现，前端 invoke 不会失败；`open_url` 在移动端走 `tauri-plugin-opener`；`data_dir` 在移动端回退到 `app_data_dir()`。
-- **已知限制**：移动端的文件导入/导出、背景图片选择依赖 `plugin-dialog` 的文件路径，在 Android 上可能静默失败（不崩溃），后续版本再做移动端专用文件流。
-
-## 项目结构
+### 进程拓扑（v10，最重要的认知）
 
 ```
-src/
-├── App.svelte              # 精简协调器
-├── main.ts                 # 入口 + CSS 导入
-├── styles/
-│   ├── base.css            # 根样式、重置、布局
-│   ├── titlebar.css        # 标题栏 + 窗口按钮
-│   ├── sidebar.css         # 侧边栏 + 树 + 图标选择器
-│   ├── workspace.css       # 任务 + Markdown + 菜单
-│   ├── settings.css        # 设置抽屉
-│   ├── shared.css          # 浮动通知
-│   └── mobile.css          # 移动端堆叠布局
-├── lib/
-│   ├── stores.ts           # 集中式状态 + 持久化
-│   ├── nodes.ts            # 纯树查询函数
-│   ├── styles.ts           # 样式计算函数
-│   ├── TitleBar.svelte     # 窗口控制
-│   ├── Toast.svelte        # 浮动通知
-│   ├── Sidebar.svelte      # 左侧面板
-│   ├── Workspace.svelte    # 主内容区
-│   ├── SettingsDrawer.svelte # 设置面板
-│   ├── TaskCard.svelte     # 任务卡片组件
-│   ├── ListTree.svelte     # 递归树组件
-│   ├── IconGlyph.svelte    # 图标渲染
-│   ├── IconPicker.svelte   # 图标/emoji 选择器
-│   ├── types.ts            # 数据模型类型
-│   ├── defaults.ts         # 默认值 + 数据规范化
-│   ├── backend.ts          # Tauri 桥接
-│   ├── markdown.ts         # Markdown 渲染
-│   ├── shortcuts.ts        # 快捷键匹配
-│   ├── platform.ts         # 移动端检测 + 移动导航状态
-│   └── sync.ts             # 同步适配器（占位）
-src-tauri/
-├── src/
-│   ├── main.rs             # 二进制入口，调用 lib 的 run()
-│   └── lib.rs              # Rust 后端核心（desktop/mobile cfg 隔离）
-└── gen/android/            # Tauri 生成的 Android Gradle 工程（首次 `tauri android init` 创建）
+kxtodo.exe (GUI)                    kxtodo-cli (CLI)
+  │ windows 子系统，无控制台          │ 控制台程序，跑完即退
+  │ 内嵌 Host（IPC 服务端 + 调度引擎） │ 薄入口 → kxtodo_core::cli::main_entry
+  └──────────┬───────────────────────┘
+             │  共享同一个 Domain Core（crates/core，kxtodo-core）
+             ▼
+   Repository（fs2 文件锁 + 原子写 + revision + 幂等台账）
+             ▼
+   <数据目录>/data.json + settings.json + tasks.json
 ```
 
-## 数据模型
+- **GUI 是唯一常驻进程**：窗口关闭（默认隐藏到托盘）后 Host 继续跑调度与 IPC；无窗口、无启用任务时看门狗自动退出。
+- **CLI 不持有状态**：需要常驻能力（notify 弹通知、schedule run）时，CLI 通过 IPC 找 Host；Host 不在就拉起 GUI 同目录 exe 的隐藏 Host 模式（`--kxtodo-host`），找不到 GUI 则报 `GUI_NOT_FOUND`。
+- **GUI/CLI/Agent 三方写操作走同一条业务命令层**（Domain Core 的 Invocation → 域分发 → envelope 输出），不存在"读全量 JSON 改完写回"的路径。
 
-- `AppNode` 表示左侧树节点。内置系统节点有 `my-day`（我的一天）、`planned`（计划内）、`important`（收藏）；自定义 `category` 节点为可展开/收起的文件夹；自定义 `entry` 节点拥有 Markdown 卡片。
-- `Task` 属于某个 entry，存储 Markdown 内容、完成状态、完成时间戳 (`completedAt`)、"我的一天"/收藏标记、日期元数据（精确到天的 `YYYY-MM-DD` 格式）、以及瞬态的展开/编辑 UI 状态。
-- `Settings` 存储可编辑的个人资料（含头像 data URL）、显示偏好（CSS 缩放、UI/Markdown/编辑器字号、链接打开模式）、生命周期偏好（关闭到托盘、开机自启）、本地快捷键绑定、全局唤起快捷键、云同步配置（已禁用）。
-- 左侧树的顺序由 `nodes` 数组决定。拖放和"移动到分组"菜单需同时更新 `parentId` 和数组位置。
-- 桌面端仅允许单实例运行，第二次启动会聚焦已有窗口；关闭窗口默认隐藏到托盘。
+### 数据目录解析
 
-## 技术要点
+- GUI：`<exe 同级>/todo-note-data/`（便携），移动端回退 `app_data_dir()`。缺文件时 `Repository::ensure_initialized()` 立即落盘默认三文件。
+- CLI：`--data-dir` > 环境变量 `KXTODO_HOME` > 当前目录（若当前目录没有 `data.json` 但有 `todo-note-data/data.json`，自动下探一层）；最终没有 `data.json` 报 `DATA_DIR_NOT_FOUND`（退出码 3），**CLI 永不静默创建数据**。
 
-- **UI 缩放**：`.app-shell` 使用 `transform: scale(var(--ui-scale))`，`transform-origin: top left`，内部尺寸用 `calc(100/scale)vw` 适配视口。
-- **WebView2 怪癖**：当 `#app` 设置 `overflow: hidden` 时，缩放容器外的 `position: fixed` 元素不会渲染，因此窗口控制按钮必须放在 `.app-shell` 内部。
-- **单实例**：`tauri_plugin_single_instance` 使用应用标识 `com.wddjwk.todonote`，release 目录下的旧 exe（同一标识）会造成冲突。
-- **便携数据存储**：`data_dir()` 解析为 `<exe所在目录>/todo-note-data/`。
-- **开机自启错误**：`tauri_plugin_autostart` 在禁用时如果快捷方式不存在会抛出 "file not found"（os error 2），当 `launchAtStartup` 为 false 时静默捕获。
-- **左侧与顶部一体化**：标题栏和侧边栏共用 `#f0f0f0` 透明背景，工作区左上角有 `border-radius: 12px` 圆角，营造 Microsoft To Do 风格的一体化视觉效果。
-- **排序功能**：工作区支持 7 种排序模式（创建时间正序/倒序、字母正序/倒序、截止时间正序/倒序、重要性），排序状态为组件局部变量。
-- **展开/收起全部**：跳过单行 Markdown 内容的任务，避免展开后无意义。
-- **自定义颜色**：背景颜色网格末尾有彩虹色盘按钮，点击调用原生 `<input type="color">` 色盘；EyeDropper API 可用时支持取色器。
-- **日期精度**：任务日期使用 `date` 类型（精确到天），日期显示为中文格式（"X月X日"），可点击跳转日历选择。
-- **"我的一天"功能**：标题下方显示当前日期；已完成区仅显示当天完成的任务（`completedAt` 过滤）；灯泡建议按钮提供智能添加建议（昨天/今天创建的未完成任务、今天到期的任务、回退到最近5条）；日历按钮展示月/周视图下各天的已完成任务。
-- **完成时间追踪**：`completedAt` 字段在任务标记完成时设置，取消完成时清除。旧数据迁移时以 `updatedAt` 作为回退值。
-- **双击防选中**：双击任务卡片展开/收起时自动清除文本选择，compact 模式下 `user-select: none`。
+### 前端分层（src/）
 
-## 维护工作流
+- **stores.ts**：Svelte stores 单一事实来源。`appState`/`appSettings` + derived（`selectedNode`/`visibleTasks`/`listCounts`/`accent`…）。core 模式下 hydrate 走 `coreSnapshot`，之后靠 `kxtodo://domain-changed` 事件 + `refreshFromCore` 增量回刷。
+- **actions.ts**：GUI 全部写操作的业务命令层。core 路径（`coreDispatch`）+ 移动端 legacy 回退。**新写操作一律加在这里，不要在组件里直接改 store 或 invoke。**
+- **backend.ts**：Tauri invoke 桥接（含浏览器 dev 回退）。
+- **scheduleAdapter.ts**：v9 ScheduleEntry（spec/state/ui 三段）↔ UI 编辑模型双向适配，patch 时保留 CLI 专属字段。
+- **纯逻辑**：`nodes.ts`（树查询）、`styles.ts`（样式计算）、`sort.ts`（7 种排序）、`markdown.ts`（渲染消毒）、`defaults.ts`（默认值 + 旧数据规范化）、`platform.ts`（移动端检测 + 导航）。
+- **组件**：`App.svelte`（协调器）→ `Sidebar`（导航 + 树 + 右键菜单）、`Workspace`（列表头 + TaskCard 列表 + 添加栏；`selectedNode.id === "scheduled"` 时切换为 `ScheduledTasksView`）、`SettingsDrawer`、`TitleBar`、`Toast`。
+- **editor/**：浮窗 Markdown 编辑器（CodeMirror 6，动态 import，挂在 App 层避开 workspace overflow 裁剪）。
+- **menu/**：统一菜单系统（ContextMenu/MenuItem/MenuSeparator），所有右键/⋯ 菜单都基于它。
 
-1. 安装依赖：`npm install`
-2. 桌面开发运行：`npm run desktop:dev`
-3. Android 开发运行：`npm run android:dev`（需 ANDROID_HOME / NDK，连接设备或模拟器）
-4. 前端构建：`npm run build`
-5. 一键打包发布（Windows + Android）：`.\scripts\package.ps1 -Version 7.0.0`
-   - 仅 Windows：`.\scripts\package.ps1 -Version 7.0.0 -Targets windows`
-   - 仅 Android：`.\scripts\package.ps1 -Version 7.0.0 -Targets android`
-   - 产物输出到 `release/`：`KXToDo-<版本>.exe` 与 `KXToDo-<版本>.apk`
-6. 加载截图测试数据：`.\scripts\load-sample-data.ps1`（生产默认数据保持最小化）
-7. 新原生功能放在 Tauri 命令/插件后面（注意 desktop/mobile cfg 隔离），同步集成放在适配器边界后面。
+### CSS
 
-## v7.0.0 变更摘要
+全局 CSS（非 Svelte scoped——`{@html}` 渲染的 Markdown 没有 scoped 属性，触及不到）。`main.ts` 按级联顺序导入：base → titlebar → sidebar → workspace → menu → editor → settings → shared → mobile。同名类用父选择器区分（如 `.sidebar .collapse-button` vs `.workspace .collapse-button`）。移动端样式全部收在 `.app-shell.mobile` 下，桌面零副作用。
 
-### Android 支持（保持 Windows 体验不变）
-- Rust 后端从 `main.rs` 重构为 `lib.rs` 的 `run()`（`#[cfg_attr(mobile, tauri::mobile_entry_point)]`），`main.rs` 仅调用它。
-- `Cargo.toml` 新增 `[lib]`（`staticlib`/`cdylib`/`rlib`）；托盘、全局快捷键、窗口状态、单实例、开机自启移到 `cfg(not(android/ios))` 目标依赖，Android 改用 `tauri-plugin-opener`。
-- 所有桌面专有逻辑用 `#[cfg(desktop)]` 隔离；相关命令在移动端提供空实现，前端 invoke 不报错。`data_dir` 在移动端回退到 `app_data_dir()`。
-- 新增 `src/lib/platform.ts`（`isMobile`、`mobileView`）与 `src/styles/mobile.css`。
+**按钮样式规范（不许再发明新样式）**：
+- 菜单/浮层面板里的动作按钮 → `menu-action-button`（menu.css：白底细边框、圆角 7、hover #f2f4f7）。
+- 设置抽屉里的按钮 → `settings-button`（settings.css：同一视觉语言），主操作加 `.primary`（accent 填充白字）。
+- 菜单项一律走 `MenuItem` 组件（menu-item-button），不写裸 `<button>`。
+- 新写任何按钮前先想这两个类能不能用；风格不一致的裸按钮视为 bug。
 
-### Android 交互（对齐 Microsoft To Do 移动版）
-- 打开仅显示分类区域；点击条目推入正文区，顶部返回按钮回到分类列表。
-- 移动端缩放固定为 1、铺满屏幕，隐藏标题栏与宽度手柄，设置抽屉全屏。
-- Android 硬件返回键经 History（pushState/popstate）返回分类列表而非退出应用。
+## UI 布局与特性
 
-### 打包
-- `scripts/package.ps1` 支持 `-Targets all|windows|android`，一条命令产出 Windows exe + Android apk，并同步 `APP_VERSION`。
-- 首次 Android 打包会自动安装 Rust Android 目标并在缺失时执行 `tauri android init`。
+- **布局**：标题栏 + 左侧栏（#f0f0f0 一体化背景）+ 工作区（左上角 12px 圆角）。左侧栏 = 个人资料卡、搜索、系统导航（我的一天/计划内/收藏/定时任务）、自定义树、底部新建。工作区 = 列表头（标题可内联重命名；右侧 展开全部/收起全部/⋯ 菜单）、任务卡片流、底部添加栏。
+- **任务卡片**：单击选中复制文本；双击展开/收起（不选词）；右侧笔图标打开浮窗编辑器（编辑/预览切换、插图、Esc 或点外部保存关闭）；右键出菜单（日期/标签/emoji/移动/删除）。
+- **树**：分类可折叠、图标可选（Lucide/emoji）、指针拖拽排序（before/after/inside 指示、边缘自动滚动、悬停展开、Esc 取消、拖到空白落根级末尾）、右键菜单、空白区右键新建。
+- **⋯ 列表菜单**（ListMenu.svelte）：重命名、移动到分组、排序方式、删除、导出/导入、UI 颜色、背景（色盘 + 莫奈预设 + 图片 + 透明度）。
+- **定时任务**：独立视图，卡片三态（compact/expanded/editing），新建后停在编辑态（ui.editing 持久化）。触发器 once/interval/calendar/condition；动作 脚本/可执行文件/通知；执行历史 `schedule logs`。
+- **我的一天**：标题下显示当天日期；灯泡 = 智能建议；日历 = 月/周视图回看各天完成项；已完成区只显示当天完成。
+- **设置抽屉**：个人资料（头像 dataURL）、外观（缩放/字号/链接打开方式）、生命周期（关闭到托盘/开机自启）、快捷键、云同步占位。
+- **移动端（Android）**：打开只见分类列表，点条目推入正文（顶部返回），硬件返回键经 History 回列表。桌面体验不受影响（isMobile 只看 userAgent）。
 
-## v6.2.0 变更摘要
+## 如何修改 / 维护 / 拓展
 
-### 界面 & 交互
-- 任务勾选圆圈：compact 模式居中，expanded/editing 模式固定在顶部。
-- 双击展开/收起不再选中文本（`event.preventDefault()` + 清除选区）。
-- 任务日期精度改为天（`date` 类型），移除分钟精度。
-- 任务卡片上的日期可点击，跳出系统日期选择器。
-- 创建任务时不再自动添加日期（"计划内"视图下也不自动设置）。
-
-### "我的一天"增强
-- 标题下方展示当前日期（"X月X日, 星期X"）。
-- 新增灯泡建议按钮：显示昨天/今天创建的未完成任务、今日到期的任务，无匹配时回退显示最近5条。
-- 新增日历按钮：月视图/周视图切换，展示各天已完成任务列表。
-- 已完成区仅展示当天完成的任务。
-- 设置日期为当天时自动添加到"我的一天"。
-
-### 数据模型
-- `Task` 新增 `completedAt?: string` 字段。
-- `normalizeTask` 迁移旧数据时用 `updatedAt` 回退设置 `completedAt`。
-
-## v6.1.0 变更摘要
-
-### 界面美化
-- 左侧栏 + 顶部栏颜色统一，去除分割线，工作区左上角圆角，呈现现代一体化视觉。
-- 任务勾选圆圈垂直居中。
-- 任务日期显示字体加大，中文格式化（"5月30日 22:00"）。
-- 日期选择器默认当前时刻，支持精确到分钟。
-- 顶栏收窄（44px → 36px）。
-- 所有菜单样式统一（列表菜单、任务右键菜单、树右键菜单）。
-- 编辑按钮图标更换为 PenLine。
-
-### 功能改进
-- 背景颜色网格末尾加入彩虹色盘按钮，调用系统颜色选择器。
-- 预设颜色替换为莫奈配色（日出、睡莲、干草垛、教堂、花园、鸢尾等）。
-- 颜色悬浮效果改为仅显示高亮外框。
-- 三点菜单新增"排序方式"子菜单，支持 7 种排序。
-- 三点菜单左侧新增"展开/收起全部"按钮（单行内容跳过展开）。
-
-## v9.0.0 变更摘要
-
-### CLI 与 Domain Core（§3–4）
-
-domain 层引入完整的命令行界面，CLI / GUI / Agent 共享同一个 Rust Domain Core（`src-tauri/src/domain/`），所有写操作经过统一的业务命令层，不再允许"读全量—改 JSON—写全量"。
-
-**模块结构**（`src-tauri/src/domain/`）：
-
-| 模块 | 职责 |
+| 要做什么 | 动哪里 |
 |---|---|
-| `model.rs` | 权威数据模型（DataFile/SettingsFile/ScheduleFile），serde + schemars 双 derive |
-| `error.rs` | CoreError + 稳定退出码（0/2/3/4/5/10/20） |
-| `time.rs` | 唯一时长解析器（`<n><ms\|s\|m\|h\|d>`）、ISO 8601、DST 迁移 |
-| `repo.rs` | Repository：跨进程文件锁（fs2）、原子写（tmp+rename）、revision、幂等台账、备份 |
-| `migrate.rs` | v8→v9 三文件迁移（data/settings/tasks），幂等可重试 |
-| `ops_task.rs` | task 域：category/entry/item CRUD、树、搜索、分页 |
-| `ops_config.rs` | config 域：点路径 get/set/unset/reset/validate |
-| `ops_schedule.rs` | schedule 域：spec 校验（含 discriminator 分支白名单）、patch 语义、CRUD |
-| `ops_gui.rs` | GUI 专用写命令（select-node/set-collapsed/set-item-ui/set-background/apply-tree-order/import-state） |
-| `core.rs` | 执行器：Invocation → 域分发 → envelope 输出 |
-| `cli.rs` | clap 命令树 + 全局选项 + payload 解析（@file / stdin） |
-| `render.rs` | 输出格式：json / pretty / table / ndjson + 内置 jq 子集 |
-| `jq.rs` | jq 兼容子集（字段路径/下标/迭代/管道/length/keys/map/select） |
-| `schema.rs` | `kxtodo schema`：schemars 生成 JSON Schema + patch 自动派生 + 示例 |
-| `skills.rs` | `kxtodo skills`：SKILL.md 定位/读取/校验 |
-| `doctor.rs` | `kxtodo doctor`：数据完整性/锁/备份/运行时诊断 |
-| `host.rs` | Background Host：IPC 服务端、路由（Host/standalone）、Hidden Host 启动器 |
-| `ipc.rs` | 本机 local socket（interprocess）+ 长度前缀 JSON 帧 |
-| `scheduler.rs` | 调度引擎：once/interval/calendar/condition、missedPolicy、probe、历史 |
-| `exec.rs` | 进程执行器：argv spawn、超时、取消、输出截断 |
-| `plan.rs` | 触发器计划：nextRunAt 计算（cron + chrono-tz） |
-| `history.rs` | 有界 NDJSON 历史（schedule.ndjson / audit.ndjson） |
-| `envelope.rs` | 输出信封：`{ok, command, data\|error, meta}` |
+| 加/改 CLI 命令 | `crates/core/src/cli.rs`（clap 树）+ 对应 `ops_*.rs`；`schema.rs`/`skills.rs` 自动跟随 |
+| 加 GUI 写操作 | `crates/core/src/ops_gui.rs` 加命令 → `actions.ts` 加 coreDispatch 包装 → 组件调用 actions |
+| 加设置项 | `model.rs` SettingsFile + `defaults.ts` 默认值/normalize + `SettingsDrawer.svelte` UI |
+| 加调度触发/动作类型 | `model.rs`（discriminator 分支）+ `ops_schedule.rs` 白名单校验 + `plan.rs`/`scheduler.rs` 执行 + `scheduleAdapter.ts` 适配 + `ScheduledTasksView.svelte` 编辑表单 |
+| 改外观 | 全局 CSS 文件按区域找；配色变量在 base.css；菜单样式统一在 menu.css |
+| 加原生能力 | Tauri 命令/插件，桌面专有逻辑必须 `#[cfg(desktop)]` 隔离并在移动端给空实现（前端 invoke 不能炸） |
+| Agent 技能文档 | 只编辑 `skills/kxtodo/SKILL.md`（编译期 include_str! 嵌入，发布 exe 自包含） |
 
-**CLI 命令域**：
+**铁律**：写路径永远过 Domain Core 命令层；前端永不直接改 JSON；GUI 桥接默认 `controls.yes = true`（GUI 操作即用户确认，CLI 的确认门不适用于 GUI）。
 
-```
-kxtodo notify <message> [--title] [--duration] [--tone] [--position] [--wait]
-kxtodo task add|get|list|find|modify|remove|tree
-kxtodo schedule add|validate|get|list|find|modify|remove|enable|disable|run|stop|logs|status
-kxtodo schedule runtime list|detect|set
-kxtodo config list|get|set|unset|reset|path|validate
-kxtodo schema <target> [--example <name>]
-kxtodo skills list|read|path|validate
-kxtodo doctor [--check <name>]
-kxtodo version
+## 构建 / 测试 / 发布
+
+```bash
+npm install                # 依赖
+npm run desktop:dev        # 桌面开发（vite + tauri dev）
+scripts/cargo-msvc.sh test -p kxtodo-core   # Rust 测试（Git Bash 下必须用这个包装！）
+.\release.ps1 windows      # 本地构建 Windows 双产物
+.\scripts\publish.ps1      # 一键发布：构建 + gh release create（需要 gh 已登录）
 ```
 
-全局选项：`--data-dir`、`--format`、`--json`、`-q/--jq`、`--dry-run`、`--yes`、`--idempotency-key`、`--if-revision`。
+**版本号只有 git 一个来源**：最近的 `v*` tag，其次最近一条 `vX.Y.Z` 开头的 commit message。`build.rs`（根 crate + crates/core）构建期调用 git 注入 `KXTODO_VERSION`，GUI 经 `app_version` 命令展示在设置页，CLI 的 `version` 命令同源。**仓库任何文件里都不写版本号**（Cargo.toml 是 0.0.0 占位、tauri.conf.json 无 version 字段、前端无常量）——发版只打 tag/写 commit，永远不要往文件里同步版本号。
 
-**数据格式（v9）**：
+产物：`release/KXToDo-<版本>.exe`（GUI）+ `KXToDo-CLI-<版本>.exe`（CLI）。没有 GitHub 构建流水线（已删），构建与发布全在本地。
 
-- `data.json`：`schemaVersion: 5`，顶层 `_meta: {revision, idempotency[]}`，nodes/tasks/backgrounds/selectedNodeId。
-- `settings.json`：`_meta: {schemaVersion: 1, revision, idempotency[]}`，各设置段。
-- `tasks.json`：`_meta: {schemaVersion: 2, revision, idempotency[]}`，`runtimes`，`tasks: [{id, spec, state, ui, createdAt, updatedAt}]`。
-  - `spec`：`{name, enabled, trigger: {type: once|interval|calendar|condition, ...}, action: {type: script|executable|notification, ...}}`
-  - `state`：`{runCount, running?, lastRunAt?, nextRunAt?, lastStatus, lastExitCode?, lastStdout?, lastStderr?, missedCount, lastProbe?}`
+## 环境坑位（Windows 开发必读）
 
-### Background Host 与状态机（§4.4）
+1. **Git Bash 里 cargo 链接失败**（"link: extra operand"）：uutils-coreutils 的 `link` 遮蔽了 MSVC `link.exe`。**一切 cargo 调用走 `scripts/cargo-msvc.sh`**。
+2. **PowerShell 必须 `-NoProfile` 调脚本**的说法反过来也成立：package.ps1/release.ps1 已内置 MSVC 环境自举（cl.exe 不在 PATH 时从 setup_x64.bat 导入），直接跑即可。
+3. **Git Bash 里 `taskkill /PID` 会被转成 UNC 路径**——杀进程用 `powershell -NoProfile -Command "Stop-Process -Id <pid> -Force"`。
+4. **单实例标识 `com.wddjwk.kxtodo` 全局唯一**：debug、release、旧版本 exe 互相同标识，启动新实例会转发到已运行的旧实例（表现为"改了代码没生效"）。**调试前先把所有 kxtodo/KXToDo 进程杀光（含托盘）**；用户反馈"修复没生效"也优先怀疑旧进程残留。
+5. **tauri-plugin-window-state 默认管所有窗口**：动态 label 的窗口（通知窗 `notification-N` 按进程内计数器复用 label）会被恢复历史"不可见/旧位置"状态——曾导致通知窗建好了却看不见。必须用 `with_filter` 按前缀排除；主窗口可见性若由代码接管（conf `visible:false` + 前端 reveal），还要把 `StateFlags::VISIBLE` 从持久化里剥掉，否则恢复逻辑会绕过 reveal 提前显示窗口。
+6. **pwsh 5.1 写文件默认 GBK**：脚本里写中文文本一律 `[System.IO.File]::WriteAllText` + UTF-8 no-BOM。
 
-- **Absent → Hidden Host**：`notify` / `schedule run` 在 Host 缺失时自动 spawn `--kxtodo-host` 隐藏进程。
-- **Hidden Host → GUI Visible**：无参数启动时 single-instance 转发到 Hidden Host，创建主窗口。
-- **GUI 关闭 → Hidden Host**：主窗口隐藏到托盘后 Host 继续运行（调度器 + IPC）。
-- **Hidden Host 自动退出**：无通知、无 GUI、无启用 schedule、无运行子进程时看门狗退出。
-- IPC 端点：`runtime/host.json` 描述符（protocolVersion/pid/dataDir/endpoint/mode），local socket 按 dataDir 哈希命名。
+## computer-use 调试经验（WebView2 应用）
 
-### 前端命令化（§4.3）
+KXToDo 的窗口内容是 WebView2 渲染的，**UIA 拿不到 DOM 树**（accessibility 为空），只能用像素截图 + 坐标点击。多轮实战总结：
 
-- `src/lib/actions.ts`：全部 GUI 写操作的业务命令层（core 路径 + legacy 回退）。
-- `src/lib/stores.ts`：`coreMode` 检测、`coreSnapshot` 水合、`kxtodo://domain-changed` 事件监听、编辑冲突策略（editBases + pending conflict toast）。
-- `src/lib/scheduleAdapter.ts`：v9 ScheduleEntry ↔ v8 UI 编辑模型双向适配（partial patch 保留 CLI 专属字段）。
-- `src/lib/scheduler.ts` 已删除：调度引擎完全在 Rust Host 中运行。
-
-### Agent SKILL（§3.7）
-
-- 编辑源：`skills/kxtodo/SKILL.md`（仓库中唯一编辑位置）。
-- 编译期通过 `include_str!` 嵌入二进制，发布 exe 完全自包含，无外挂文件。
-- `kxtodo skills read kxtodo` 输出嵌入内容；`kxtodo skills validate` 校验引用的命令与当前 CLI 一致。
-
-### 测试（`src-tauri/tests/`）
-
-- `cli_task.rs`（20）：节点/任务 CRUD、过滤、分页、标签、冲突、幂等、revision 守卫。
-- `cli_schedule.rs`（13）：spec 校验、patch 语义、分支白名单、runtime、logs。
-- `cli_config.rs`（9）：点路径读写、map-key、reset、validate。
-- `cli_misc.rs`（13）：version/schema/skills/doctor/jq/格式/帮助。
-- `migration.rs`（6）：v8→v9 三文件迁移、幂等、时区。
-- `repo.rs`（8）：原子写、并发锁、revision、备份、审计。
-- `host_scheduler.rs`（8）：IPC 往返、notify 路由、调度触发、stopWhen、probe、missedPolicy。
-
-运行：`cargo test`（需 MSVC 环境）。
-
-### 构建
-
-- 开发：`npm run desktop:dev`（前端 + Tauri dev server）。
-- 发布：`.\release.ps1`（等同 `.\scripts\package.ps1 -Targets windows`，版本从 Cargo.toml 读取）。
-  - 指定版本：`.\release.ps1 windows 9.0.1`
-  - 含 Android：`.\release.ps1 all`
-- 产物：`release/KXToDo-<版本>.exe`（单文件自包含，SKILL 已嵌入）。
-- 注意：package.ps1 使用 `[System.IO.File]::ReadAllText/WriteAllText` + UTF-8 no-BOM 避免 PS 5.1 GBK 损坏中文。
-- 二进制为 console 子系统：CLI 模式直接输出；GUI 模式（无参数）启动时 `FreeConsole()` 隐藏控制台。
+1. **截图坐标系**：`get_app_state` 返回的坐标是缩放后截图像素，click/scroll/type 直接用；每次操作后必须重新 get_app_state 拿新 snapshot_id 和新坐标，不要复用旧坐标点变了位置的元素。
+2. **input_revision 是你的朋友**：两次截图 revision 相同 = 画面没变（操作没生效，或捕获到了缓存帧）。不同 = 真的重绘了。判"点没点上"先看 revision。
+3. **hover 无法合成**：CU 没有"移动鼠标不点击"，悬停子菜单、悬停展开这类行为测不了。用 Playwright（`channel: "msedge"` 直接驱动系统 Edge/WebView2 内核）连 vite dev server（`npm run dev` 的 1420 端口）补测 hover 路径——webapp-testing 技能的 `with_server.py` 可管生命周期。
+4. **vite dev 长开 + HMR 会污染判断**：dev 实例在多轮源码热更后，运行中的组件可能持有新旧混合的响应式状态，表现出"磁盘数据正确但界面不对""同一帧里两个状态混渲"等灵异现象。**改完前端代码验证前，杀掉 dev 实例重启干净进程**；vite server 本身不用重启（它只serve源码）。
+5. **验证数据的权威来源是磁盘文件**：todo-note-data/*.json 直接可读。界面存疑时先 `cat` 数据文件区分"写错了"还是"画错了"，能省一半时间。
+6. **Esc 是 CU 的取消键**：对目标应用发 Esc 可能被 CU 层拦截/取消会话，测试"Esc 关闭浮窗"这类交互时优先用 Playwright 或改用其他关闭路径验证。
+7. **通知/托盘弹窗是独立窗口**：`list_windows` 里主窗口旁的小窗口（如 `com.wddjwk.kxtodo-siw`、通知窗）要按 hwnd 单独截图。
+8. **定时任务触发等时间相关验证**：用 CLI 造一个 `once` 任务设到 1 分钟后，比改系统时间或注入时钟省事得多；触发后看 `schedule logs` 和磁盘 state 即可闭环。

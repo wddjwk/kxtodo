@@ -1,13 +1,10 @@
 # KXToDo release build.
 # Usage:
-#   .\release.ps1                # Windows, version from Cargo.toml
-#   .\release.ps1 win 9.0.1     # Windows, explicit version
-#   .\release.ps1 all            # Windows + Android
+#   .\release.ps1           # Windows（版本号取 git：最近的 v* tag 或 vX.Y.Z 开头的 commit）
+#   .\release.ps1 all       # Windows + Android
 param(
   [Parameter(Position = 0)]
-  [string]$Targets = "windows",
-  [Parameter(Position = 1)]
-  [string]$Version = ""
+  [string]$Targets = "windows"
 )
 
 # Shorthand mapping
@@ -21,8 +18,4 @@ $resolvedTargets = $targetMap[$Targets.ToLower()]
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $packageScript = Join-Path $scriptDir "scripts\package.ps1"
 
-if ($Version) {
-  & $packageScript -Targets $resolvedTargets -Version $Version
-} else {
-  & $packageScript -Targets $resolvedTargets
-}
+& $packageScript -Targets $resolvedTargets

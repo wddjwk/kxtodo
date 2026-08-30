@@ -1,0 +1,170 @@
+/* menu.css — 统一菜单系统：右键菜单、下拉菜单、子菜单共用同一视觉与行为 */
+
+.context-menu {
+  position: fixed;
+  z-index: 3600;
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 16px 50px rgb(0 0 0 / 16%), 0 2px 8px rgb(0 0 0 / 8%);
+  font-size: var(--font-control);
+  user-select: none;
+  animation: menu-fade-in 0.1s ease-out;
+}
+
+@keyframes menu-fade-in {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: none; }
+}
+
+.menu-item {
+  width: 100%;
+}
+
+.menu-item-button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 32px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #1f2937;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.menu-item-button:hover,
+.menu-item-button:focus-visible {
+  background: #f2f4f7;
+  outline: none;
+}
+
+.menu-item-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.menu-item-button:disabled:hover {
+  background: transparent;
+}
+
+.menu-item.danger .menu-item-button:hover {
+  background: #fef2f2;
+  color: #b3261e;
+}
+
+.menu-item-button.active {
+  color: var(--accent, #2564cf);
+  font-weight: 600;
+}
+
+.menu-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.menu-item-check {
+  color: var(--accent, #2564cf);
+  font-weight: 700;
+}
+
+.menu-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: #eceff3;
+}
+
+.menu-section-title {
+  padding: 6px 10px 3px;
+  color: #6b7280;
+  font-size: 0.82em;
+  user-select: none;
+}
+
+/* 子菜单：贴父项右缘展开，边界自动翻转 */
+.menu-item.has-submenu {
+  position: relative;
+}
+
+.submenu-chevron {
+  margin-left: auto;
+  color: #9ca3af;
+}
+
+.submenu-panel {
+  position: absolute;
+  left: calc(100% + 2px);
+  top: -7px;
+  z-index: 3700;
+  display: grid;
+  min-width: 168px;
+  max-width: min(320px, 60vw);
+  max-height: 60vh;
+  overflow-y: auto;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 16px 50px rgb(0 0 0 / 16%), 0 2px 8px rgb(0 0 0 / 8%);
+}
+
+.submenu-panel.flip-x {
+  left: auto;
+  right: calc(100% + 2px);
+}
+
+.submenu-panel.flip-y {
+  top: auto;
+  bottom: -7px;
+}
+
+.submenu-list {
+  display: grid;
+  gap: 2px;
+}
+
+.menu-empty {
+  padding: 8px 12px;
+  color: #94a3b8;
+  font-size: 0.88em;
+  white-space: nowrap;
+}
+
+/* 菜单内联动作按钮（背景面板 上传图片/清除背景 等），与菜单项同一视觉语言 */
+.menu-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 6px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #1f2937;
+  font-size: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s ease-out, border-color 0.12s ease-out;
+}
+
+.menu-action-button:hover,
+.menu-action-button:focus-visible {
+  background: #f2f4f7;
+  border-color: #dde1e6;
+  outline: none;
+}
+
+.menu-action-button:active {
+  background: #e9edf2;
+}
