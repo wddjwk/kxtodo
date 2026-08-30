@@ -1,4 +1,4 @@
-# KXToDo 一键发布：git 取版本 → 本地构建双产物 → gh release 上传。
+﻿# KXToDo 一键发布：git 取版本 → 本地构建双产物 → gh release 上传。
 # 用法：
 #   .\scripts\publish.ps1            # 构建 + 发布当前 git 版本
 #   .\scripts\publish.ps1 -DryRun    # 只打印将要执行的步骤
@@ -73,13 +73,19 @@ if ($LASTEXITCODE -ne 0) {
   git push origin $tag
 }
 
-# release 已存在则只补传产物，不存在则创建
-gh release view $tag >$null 2>&1
-if ($LASTEXITCODE -eq 0) {
+# release 已存在则只补传产物，不存在则创建。
+# PS 5.1 下 gh 写 stderr + ErrorActionPreference=Stop 会变终止性 NativeCommandError，局部降级。
+$saved = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+gh release view $tag *> $null
+$releaseExists = $LASTEXITCODE -eq 0
+if ($releaseExists) {
   gh release upload $tag $guiExe $cliExe --clobber
 } else {
   gh release create $tag $guiExe $cliExe --title $tag --generate-notes
 }
-if ($LASTEXITCODE -ne 0) { throw "gh release 失败" }
+$publishOk = $LASTEXITCODE -eq 0
+$ErrorActionPreference = $saved
+if (-not $publishOk) { throw "gh release 失败" }
 
 Write-Host "已发布 $tag ：GUI + CLI 双产物" -ForegroundColor Green
