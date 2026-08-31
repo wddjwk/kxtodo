@@ -56,9 +56,14 @@ if ($DryRun) {
   return
 }
 
-# 构建（release.ps1 内部用同一个 git 版本逻辑，产物名与此处一致）
-& (Join-Path $root "release.ps1") windows
-if ($LASTEXITCODE -ne 0) { throw "构建失败" }
+# 双产物已构建过（release\ 下同名产物存在）则直接复用，否则重新构建
+# （release.ps1 内部用同一个 git 版本逻辑，产物名与此处一致）
+if ((Test-Path -LiteralPath $guiExe) -and (Test-Path -LiteralPath $cliExe)) {
+  Write-Host "==> 复用已构建产物：$guiExe + $cliExe（删除后重跑可强制重建）" -ForegroundColor Yellow
+} else {
+  & (Join-Path $root "release.ps1") windows
+  if ($LASTEXITCODE -ne 0) { throw "构建失败" }
+}
 
 foreach ($artifact in @($guiExe, $cliExe)) {
   if (-not (Test-Path -LiteralPath $artifact)) {
@@ -66,12 +71,16 @@ foreach ($artifact in @($guiExe, $cliExe)) {
   }
 }
 
-# tag 不存在就先建（指向 HEAD），已存在则复用
+# tag 不存在就先建（指向 HEAD）；分支与 tag 一律推送——gh release create
+# 要求远端已存在该 tag，只推 tag 不推分支会让远端 release 缺少对应提交。
 git rev-parse --verify --quiet "refs/tags/$tag" >$null 2>&1
 if ($LASTEXITCODE -ne 0) {
   git tag $tag
-  git push origin $tag
 }
+git push origin HEAD
+if ($LASTEXITCODE -ne 0) { throw "推送当前分支到 origin 失败" }
+git push origin $tag
+if ($LASTEXITCODE -ne 0) { throw "推送 tag $tag 到 origin 失败" }
 
 # release 已存在则只补传产物，不存在则创建。
 # PS 5.1 下 gh 写 stderr + ErrorActionPreference=Stop 会变终止性 NativeCommandError，局部降级。
