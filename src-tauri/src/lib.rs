@@ -59,34 +59,46 @@ enum NotificationPosition {
     TopLeft,
 }
 
-/// GUI 的默认数据目录（便携模式：exe 同级 todo-note-data/）。
+/// GUI 的默认数据目录（桌面端：系统标准数据目录 kxtodo/todo-note-data/）。
 #[cfg(desktop)]
 fn default_data_dir() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            return dir.join("todo-note-data");
-        }
-    }
-    PathBuf::from("todo-note-data")
+    domain::repo::default_data_dir()
 }
 
 fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     #[cfg(desktop)]
-    {
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
-                return Ok(dir.join("todo-note-data"));
-            }
-        }
-    }
-
-    app.path().app_data_dir().map_err(|error| error.to_string())
+    let dir = {
+        let _ = app;
+        default_data_dir()
+    };
+    #[cfg(not(desktop))]
+    let dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    Ok(dir)
 }
 
 fn ensure_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = data_dir(app)?;
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     Ok(dir)
+}
+
+/// 旧版（≤v0.1.1 便携布局）数据在 exe 同级 todo-note-data/ 下；首次以标准目录
+/// 启动且新目录还没有数据时整体迁入，避免升级后数据"消失"。
+#[cfg(desktop)]
+fn migrate_legacy_portable_data(target: &std::path::Path) {
+    let legacy = match std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join(domain::repo::DATA_DIR_NAME)))
+    {
+        Some(dir) => dir,
+        None => return,
+    };
+    if !legacy.join("data.json").is_file() || target.join("data.json").exists() {
+        return;
+    }
+    if let Err(error) = move_dir_contents(legacy, target.to_path_buf()) {
+        eprintln!("迁移旧版数据目录失败：{error}");
+    }
 }
 
 fn move_dir_contents(src: PathBuf, dest: PathBuf) -> Result<(), String> {
@@ -1462,6 +1474,9 @@ fn init_host_core(
     dir: PathBuf,
 ) -> Result<Arc<domain::host::HostCore>, String> {
     let dir = domain::ipc::normalize_data_dir(&dir);
+    if domain::ipc::same_data_dir(&dir, &default_data_dir()) {
+        migrate_legacy_portable_data(&dir);
+    }
     domain::host::stale_descriptor_cleanup(&dir);
     let repo = domain::repo::Repository::open(dir.clone()).map_err(|error| error.to_string())?;
     if let Err(error) = repo.load_all() {

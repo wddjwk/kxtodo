@@ -27,6 +27,43 @@ pub const HOST_LAUNCH_LOCK: &str = "host.launch.lock";
 pub const HOST_OWNER_LOCK: &str = "host.owner.lock";
 pub const RECOVERY_FILE: &str = "recovery.json";
 pub const IMG_DIR: &str = "img";
+/// 数据目录名（桌面端默认布局：平台数据根/kxtodo/todo-note-data）。
+pub const DATA_DIR_NAME: &str = "todo-note-data";
+
+/// 平台标准数据根：Windows → %LOCALAPPDATA%（回退 %USERPROFILE%\AppData\Local）；
+/// Unix → $XDG_DATA_HOME（须为绝对路径）或 ~/.local/share。
+fn platform_data_root() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        if let Some(dir) = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .filter(|dir| !dir.as_os_str().is_empty())
+        {
+            return Some(dir);
+        }
+        std::env::var_os("USERPROFILE")
+            .map(|home| PathBuf::from(home).join("AppData").join("Local"))
+    }
+    #[cfg(not(windows))]
+    {
+        if let Some(dir) = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .filter(|dir| dir.is_absolute())
+        {
+            return Some(dir);
+        }
+        std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local").join("share"))
+    }
+}
+
+/// 桌面端默认数据目录（GUI 与 CLI 共用）：平台数据根/kxtodo/todo-note-data。
+/// 环境变量缺失时回退相对目录名，交给调用方解析兜底。
+pub fn default_data_dir() -> PathBuf {
+    match platform_data_root() {
+        Some(root) => root.join("kxtodo").join(DATA_DIR_NAME),
+        None => PathBuf::from(DATA_DIR_NAME),
+    }
+}
 
 pub const IDEMPOTENCY_MAX_RECORDS: usize = 1000;
 pub const IDEMPOTENCY_MAX_AGE_DAYS: i64 = 30;

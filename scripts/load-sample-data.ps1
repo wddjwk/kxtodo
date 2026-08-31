@@ -8,7 +8,7 @@ $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Resolve-Path (Join-Path $scriptPath "..")
 
 if ($DataDir.Trim().Length -eq 0) {
-  $DataDir = Join-Path $root "release\todo-note-data"
+  $DataDir = Join-Path $env:LOCALAPPDATA "kxtodo\todo-note-data"
 }
 
 $sample = Get-Content -LiteralPath (Join-Path $root "test-data\sample-export.json") -Raw | ConvertFrom-Json

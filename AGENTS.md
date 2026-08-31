@@ -24,8 +24,8 @@ kxtodo.exe (GUI)                    kxtodo-cli (CLI)
 
 ### 数据目录解析
 
-- GUI：`<exe 同级>/todo-note-data/`（便携），移动端回退 `app_data_dir()`。缺文件时 `Repository::ensure_initialized()` 立即落盘默认三文件。
-- CLI：`--data-dir` > 环境变量 `KXTODO_HOME` > 当前目录（若当前目录没有 `data.json` 但有 `todo-note-data/data.json`，自动下探一层）；最终没有 `data.json` 报 `DATA_DIR_NOT_FOUND`（退出码 3），**CLI 永不静默创建数据**。
+- GUI：桌面端 `<平台数据根>/kxtodo/todo-note-data/`（Windows `%LOCALAPPDATA%`、Linux `$XDG_DATA_HOME` 或 `~/.local/share`、macOS `~/Library/Application Support`，即 `kxtodo_core::repo::default_data_dir()`），移动端回退 `app_data_dir()`。缺文件时 `Repository::ensure_initialized()` 立即落盘默认三文件；GUI 启动时会把旧版 exe 同级的便携数据目录一次性迁入标准目录。
+- CLI：`--data-dir` > 系统默认数据目录（同 GUI）；最终没有 `data.json` 报 `DATA_DIR_NOT_FOUND`（退出码 3），**CLI 永不静默创建数据**。
 
 ### 前端分层（src/）
 
@@ -104,7 +104,7 @@ KXToDo 的窗口内容是 WebView2 渲染的，**UIA 拿不到 DOM 树**（acces
 2. **input_revision 是你的朋友**：两次截图 revision 相同 = 画面没变（操作没生效，或捕获到了缓存帧）。不同 = 真的重绘了。判"点没点上"先看 revision。
 3. **hover 无法合成**：CU 没有"移动鼠标不点击"，悬停子菜单、悬停展开这类行为测不了。用 Playwright（`channel: "msedge"` 直接驱动系统 Edge/WebView2 内核）连 vite dev server（`npm run dev` 的 1420 端口）补测 hover 路径——webapp-testing 技能的 `with_server.py` 可管生命周期。
 4. **vite dev 长开 + HMR 会污染判断**：dev 实例在多轮源码热更后，运行中的组件可能持有新旧混合的响应式状态，表现出"磁盘数据正确但界面不对""同一帧里两个状态混渲"等灵异现象。**改完前端代码验证前，杀掉 dev 实例重启干净进程**；vite server 本身不用重启（它只serve源码）。
-5. **验证数据的权威来源是磁盘文件**：todo-note-data/*.json 直接可读。界面存疑时先 `cat` 数据文件区分"写错了"还是"画错了"，能省一半时间。
+5. **验证数据的权威来源是磁盘文件**：默认数据目录（Windows `%LOCALAPPDATA%\kxtodo\todo-note-data`）下的 *.json 直接可读。界面存疑时先 `cat` 数据文件区分"写错了"还是"画错了"，能省一半时间。
 6. **Esc 是 CU 的取消键**：对目标应用发 Esc 可能被 CU 层拦截/取消会话，测试"Esc 关闭浮窗"这类交互时优先用 Playwright 或改用其他关闭路径验证。
 7. **通知/托盘弹窗是独立窗口**：`list_windows` 里主窗口旁的小窗口（如 `com.wddjwk.kxtodo-siw`、通知窗）要按 hwnd 单独截图。
 8. **定时任务触发等时间相关验证**：用 CLI 造一个 `once` 任务设到 1 分钟后，比改系统时间或注入时钟省事得多；触发后看 `schedule logs` 和磁盘 state 即可闭环。

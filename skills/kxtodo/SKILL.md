@@ -12,7 +12,7 @@ KXToDo v9 提供脚本化 CLI。本 SKILL 说明**何时调用、按什么步骤
 
 ## 核心约定
 
-- 数据目录：`--data-dir` > 环境变量 `KXTODO_HOME` > 当前目录（含其 `todo-note-data` 子目录）；目录中没有数据（缺 data.json）会报错退出码 3。GUI（kxtodo.exe）数据在其同级 `todo-note-data/`。
+- 数据目录：`--data-dir` > 系统默认数据目录（Windows `%LOCALAPPDATA%\kxtodo\todo-note-data`，Linux `$XDG_DATA_HOME`/`~/.local/share` 下的 `kxtodo/todo-note-data`）；目录中没有数据（缺 data.json）会报错退出码 3。GUI（kxtodo.exe）使用同一默认目录，首次启动会把旧版 exe 同级数据迁入。
 - 输出协议：成功写 stdout，`{ "ok": true, "command", "data", "meta" }`；错误写 stderr，`{ "ok": false, "error": { "type", "code", "message", "hint?" } }`。判断成功以退出码 0 或 `ok == true` 为准。
 - 退出码：0 成功；2 参数/校验错误；3 资源不存在；4 歧义或状态冲突；5 数据/锁/文件系统错误；10 高风险需确认；20 执行失败。
 - `--dry-run` 永不触发确认门禁，适合先向用户展示影响范围。

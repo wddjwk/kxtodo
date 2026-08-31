@@ -37,7 +37,7 @@ impl From<OutputFormat> for Format {
 
 #[derive(Debug, Clone, Args)]
 pub struct GlobalArgs {
-    /// 本次命令使用指定数据目录（优先于 KXTODO_HOME；缺省为当前目录）
+    /// 本次命令使用指定数据目录（缺省为系统默认数据目录）
     #[arg(long, global = true, value_name = "path")]
     pub data_dir: Option<PathBuf>,
 
@@ -107,7 +107,7 @@ impl GlobalArgs {
     name = "kxtodo-cli",
     version,
     about = "KXToDo CLI：操作 KXToDo 用户数据的命令行工具",
-    long_about = "KXToDo CLI\n\n数据目录解析：--data-dir > 环境变量 KXTODO_HOME > 当前目录；目录中没有数据时直接报错。\nGUI 程序是独立的 kxtodo.exe（无参数启动图形界面）。\n默认输出 JSON envelope（ok/command/data|error/meta）。\n全局选项可放在任意命令之后；逐级帮助：kxtodo-cli <领域> --help、kxtodo-cli <领域> <动作> --help。",
+    long_about = "KXToDo CLI\n\n数据目录解析：--data-dir > 系统默认数据目录\n（Windows %LOCALAPPDATA%\\kxtodo\\todo-note-data，Linux/macOS 为 XDG/系统数据目录下的 kxtodo\\todo-note-data）；\n目录中没有数据时直接报错。\nGUI 程序是独立的 kxtodo.exe（无参数启动图形界面）。\n默认输出 JSON envelope（ok/command/data|error/meta）。\n全局选项可放在任意命令之后；逐级帮助：kxtodo-cli <领域> --help、kxtodo-cli <领域> <动作> --help。",
     subcommand_required = false,
     arg_required_else_help = true,
     disable_version_flag = true
@@ -945,29 +945,9 @@ pub enum Routing {
     Local,
 }
 
-/// 数据目录环境变量：CLI 的"用户数据家目录"。
-pub const DATA_HOME_ENV: &str = "KXTODO_HOME";
-
-/// CLI 数据目录解析：--data-dir > KXTODO_HOME > 当前目录（含其 todo-note-data 子目录）。
+/// CLI 数据目录解析：--data-dir > 系统默认数据目录（repo::default_data_dir）。
 pub fn resolve_data_dir(flag: Option<PathBuf>) -> PathBuf {
-    if let Some(dir) = flag {
-        return dir;
-    }
-    if let Ok(home) = std::env::var(DATA_HOME_ENV) {
-        let trimmed = home.trim();
-        if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
-        }
-    }
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    // 便携布局：GUI 数据在 exe 同级 todo-note-data/ 下，从该目录运行 CLI 时直接命中。
-    if !cwd.join(crate::repo::DATA_FILE).is_file() {
-        let nested = cwd.join("todo-note-data");
-        if nested.join(crate::repo::DATA_FILE).is_file() {
-            return nested;
-        }
-    }
-    cwd
+    flag.unwrap_or_else(crate::repo::default_data_dir)
 }
 
 /// 该命令是否需要读取用户数据（schema/skills/version/doctor 为纯本地命令）。
@@ -988,7 +968,8 @@ fn data_missing_output(data_dir: &Path) -> CliOutput {
         format!("未找到 KXToDo 数据：{}（缺少 data.json）", data_dir.display()),
     )
     .with_hint(format!(
-        "设置环境变量 {DATA_HOME_ENV} 指向数据目录，或用 --data-dir 显式指定（当前目录及其 todo-note-data 子目录会被自动探测）；也可以先运行一次 GUI 创建数据"
+        "用 --data-dir 显式指定数据目录；也可以先运行一次 GUI 创建/迁移数据（默认目录：{}）",
+        crate::repo::default_data_dir().display()
     ));
     error_output("cli", &error)
 }
