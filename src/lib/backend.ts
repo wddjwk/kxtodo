@@ -102,16 +102,6 @@ export async function getAppVersion(): Promise<string> {
   return invoke<string>("app_version");
 }
 
-/** 增量写入更新包（base64 分块），返回临时文件路径。 */
-export async function writeUpdatePackage(chunk: string, append: boolean): Promise<string> {
-  return invoke<string>("write_update_package", { chunk, append });
-}
-
-/** 启动更新脚本并退出当前进程（脚本等待退出后替换 exe 并重启）。 */
-export async function applyUpdateAndRestart(): Promise<void> {
-  await invoke("apply_update_and_restart");
-}
-
 export async function exportData(payload: unknown, defaultName: string): Promise<void> {
   if (isTauriRuntime) {
     const filePath = await save({

@@ -82,25 +82,6 @@ fn ensure_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// 旧版（≤v0.1.1 便携布局）数据在 exe 同级 todo-note-data/ 下；首次以标准目录
-/// 启动且新目录还没有数据时整体迁入，避免升级后数据"消失"。
-#[cfg(desktop)]
-fn migrate_legacy_portable_data(target: &std::path::Path) {
-    let legacy = match std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join(domain::repo::DATA_DIR_NAME)))
-    {
-        Some(dir) => dir,
-        None => return,
-    };
-    if !legacy.join("data.json").is_file() || target.join("data.json").exists() {
-        return;
-    }
-    if let Err(error) = move_dir_contents(legacy, target.to_path_buf()) {
-        eprintln!("迁移旧版数据目录失败：{error}");
-    }
-}
-
 fn move_dir_contents(src: PathBuf, dest: PathBuf) -> Result<(), String> {
     if !src.exists() {
         return Ok(());
@@ -1212,69 +1193,198 @@ fn app_version() -> String {
     env!("KXTODO_VERSION").to_string()
 }
 
+// ---------------------------------------------------------------------------
+// 应用更新：GitHub release 双产物下载到 exe 目录 → 稳定名 shim → 重启。
+// Windows 用硬链接（同名目录无需特权，退出后由 bat 换链）；Unix 用符号链接。
+// ---------------------------------------------------------------------------
+
 #[cfg(desktop)]
-#[tauri::command]
-fn write_update_package(app: AppHandle, chunk: String, append: bool) -> Result<String, String> {
-    use base64::Engine;
-    use std::io::Write;
-    let exe = std::env::current_exe().map_err(|error| error.to_string())?;
-    let dir = exe
-        .parent()
-        .ok_or_else(|| "无法定位程序目录".to_string())?;
-    let path = dir.join("KXToDo-update.exe.tmp");
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(chunk)
-        .map_err(|error| error.to_string())?;
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(append)
-        .truncate(!append)
-        .open(&path)
-        .map_err(|error| error.to_string())?;
-    file.write_all(&bytes).map_err(|error| error.to_string())?;
-    let _ = app;
-    Ok(path.to_string_lossy().to_string())
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateApplyParams {
+    version: String,
+    gui_url: String,
+    cli_url: String,
 }
 
 #[cfg(desktop)]
-#[tauri::command]
-fn apply_update_and_restart(app: AppHandle) -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|error| error.to_string())?;
-    let dir = exe.parent().ok_or_else(|| "无法定位程序目录".to_string())?;
-    let tmp = dir.join("KXToDo-update.exe.tmp");
-    if !tmp.is_file() {
-        return Err("更新包不存在".to_string());
+fn update_emit(app: &AppHandle, event: &str, payload: Value) {
+    use tauri::Emitter;
+    let _ = app.emit(event, payload);
+}
+
+#[cfg(desktop)]
+fn update_agent() -> ureq::Agent {
+    // ureq 默认探测 HTTP(S)_PROXY 环境变量，无需手工配置。
+    ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(15))
+        .build()
+}
+
+#[cfg(desktop)]
+fn update_download_file(
+    app: &AppHandle,
+    agent: &ureq::Agent,
+    stage: &str,
+    url: &str,
+    dest: &std::path::Path,
+) -> Result<(), String> {
+    let response = agent
+        .get(url)
+        .call()
+        .map_err(|error| format!("下载 {stage} 失败：{error}"))?;
+    let total = response
+        .header("content-length")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    let mut reader = response.into_reader();
+    let file_name = dest
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("download")
+        .to_string();
+    let part = dest.with_file_name(format!("{file_name}.part"));
+    use std::io::{Read, Write};
+    let write_result = (|| -> std::io::Result<()> {
+        let mut file = fs::File::create(&part)?;
+        let mut buffer = [0u8; 64 * 1024];
+        let mut received: u64 = 0;
+        let mut last_percent: u64 = u64::MAX;
+        loop {
+            let count = reader.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            file.write_all(&buffer[..count])?;
+            received += count as u64;
+            if total > 0 {
+                let percent = received * 100 / total;
+                if percent != last_percent {
+                    last_percent = percent;
+                    update_emit(
+                        app,
+                        "update://progress",
+                        serde_json::json!({
+                            "stage": stage,
+                            "received": received,
+                            "total": total,
+                            "percent": percent
+                        }),
+                    );
+                }
+            }
+        }
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&part);
+        return Err(format!("下载 {stage} 失败：{error}"));
     }
-    let pid = std::process::id();
-    let bat = dir.join("kxtodo-update.bat");
-    let script = format!(
-        "@echo off\r\n:wait\r\ntasklist /FI \"PID eq {pid}\" | findstr /C:\" {pid} \" >nul\r\nif %errorlevel%==0 (timeout /t 1 /nobreak >nul & goto wait)\r\nmove /y \"{tmp}\" \"{exe}\"\r\nstart \"\" \"{exe}\"\r\ndel \"%~f0\"\r\n",
-        pid = pid,
-        tmp = tmp.display(),
-        exe = exe.display()
-    );
-    std::fs::write(&bat, script).map_err(|error| error.to_string())?;
-    std::process::Command::new("cmd")
-        .args(["/c", "start", "/min", ""])
-        .arg(&bat)
-        .spawn()
-        .map_err(|error| error.to_string())?;
-    app.exit(0);
+    if dest.exists() {
+        fs::remove_file(dest).map_err(|error| format!("替换旧 {stage} 安装包失败：{error}"))?;
+    }
+    fs::rename(&part, dest).map_err(|error| format!("保存 {stage} 安装包失败：{error}"))?;
     Ok(())
 }
 
-#[cfg(not(desktop))]
-#[tauri::command]
-fn write_update_package(chunk: String, append: bool) -> Result<String, String> {
-    let _ = (chunk, append);
-    Err("当前平台不支持应用内更新".to_string())
+/// Windows shim 换链脚本：等本进程退出 → 删旧稳定名 → 硬链接到新版本 → 重启。
+/// 删名最多等 15 秒（防其他 kxtodo 进程短暂占用），失败细节写 kxtodo-update.log。
+#[cfg(desktop)]
+fn write_update_bat(dir: &std::path::Path, pid: u32, version: &str) -> Result<PathBuf, String> {
+    let bat = dir.join("kxtodo-update.bat");
+    let script = format!(
+        "@echo off\r\ncd /d \"{dir}\"\r\nset LOG=kxtodo-update.log\r\necho [%date% %time%] update to {version} (pid {pid}) > \"%LOG%\"\r\n:wait\r\ntasklist /FI \"PID eq {pid}\" | findstr /C:\" {pid} \" >nul\r\nif %errorlevel%==0 (timeout /t 1 /nobreak >nul & goto wait)\r\nfor /l %%i in (1,1,15) do (\r\n  if not exist \"KXToDo.exe\" goto linkgui\r\n  del /f /q \"KXToDo.exe\" >nul 2>&1\r\n  timeout /t 1 /nobreak >nul\r\n)\r\n:linkgui\r\nmklink /H \"KXToDo.exe\" \"KXToDo-{version}.exe\" >> \"%LOG%\" 2>&1\r\nfor /l %%i in (1,1,15) do (\r\n  if not exist \"kxtodo-cli.exe\" goto linkcli\r\n  del /f /q \"kxtodo-cli.exe\" >nul 2>&1\r\n  timeout /t 1 /nobreak >nul\r\n)\r\n:linkcli\r\nmklink /H \"kxtodo-cli.exe\" \"KXToDo-CLI-{version}.exe\" >> \"%LOG%\" 2>&1\r\necho [%date% %time%] links done, start KXToDo.exe >> \"%LOG%\"\r\nstart \"\" \"KXToDo.exe\"\r\ndel \"%~f0\"\r\n",
+        dir = dir.display(),
+        pid = pid,
+        version = version
+    );
+    fs::write(&bat, script).map_err(|error| format!("写入更新脚本失败：{error}"))?;
+    Ok(bat)
 }
 
-#[cfg(not(desktop))]
+#[cfg(not(windows))]
+fn stage_unix_shims(dir: &std::path::Path, version: &str) -> Result<(), String> {
+    use std::os::unix::fs::symlink;
+    for (link, target) in [
+        ("kxtodo", format!("KXToDo-{version}")),
+        ("kxtodo-cli", format!("KXToDo-CLI-{version}")),
+    ] {
+        let link_path = dir.join(link);
+        let tmp = dir.join(format!(".{link}.link"));
+        let _ = fs::remove_file(&tmp);
+        symlink(dir.join(&target), &tmp)
+            .map_err(|error| format!("创建 {link} 软链接失败：{error}"))?;
+        fs::rename(&tmp, &link_path)
+            .map_err(|error| format!("替换 {link} 软链接失败：{error}"))?;
+    }
+    Ok(())
+}
+
+#[cfg(desktop)]
+fn run_update(
+    app: &AppHandle,
+    dir: &std::path::Path,
+    params: &UpdateApplyParams,
+) -> Result<(), String> {
+    let agent = update_agent();
+    let gui_dest = dir.join(format!("KXToDo-{}.exe", params.version));
+    let cli_dest = dir.join(format!("KXToDo-CLI-{}.exe", params.version));
+    update_download_file(app, &agent, "GUI", &params.gui_url, &gui_dest)?;
+    update_download_file(app, &agent, "CLI", &params.cli_url, &cli_dest)?;
+    // 自检：错误页/JSON 响应体积远小于真实产物，拦下明显存坏的下载。
+    for (stage, path) in [("GUI", &gui_dest), ("CLI", &cli_dest)] {
+        let size = fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
+        if size < 64 * 1024 {
+            return Err(format!("{stage} 更新包异常（仅 {size} 字节），已中止"));
+        }
+    }
+    #[cfg(windows)]
+    {
+        let bat = write_update_bat(dir, std::process::id(), &params.version)?;
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "/min", ""])
+            .arg(&bat)
+            .spawn()
+            .map_err(|error| format!("无法启动更新脚本：{error}"))?;
+    }
+    #[cfg(not(windows))]
+    {
+        stage_unix_shims(dir, &params.version)?;
+        std::process::Command::new(dir.join("kxtodo"))
+            .spawn()
+            .map_err(|error| format!("无法重启应用：{error}"))?;
+    }
+    Ok(())
+}
+
+/// 下载 GUI + CLI 到 exe 目录，布置 shim 与重启（后台线程执行，进度走事件）。
+#[cfg(desktop)]
 #[tauri::command]
-fn apply_update_and_restart() -> Result<(), String> {
-    Err("当前平台不支持应用内更新".to_string())
+fn update_download_and_apply(
+    app: AppHandle,
+    params: UpdateApplyParams,
+) -> Result<(), String> {
+    for url in [&params.gui_url, &params.cli_url] {
+        if !url.starts_with("https://github.com/wddjwk/kxtodo/releases/download/")
+            && !url.starts_with("https://objects.githubusercontent.com/")
+        {
+            return Err(format!("更新地址不受信任：{url}"));
+        }
+    }
+    let dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
+        .ok_or_else(|| "无法定位程序目录".to_string())?;
+    std::thread::spawn(move || match run_update(&app, &dir, &params) {
+        Ok(()) => {
+            update_emit(&app, "update://applied", serde_json::json!({}));
+            let _ = app.exit(0);
+        }
+        Err(message) => {
+            update_emit(&app, "update://failed", serde_json::json!({ "message": message }));
+        }
+    });
+    Ok(())
 }
 
 #[cfg(desktop)]
@@ -1474,9 +1584,6 @@ fn init_host_core(
     dir: PathBuf,
 ) -> Result<Arc<domain::host::HostCore>, String> {
     let dir = domain::ipc::normalize_data_dir(&dir);
-    if domain::ipc::same_data_dir(&dir, &default_data_dir()) {
-        migrate_legacy_portable_data(&dir);
-    }
     domain::host::stale_descriptor_cleanup(&dir);
     let repo = domain::repo::Repository::open(dir.clone()).map_err(|error| error.to_string())?;
     if let Err(error) = repo.load_all() {
@@ -1588,8 +1695,7 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
             set_webview_zoom,
             reveal_main_window,
             app_version,
-            write_update_package,
-            apply_update_and_restart,
+            update_download_and_apply,
             open_url,
             core_dispatch,
             core_snapshot,
@@ -1833,8 +1939,6 @@ pub fn run() {
                 set_webview_zoom,
                 reveal_main_window,
                 app_version,
-                write_update_package,
-                apply_update_and_restart,
                 open_url
             ])
             .setup(move |app| {

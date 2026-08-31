@@ -284,6 +284,30 @@
   white-space: nowrap;
 }
 
+/* 关于与更新：版本号、勾选框、按钮统一左对齐（第二列起始位） */
+.settings-row > .settings-button {
+  justify-self: start;
+}
+
+.settings-row > input[type="checkbox"] {
+  justify-self: start;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent, #2564cf);
+}
+
+.update-status {
+  margin: 8px 0 0;
+  color: #1f2937;
+  font-size: 13px;
+}
+
+.update-error {
+  margin: 8px 0 0;
+  color: #b42318;
+  font-size: 13px;
+}
+
 /* 统一按钮：次要操作白底细边框（与菜单按钮同一语言），主操作 accent 填充 */
 .settings-button {
   padding: 7px 14px;

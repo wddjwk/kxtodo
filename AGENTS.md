@@ -24,8 +24,9 @@ kxtodo.exe (GUI)                    kxtodo-cli (CLI)
 
 ### 数据目录解析
 
-- GUI：桌面端 `<平台数据根>/kxtodo/todo-note-data/`（Windows `%LOCALAPPDATA%`、Linux `$XDG_DATA_HOME` 或 `~/.local/share`、macOS `~/Library/Application Support`，即 `kxtodo_core::repo::default_data_dir()`），移动端回退 `app_data_dir()`。缺文件时 `Repository::ensure_initialized()` 立即落盘默认三文件；GUI 启动时会把旧版 exe 同级的便携数据目录一次性迁入标准目录。
+- GUI：桌面端 `<平台数据根>/kxtodo/todo-note-data/`（Windows `%LOCALAPPDATA%`、Linux `$XDG_DATA_HOME` 或 `~/.local/share`、macOS `~/Library/Application Support`，即 `kxtodo_core::repo::default_data_dir()`），移动端回退 `app_data_dir()`。缺文件时 `Repository::ensure_initialized()` 立即落盘默认三文件。
 - CLI：`--data-dir` > 系统默认数据目录（同 GUI）；最终没有 `data.json` 报 `DATA_DIR_NOT_FOUND`（退出码 3），**CLI 永不静默创建数据**。
+- **不做兼容**：项目没有正式 release，不存在需要兼容的旧版用户。数据格式、数据位置等变更一律直接切换，不写迁移/兼容代码；旧数据由用户自行迁移或丢弃。
 
 ### 前端分层（src/）
 

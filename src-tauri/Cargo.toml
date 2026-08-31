@@ -35,3 +35,4 @@ tauri-plugin-window-state = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
 kxtodo-core = { path = "crates/core" }
+ureq = { version = "2", default-features = false, features = ["tls"] }

@@ -968,7 +968,7 @@ fn data_missing_output(data_dir: &Path) -> CliOutput {
         format!("未找到 KXToDo 数据：{}（缺少 data.json）", data_dir.display()),
     )
     .with_hint(format!(
-        "用 --data-dir 显式指定数据目录；也可以先运行一次 GUI 创建/迁移数据（默认目录：{}）",
+        "用 --data-dir 显式指定数据目录；也可以先运行一次 GUI 创建数据（默认目录：{}）",
         crate::repo::default_data_dir().display()
     ));
     error_output("cli", &error)

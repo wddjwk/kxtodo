@@ -1,19 +1,22 @@
 // ---------------------------------------------------------------------------
-// updater.ts — GitHub latest release 检查更新 + 单 binary 替换更新。
-// 检查走 WebView2 fetch（系统代理生效）；下载分块经 IPC 落盘；
-// 替换由 Rust 侧生成的 updater bat 在进程退出后完成并重启。
+// updater.ts — GitHub latest release 检查 + Rust 侧下载/shim/重启。
+// 检查走 WebView2 fetch（api.github.com 允许 CORS）；下载、落盘、换链、重启
+// 全部由 Rust 的 update_download_and_apply 在后台线程完成，进度经事件回传。
 // ---------------------------------------------------------------------------
 
-import { writeUpdatePackage, applyUpdateAndRestart } from "./backend";
+import { writable } from "svelte/store";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { isTauriRuntime } from "./backend";
 
 const RELEASE_API = "https://api.github.com/repos/wddjwk/kxtodo/releases/latest";
 const FETCH_TIMEOUT_MS = 15_000;
-const CHUNK_SIZE = 2 * 1024 * 1024;
 
 export type UpdateInfo = {
   version: string;
   tag: string;
-  downloadUrl: string;
+  guiUrl: string;
+  cliUrl: string;
   notes: string;
 };
 
@@ -21,6 +24,40 @@ export type UpdateCheckResult =
   | { status: "up-to-date" }
   | { status: "available"; info: UpdateInfo }
   | { status: "error"; message: string };
+
+export type UpdatePhase = "idle" | "downloading" | "restarting" | "failed";
+
+export type UpdateProgress = {
+  phase: UpdatePhase;
+  stage: "GUI" | "CLI" | "";
+  percent: number;
+  message: string;
+};
+
+/** 下载/重启全过程状态：SettingsDrawer 直接订阅渲染。 */
+export const updateProgress = writable<UpdateProgress>({
+  phase: "idle",
+  stage: "",
+  percent: 0,
+  message: ""
+});
+
+if (isTauriRuntime) {
+  void listen<{ stage: string; percent: number }>("update://progress", (event) => {
+    updateProgress.update((state) => ({
+      ...state,
+      phase: "downloading",
+      stage: event.payload.stage === "CLI" ? "CLI" : "GUI",
+      percent: event.payload.percent
+    }));
+  });
+  void listen("update://applied", () => {
+    updateProgress.set({ phase: "restarting", stage: "", percent: 100, message: "" });
+  });
+  void listen<{ message: string }>("update://failed", (event) => {
+    updateProgress.set({ phase: "failed", stage: "", percent: 0, message: event.payload.message });
+  });
+}
 
 function compareVersions(a: string, b: string): number {
   const pa = a.split(".").map((n) => Number(n) || 0);
@@ -43,7 +80,7 @@ async function fetchJson(url: string): Promise<unknown> {
   }
 }
 
-/** 查询 GitHub latest release；有更新返回版本与 GUI exe 下载地址。 */
+/** 查询 GitHub latest release；有更新返回版本与 GUI/CLI 下载地址。 */
 export async function checkForUpdate(currentVersion: string): Promise<UpdateCheckResult> {
   try {
     const data = (await fetchJson(RELEASE_API)) as {
@@ -56,19 +93,22 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateChec
     if (!latest || compareVersions(latest, currentVersion) <= 0) {
       return { status: "up-to-date" };
     }
-    const asset = (data.assets ?? []).find((item) => {
+    const assets = data.assets ?? [];
+    const gui = assets.find((item) => {
       const name = item.name ?? "";
       return /^KXToDo-.*\.exe$/.test(name) && !name.includes("CLI");
     });
-    if (!asset?.browser_download_url) {
-      return { status: "error", message: "最新发布中没有找到安装包" };
+    const cli = assets.find((item) => /^KXToDo-CLI-.*\.exe$/.test(item.name ?? ""));
+    if (!gui?.browser_download_url || !cli?.browser_download_url) {
+      return { status: "error", message: "最新发布中缺少 GUI 或 CLI 安装包，无法更新" };
     }
     return {
       status: "available",
       info: {
         version: latest,
         tag,
-        downloadUrl: asset.browser_download_url,
+        guiUrl: gui.browser_download_url,
+        cliUrl: cli.browser_download_url,
         notes: data.body ?? ""
       }
     };
@@ -77,49 +117,10 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateChec
   }
 }
 
-/** 下载更新包并落盘（分块），返回后由调用方决定是否重启应用。 */
-export async function downloadUpdate(
-  info: UpdateInfo,
-  onProgress: (percent: number) => void
-): Promise<void> {
-  const response = await fetch(info.downloadUrl);
-  if (!response.ok || !response.body) throw new Error(`下载失败：HTTP ${response.status}`);
-  const total = Number(response.headers.get("content-length")) || 0;
-  const reader = response.body.getReader();
-  let received = 0;
-  let first = true;
-  let pending: Uint8Array[] = [];
-  let pendingBytes = 0;
-  const flush = async () => {
-    if (pendingBytes === 0) return;
-    const merged = new Uint8Array(pendingBytes);
-    let offset = 0;
-    for (const part of pending) {
-      merged.set(part, offset);
-      offset += part.length;
-    }
-    pending = [];
-    pendingBytes = 0;
-    let binary = "";
-    for (let i = 0; i < merged.length; i += 32768) {
-      binary += String.fromCharCode(...merged.subarray(i, i + 32768));
-    }
-    await writeUpdatePackage(btoa(binary), !first);
-    first = false;
-  };
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    pending.push(value);
-    pendingBytes += value.length;
-    received += value.length;
-    if (pendingBytes >= CHUNK_SIZE) await flush();
-    if (total > 0) onProgress(Math.round((received / total) * 100));
-  }
-  await flush();
-}
-
-/** 应用更新并重启（bat 等待进程退出后替换 exe）。 */
-export async function applyUpdate(): Promise<void> {
-  await applyUpdateAndRestart();
+/** 触发 Rust 侧下载 → shim → 重启；进度与结果经 updateProgress store 回传。 */
+export async function startUpdate(info: UpdateInfo): Promise<void> {
+  updateProgress.set({ phase: "downloading", stage: "GUI", percent: 0, message: "" });
+  await invoke("update_download_and_apply", {
+    params: { version: info.version, guiUrl: info.guiUrl, cliUrl: info.cliUrl }
+  });
 }

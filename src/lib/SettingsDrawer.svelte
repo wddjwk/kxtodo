@@ -3,7 +3,7 @@
     appSettings, showSettings, showToast, showNotification, fileToDataUrl, appVersion
   } from "./stores";
   import { setConfig as setConfigAction } from "./actions";
-  import { checkForUpdate, downloadUpdate, applyUpdate, type UpdateInfo } from "./updater";
+  import { checkForUpdate, startUpdate, updateProgress, type UpdateInfo } from "./updater";
   import { isMobile } from "./platform";
   import {
     uiScaleValue, scalePercentValue, clampNumber, isNumberInRange,
@@ -108,35 +108,36 @@
 
   // ---- 更新 ----
   let checkingUpdate = false;
-  let downloading = false;
-  let downloadPercent = 0;
   let pendingUpdate: UpdateInfo | null = null;
+  let upToDate = false;
+  let updateCheckError = "";
+
+  $: progress = $updateProgress;
+  $: updateBusy = progress.phase === "downloading" || progress.phase === "restarting";
 
   async function checkUpdates(): Promise<void> {
-    if (checkingUpdate || downloading) return;
+    if (checkingUpdate || updateBusy) return;
     checkingUpdate = true;
     pendingUpdate = null;
+    upToDate = false;
+    updateCheckError = "";
     const result = await checkForUpdate($appVersion || "0.0.0");
     checkingUpdate = false;
     if (result.status === "up-to-date") {
-      showToast("当前已是最新版本");
+      upToDate = true;
     } else if (result.status === "available") {
       pendingUpdate = result.info;
     } else {
-      showToast(result.message);
+      updateCheckError = result.message;
     }
   }
 
   async function downloadAndApply(): Promise<void> {
-    if (!pendingUpdate || downloading) return;
-    downloading = true;
-    downloadPercent = 0;
+    if (!pendingUpdate || updateBusy) return;
     try {
-      await downloadUpdate(pendingUpdate, (percent) => (downloadPercent = percent));
-      await applyUpdate();
+      await startUpdate(pendingUpdate);
     } catch (error) {
-      downloading = false;
-      showToast(`更新失败：${String(error)}`);
+      updateProgress.set({ phase: "failed", stage: "", percent: 0, message: String(error) });
     }
   }
 
@@ -463,17 +464,30 @@
       </div>
       <div class="settings-row">
         <span>检查更新</span>
-        <button class="settings-button" style="justify-self: start" type="button" disabled={checkingUpdate || downloading} on:click={checkUpdates}>
+        <button class="settings-button" type="button" disabled={checkingUpdate || updateBusy} on:click={checkUpdates}>
           {checkingUpdate ? "检查中…" : "检查更新"}
         </button>
       </div>
+      {#if progress.phase === "downloading"}
+        <p class="update-status">正在下载 {progress.stage || "更新"} {progress.percent}%</p>
+      {:else if progress.phase === "restarting"}
+        <p class="update-status">下载完成，正在重启应用…</p>
+      {:else if progress.phase === "failed"}
+        <p class="update-error">更新失败：{progress.message}</p>
+      {/if}
       {#if pendingUpdate}
         <div class="update-available">
           <p>发现新版本 <strong>v{pendingUpdate.version}</strong></p>
-          <button class="settings-button primary" type="button" disabled={downloading} on:click={downloadAndApply}>
-            {downloading ? `下载中 ${downloadPercent}%` : "下载并重启更新"}
+          <button class="settings-button primary" type="button" disabled={updateBusy} on:click={downloadAndApply}>
+            下载并重启更新
           </button>
         </div>
+      {/if}
+      {#if upToDate && !pendingUpdate}
+        <p class="update-status">您当前已经是最新版本</p>
+      {/if}
+      {#if updateCheckError}
+        <p class="update-error">{updateCheckError}</p>
       {/if}
     </section>
   {/if}
