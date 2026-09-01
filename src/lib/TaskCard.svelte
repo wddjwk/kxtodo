@@ -3,6 +3,8 @@
   import { Check, ChevronUp, PenLine, Plus, X } from "@lucide/svelte";
   import { collapsedMarkdownLine, hasMultipleMarkdownLines, renderInlineMarkdown, renderMarkdown } from "./markdown";
   import { mdImageCache, resolveMarkdownImages } from "./images";
+  import { appSettings } from "./stores";
+  import { uiScaleValue } from "./styles";
   import DatePicker from "./DatePicker.svelte";
   import type { Task } from "./types";
 
@@ -27,6 +29,8 @@
   let editingTagId = "";
   let editingTagText = "";
   let tagEditEl: HTMLInputElement;
+  let dueButtonEl: HTMLButtonElement;
+  let datePopoverStyle = "";
 
   $: resolvedMd = resolveMarkdownImages(task.markdown, nodeId, $mdImageCache);
   $: collapsedHtml = renderInlineMarkdown(collapsedMarkdownLine(task.markdown));
@@ -40,8 +44,20 @@
     return `${parts[1]}月${parts[2]}日`;
   }
 
+  /** 日期弹窗用 fixed 浮层：absolute 会被卡片/任务列表的 overflow 裁剪。
+   * fixed 在 transform 缩放的 app-shell 内相对其左上角定位，按钮的屏幕坐标
+   * 除以 scale 换算回逻辑坐标；贴近视口底部时向上翻转。 */
   function toggleDatePicker(): void {
     showPicker = !showPicker;
+    if (!showPicker || !dueButtonEl) return;
+    const scale = uiScaleValue($appSettings.appearance.uiScale);
+    const rect = dueButtonEl.getBoundingClientRect();
+    const estVisualHeight = 360;
+    const openBelow = rect.bottom + estVisualHeight <= window.innerHeight;
+    const anchorEdge = openBelow ? rect.bottom + 6 : rect.top - estVisualHeight - 6;
+    const topLogical = anchorEdge / scale;
+    const rightLogical = (window.innerWidth - rect.right) / scale;
+    datePopoverStyle = `top: ${topLogical}px; right: ${rightLogical}px;`;
   }
 
   function handlePick(date: string): void {
@@ -195,9 +211,9 @@
 
     {#if !isExpanded && task.dueDate}
       <div class="task-due-wrap">
-        <button class="task-due-date" type="button" on:click|stopPropagation={toggleDatePicker}>{formattedDate}</button>
+        <button bind:this={dueButtonEl} class="task-due-date" type="button" on:click|stopPropagation={toggleDatePicker}>{formattedDate}</button>
         {#if showPicker}
-          <div class="task-date-popover">
+          <div class="task-date-popover" style={datePopoverStyle}>
             <DatePicker value={task.dueDate?.slice(0, 10) ?? ""} on:select={(e) => handlePick(e.detail)} on:clear={handleClearDate} />
           </div>
         {/if}

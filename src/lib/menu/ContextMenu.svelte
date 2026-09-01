@@ -53,13 +53,13 @@
       event.preventDefault();
       const delta = event.key === "ArrowDown" ? 1 : -1;
       const next = activeIndex < 0 ? 0 : (activeIndex + delta + items.length) % items.length;
-      items[next]?.focus();
+      items[next]?.focus({ preventScroll: true });
     } else if (event.key === "Home") {
       event.preventDefault();
-      items[0]?.focus();
+      items[0]?.focus({ preventScroll: true });
     } else if (event.key === "End") {
       event.preventDefault();
-      items[items.length - 1]?.focus();
+      items[items.length - 1]?.focus({ preventScroll: true });
     }
   }
 
@@ -68,27 +68,44 @@
     return [...menuEl.querySelectorAll<HTMLElement>("[data-menu-item]:not([disabled])")];
   }
 
+  /** 按钮等元素阻止 mousedown 默认聚焦（防 focus-scroll 滚动祖先误关菜单），
+   * click 时再以 preventScroll 补焦点；输入类控件必须保留原生聚焦——子面板
+   * 会 stopPropagation 吞掉 click，根级补焦 handler 收不到事件。输入框的
+   * focus-scroll 由 inputActivity 时间窗守卫兜底。 */
+  function handleMenuMouseDown(event: MouseEvent): void {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest("input, textarea, select")) return;
+    event.preventDefault();
+  }
+
+  function handleMenuClick(event: MouseEvent): void {
+    const target = event.target as HTMLElement | null;
+    const focusable = target?.closest<HTMLElement>("button, input, [tabindex]:not([tabindex='-1'])");
+    focusable?.focus({ preventScroll: true });
+  }
+
+  // 输入框 focus / 输入法 compositionend 时浏览器会对输入框自动
+  // scrollIntoView，滚动 DOM 祖先并触发 scroll 事件——这是“输入中文菜单就
+  // 消失”的根源。记录输入活动时刻，短窗口内的 scroll 视为自动滚动，不关菜单。
+  let inputActivityAt = 0;
+
+  function markInputActivity(): void {
+    inputActivityAt = performance.now();
+  }
+
   function handleScroll(event: Event): void {
+    if (performance.now() - inputActivityAt < 150) return;
     if (!isInside(event.target)) onClose();
   }
 
   let blurCloseTimer: number | undefined;
 
-  // 菜单 DOM 默认挂在滚动容器内：点击菜单项/输入框获得焦点时浏览器会
-  // focus-scroll 最近的滚动祖先，触发 scroll 误关菜单；且拆卸时 Svelte 只按
-  // 挂载位置摘节点。用 action 传送到 body，destroy 时显式移除。
-  function portal(node: HTMLElement): { destroy(): void } {
-    document.body.appendChild(node);
-    return {
-      destroy() {
-        node.remove();
-      }
-    };
-  }
-
-  // 输入法候选窗等系统浮层会瞬时抢走窗口焦点（blur/focus 成对出现），
-  // 延迟确认且焦点未回归才关菜单，避免输入中文时菜单被误关。
+  // 输入法候选窗等系统浮层会瞬时甚至持续抢走窗口焦点；菜单内有聚焦元素
+  // （正在输入）时绝不因 blur 关闭，其余情况延迟确认窗口真的失焦才关。
   function handleWindowBlur(): void {
+    const active = document.activeElement;
+    if (active && menuEl?.contains(active)) return;
     window.clearTimeout(blurCloseTimer);
     blurCloseTimer = window.setTimeout(() => {
       if (!document.hasFocus()) onClose();
@@ -123,12 +140,14 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   bind:this={menuEl}
-  use:portal
   class="context-menu"
   role="menu"
   tabindex="-1"
   style={`left: ${left}px; top: ${top}px; min-width: ${minWidth}px; visibility: ${ready ? "visible" : "hidden"};`}
-  on:click|stopPropagation
+  on:mousedown={handleMenuMouseDown}
+  on:click|stopPropagation={handleMenuClick}
+  on:focusin={markInputActivity}
+  on:compositionend={markInputActivity}
   on:contextmenu|preventDefault|stopPropagation
 >
   <slot />

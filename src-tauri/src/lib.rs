@@ -674,7 +674,9 @@ fn notification_ready(window: tauri::Window) -> Result<(), String> {
 
 #[cfg(desktop)]
 #[tauri::command]
-fn send_notification(
+// async 让命令跑在线程池：同步命令占主线程时，show_notification_window 内的
+// run_on_main_thread + 阻塞 recv 会在主线程上自等待，直接把整个应用锁死。
+async fn send_notification(
     notification: NotificationRequest,
     core: State<'_, Arc<domain::host::HostCore>>,
 ) -> Result<(), String> {
