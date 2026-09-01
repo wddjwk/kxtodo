@@ -38,6 +38,8 @@
   }
 
   function handleKeydown(event: KeyboardEvent): void {
+    // 输入法组合期间（候选键/确认键）不响应菜单键盘导航，避免抢焦点打断输入。
+    if (event.isComposing || event.keyCode === 229) return;
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
@@ -70,19 +72,49 @@
     if (!isInside(event.target)) onClose();
   }
 
+  let blurCloseTimer: number | undefined;
+
+  // 菜单 DOM 默认挂在滚动容器内：点击菜单项/输入框获得焦点时浏览器会
+  // focus-scroll 最近的滚动祖先，触发 scroll 误关菜单；且拆卸时 Svelte 只按
+  // 挂载位置摘节点。用 action 传送到 body，destroy 时显式移除。
+  function portal(node: HTMLElement): { destroy(): void } {
+    document.body.appendChild(node);
+    return {
+      destroy() {
+        node.remove();
+      }
+    };
+  }
+
+  // 输入法候选窗等系统浮层会瞬时抢走窗口焦点（blur/focus 成对出现），
+  // 延迟确认且焦点未回归才关菜单，避免输入中文时菜单被误关。
+  function handleWindowBlur(): void {
+    window.clearTimeout(blurCloseTimer);
+    blurCloseTimer = window.setTimeout(() => {
+      if (!document.hasFocus()) onClose();
+    }, 180);
+  }
+
+  function handleWindowFocus(): void {
+    window.clearTimeout(blurCloseTimer);
+  }
+
   onMount(() => {
     void layout();
     window.addEventListener("pointerdown", handlePointerDown, true);
     window.addEventListener("keydown", handleKeydown, true);
-    window.addEventListener("blur", onClose);
+    window.addEventListener("blur", handleWindowBlur);
+    window.addEventListener("focus", handleWindowFocus);
     window.addEventListener("resize", onClose);
     window.addEventListener("scroll", handleScroll, true);
     return () => {
       window.removeEventListener("pointerdown", handlePointerDown, true);
       window.removeEventListener("keydown", handleKeydown, true);
-      window.removeEventListener("blur", onClose);
+      window.removeEventListener("blur", handleWindowBlur);
+      window.removeEventListener("focus", handleWindowFocus);
       window.removeEventListener("resize", onClose);
       window.removeEventListener("scroll", handleScroll, true);
+      window.clearTimeout(blurCloseTimer);
     };
   });
 </script>
@@ -91,6 +123,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   bind:this={menuEl}
+  use:portal
   class="context-menu"
   role="menu"
   tabindex="-1"

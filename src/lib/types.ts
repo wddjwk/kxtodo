@@ -89,6 +89,9 @@ export type Settings = {
   updates: {
     autoCheck: boolean;
   };
+  features: {
+    showCategoryBadges: boolean;
+  };
 };
 
 export type ListBackground = {

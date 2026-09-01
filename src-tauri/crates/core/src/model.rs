@@ -214,6 +214,8 @@ pub struct SettingsFile {
     pub cloud: CloudSettings,
     #[serde(default)]
     pub updates: UpdateSettings,
+    #[serde(default)]
+    pub features: FeatureSettings,
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
@@ -557,6 +559,25 @@ impl Default for UpdateSettings {
     fn default() -> Self {
         Self {
             auto_check: true,
+            extra: Map::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FeatureSettings {
+    /// 侧栏分类行显示未完成条目数角标（特性开关）
+    #[serde(rename = "showCategoryBadges", default = "default_true")]
+    pub show_category_badges: bool,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
+}
+
+impl Default for FeatureSettings {
+    fn default() -> Self {
+        Self {
+            show_category_badges: true,
             extra: Map::new(),
         }
     }

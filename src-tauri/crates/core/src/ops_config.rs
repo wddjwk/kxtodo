@@ -178,6 +178,12 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         description: "启动后自动检查更新",
         is_map: false,
     },
+    FieldMeta {
+        path: "features.showCategoryBadges",
+        kind: "boolean",
+        description: "侧栏分类行显示未完成角标（特性开关）",
+        is_map: false,
+    },
 ];
 
 pub fn field_meta(path: &str) -> Option<&'static FieldMeta> {
@@ -249,6 +255,7 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "cloud.endpoint" => json!(settings.cloud.endpoint),
         "cloud.enabled" => json!(settings.cloud.enabled),
         "updates.autoCheck" => json!(settings.updates.auto_check),
+        "features.showCategoryBadges" => json!(settings.features.show_category_badges),
         _ => return Err(unknown_field(path)),
     };
     Ok(value)
@@ -588,6 +595,9 @@ pub fn set_value(
         "cloud.endpoint" => settings.cloud.endpoint = expect_string(path, &value)?,
         "cloud.enabled" => settings.cloud.enabled = expect_bool(path, &value)?,
         "updates.autoCheck" => settings.updates.auto_check = expect_bool(path, &value)?,
+        "features.showCategoryBadges" => {
+            settings.features.show_category_badges = expect_bool(path, &value)?;
+        }
         _ => return Err(unknown_field(path)),
     }
     outcome.value = get_typed(settings, path)?;
@@ -721,6 +731,9 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "cloud.endpoint" => target.cloud.endpoint = defaults.cloud.endpoint.clone(),
         "cloud.enabled" => target.cloud.enabled = defaults.cloud.enabled,
         "updates.autoCheck" => target.updates.auto_check = defaults.updates.auto_check,
+        "features.showCategoryBadges" => {
+            target.features.show_category_badges = defaults.features.show_category_badges
+        }
         _ => return Err(unknown_field(path)),
     }
     Ok(())

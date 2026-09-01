@@ -145,6 +145,10 @@
     void setConfigAction("updates.autoCheck", value);
   }
 
+  function updateFeature<K extends keyof Settings["features"]>(field: K, value: Settings["features"][K]): void {
+    void setConfigAction(`features.${field}`, value);
+  }
+
   async function uploadAvatar(): Promise<void> {
     if (!isTauriRuntime) {
       avatarFileInput.click();
@@ -295,6 +299,19 @@
         on:change={(event) => updateAppearance("linkOpenMode", event.detail as Settings["appearance"]["linkOpenMode"])}
       />
     </div>
+  </section>
+
+  <section>
+    <h3>特性开关</h3>
+    <label class="toggle-row">
+      <span>显示分类角标</span>
+      <input
+        type="checkbox"
+        checked={$appSettings.features.showCategoryBadges}
+        on:change={(event) => updateFeature("showCategoryBadges", event.currentTarget.checked)}
+      />
+    </label>
+    <p class="muted">在左侧栏分类行显示该分类下未完成条目数。</p>
   </section>
 
   <section>

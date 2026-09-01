@@ -536,6 +536,10 @@ fn normalize_notification(
 #[cfg(desktop)]
 static NOTIFICATION_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// 近 3 秒内新建通知窗的出生时间：show 有最多 900ms 兜底延迟，新建时可能还不可见。
+#[cfg(desktop)]
+static NOTIFICATION_BIRTHS: std::sync::Mutex<Vec<std::time::Instant>> = std::sync::Mutex::new(Vec::new());
+
 #[cfg(desktop)]
 fn notification_position(
     app: &AppHandle,
@@ -583,12 +587,7 @@ fn show_notification_window(
     let label_clone = label.clone();
     let (tx, rx) = std::sync::mpsc::channel();
     app.run_on_main_thread(move || {
-        let _ = tx.send(build_notification_window(
-            &app_clone,
-            label_clone,
-            notification,
-            counter,
-        ));
+        let _ = tx.send(build_notification_window(&app_clone, label_clone, notification));
     })
     .map_err(|error| error.to_string())?;
     rx.recv().map_err(|error| error.to_string())?
@@ -599,7 +598,6 @@ fn build_notification_window(
     app: &AppHandle,
     label: String,
     notification: NotificationRequest,
-    counter: u64,
 ) -> Result<String, String> {
     let payload = serde_json::to_vec(&notification).map_err(|error| error.to_string())?;
     let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
@@ -607,7 +605,27 @@ fn build_notification_window(
     let position_kind = parse_notification_position(&notification.position);
     let width = notification_setting_f64(app, "width", 400.0);
     let height = notification_setting_f64(app, "height", 68.0);
-    let position = notification_position(app, width, height, counter, position_kind);
+    // 堆叠序号 = 当前可见通知窗数 与 近 3 秒新建数 取大。生命周期计数器会把
+    // 已消失窗口的位置继续算给新窗；只数存活窗口又会把“视觉已关、销毁尚未
+    // 完成”的窗口算进去，连发时越叠越高。
+    let visible_count = app
+        .webview_windows()
+        .iter()
+        .filter(|(label, window)| {
+            label.starts_with("notification-") && window.is_visible().unwrap_or(false)
+        })
+        .count();
+    let now = std::time::Instant::now();
+    let stack_index = {
+        let mut births = NOTIFICATION_BIRTHS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        births.retain(|at| now.duration_since(*at).as_millis() < 3_000);
+        let index = visible_count.max(births.len()) as u64;
+        births.push(now);
+        index
+    };
+    let position = notification_position(app, width, height, stack_index, position_kind);
     let duration_ms = notification.duration_ms;
 
     // 隐藏创建，内容首帧渲染后由 notification_ready 命令显示（消除白帧闪烁）；

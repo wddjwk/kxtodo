@@ -11,6 +11,7 @@
   export let parentId: string | null = null;
   export let selectedNodeId = "";
   export let counts: Record<string, number> = {};
+  export let showCategoryCounts = true;
   export let level = 0;
   export let renamingId: string | null = null;
   export let renameDraft = "";
@@ -291,13 +292,19 @@
         on:pointerdown|stopPropagation
         on:input={(event) => dispatch("renameInput", event.currentTarget.value)}
         on:blur={() => dispatch("renameCommit", node.id)}
-        on:keydown={(event) => event.key === "Enter" && dispatch("renameCommit", node.id)}
+        on:keydown={(event) => {
+          if (event.isComposing || event.keyCode === 229) return;
+          if (event.key === "Enter") dispatch("renameCommit", node.id);
+        }}
       />
     {:else}
       <span class="list-name">{node.name}</span>
     {/if}
 
     {#if node.kind === "category"}
+      {#if showCategoryCounts && counts[node.id]}
+        <span class="count-pill">{counts[node.id]}</span>
+      {/if}
       <button class="collapse-button" type="button" aria-label="折叠分类" on:click|stopPropagation={() => dispatch("toggleCategory", node.id)}>
         <ChevronDown class={node.collapsed ? "collapsed" : ""} size={19} />
       </button>
@@ -311,6 +318,7 @@
       parentId={node.id}
       {selectedNodeId}
       {counts}
+      {showCategoryCounts}
       level={level + 1}
       {renamingId}
       {renameDraft}

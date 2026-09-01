@@ -30,6 +30,7 @@
   import ContextMenu from "./menu/ContextMenu.svelte";
   import MenuItem from "./menu/MenuItem.svelte";
   import MenuSeparator from "./menu/MenuSeparator.svelte";
+  import MoveTargetTree from "./menu/MoveTargetTree.svelte";
   import ListMenu from "./workspace/ListMenu.svelte";
   import { sortTasks, type SortMode } from "./sort";
   import { showMobileList, isMobile } from "./platform";
@@ -77,7 +78,10 @@
         : sortedTasks.filter((task) => task.completed && dateOnly(task.completedAt) === todayIso()))
     : sortedTasks.filter((task) => task.completed);
   $: taskMenuTask = taskMenu ? $appState.tasks.find((task) => task.id === taskMenu?.taskId) : null;
-  $: taskMoveTargetList = taskMenu ? taskMoveTargets($appState.nodes, taskMenuTask?.nodeId ?? "") : [];
+  $: hasTaskMoveTargets = taskMenu ? taskMoveTargets($appState.nodes, taskMenuTask?.nodeId ?? "").length > 0 : false;
+  $: expandableTasks = $visibleTasks.filter((task) => hasMultipleMarkdownLines(task.markdown));
+  $: allExpanded = expandableTasks.length > 0 && expandableTasks.every((task) => task.expanded);
+  $: allCollapsed = expandableTasks.every((task) => !task.expanded);
   $: if (!taskMenu) { tagInputText = ""; selectedTagColor = "yellow"; editingTagIdInMenu = ""; editingTagTextInMenu = ""; }
 
   // My Day suggestions
@@ -337,6 +341,7 @@
   }
 
   function handleComposerKeydown(event: KeyboardEvent): void {
+    if (event.isComposing || event.keyCode === 229) return;
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       addTaskFromDraft();
@@ -426,6 +431,7 @@
   }
 
   function handleHeaderRenameKeydown(event: KeyboardEvent): void {
+    if (event.isComposing || event.keyCode === 229) return;
     if (event.key === "Enter") {
       event.preventDefault();
       commitHeaderRename();
@@ -515,16 +521,20 @@
             <Lightbulb size={21} />
           </button>
         {/if}
-        <button
-          type="button"
-          title="展开全部"
-          on:click|stopPropagation={() => expandAll(true)}
-        ><ChevronsDown size={21} /></button>
-        <button
-          type="button"
-          title="收起全部"
-          on:click|stopPropagation={() => expandAll(false)}
-        ><ChevronsUp size={21} /></button>
+        {#if !allCollapsed}
+          <button
+            type="button"
+            title="收起全部"
+            on:click|stopPropagation={() => expandAll(false)}
+          ><ChevronsUp size={21} /></button>
+        {/if}
+        {#if !allExpanded}
+          <button
+            type="button"
+            title="展开全部"
+            on:click|stopPropagation={() => expandAll(true)}
+          ><ChevronsDown size={21} /></button>
+        {/if}
 
         {#if showSuggestions}
         <section class="suggestion-panel" on:click|stopPropagation>
@@ -727,7 +737,7 @@
                     maxlength="20"
                     value={editingTagTextInMenu}
                     on:input={(e) => editingTagTextInMenu = e.currentTarget.value}
-                    on:keydown|stopPropagation={(e) => { if (e.key === "Enter") submitTagEditInMenu(); }}
+                    on:keydown|stopPropagation={(e) => { if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) submitTagEditInMenu(); }}
                     on:blur={submitTagEditInMenu}
                   />
                   <button class="tag-add-btn" type="button" on:click|stopPropagation={submitTagEditInMenu}>
@@ -754,7 +764,7 @@
               maxlength="20"
               value={tagInputText}
               on:input={(e) => tagInputText = e.currentTarget.value}
-              on:keydown|stopPropagation={(e) => { if (e.key === "Enter") submitTagInput(); }}
+              on:keydown|stopPropagation={(e) => { if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) submitTagInput(); }}
             />
             <button class="tag-add-btn" type="button" title="添加标签" on:click|stopPropagation={submitTagInput}>
               <Plus size={15} />
@@ -780,11 +790,14 @@
       <MenuItem icon={SmilePlus} label="添加表情" onSelect={() => openEmojiPickerForTask(taskMenuTask.id)} />
       <MenuItem icon={FolderInput} label="移动到">
         <div slot="submenu" class="submenu-list">
-          {#each taskMoveTargetList as target (target.id)}
-            <MenuItem label={target.name} onSelect={() => moveTaskToNode(taskMenuTask.id, target.id)} />
-          {:else}
+          <MoveTargetTree
+            nodes={$appState.nodes}
+            currentEntryId={taskMenuTask.nodeId}
+            on:move={(event) => moveTaskToNode(taskMenuTask.id, event.detail)}
+          />
+          {#if !hasTaskMoveTargets}
             <div class="menu-empty">没有可移动的目标</div>
-          {/each}
+          {/if}
         </div>
       </MenuItem>
       <MenuSeparator />

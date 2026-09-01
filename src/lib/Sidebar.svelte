@@ -322,6 +322,7 @@
       nodes={$appState.nodes}
       selectedNodeId={$appState.selectedNodeId}
       counts={$listCounts}
+      showCategoryCounts={$appSettings.features.showCategoryBadges}
       {renamingId}
       {renameDraft}
       {draggingId}

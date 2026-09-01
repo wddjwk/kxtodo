@@ -140,6 +140,17 @@
   white-space: nowrap;
 }
 
+/* 移动到子菜单的可折叠分类行（复用 menu-item-button 视觉） */
+.move-category-row .move-chevron {
+  flex-shrink: 0;
+  color: #9ca3af;
+  transition: transform 0.12s ease-out;
+}
+
+.move-category-row .move-chevron.open {
+  transform: rotate(90deg);
+}
+
 /* 菜单内联动作按钮（背景面板 上传图片/清除背景 等），与菜单项同一视觉语言 */
 .menu-action-button {
   display: inline-flex;

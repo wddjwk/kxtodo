@@ -89,6 +89,9 @@ export const defaultSettings: Settings = {
   },
   updates: {
     autoCheck: true
+  },
+  features: {
+    showCategoryBadges: true
   }
 };
 
@@ -521,6 +524,7 @@ export function normalizeSettings(raw: unknown): Settings {
     globalShortcut?: string;
     shortcuts?: Partial<Settings["shortcuts"]> | Array<{ id: string; combo: string }>;
     cloudSync?: Partial<Settings["cloud"]>;
+    features?: Partial<Settings["features"]>;
   };
   const legacyShortcuts = Array.isArray(source?.shortcuts) ? source.shortcuts : [];
   const shortcutValue = (key: keyof Settings["shortcuts"], fallback: string) => {
@@ -643,6 +647,12 @@ export function normalizeSettings(raw: unknown): Settings {
     },
     updates: {
       autoCheck: typeof source?.updates?.autoCheck === "boolean" ? source.updates.autoCheck : true
+    },
+    features: {
+      showCategoryBadges:
+        typeof source?.features?.showCategoryBadges === "boolean"
+          ? source.features.showCategoryBadges
+          : defaultSettings.features.showCategoryBadges
     }
   };
 }
