@@ -17,6 +17,7 @@
   } from "./defaults";
   import { pickExecutableFile } from "./backend";
   import Dropdown from "./Dropdown.svelte";
+  import NumberField from "./NumberField.svelte";
   import SchedulerActionEditor from "./SchedulerActionEditor.svelte";
   import type {
     ScheduledTask,
@@ -225,14 +226,6 @@
     return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement ? target.value : "";
   }
 
-  function numberValue(event: Event, fallback: number, min: number, max: number): number {
-    const value = Number(textValue(event));
-    if (!Number.isFinite(value)) {
-      return fallback;
-    }
-    return Math.min(max, Math.max(min, Math.round(value)));
-  }
-
   function checkedValue(event: Event): boolean {
     const target = event.currentTarget;
     return target instanceof HTMLInputElement ? target.checked : false;
@@ -391,11 +384,23 @@
               <div class="scheduler-form-grid">
                 <label>
                   <span>间隔秒数</span>
-                  <input type="number" min="1" value={task.trigger.everySeconds} on:input={(event) => patchTrigger(task.id, { everySeconds: numberValue(event, 300, 1, 31536000) })} />
+                  <NumberField
+                    ariaLabel="间隔秒数"
+                    min={1}
+                    max={31536000}
+                    value={task.trigger.everySeconds}
+                    onCommit={(v) => patchTrigger(task.id, { everySeconds: v })}
+                  />
                 </label>
                 <label>
                   <span>重复次数（0 = 无限）</span>
-                  <input type="number" min="0" value={task.trigger.repeatCount} on:input={(event) => patchTrigger(task.id, { repeatCount: numberValue(event, 0, 0, 1000000) })} />
+                  <NumberField
+                    ariaLabel="重复次数"
+                    min={0}
+                    max={1000000}
+                    value={task.trigger.repeatCount}
+                    onCommit={(v) => patchTrigger(task.id, { repeatCount: v })}
+                  />
                 </label>
               </div>
               <div class="condition-row">
@@ -425,7 +430,13 @@
               <div class="scheduler-form-grid">
                 <label>
                   <span>检查间隔秒数</span>
-                  <input type="number" min="1" value={task.trigger.everySeconds} on:input={(event) => patchTrigger(task.id, { everySeconds: numberValue(event, 60, 1, 31536000) })} />
+                  <NumberField
+                    ariaLabel="检查间隔秒数"
+                    min={1}
+                    max={31536000}
+                    value={task.trigger.everySeconds}
+                    onCommit={(v) => patchTrigger(task.id, { everySeconds: v })}
+                  />
                 </label>
                 <label>
                   <span>条件判断</span>

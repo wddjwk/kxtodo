@@ -12,3 +12,59 @@
   padding: 12px 16px;
   box-shadow: 0 14px 34px rgb(0 0 0 / 18%);
 }
+
+/* 严格数字输入（NumberField）：设置抽屉与定时任务编辑共用 */
+.number-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.number-field .number-step {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  place-items: center;
+  border: 1px solid #d8d8d8;
+  border-radius: 6px;
+  background: #fbfbfb;
+  color: #444;
+  padding: 0;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.number-field .number-step:hover {
+  background: #f0f0f0;
+}
+
+.number-field .number-step:active {
+  background: #e6e6e6;
+}
+
+.number-field input {
+  width: 84px;
+  min-width: 0;
+  border: 1px solid #d8d8d8;
+  border-radius: 7px;
+  outline: none;
+  background: #fbfbfb;
+  color: #222;
+  padding: 6px 8px;
+  font-size: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.number-field input:focus {
+  border-color: var(--accent, #2564cf);
+  background: #ffffff;
+}
+
+.number-field .number-suffix {
+  color: #555;
+  font-variant-numeric: tabular-nums;
+}

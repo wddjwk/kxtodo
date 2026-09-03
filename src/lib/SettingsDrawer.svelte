@@ -6,15 +6,14 @@
   import { checkForUpdate, startUpdate, updateProgress, type UpdateInfo } from "./updater";
   import { isMobile } from "./platform";
   import {
-    uiScaleValue, scalePercentValue, clampNumber, isNumberInRange,
-    buildSettingsDrawerStyle, avatarStyle, avatarInitial
+    scalePercentValue, buildSettingsDrawerStyle, avatarStyle, avatarInitial
   } from "./styles";
-  import { defaultSettings } from "./defaults";
   import {
     isTauriRuntime, pickImageFile, saveAvatarImage, avatarImageUrl
   } from "./backend";
   import { avatarCache, resolveAvatarSrc } from "./images";
   import Dropdown from "./Dropdown.svelte";
+  import NumberField from "./NumberField.svelte";
   import type { Settings } from "./types";
 
   let avatarFileInput: HTMLInputElement;
@@ -41,42 +40,6 @@
 
   function updateNotifications<K extends keyof Settings["notifications"]>(field: K, value: Settings["notifications"][K]): void {
     void setConfigAction(`notifications.${field}`, value);
-  }
-
-  function updateScalePercent(value: number): void {
-    if (isNumberInRange(value, 50, 150)) {
-      updateAppearance("uiScale", Math.round(value) / 100);
-    }
-  }
-
-  function commitScalePercent(value: number): void {
-    const nextPercent = clampNumber(value, scalePercentValue($appSettings.appearance.uiScale), 50, 150);
-    updateAppearance("uiScale", nextPercent / 100);
-  }
-
-  function updateAppearanceFont(field: "uiFontSize" | "markdownFontSize" | "editorFontSize" | "tagFontSize", value: number): void {
-    const max = field === "uiFontSize" ? 22 : field === "tagFontSize" ? 30 : 26;
-    const min = field === "tagFontSize" ? 11 : 14;
-    if (isNumberInRange(value, min, max)) {
-      updateAppearance(field, Math.round(value));
-    }
-  }
-
-  function commitAppearanceFont(field: "uiFontSize" | "markdownFontSize" | "editorFontSize" | "tagFontSize", value: number): void {
-    const fallback = defaultSettings.appearance[field];
-    const max = field === "uiFontSize" ? 22 : field === "tagFontSize" ? 30 : 26;
-    const min = field === "tagFontSize" ? 11 : 14;
-    updateAppearance(field, clampNumber(value, fallback, min, max));
-  }
-
-  function updateNotificationDuration(value: number): void {
-    if (isNumberInRange(value, 1200, 60000)) {
-      updateNotifications("durationMs", Math.round(value));
-    }
-  }
-
-  function commitNotificationDuration(value: number): void {
-    updateNotifications("durationMs", clampNumber(value, defaultSettings.notifications.durationMs, 1200, 60000));
   }
 
   function testNotification(): void {
@@ -209,83 +172,63 @@
     <h3>显示与链接</h3>
     <div class="settings-row number-row">
       <span>界面缩放</span>
-      <span class="number-control">
-        <input
-          aria-label="界面缩放"
-          type="number"
-          min="50"
-          max="150"
-          step="1"
-          value={scalePercentValue($appSettings.appearance.uiScale)}
-          on:input={(event) => updateScalePercent(event.currentTarget.valueAsNumber)}
-          on:change={(event) => commitScalePercent(event.currentTarget.valueAsNumber)}
-        />
-        <span>%</span>
-      </span>
+      <NumberField
+        ariaLabel="界面缩放"
+        suffix="%"
+        min={50}
+        max={150}
+        live={true}
+        value={scalePercentValue($appSettings.appearance.uiScale)}
+        onCommit={(v) => updateAppearance("uiScale", v / 100)}
+      />
     </div>
     <div class="settings-row number-row">
       <span>UI 字号</span>
-      <span class="number-control">
-        <input
-          aria-label="UI 字号"
-          type="number"
-          min="14"
-          max="22"
-          step="1"
-          value={$appSettings.appearance.uiFontSize}
-          on:input={(event) => updateAppearanceFont("uiFontSize", event.currentTarget.valueAsNumber)}
-          on:change={(event) => commitAppearanceFont("uiFontSize", event.currentTarget.valueAsNumber)}
-        />
-        <span>px</span>
-      </span>
+      <NumberField
+        ariaLabel="UI 字号"
+        suffix="px"
+        min={14}
+        max={22}
+        live={true}
+        value={$appSettings.appearance.uiFontSize}
+        onCommit={(v) => updateAppearance("uiFontSize", v)}
+      />
     </div>
     <div class="settings-row number-row">
       <span>Markdown 字号</span>
-      <span class="number-control">
-        <input
-          aria-label="Markdown 字号"
-          type="number"
-          min="14"
-          max="26"
-          step="1"
-          value={$appSettings.appearance.markdownFontSize}
-          on:input={(event) => updateAppearanceFont("markdownFontSize", event.currentTarget.valueAsNumber)}
-          on:change={(event) => commitAppearanceFont("markdownFontSize", event.currentTarget.valueAsNumber)}
-        />
-        <span>px</span>
-      </span>
+      <NumberField
+        ariaLabel="Markdown 字号"
+        suffix="px"
+        min={14}
+        max={26}
+        live={true}
+        value={$appSettings.appearance.markdownFontSize}
+        onCommit={(v) => updateAppearance("markdownFontSize", v)}
+      />
     </div>
     <div class="settings-row number-row">
       <span>编辑器字号</span>
-      <span class="number-control">
-        <input
-          aria-label="编辑器字号"
-          type="number"
-          min="14"
-          max="26"
-          step="1"
-          value={$appSettings.appearance.editorFontSize}
-          on:input={(event) => updateAppearanceFont("editorFontSize", event.currentTarget.valueAsNumber)}
-          on:change={(event) => commitAppearanceFont("editorFontSize", event.currentTarget.valueAsNumber)}
-        />
-        <span>px</span>
-      </span>
+      <NumberField
+        ariaLabel="编辑器字号"
+        suffix="px"
+        min={14}
+        max={26}
+        live={true}
+        value={$appSettings.appearance.editorFontSize}
+        onCommit={(v) => updateAppearance("editorFontSize", v)}
+      />
     </div>
     <div class="settings-row number-row">
       <span>标签字号</span>
-      <span class="number-control">
-        <input
-          aria-label="标签字号"
-          type="number"
-          min="11"
-          max="30"
-          step="1"
-          value={$appSettings.appearance.tagFontSize}
-          on:input={(event) => updateAppearanceFont("tagFontSize", event.currentTarget.valueAsNumber)}
-          on:change={(event) => commitAppearanceFont("tagFontSize", event.currentTarget.valueAsNumber)}
-        />
-        <span>px</span>
-      </span>
+      <NumberField
+        ariaLabel="标签字号"
+        suffix="px"
+        min={11}
+        max={30}
+        live={true}
+        value={$appSettings.appearance.tagFontSize}
+        onCommit={(v) => updateAppearance("tagFontSize", v)}
+      />
     </div>
     <div class="settings-row">
       <span>链接打开</span>
@@ -343,19 +286,14 @@
     <h3>消息通知</h3>
     <div class="settings-row number-row">
       <span>自动隐藏</span>
-      <span class="number-control">
-        <input
-          aria-label="通知自动隐藏时长"
-          type="number"
-          min="1200"
-          max="60000"
-          step="100"
-          value={$appSettings.notifications.durationMs}
-          on:input={(event) => updateNotificationDuration(event.currentTarget.valueAsNumber)}
-          on:change={(event) => commitNotificationDuration(event.currentTarget.valueAsNumber)}
-        />
-        <span>ms</span>
-      </span>
+      <NumberField
+        ariaLabel="通知自动隐藏时长"
+        suffix="ms"
+        min={1200}
+        max={60000}
+        value={$appSettings.notifications.durationMs}
+        onCommit={(v) => updateNotifications("durationMs", v)}
+      />
     </div>
     <div class="settings-row">
       <span>弹窗位置</span>
@@ -368,47 +306,47 @@
     </div>
     <div class="settings-row number-row">
       <span>弹窗宽度</span>
-      <span class="number-control">
-        <input aria-label="通知弹窗宽度" type="number" min="280" max="600" step="10"
-          value={$appSettings.notifications.width}
-          on:input={(event) => { const v = event.currentTarget.valueAsNumber; if (Number.isFinite(v)) updateNotifications("width", Math.min(600, Math.max(280, Math.round(v)))); }}
-          on:change={(event) => updateNotifications("width", clampNumber(event.currentTarget.valueAsNumber, defaultSettings.notifications.width, 280, 600))}
-        />
-        <span>px</span>
-      </span>
+      <NumberField
+        ariaLabel="通知弹窗宽度"
+        suffix="px"
+        min={280}
+        max={600}
+        value={$appSettings.notifications.width}
+        onCommit={(v) => updateNotifications("width", v)}
+      />
     </div>
     <div class="settings-row number-row">
       <span>弹窗高度</span>
-      <span class="number-control">
-        <input aria-label="通知弹窗高度" type="number" min="50" max="200" step="2"
-          value={$appSettings.notifications.height}
-          on:input={(event) => { const v = event.currentTarget.valueAsNumber; if (Number.isFinite(v)) updateNotifications("height", Math.min(200, Math.max(50, Math.round(v)))); }}
-          on:change={(event) => updateNotifications("height", clampNumber(event.currentTarget.valueAsNumber, defaultSettings.notifications.height, 50, 200))}
-        />
-        <span>px</span>
-      </span>
+      <NumberField
+        ariaLabel="通知弹窗高度"
+        suffix="px"
+        min={50}
+        max={200}
+        value={$appSettings.notifications.height}
+        onCommit={(v) => updateNotifications("height", v)}
+      />
     </div>
     <div class="settings-row number-row">
       <span>标题字号</span>
-      <span class="number-control">
-        <input aria-label="通知标题字号" type="number" min="10" max="24" step="1"
-          value={$appSettings.notifications.titleFontSize}
-          on:input={(event) => { const v = event.currentTarget.valueAsNumber; if (Number.isFinite(v)) updateNotifications("titleFontSize", Math.min(24, Math.max(10, Math.round(v)))); }}
-          on:change={(event) => updateNotifications("titleFontSize", clampNumber(event.currentTarget.valueAsNumber, defaultSettings.notifications.titleFontSize, 10, 24))}
-        />
-        <span>px</span>
-      </span>
+      <NumberField
+        ariaLabel="通知标题字号"
+        suffix="px"
+        min={10}
+        max={24}
+        value={$appSettings.notifications.titleFontSize}
+        onCommit={(v) => updateNotifications("titleFontSize", v)}
+      />
     </div>
     <div class="settings-row number-row">
       <span>正文字号</span>
-      <span class="number-control">
-        <input aria-label="通知正文字号" type="number" min="8" max="20" step="1"
-          value={$appSettings.notifications.bodyFontSize}
-          on:input={(event) => { const v = event.currentTarget.valueAsNumber; if (Number.isFinite(v)) updateNotifications("bodyFontSize", Math.min(20, Math.max(8, Math.round(v)))); }}
-          on:change={(event) => updateNotifications("bodyFontSize", clampNumber(event.currentTarget.valueAsNumber, defaultSettings.notifications.bodyFontSize, 8, 20))}
-        />
-        <span>px</span>
-      </span>
+      <NumberField
+        ariaLabel="通知正文字号"
+        suffix="px"
+        min={8}
+        max={20}
+        value={$appSettings.notifications.bodyFontSize}
+        onCommit={(v) => updateNotifications("bodyFontSize", v)}
+      />
     </div>
     <div class="notification-setting-card">
       <span>通知会以独立悬浮小窗展示，适用于命令行 notify 和定时任务。</span>

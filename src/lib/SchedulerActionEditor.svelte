@@ -1,5 +1,6 @@
 <script lang="ts">
   import Dropdown from "./Dropdown.svelte";
+  import NumberField from "./NumberField.svelte";
   import { FolderOpen, Search } from "@lucide/svelte";
   import { pickExecutableFile, resolveExecutablePath } from "./backend";
   import type { AppNotification, ScheduledTaskAction, SchedulerCondition } from "./types";
@@ -54,14 +55,6 @@
   function textValue(event: Event): string {
     const target = event.currentTarget;
     return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement ? target.value : "";
-  }
-
-  function numberValue(event: Event, fallback: number): number {
-    const value = Number(textValue(event));
-    if (!Number.isFinite(value) || value < 0) {
-      return fallback;
-    }
-    return Math.round(value);
   }
 
   function checkedValue(event: Event): boolean {
@@ -172,7 +165,14 @@
       </label>
       <label>
         <span>自动隐藏</span>
-        <input type="text" inputmode="numeric" value={action.notification.durationMs} on:input={(event) => patchNotification({ durationMs: numberValue(event, action.notification.durationMs) })} />
+        <NumberField
+          ariaLabel="通知自动隐藏时长"
+          suffix="ms"
+          min={1200}
+          max={60000}
+          value={action.notification.durationMs}
+          onCommit={(v) => patchNotification({ durationMs: v })}
+        />
       </label>
       <small class="wide">可在消息中使用 {"{taskName}"}，脚本输出变量在执行脚本后通知中可用。</small>
     </div>
@@ -266,7 +266,14 @@
           </label>
           <label>
             <span>自动隐藏</span>
-            <input type="text" inputmode="numeric" value={action.completionNotification.durationMs} on:input={(event) => patchCompletionNotification({ durationMs: numberValue(event, action.completionNotification.durationMs) })} />
+            <NumberField
+              ariaLabel="完成通知自动隐藏时长"
+              suffix="ms"
+              min={1200}
+              max={60000}
+              value={action.completionNotification.durationMs}
+              onCommit={(v) => patchCompletionNotification({ durationMs: v })}
+            />
           </label>
         </div>
       {/if}
@@ -307,7 +314,14 @@
           </label>
           <label>
             <span>自动隐藏</span>
-            <input type="text" inputmode="numeric" value={action.stdoutNotification.notification.durationMs} on:input={(event) => patchStdoutNotification({ durationMs: numberValue(event, action.stdoutNotification.notification.durationMs) })} />
+            <NumberField
+              ariaLabel="stdout 通知自动隐藏时长"
+              suffix="ms"
+              min={1200}
+              max={60000}
+              value={action.stdoutNotification.notification.durationMs}
+              onCommit={(v) => patchStdoutNotification({ durationMs: v })}
+            />
           </label>
         </div>
       {/if}

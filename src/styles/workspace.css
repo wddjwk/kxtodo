@@ -306,7 +306,8 @@ h1 {
 }
 
 .task-card:hover,
-.task-card.selected {
+.task-card.selected,
+.task-card.expanded {
   background: white;
   box-shadow: 0 8px 24px rgb(110 61 42 / 9%);
 }

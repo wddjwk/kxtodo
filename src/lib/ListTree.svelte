@@ -302,7 +302,7 @@
     {/if}
 
     {#if node.kind === "category"}
-      {#if showCategoryCounts && counts[node.id]}
+      {#if showCategoryCounts && node.collapsed && counts[node.id]}
         <span class="count-pill">{counts[node.id]}</span>
       {/if}
       <button class="collapse-button" type="button" aria-label="折叠分类" on:click|stopPropagation={() => dispatch("toggleCategory", node.id)}>

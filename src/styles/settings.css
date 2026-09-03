@@ -58,31 +58,6 @@
   align-items: start;
 }
 
-.number-control {
-  display: inline-grid;
-  grid-template-columns: 92px 28px;
-  gap: 8px;
-  align-items: center;
-  justify-content: start;
-}
-
-.number-control input[type="number"] {
-  width: 92px;
-  border: 1px solid #d8d8d8;
-  border-radius: 7px;
-  background: #fbfbfb;
-  color: #222;
-  padding: 7px 8px;
-  font-size: var(--font-control);
-  font-variant-numeric: tabular-nums;
-}
-
-.number-control span {
-  color: #555;
-  font-variant-numeric: tabular-nums;
-  text-align: left;
-}
-
 .toggle-row {
   display: flex;
   align-items: center;

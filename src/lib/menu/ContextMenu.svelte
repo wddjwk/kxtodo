@@ -6,6 +6,8 @@
   /** 触发点坐标（clientX/clientY，屏幕像素）。 */
   export let x = 0;
   export let y = 0;
+  /** x 锚点对齐方式：left = 菜单左缘贴 x；right = 菜单右缘贴 x。 */
+  export let xAlign: "left" | "right" = "left";
   export let minWidth = 232;
   export let onClose: () => void = () => {};
 
@@ -24,7 +26,8 @@
     const rect = menuEl.getBoundingClientRect();
     const width = rect.width / scale;
     const height = rect.height / scale;
-    left = Math.max(8, Math.min(x / scale, viewWidth - width - 8));
+    const anchorLeft = xAlign === "right" ? x / scale - width : x / scale;
+    left = Math.max(8, Math.min(anchorLeft, viewWidth - width - 8));
     top = Math.max(8, Math.min(y / scale, viewHeight - height - 8));
     ready = true;
   }

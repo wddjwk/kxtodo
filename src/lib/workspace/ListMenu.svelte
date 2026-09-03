@@ -26,6 +26,7 @@
 
   export let x = 0;
   export let y = 0;
+  export let xAlign: "left" | "right" = "left";
   export let node: AppNode | undefined = undefined;
   export let isScheduled = false;
   export let sortMode: SortMode = "created-desc";
@@ -307,7 +308,7 @@
   }
 </script>
 
-<ContextMenu {x} {y} minWidth={300} {onClose}>
+<ContextMenu {x} {y} {xAlign} minWidth={300} {onClose}>
   {#if !isSystemNode && node}
     <MenuItem icon={PenLine} label="重命名" onSelect={() => { onRenameRequest(); }} />
     <MenuItem icon={FolderInput} label="移动到分组">

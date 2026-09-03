@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from "svelte";
+  import { onDestroy, tick } from "svelte";
   import { ChevronRight } from "@lucide/svelte";
   import type { Component } from "svelte";
 
@@ -12,34 +12,29 @@
 
   let submenuOpen = false;
   let submenuEl: HTMLElement;
+  let itemEl: HTMLElement;
   let flipX = false;
   let flipY = false;
-  let openTimer: number | undefined;
-  let closeTimer: number | undefined;
 
   $: hasSubmenu = Boolean($$slots.submenu);
   $: submenuClass = `submenu-panel${flipX ? " flip-x" : ""}${flipY ? " flip-y" : ""}`;
 
-  function scheduleOpen(): void {
-    window.clearTimeout(closeTimer);
-    openTimer = window.setTimeout(() => {
-      submenuOpen = true;
-      void adjustSubmenu();
-    }, 200);
-  }
-
-  function scheduleClose(): void {
-    window.clearTimeout(openTimer);
-    closeTimer = window.setTimeout(() => {
-      submenuOpen = false;
-    }, 160);
-  }
-
-  function openNow(): void {
-    window.clearTimeout(closeTimer);
-    window.clearTimeout(openTimer);
+  function openSubmenu(): void {
     submenuOpen = true;
+    window.addEventListener("click", handleDocumentClick, true);
     void adjustSubmenu();
+  }
+
+  function closeSubmenu(): void {
+    submenuOpen = false;
+    window.removeEventListener("click", handleDocumentClick, true);
+  }
+
+  /** 点击菜单内其它位置（根菜单对 click stopPropagation，故用捕获阶段）时收起本子菜单。 */
+  function handleDocumentClick(event: MouseEvent): void {
+    const target = event.target as Node | null;
+    if (target && itemEl?.contains(target)) return;
+    closeSubmenu();
   }
 
   /** 子菜单贴右缘展开；超出视口右/下缘时翻转。 */
@@ -57,22 +52,23 @@
   function handleClick(): void {
     if (hasSubmenu) {
       if (submenuOpen) {
-        submenuOpen = false;
+        closeSubmenu();
       } else {
-        openNow();
+        openSubmenu();
       }
       return;
     }
     onSelect();
   }
+
+  onDestroy(closeSubmenu);
 </script>
 
 {#if hasSubmenu}
   <div
+    bind:this={itemEl}
     class="menu-item has-submenu"
     role="none"
-    on:pointerenter={scheduleOpen}
-    on:pointerleave={scheduleClose}
   >
     <button
       type="button"

@@ -37,7 +37,6 @@
   import type { AppNode, TagColor, Task } from "./types";
 
   let newTaskDraft = "";
-  let selectedTaskId: string | null = null;
   let showCompleted = true;
   let showSuggestions = false;
   let showCalendar = false;
@@ -255,7 +254,6 @@
   }
 
   function toggleTaskExpansion(taskId: string): void {
-    selectedTaskId = taskId;
     const task = $appState.tasks.find((item) => item.id === taskId);
     if (!task) return;
     void setItemUiAction(taskId, {
@@ -264,7 +262,6 @@
   }
 
   function openTaskEditor(taskId: string): void {
-    selectedTaskId = taskId;
     taskMenu = null;
     editorTaskId.set(taskId);
   }
@@ -405,7 +402,7 @@
 
   function openListMenu(event: MouseEvent): void {
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    listMenuAt = { x: rect.right - 300, y: rect.bottom + 6 };
+    listMenuAt = { x: rect.right, y: rect.bottom + 6 };
     showSuggestions = false;
     showCalendar = false;
     taskMenu = null;
@@ -627,6 +624,7 @@
     <ListMenu
       x={listMenuAt.x}
       y={listMenuAt.y}
+      xAlign="right"
       node={$selectedNode}
       {isScheduled}
       {sortMode}
@@ -653,7 +651,7 @@
       <TaskCard
         {task}
         nodeId={task.nodeId}
-        selected={taskMenu?.taskId === task.id || selectedTaskId === task.id}
+        selected={taskMenu?.taskId === task.id}
         on:toggle={(event) => toggleCompletion(event.detail)}
         on:expand={(event) => toggleTaskExpansion(event.detail)}
         on:edit={(event) => openTaskEditor(event.detail)}
@@ -678,7 +676,7 @@
             <TaskCard
               {task}
               nodeId={task.nodeId}
-              selected={taskMenu?.taskId === task.id || selectedTaskId === task.id}
+              selected={taskMenu?.taskId === task.id}
                     on:toggle={(event) => toggleCompletion(event.detail)}
               on:expand={(event) => toggleTaskExpansion(event.detail)}
               on:edit={(event) => openTaskEditor(event.detail)}
