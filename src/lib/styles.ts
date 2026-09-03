@@ -34,9 +34,7 @@ export function avatarInitial(displayName: string): string {
 }
 
 export function uiScaleValue(scaleValue = defaultSettings.appearance.uiScale): number {
-  const staleScale = scaleValue === 0.62 || scaleValue === 0.72 || scaleValue === 0.86 || scaleValue === 0.92;
-  const normalizedScale = staleScale ? defaultSettings.appearance.uiScale : scaleValue;
-  return Math.min(1.5, Math.max(0.5, normalizedScale || defaultSettings.appearance.uiScale));
+  return Math.min(1.5, Math.max(0.5, scaleValue || defaultSettings.appearance.uiScale));
 }
 
 export function scalePercentValue(scaleValue = defaultSettings.appearance.uiScale): number {

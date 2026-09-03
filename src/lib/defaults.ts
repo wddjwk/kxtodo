@@ -536,15 +536,8 @@ export function normalizeSettings(raw: unknown): Settings {
     }
     return legacyShortcuts.find((shortcut) => shortcut.id === key)?.combo ?? fallback;
   };
-  const normalizeUiScale = (value: unknown): number | null => {
-    if (typeof value !== "number") {
-      return null;
-    }
-    if (Math.abs(value - 0.62) < 0.001 || Math.abs(value - 0.72) < 0.001 || Math.abs(value - 0.86) < 0.001 || Math.abs(value - 0.92) < 0.001) {
-      return defaultSettings.appearance.uiScale;
-    }
-    return Math.min(1.5, Math.max(0.5, value));
-  };
+  const normalizeUiScale = (value: unknown): number | null =>
+    typeof value === "number" && Number.isFinite(value) ? Math.min(1.5, Math.max(0.5, value)) : null;
   const normalizeFontSize = (value: unknown, fallback: number, min = 14, max = 24): number =>
     typeof value === "number" ? Math.min(max, Math.max(min, Math.round(value))) : fallback;
   const normalizeHexColor = (value: unknown, fallback: string): string =>
