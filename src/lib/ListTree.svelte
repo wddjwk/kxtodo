@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy } from "svelte";
   import { ChevronDown } from "@lucide/svelte";
-  import { isMobile } from "./platform";
+  import { longpress, isLongPressSuppressed } from "./longpress";
   import type { AppNode } from "./types";
   import IconGlyph from "./IconGlyph.svelte";
 
@@ -40,7 +40,6 @@
   let dropRootEnd = false;
   let suppressNextClick = false;
   let pointerDrag: { id: string; startX: number; startY: number; active: boolean } | null = null;
-  let longPressTimer: number | null = null;
   let longPressFired = false;
   let scrollContainer: HTMLElement | null = null;
   let hoverExpandTimer: number | null = null;
@@ -53,6 +52,8 @@
   }
 
   function handlePointerDown(event: PointerEvent, node: AppNode): void {
+    // 拖拽排序仅支持鼠标；触摸端用长按开菜单，避免与滚动/长按冲突
+    if (event.pointerType !== "mouse") return;
     const target = event.target;
     if (event.button !== 0 || node.kind === "system" || (target instanceof Element && target.closest("button, input"))) {
       return;
@@ -60,6 +61,7 @@
     pointerDrag = { id: node.id, startX: event.clientX, startY: event.clientY, active: false };
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerUp, { once: true });
+    window.addEventListener("pointercancel", cleanupPointerDrag);
     window.addEventListener("keydown", handleDragKeydown, true);
   }
 
@@ -82,32 +84,18 @@
   function openMenu(event: MouseEvent, node: AppNode): void {
     event.preventDefault();
     event.stopPropagation();
+    // 触摸长按已开过菜单时，Chromium 补发的原生 contextmenu 直接吞掉
+    if (isLongPressSuppressed()) return;
     dispatch("openMenu", { id: node.id, x: event.clientX, y: event.clientY });
   }
 
-  function handleTouchStart(event: TouchEvent, node: AppNode): void {
-    if (!$isMobile) return;
-    longPressFired = false;
-    const touch = event.touches[0];
-    if (!touch) return;
-    const x = touch.clientX;
-    const y = touch.clientY;
-    longPressTimer = window.setTimeout(() => {
+  /** 移动端触摸长按行：以原始触点为锚打开树菜单，并吞掉长按后的那次 click。 */
+  function handleRowLongPress(node: AppNode) {
+    return (pos: { x: number; y: number }): void => {
       longPressFired = true;
       suppressNextClick = true;
-      dispatch("openMenu", { id: node.id, x, y });
-    }, 500);
-  }
-
-  function handleTouchEnd(): void {
-    if (longPressTimer !== null) {
-      window.clearTimeout(longPressTimer);
-      longPressTimer = null;
-    }
-  }
-
-  function handleTouchMove(): void {
-    handleTouchEnd();
+      dispatch("openMenu", { id: node.id, x: pos.x, y: pos.y });
+    };
   }
 
   function focusRename(node: HTMLInputElement): { destroy(): void } {
@@ -227,6 +215,7 @@
   function cleanupPointerDrag(): void {
     window.removeEventListener("pointermove", handlePointerMove);
     window.removeEventListener("pointerup", handlePointerUp);
+    window.removeEventListener("pointercancel", cleanupPointerDrag);
     window.removeEventListener("keydown", handleDragKeydown, true);
     if (pointerDrag?.active) {
       dispatch("dragEnd");
@@ -245,7 +234,6 @@
 
   onDestroy(() => {
     cleanupPointerDrag();
-    handleTouchEnd();
   });
 </script>
 
@@ -263,12 +251,10 @@
     data-node-id={node.id}
     data-level={level}
     style={rowStyle(level)}
+    use:longpress={handleRowLongPress(node)}
     on:pointerdown={(event) => handlePointerDown(event, node)}
     on:click={(event) => handleClick(event, node)}
     on:contextmenu={(event) => openMenu(event, node)}
-    on:touchstart={(event) => handleTouchStart(event, node)}
-    on:touchend={handleTouchEnd}
-    on:touchmove={handleTouchMove}
   >
     <button
       class="tree-icon"

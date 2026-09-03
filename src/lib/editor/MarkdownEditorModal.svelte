@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
   import { Check, Eye, ImagePlus, PenLine, X } from "@lucide/svelte";
   import type { EditorView } from "@codemirror/view";
   import { createMarkdownEditor, insertAtCursor } from "./codemirrorSetup";
@@ -8,7 +8,8 @@
   import {
     isTauriRuntime, mdImageUrl, pickImageFile, saveMdImage, saveMdImageFromDataUrl
   } from "../backend";
-  import { appState, clearEditBase, markEditStart, showToast } from "../stores";
+  import { caps } from "../capabilities";
+  import { appState, clearEditBase, fileToDataUrl, markEditStart, showToast } from "../stores";
   import { saveTaskMarkdown } from "../actions";
 
   export let taskId: string;
@@ -16,6 +17,7 @@
   export let onOpenLink: (url: string) => void = () => {};
 
   let host: HTMLDivElement;
+  let imageFileInput: HTMLInputElement;
   let view: EditorView | null = null;
   let mode: "edit" | "preview" = "edit";
   let text = "";
@@ -70,9 +72,20 @@
     const ok = await saveTaskMarkdown(taskId, markdown, hasMultipleMarkdownLines(markdown));
     saving = false;
     if (ok) {
+      initialText = markdown;
       onClose();
     }
   }
+
+  // 外部路径卸载（移动端硬件返回弹历史栈）时未保存内容不能丢：尽力保存一次，
+  // 与桌面 Esc / 点遮罩"保存并关闭"语义一致。
+  onDestroy(() => {
+    if (saving || !task) return;
+    const markdown = currentText();
+    if (markdown !== initialText) {
+      void saveTaskMarkdown(taskId, markdown, hasMultipleMarkdownLines(markdown));
+    }
+  });
 
   function toggleMode(next: "edit" | "preview"): void {
     mode = next;
@@ -81,17 +94,41 @@
     }
   }
 
+  async function insertImageReference(filename: string): Promise<void> {
+    const url = await mdImageUrl(nodeId, filename);
+    primeMdImageCache(nodeId, filename, url);
+    if (view) insertAtCursor(view, `\n![](${filename})\n`);
+  }
+
   async function insertImageFile(): Promise<void> {
     if (!isTauriRuntime || !nodeId || !view) return;
+    if (!caps.nativeFileDialogs) {
+      // 移动端：无原生文件对话框，走隐藏 <input type=file> + dataURL。
+      imageFileInput?.click();
+      return;
+    }
     try {
       const srcPath = await pickImageFile();
       if (!srcPath) return;
       const filename = await saveMdImage(srcPath, nodeId);
-      const url = await mdImageUrl(nodeId, filename);
-      primeMdImageCache(nodeId, filename, url);
-      insertAtCursor(view, `\n![](${filename})\n`);
+      await insertImageReference(filename);
     } catch (error) {
       showToast(`图片插入失败：${String(error)}`);
+    }
+  }
+
+  async function insertImageFromInput(event: Event): Promise<void> {
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLInputElement) || !target.files?.[0]) return;
+    if (!isTauriRuntime || !nodeId || !view) return;
+    try {
+      const dataUrl = await fileToDataUrl(target.files[0]);
+      const filename = await saveMdImageFromDataUrl(dataUrl, nodeId);
+      await insertImageReference(filename);
+    } catch (error) {
+      showToast(`图片插入失败：${String(error)}`);
+    } finally {
+      target.value = "";
     }
   }
 
@@ -188,5 +225,7 @@
         </div>
       {/if}
     </div>
+
+    <input bind:this={imageFileInput} class="hidden-file" type="file" accept="image/*" on:change={insertImageFromInput} />
   </div>
 </div>

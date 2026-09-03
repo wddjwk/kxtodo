@@ -19,3 +19,10 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# KXToDo JS 桥（window.kxtodoAndroid）：release 构建启用 minify，
+# WebView 反射调用 @JavascriptInterface 方法，必须保留类与方法。
+-keep class com.wddjwk.kxtodo.ApkBridge { *; }
+-keepclassmembers class com.wddjwk.kxtodo.ApkBridge {
+    @android.webkit.JavascriptInterface <methods>;
+}

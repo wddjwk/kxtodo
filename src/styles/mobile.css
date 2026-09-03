@@ -56,6 +56,12 @@
   display: none;
 }
 
+/* Settings is a full-screen layer on mobile: hide both panes underneath. */
+.app-shell.mobile.view-settings .sidebar,
+.app-shell.mobile.view-settings .workspace {
+  display: none;
+}
+
 .app-shell.mobile .resize-handle {
   display: none;
 }
@@ -74,7 +80,8 @@
   display: none;
 }
 
-.app-shell.mobile .mobile-back {
+.app-shell.mobile .mobile-back,
+.app-shell.mobile .drawer-header .mobile-back {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -89,6 +96,16 @@
 
 .app-shell.mobile .mobile-back:hover {
   background: rgb(0 0 0 / 6%);
+}
+
+/* Suppress the native long-press UI (callout bubble / text selection) on the
+   surfaces that implement their own long-press menus. Scrolling is untouched
+   (no touch-action / preventDefault involved). */
+.app-shell.mobile .task-card,
+.app-shell.mobile .tree-row {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 /* Settings drawer becomes a full-screen sheet on mobile. */

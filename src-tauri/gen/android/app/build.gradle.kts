@@ -39,8 +39,20 @@ android {
         applicationId = "com.wddjwk.kxtodo"
         minSdk = 24
         targetSdk = 36
-        versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
-        versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+        // 版本号唯一来源是 git：package.ps1 构建时注入环境变量 KXTODO_VERSION（X.Y.Z）。
+        // versionCode 以 900000000 为基线：旧构建曾因过期 versionName 8.2.1 产生
+        // versionCode 8002001，基线保证升级安装永不因版本号回退而降级；
+        // 每段三位（*1000000/*1000）避免 0.2.100 与 0.3.0 这类进位碰撞。
+        val envVersion = System.getenv("KXTODO_VERSION")
+            ?.let { Regex("""^(\d+)\.(\d+)\.(\d+)$""").matchEntire(it) }
+        if (envVersion != null) {
+            val (major, minor, patch) = envVersion.destructured
+            versionName = "$major.$minor.$patch"
+            versionCode = 900000000 + major.toInt() * 1000000 + minor.toInt() * 1000 + patch.toInt()
+        } else {
+            versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
+            versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+        }
     }
     buildTypes {
         getByName("debug") {

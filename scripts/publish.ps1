@@ -1,10 +1,10 @@
-﻿# KXToDo 一键发布：git 取版本 → 本地构建双产物 → gh release 上传。
+﻿# KXToDo 一键发布：git 取版本 → 本地构建三产物（GUI exe + CLI exe + Android APK）→ gh release 上传。
 # 用法：
 #   .\scripts\publish.ps1            # 构建 + 发布当前 git 版本
 #   .\scripts\publish.ps1 -DryRun    # 只打印将要执行的步骤
 #
 # 前置：gh 已登录（gh auth login）；git 工作区已提交（版本号来自最近的 v* tag
-# 或最近一条 vX.Y.Z 开头的 commit message）。
+# 或最近一条 vX.Y.Z 开头的 commit message）；构建 APK 还需 ANDROID_HOME/NDK 与 JDK。
 param(
   [switch]$DryRun
 )
@@ -42,6 +42,11 @@ $version = Get-GitVersion
 $tag = "v$version"
 $guiExe = Join-Path $root "release\KXToDo-$version.exe"
 $cliExe = Join-Path $root "release\KXToDo-CLI-$version.exe"
+# APK 固定命名（覆盖安装不留历史包），靠 sidecar 记录构建版本防旧产物误复用
+$apk = Join-Path $root "release\KXToDo.apk"
+$apkVersionFile = Join-Path $root "release\KXToDo.apk.version"
+$apkFresh = (Test-Path -LiteralPath $apk) -and (Test-Path -LiteralPath $apkVersionFile) -and
+  ((Get-Content -LiteralPath $apkVersionFile -Raw).Trim() -eq $version)
 
 Write-Host "==> 版本：$tag" -ForegroundColor Cyan
 
@@ -52,20 +57,29 @@ if ($dirty -and -not $DryRun) {
 }
 
 if ($DryRun) {
-  Write-Host "[DryRun] 将构建 $tag 并发布 $guiExe + $cliExe"
+  Write-Host "[DryRun] 将构建 $tag 并发布三产物："
+  Write-Host "[DryRun]   $guiExe"
+  Write-Host "[DryRun]   $cliExe"
+  Write-Host "[DryRun]   $apk"
   return
 }
 
-# 双产物已构建过（release\ 下同名产物存在）则直接复用，否则重新构建
+# 三产物都已构建过（exe 同名 + APK sidecar 版本匹配）则直接复用，否则只补缺失的部分
 # （release.ps1 内部用同一个 git 版本逻辑，产物名与此处一致）
-if ((Test-Path -LiteralPath $guiExe) -and (Test-Path -LiteralPath $cliExe)) {
-  Write-Host "==> 复用已构建产物：$guiExe + $cliExe（删除后重跑可强制重建）" -ForegroundColor Yellow
+if ((Test-Path -LiteralPath $guiExe) -and (Test-Path -LiteralPath $cliExe) -and $apkFresh) {
+  Write-Host "==> 复用已构建产物：$guiExe + $cliExe + $apk（删除后重跑可强制重建）" -ForegroundColor Yellow
 } else {
-  & (Join-Path $root "release.ps1") windows
-  if ($LASTEXITCODE -ne 0) { throw "构建失败" }
+  if (-not (Test-Path -LiteralPath $guiExe) -or -not (Test-Path -LiteralPath $cliExe)) {
+    & (Join-Path $root "release.ps1") windows
+    if ($LASTEXITCODE -ne 0) { throw "Windows 构建失败" }
+  }
+  if (-not $apkFresh) {
+    & (Join-Path $root "release.ps1") android
+    if ($LASTEXITCODE -ne 0) { throw "Android 构建失败" }
+  }
 }
 
-foreach ($artifact in @($guiExe, $cliExe)) {
+foreach ($artifact in @($guiExe, $cliExe, $apk)) {
   if (-not (Test-Path -LiteralPath $artifact)) {
     throw "构建产物缺失：$artifact"
   }
@@ -89,12 +103,12 @@ $ErrorActionPreference = "Continue"
 gh release view $tag *> $null
 $releaseExists = $LASTEXITCODE -eq 0
 if ($releaseExists) {
-  gh release upload $tag $guiExe $cliExe --clobber
+  gh release upload $tag $guiExe $cliExe $apk --clobber
 } else {
-  gh release create $tag $guiExe $cliExe --title $tag --generate-notes
+  gh release create $tag $guiExe $cliExe $apk --title $tag --generate-notes
 }
 $publishOk = $LASTEXITCODE -eq 0
 $ErrorActionPreference = $saved
 if (-not $publishOk) { throw "gh release 失败" }
 
-Write-Host "已发布 $tag ：GUI + CLI 双产物" -ForegroundColor Green
+Write-Host "已发布 $tag ：GUI + CLI + APK 三产物" -ForegroundColor Green

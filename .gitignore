@@ -11,3 +11,4 @@ PixPin*.png
 npm-debug.log*
 *.log
 .pi-subagents/
+.qoder/

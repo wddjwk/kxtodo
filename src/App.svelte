@@ -5,10 +5,11 @@
   import {
     appSettings, appState, showSettings, searchQuery,
     taskEmojiPicker, editorTaskId, appVersion, showToast,
+    isHydrated,
     hydrate as hydrateStores
   } from "./lib/stores";
-  import { replaceTaskEmojis } from "./lib/actions";
-  import { isMobile, mobileView } from "./lib/platform";
+  import { replaceTaskEmojis, selectNode as selectNodeAction } from "./lib/actions";
+  import { isMobile, mobileView, startMobileRouter } from "./lib/platform";
   import { revealMainWindow } from "./lib/backend";
   import { checkForUpdate } from "./lib/updater";
   import TitleBar from "./lib/TitleBar.svelte";
@@ -29,14 +30,22 @@
     ? $appState.tasks.find((t) => t.id === $taskEmojiPicker?.taskId) ?? null
     : null;
 
+  // 移动端没有调度引擎：若选中节点是"定时任务"，水合后一次性重定向到我的一天
+  //（my-day 是合法系统节点，条件随即自清，不会成环）
+  $: if ($isMobile && $isHydrated && $appState.selectedNodeId === "scheduled") {
+    void selectNodeAction("my-day");
+  }
+
   onMount(() => {
+    // 移动端历史栈路由：必须在模块全部初始化后挂载（platform 与 stores 循环依赖）
+    startMobileRouter();
     // 调度引擎在 Rust Background Host 中运行，前端不再持有调度循环。
     void hydrateStores();
     void revealMainWindow();
     window.addEventListener("keydown", handleShortcut);
-    // 启动后静默检查一次更新（桌面端，可关）
+    // 启动后静默检查一次更新（桌面 + 移动端，可关）
     const timer = window.setTimeout(() => {
-      if (!$isMobile && $appSettings.updates.autoCheck && $appVersion) {
+      if ($appSettings.updates.autoCheck && $appVersion) {
         void checkForUpdate($appVersion).then((result) => {
           if (result.status === "available") {
             showToast(`发现新版本 v${result.info.version}，可在设置中更新`, 6000);
@@ -98,6 +107,7 @@
   class:mobile={$isMobile}
   class:view-list={$isMobile && $mobileView === "list"}
   class:view-content={$isMobile && $mobileView === "content"}
+  class:view-settings={$isMobile && $showSettings}
   style={appShellStyle}
   on:click={closeOverlays}
 >

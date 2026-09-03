@@ -25,6 +25,8 @@
   import MenuItem from "./menu/MenuItem.svelte";
   import MenuSeparator from "./menu/MenuSeparator.svelte";
   import { showMobileContent } from "./platform";
+  import { caps } from "./capabilities";
+  import { longpress, isLongPressSuppressed } from "./longpress";
 
   const dispatch = createEventDispatcher<{ suppressClose: void }>();
 
@@ -44,6 +46,8 @@
   $: resolvedAvatar = resolveAvatarSrc($appSettings.profile.avatar, $avatarCache);
   $: avStyle = avatarStyle(resolvedAvatar);
   $: avInitial = avatarInitial($appSettings.profile.displayName);
+  // 移动端没有调度引擎：隐藏"定时任务"系统节点
+  $: systemNavNodes = $appState.nodes.filter((n) => n.kind === "system" && (caps.scheduler || n.id !== "scheduled"));
 
   export function closeOverlays(): void {
     if (ignoreOverlayCloseOnce) {
@@ -264,8 +268,20 @@
     const target = event.target as HTMLElement | null;
     if (target?.closest(".tree-row")) return;
     event.preventDefault();
+    // 触摸长按已开过菜单时，Chromium 补发的原生 contextmenu 直接吞掉
+    if (isLongPressSuppressed()) return;
     treeMenu = null;
     emptyAreaMenu = { x: event.clientX, y: event.clientY };
+  }
+
+  /** 移动端空白区长按：与右键同菜单。落在树行上时不处理（行有自己的长按）。 */
+  function handleEmptyAreaLongPress(pos: { x: number; y: number }): void {
+    // 行长按与空白区长按会被同一次手势先后触发：行菜单已开（或抑制窗内）时跳过，
+    // 否则 elementFromPoint 会命中刚渲染的菜单浮层，把行菜单替换成空白区菜单。
+    if (isLongPressSuppressed() || treeMenu) return;
+    if (document.elementFromPoint(pos.x, pos.y)?.closest(".tree-row")) return;
+    treeMenu = null;
+    emptyAreaMenu = { x: pos.x, y: pos.y };
   }
 
   function startSidebarResize(event: MouseEvent): void {
@@ -303,7 +319,7 @@
   </label>
 
   <nav class="system-nav">
-    {#each $appState.nodes.filter((n) => n.kind === "system") as node (node.id)}
+    {#each systemNavNodes as node (node.id)}
       <button class:selected={$appState.selectedNodeId === node.id && !$isSearching} class="nav-row" type="button" on:click={() => selectNode(node.id)}>
         <span class="active-rail"></span>
         <span class="system-icon"><IconGlyph icon={node.icon} size={19} /></span>
@@ -317,7 +333,7 @@
 
   <div class="nav-divider"></div>
 
-  <nav class="custom-nav" class:root-drop-active={draggingId !== null} on:contextmenu={openEmptyAreaMenu} on:click|stopPropagation>
+  <nav class="custom-nav" class:root-drop-active={draggingId !== null} use:longpress={handleEmptyAreaLongPress} on:contextmenu={openEmptyAreaMenu} on:click|stopPropagation>
     <ListTree
       nodes={$appState.nodes}
       selectedNodeId={$appState.selectedNodeId}

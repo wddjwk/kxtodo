@@ -34,6 +34,7 @@
   import ListMenu from "./workspace/ListMenu.svelte";
   import { sortTasks, type SortMode } from "./sort";
   import { showMobileList, isMobile } from "./platform";
+  import { caps } from "./capabilities";
   import type { AppNode, TagColor, Task } from "./types";
 
   let newTaskDraft = "";
@@ -66,7 +67,7 @@
   $: resolvedBgImage = resolveImageSrc($selectedBackground.image, $imageCache);
   $: mainStyle = buildMainStyle($selectedBackground, $accent, resolvedBgImage);
   $: isMyDay = $selectedNode?.id === "my-day";
-  $: isScheduled = !$isSearching && $selectedNode?.id === "scheduled";
+  $: isScheduled = caps.scheduler && !$isSearching && $selectedNode?.id === "scheduled";
   $: if (!isMyDay && myDayViewDate !== todayIso()) myDayViewDate = todayIso();
   $: isMyDayHistory = isMyDay && myDayViewDate !== todayIso();
   $: sortedTasks = sortTasks($visibleTasks, sortMode);

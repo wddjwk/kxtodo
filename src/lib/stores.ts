@@ -10,6 +10,7 @@ import {
 import { buildListCounts, buildVisibleTasks, getBackground } from "./nodes";
 import { accentForNode, uiScaleValue } from "./styles";
 import { entryToUi, type ScheduleEntryV9 } from "./scheduleAdapter";
+import { caps } from "./capabilities";
 
 /** 运行时版本号：构建期由 build.rs 从 git tag/commit 注入（KXTODO_VERSION），hydrate 时填充。 */
 export const appVersion = writable("");
@@ -103,6 +104,27 @@ export function showNotification(
     return Promise.resolve();
   }
 
+  if (caps.systemNotifications) {
+    // 移动端：走 tauri-plugin-notification 的系统通知；任何失败降级为 Toast。
+    void (async () => {
+      try {
+        const { isPermissionGranted, requestPermission, sendNotification } = await import("@tauri-apps/plugin-notification");
+        let granted = await isPermissionGranted();
+        if (!granted) {
+          granted = (await requestPermission()) === "granted";
+        }
+        if (granted) {
+          await sendNotification({ title: notification.title, body: notification.message });
+        } else {
+          showToast(`${notification.title}：${notification.message}`, notification.durationMs);
+        }
+      } catch (error) {
+        showToast(`通知发送失败：${String(error)}`);
+      }
+    })();
+    return Promise.resolve();
+  }
+
   void sendNativeNotification(notification).catch((error) => {
     showToast(`通知发送失败：${String(error)}`);
   });
@@ -147,7 +169,7 @@ export const accent = derived(
 export const isSearching = derived(searchQuery, ($q) => $q.trim().length > 0);
 
 // ---------------------------------------------------------------------------
-// Legacy persistence（mobile / 浏览器预览路径；桌面 v9 走 actions.ts 命令化写入）
+// Legacy persistence（浏览器预览路径；桌面与移动端 Tauri 走 actions.ts 命令化写入）
 // ---------------------------------------------------------------------------
 
 let stateSaveTimer: number | undefined;
@@ -370,7 +392,7 @@ export async function hydrate(): Promise<void> {
     return;
   }
 
-  // Legacy 路径（mobile / 浏览器预览）
+  // 浏览器预览路径（移动端已是 core 模式）
   let loadedSettings = clone(defaultSettings);
   try {
     const [storedState, storedScheduler, storedSettings, resolvedExecutors] = await Promise.all([

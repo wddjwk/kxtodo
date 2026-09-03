@@ -13,6 +13,18 @@ from PIL import Image
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SRC = os.path.join(ROOT, "logo.png")
 ICON_DIR = os.path.join(ROOT, "src-tauri", "icons")
+ANDROID_RES = os.path.join(
+    ROOT, "src-tauri", "gen", "android", "app", "src", "main", "res"
+)
+
+# Android launcher icon densities: mdpi=48dp base, foreground canvas=108dp.
+ANDROID_DENSITIES = {
+    "mipmap-mdpi": 1,
+    "mipmap-hdpi": 1.5,
+    "mipmap-xhdpi": 2,
+    "mipmap-xxhdpi": 3,
+    "mipmap-xxxhdpi": 4,
+}
 
 
 def squared(image, size):
@@ -25,6 +37,33 @@ def squared(image, size):
     canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     canvas.paste(resized, ((size - new_w) // 2, (size - new_h) // 2), resized)
     return canvas
+
+
+def android_foreground(image, canvas_size):
+    """Adaptive-icon foreground: logo inside the 66% safe zone of the canvas."""
+    inner = max(1, round(canvas_size * 0.66))
+    fitted = squared(image, inner)
+    canvas = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
+    offset = (canvas_size - inner) // 2
+    canvas.paste(fitted, (offset, offset), fitted)
+    return canvas
+
+
+def write_android_icons(logo):
+    if not os.path.isdir(ANDROID_RES):
+        print("Android project not found; skipping launcher icons: " + ANDROID_RES)
+        return
+    for folder, scale in ANDROID_DENSITIES.items():
+        target = os.path.join(ANDROID_RES, folder)
+        if not os.path.isdir(target):
+            continue
+        launcher = squared(logo, max(1, round(48 * scale)))
+        launcher.save(os.path.join(target, "ic_launcher.png"))
+        launcher.save(os.path.join(target, "ic_launcher_round.png"))
+        android_foreground(logo, max(1, round(108 * scale))).save(
+            os.path.join(target, "ic_launcher_foreground.png")
+        )
+    print("Android launcher icons regenerated into " + ANDROID_RES)
 
 
 def main():
@@ -45,6 +84,7 @@ def main():
 
     ico_sizes = [16, 24, 32, 48, 64, 128, 256]
     base.save(os.path.join(ICON_DIR, "icon.ico"), sizes=[(s, s) for s in ico_sizes])
+    write_android_icons(logo)
     print("Icons regenerated from " + SRC + " into " + ICON_DIR)
 
 

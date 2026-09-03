@@ -1,5 +1,6 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
+import { caps } from "./capabilities";
 import { defaultSettings, emptySchedulerState, emptyState, normalizeSchedulerState, normalizeSettings, normalizeState } from "./defaults";
 import type { AppNotification, AppState, SchedulerRuntimePaths, SchedulerState, Settings } from "./types";
 
@@ -25,70 +26,52 @@ function readLocal<T>(key: string, fallback: T): T {
   }
 }
 
+// 浏览器预览（npm run dev）专用的 localStorage 持久化。
+// Tauri 平台（桌面 + 移动端）一律走 Domain Core 命令层，绝不再整文件读写。
+
 export async function loadState(): Promise<AppState> {
-  if (isTauriRuntime) {
-    return normalizeState(await invoke<unknown>("load_state"));
-  }
   return normalizeState(readLocal(stateKey, emptyState()));
 }
 
 export async function saveState(state: AppState): Promise<void> {
   const { scheduler: _scheduler, ...persistedState } = state;
-  if (isTauriRuntime) {
-    await invoke("save_state", { state: persistedState });
-    return;
-  }
   localStorage.setItem(stateKey, JSON.stringify(persistedState));
 }
 
 export async function loadSettings(): Promise<Settings> {
-  if (isTauriRuntime) {
-    return normalizeSettings(await invoke<unknown>("load_settings"));
-  }
   return normalizeSettings(readLocal(settingsKey, clone(defaultSettings)));
 }
 
 export async function saveSettings(settings: Settings): Promise<void> {
-  if (isTauriRuntime) {
-    await invoke("save_settings", { settings });
-    return;
-  }
   localStorage.setItem(settingsKey, JSON.stringify(settings));
 }
 
 export async function loadScheduler(): Promise<SchedulerState> {
-  if (isTauriRuntime) {
-    return normalizeSchedulerState(await invoke<unknown>("load_scheduler"));
-  }
   return normalizeSchedulerState(readLocal(schedulerKey, emptySchedulerState()));
 }
 
 export async function saveScheduler(scheduler: SchedulerState): Promise<void> {
-  if (isTauriRuntime) {
-    await invoke("save_scheduler", { scheduler });
-    return;
-  }
   localStorage.setItem(schedulerKey, JSON.stringify(scheduler));
 }
 
 export async function resolveExecutorPaths(): Promise<SchedulerRuntimePaths> {
   const empty = emptySchedulerState().runtimes;
-  if (!isTauriRuntime) {
+  if (!isTauriRuntime || !caps.desktop) {
     return empty;
   }
   return { ...empty, ...(await invoke<Partial<SchedulerRuntimePaths>>("resolve_executor_paths")) };
 }
 
 export async function sendNativeNotification(notification: AppNotification): Promise<void> {
-  if (!isTauriRuntime) {
+  if (!isTauriRuntime || !caps.desktop) {
     return;
   }
   await invoke("send_notification", { notification });
 }
 
-/** 主窗口创建时隐藏（避免黑边），前端挂载后调用显示。 */
+/** 主窗口创建时隐藏（避免黑边），前端挂载后调用显示。仅桌面。 */
 export async function revealMainWindow(): Promise<void> {
-  if (!isTauriRuntime) {
+  if (!isTauriRuntime || !caps.desktop) {
     return;
   }
   await invoke("reveal_main_window");
@@ -103,7 +86,7 @@ export async function getAppVersion(): Promise<string> {
 }
 
 export async function exportData(payload: unknown, defaultName: string): Promise<void> {
-  if (isTauriRuntime) {
+  if (isTauriRuntime && caps.nativeFileDialogs) {
     const filePath = await save({
       defaultPath: defaultName,
       filters: [{ name: "KXToDo JSON", extensions: ["json"] }]
@@ -112,6 +95,20 @@ export async function exportData(payload: unknown, defaultName: string): Promise
       return;
     }
     await invoke("export_data", { payload, path: filePath });
+    return;
+  }
+
+  if (isTauriRuntime) {
+    // 移动端：dialog save() 返回 content:// URI，Rust fs 无法写入；
+    // 走 Kotlin 分享桥（FileProvider + ACTION_SEND 分享面板）。
+    const bridge = window.kxtodoAndroid;
+    if (!bridge?.shareText) {
+      throw new Error("当前 APK 不支持导出");
+    }
+    const err = bridge.shareText(defaultName, "application/json", JSON.stringify(payload, null, 2));
+    if (err) {
+      throw new Error(err);
+    }
     return;
   }
 
@@ -131,9 +128,9 @@ export async function deleteBackgroundImage(filename: string): Promise<void> {
   await invoke("delete_background_image", { filename });
 }
 
-/** Open a native file picker for an image; returns the chosen path or null. */
+/** Open a native file picker for an image; returns the chosen path or null. 移动端无原生对话框，返回 null。 */
 export async function pickImageFile(): Promise<string | null> {
-  if (!isTauriRuntime) {
+  if (!isTauriRuntime || !caps.nativeFileDialogs) {
     return null;
   }
   const selected = await open({
@@ -145,7 +142,7 @@ export async function pickImageFile(): Promise<string | null> {
 }
 
 export async function pickExecutableFile(): Promise<string | null> {
-  if (!isTauriRuntime) {
+  if (!isTauriRuntime || !caps.nativeFileDialogs) {
     return null;
   }
   const selected = await open({
@@ -156,7 +153,7 @@ export async function pickExecutableFile(): Promise<string | null> {
 }
 
 export async function resolveExecutablePath(name: string): Promise<string | null> {
-  if (!isTauriRuntime || !name.trim()) {
+  if (!isTauriRuntime || !caps.desktop || !name.trim()) {
     return null;
   }
   return invoke<string | null>("resolve_executable_path", { name });
@@ -206,8 +203,13 @@ export async function saveMdImageFromDataUrl(dataUrl: string, nodeId: string): P
   return invoke<string>("save_md_image_data", { dataUrl, nodeId });
 }
 
+/** Save a base64 data URL as the list background image (<input type=file> 移动端路径)。Returns stored filename. */
+export async function saveBackgroundImageFromDataUrl(dataUrl: string): Promise<string> {
+  return invoke<string>("save_background_image", { dataUrl });
+}
+
 // ---------------------------------------------------------------------------
-// v9 Domain Core bridge (desktop). Mobile/browser fall back to legacy paths.
+// v9 Domain Core bridge（桌面 + 移动端）。浏览器预览回退 localStorage legacy 路径。
 // ---------------------------------------------------------------------------
 
 let coreAvailable: boolean | null = null;
@@ -219,18 +221,10 @@ export async function hasCoreDispatch(): Promise<boolean> {
   if (coreAvailable !== null) {
     return coreAvailable;
   }
-  try {
-    const capability = await invoke<{ available: boolean }>("core_ping");
-    coreAvailable = capability.available;
-  } catch (error) {
-    // Tauri desktop must fail closed: an unavailable probe is not permission
-    // to fall back to full-file legacy writes.
-    const mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-    if (!mobile) {
-      throw error;
-    }
-    coreAvailable = false;
-  }
+  // 所有 Tauri 平台（桌面 + 移动端）一律 fail closed：core_ping 失败直接抛错，
+  // 绝不回退到整文件 legacy 写入。
+  const capability = await invoke<{ available: boolean }>("core_ping");
+  coreAvailable = capability.available;
   return coreAvailable;
 }
 
@@ -295,28 +289,28 @@ export async function coreSnapshot(): Promise<CoreSnapshot> {
 }
 
 export async function registerGlobalShortcut(shortcut: string): Promise<void> {
-  if (!isTauriRuntime) {
+  if (!isTauriRuntime || !caps.desktop) {
     return;
   }
   await invoke("register_global_shortcut", { shortcut });
 }
 
 export async function setCloseToTray(enabled: boolean): Promise<void> {
-  if (!isTauriRuntime) {
+  if (!isTauriRuntime || !caps.desktop) {
     return;
   }
   await invoke("set_close_to_tray", { enabled });
 }
 
 export async function setAutostart(enabled: boolean): Promise<void> {
-  if (!isTauriRuntime) {
+  if (!isTauriRuntime || !caps.desktop) {
     return;
   }
   await invoke("set_autostart", { enabled });
 }
 
 export async function setWebviewZoom(scale: number): Promise<void> {
-  if (!isTauriRuntime) {
+  if (!isTauriRuntime || !caps.desktop) {
     return;
   }
   await invoke("set_webview_zoom", { scale });

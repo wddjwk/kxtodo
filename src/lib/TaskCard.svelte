@@ -5,6 +5,7 @@
   import { mdImageCache, resolveMarkdownImages } from "./images";
   import { appSettings } from "./stores";
   import { uiScaleValue } from "./styles";
+  import { longpress, isLongPressSuppressed } from "./longpress";
   import DatePicker from "./DatePicker.svelte";
   import type { Task } from "./types";
 
@@ -102,7 +103,22 @@
   function openContext(event: MouseEvent): void {
     event.preventDefault();
     event.stopPropagation();
+    // 触摸长按已开过菜单时，Chromium 补发的原生 contextmenu 直接吞掉
+    if (isLongPressSuppressed()) return;
     dispatch("context", { id: task.id, x: event.clientX, y: event.clientY });
+  }
+
+  /** 移动端触摸长按：以原始触点为锚打开任务菜单（桌面不受影响）。 */
+  function handleLongPress(pos: { x: number; y: number }): void {
+    dispatch("context", { id: task.id, x: pos.x, y: pos.y });
+  }
+
+  /** 长按抬手补发的 click 会冒泡到 app-shell 关掉刚开的菜单，抑制窗内吞掉。 */
+  function handleCardClick(event: MouseEvent): void {
+    if (isLongPressSuppressed()) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
   }
 
   function handleMarkdownClick(event: MouseEvent): void {
@@ -145,7 +161,9 @@
   class:multiline={canExpand}
   class:selected
   class="task-card"
+  use:longpress={handleLongPress}
   on:mousedown={handleCardMouseDown}
+  on:click={handleCardClick}
   on:dblclick={handleCardDblClick}
   on:contextmenu={openContext}
 >

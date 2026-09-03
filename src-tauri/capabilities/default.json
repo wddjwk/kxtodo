@@ -2,6 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default app permissions",
+  "platforms": ["windows", "macOS", "linux"],
   "windows": ["main", "notification-*"],
   "permissions": [
     "core:default",

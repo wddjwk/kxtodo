@@ -1,17 +1,22 @@
 use base64::Engine;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+#[cfg(desktop)]
+use serde::Serialize;
 use serde_json::{json, Value};
+#[cfg(desktop)]
+use std::collections::HashMap;
+#[cfg(desktop)]
+use std::env;
 use std::{
-    collections::HashMap,
-    env, fs,
+    fs,
     path::PathBuf,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::atomic::{AtomicU64, Ordering},
+    sync::Arc,
 };
 #[cfg(desktop)]
-use std::sync::Arc;
-use tauri::{AppHandle, Manager};
+use std::sync::atomic::AtomicBool;
+use tauri::{AppHandle, Manager, State};
 
-#[cfg(desktop)]
 use kxtodo_core as domain;
 
 #[cfg(desktop)]
@@ -19,7 +24,7 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    LogicalPosition, State, WebviewUrl, WebviewWindowBuilder,
+    LogicalPosition, WebviewUrl, WebviewWindowBuilder,
 };
 #[cfg(desktop)]
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
@@ -28,20 +33,22 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 #[cfg(desktop)]
 use tauri_plugin_window_state::StateFlags;
 
+#[cfg(desktop)]
 const DEFAULT_UI_SCALE: f64 = 0.75;
 const IMG_DIR: &str = "img";
 const AVATAR_DIR: &str = "avator";
 const BACKGROUND_DIR: &str = "background";
 const ENTRY_IMAGE_DIR: &str = "data";
+#[cfg(desktop)]
 const DEFAULT_NOTIFICATION_DURATION_MS: u64 = 3_000;
 
-// Fields are only read by desktop-only tray / window-close handling.
-#[cfg_attr(not(desktop), allow(dead_code))]
+#[cfg(desktop)]
 struct LifecycleState {
     close_to_tray: AtomicBool,
     quitting: AtomicBool,
 }
 
+#[cfg(desktop)]
 impl Default for LifecycleState {
     fn default() -> Self {
         Self {
@@ -51,6 +58,7 @@ impl Default for LifecycleState {
     }
 }
 
+#[cfg(desktop)]
 #[derive(Debug, Clone, Copy)]
 enum NotificationPosition {
     BottomRight,
@@ -171,18 +179,12 @@ fn md_images_dir(app: &AppHandle, node_id: &str) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn data_file(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(data_dir(app)?.join("data.json"))
-}
-
+#[cfg(desktop)]
 fn settings_file(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(data_dir(app)?.join("settings.json"))
 }
 
-fn scheduler_file(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(data_dir(app)?.join("tasks.json"))
-}
-
+#[cfg(desktop)]
 fn ensure_parent(path: &PathBuf) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -190,6 +192,7 @@ fn ensure_parent(path: &PathBuf) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(desktop)]
 fn read_json(path: PathBuf) -> Result<Value, String> {
     if !path.exists() {
         return Ok(json!(null));
@@ -199,12 +202,14 @@ fn read_json(path: PathBuf) -> Result<Value, String> {
     serde_json::from_str(&raw).map_err(|error| error.to_string())
 }
 
+#[cfg(desktop)]
 fn write_json(path: PathBuf, value: Value) -> Result<(), String> {
     ensure_parent(&path)?;
     let raw = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
     fs::write(path, raw).map_err(|error| error.to_string())
 }
 
+#[cfg(desktop)]
 fn normalize_ui_scale(scale: Option<f64>) -> f64 {
     let raw = scale.unwrap_or(DEFAULT_UI_SCALE);
     if (raw - 0.62).abs() < 0.001
@@ -217,76 +222,12 @@ fn normalize_ui_scale(scale: Option<f64>) -> f64 {
     raw.clamp(0.5, 1.5)
 }
 
-#[tauri::command]
-fn load_state(app: AppHandle) -> Result<Value, String> {
-    read_json(data_file(&app)?)
-}
-
-#[cfg(not(desktop))]
-#[tauri::command]
-fn save_state(app: AppHandle, state: Value) -> Result<(), String> {
-    write_json(data_file(&app)?, state)
-}
-
-#[tauri::command]
-fn load_settings(app: AppHandle) -> Result<Value, String> {
-    read_json(settings_file(&app)?)
-}
-
-#[cfg(not(desktop))]
-#[tauri::command]
-fn save_settings(app: AppHandle, settings: Value) -> Result<(), String> {
-    write_json(settings_file(&app)?, settings)
-}
-
-#[tauri::command]
-fn load_scheduler(app: AppHandle) -> Result<Value, String> {
-    read_json(scheduler_file(&app)?)
-}
-
-#[cfg(not(desktop))]
-#[tauri::command]
-fn save_scheduler(app: AppHandle, scheduler: Value) -> Result<(), String> {
-    write_json(scheduler_file(&app)?, scheduler)
-}
-
-#[cfg(not(desktop))]
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ScheduledActionCommand {
-    #[serde(default, rename = "type")]
-    action_type: String,
-    #[serde(default)]
-    script_mode: String,
-    #[serde(default)]
-    language: String,
-    #[serde(default)]
-    interpreter: String,
-    #[serde(default)]
-    file_path: String,
-    #[serde(default)]
-    code: String,
-    #[serde(default)]
-    executable_path: String,
-    #[serde(default)]
-    arguments: String,
-    #[serde(default)]
-    working_directory: String,
-}
-
-#[cfg(not(desktop))]
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ScheduledActionOutput {
-    exit_code: Option<i32>,
-    stdout: String,
-    stderr: String,
-}
-
+#[cfg(desktop)]
 fn default_notification_title() -> String {
     "KXToDo".to_string()
 }
 
+#[cfg(desktop)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct NotificationRequest {
@@ -306,7 +247,7 @@ struct NotificationRequest {
     body_font_size: f64,
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(desktop, target_os = "windows"))]
 fn executable_candidates(name: &str) -> Vec<String> {
     if std::path::Path::new(name).extension().is_some() {
         return vec![name.to_string()];
@@ -319,11 +260,12 @@ fn executable_candidates(name: &str) -> Vec<String> {
     candidates
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(desktop, not(target_os = "windows")))]
 fn executable_candidates(name: &str) -> Vec<String> {
     vec![name.to_string()]
 }
 
+#[cfg(desktop)]
 fn env_executable(env_names: &[&str]) -> Option<String> {
     for name in env_names {
         let Ok(raw) = env::var(name) else {
@@ -341,6 +283,7 @@ fn env_executable(env_names: &[&str]) -> Option<String> {
     None
 }
 
+#[cfg(desktop)]
 fn find_executable(names: &[&str], env_names: &[&str]) -> String {
     if let Some(value) = env_executable(env_names) {
         return value;
@@ -362,6 +305,7 @@ fn find_executable(names: &[&str], env_names: &[&str]) -> String {
     String::new()
 }
 
+#[cfg(desktop)]
 fn default_executor_paths() -> HashMap<String, String> {
     let mut paths = HashMap::new();
     paths.insert(
@@ -393,11 +337,13 @@ fn default_executor_paths() -> HashMap<String, String> {
     paths
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 fn resolve_executor_paths() -> HashMap<String, String> {
     default_executor_paths()
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 fn resolve_executable_path(name: String) -> Option<String> {
     let name = name.trim();
@@ -412,6 +358,7 @@ fn resolve_executable_path(name: String) -> Option<String> {
     }
 }
 
+#[cfg(desktop)]
 fn clamp_notification_duration(duration_ms: u64, fallback: u64) -> u64 {
     let raw = if duration_ms == 0 {
         fallback
@@ -421,6 +368,7 @@ fn clamp_notification_duration(duration_ms: u64, fallback: u64) -> u64 {
     raw.clamp(1_200, 60_000)
 }
 
+#[cfg(desktop)]
 fn default_notification_duration(app: &AppHandle) -> u64 {
     let Ok(path) = settings_file(app) else {
         return DEFAULT_NOTIFICATION_DURATION_MS;
@@ -436,6 +384,7 @@ fn default_notification_duration(app: &AppHandle) -> u64 {
         .unwrap_or(DEFAULT_NOTIFICATION_DURATION_MS)
 }
 
+#[cfg(desktop)]
 fn parse_notification_position(raw: &str) -> NotificationPosition {
     match raw.trim().to_ascii_lowercase().as_str() {
         "top-right" => NotificationPosition::TopRight,
@@ -445,6 +394,7 @@ fn parse_notification_position(raw: &str) -> NotificationPosition {
     }
 }
 
+#[cfg(desktop)]
 fn default_notification_position(app: &AppHandle) -> NotificationPosition {
     let Ok(path) = settings_file(app) else {
         return NotificationPosition::BottomRight;
@@ -460,6 +410,7 @@ fn default_notification_position(app: &AppHandle) -> NotificationPosition {
         .unwrap_or(NotificationPosition::BottomRight)
 }
 
+#[cfg(desktop)]
 fn notification_setting_f64(app: &AppHandle, field: &str, fallback: f64) -> f64 {
     let Ok(path) = settings_file(app) else {
         return fallback;
@@ -475,6 +426,7 @@ fn notification_setting_f64(app: &AppHandle, field: &str, fallback: f64) -> f64 
         .unwrap_or(fallback)
 }
 
+#[cfg(desktop)]
 fn normalize_notification(
     app: &AppHandle,
     notification: NotificationRequest,
@@ -723,34 +675,7 @@ fn close_notification_window(window: tauri::Window) -> Result<(), String> {
     window.close().map_err(|error| error.to_string())
 }
 
-#[cfg(not(desktop))]
-#[tauri::command]
-fn send_notification(_notification: NotificationRequest) -> Result<(), String> {
-    Ok(())
-}
-
-#[cfg(not(desktop))]
-#[tauri::command]
-fn close_notification_window() -> Result<(), String> {
-    Ok(())
-}
-
-#[cfg(not(desktop))]
-#[tauri::command]
-async fn run_scheduled_action(
-    _task_id: Option<String>,
-    _action: ScheduledActionCommand,
-    _runtimes: HashMap<String, String>,
-) -> Result<ScheduledActionOutput, String> {
-    Err("Scheduled task execution is not supported on mobile".to_string())
-}
-
-#[cfg(not(desktop))]
-#[tauri::command]
-fn stop_scheduled_action(_task_id: String) -> Result<(), String> {
-    Ok(())
-}
-
+#[cfg(desktop)]
 #[tauri::command]
 fn export_data(payload: Value, path: String) -> Result<(), String> {
     let output_path = PathBuf::from(path);
@@ -1143,21 +1068,11 @@ fn register_global_shortcut(app: AppHandle, shortcut: String) -> Result<(), Stri
     register_global_toggle(&app, &shortcut)
 }
 
-#[cfg(not(desktop))]
-#[tauri::command]
-fn register_global_shortcut(_shortcut: String) -> Result<(), String> {
-    Ok(())
-}
-
 #[cfg(desktop)]
 #[tauri::command]
 fn set_close_to_tray(state: State<LifecycleState>, enabled: bool) {
     state.close_to_tray.store(enabled, Ordering::SeqCst);
 }
-
-#[cfg(not(desktop))]
-#[tauri::command]
-fn set_close_to_tray(_enabled: bool) {}
 
 #[cfg(desktop)]
 #[tauri::command]
@@ -1171,24 +1086,12 @@ fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
     }
 }
 
-#[cfg(not(desktop))]
-#[tauri::command]
-fn set_autostart(_enabled: bool) -> Result<(), String> {
-    Ok(())
-}
-
 #[cfg(desktop)]
 #[tauri::command]
 fn get_autostart_enabled(app: AppHandle) -> Result<bool, String> {
     app.autolaunch()
         .is_enabled()
         .map_err(|error| error.to_string())
-}
-
-#[cfg(not(desktop))]
-#[tauri::command]
-fn get_autostart_enabled() -> Result<bool, String> {
-    Ok(false)
 }
 
 #[cfg(desktop)]
@@ -1198,13 +1101,6 @@ fn set_webview_zoom(app: AppHandle, scale: f64) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
         window.set_zoom(1.0).map_err(|error| error.to_string())?;
     }
-    Ok(())
-}
-
-#[cfg(not(desktop))]
-#[tauri::command]
-fn set_webview_zoom(scale: f64) -> Result<(), String> {
-    let _ = normalize_ui_scale(Some(scale));
     Ok(())
 }
 
@@ -1227,13 +1123,11 @@ struct UpdateApplyParams {
     cli_url: String,
 }
 
-#[cfg(desktop)]
 fn update_emit(app: &AppHandle, event: &str, payload: Value) {
     use tauri::Emitter;
     let _ = app.emit(event, payload);
 }
 
-#[cfg(desktop)]
 fn update_agent() -> ureq::Agent {
     // ureq 默认探测 HTTP(S)_PROXY 环境变量，无需手工配置。
     ureq::AgentBuilder::new()
@@ -1241,7 +1135,6 @@ fn update_agent() -> ureq::Agent {
         .build()
 }
 
-#[cfg(desktop)]
 fn update_download_file(
     app: &AppHandle,
     agent: &ureq::Agent,
@@ -1322,7 +1215,7 @@ fn write_update_bat(dir: &std::path::Path, pid: u32, version: &str) -> Result<Pa
     Ok(bat)
 }
 
-#[cfg(not(windows))]
+#[cfg(all(desktop, not(windows)))]
 fn stage_unix_shims(dir: &std::path::Path, version: &str) -> Result<(), String> {
     use std::os::unix::fs::symlink;
     for (link, target) in [
@@ -1407,6 +1300,67 @@ fn update_download_and_apply(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// 移动端应用更新：下载 APK 到 cacheDir，安装动作由前端经 Kotlin 桥
+// （window.kxtodoAndroid.installApk）触发 PackageInstaller。
+// ---------------------------------------------------------------------------
+
+#[cfg(not(desktop))]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateApkParams {
+    version: String,
+    apk_url: String,
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+fn update_download_apk(app: AppHandle, params: UpdateApkParams) -> Result<(), String> {
+    if !params.apk_url.starts_with("https://github.com/wddjwk/kxtodo/releases/download/")
+        && !params.apk_url.starts_with("https://objects.githubusercontent.com/")
+    {
+        return Err(format!("更新地址不受信任：{}", params.apk_url));
+    }
+    let version = params.version.trim().to_string();
+    if version.is_empty()
+        || !version
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return Err(format!("非法版本号：{version}"));
+    }
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| error.to_string())?;
+    fs::create_dir_all(&cache_dir).map_err(|error| error.to_string())?;
+    // 标准安卓更新流程：固定文件名覆盖下载，不留历史版本包。
+    let dest = cache_dir.join("KXToDo.apk");
+    let url = params.apk_url;
+    std::thread::spawn(move || {
+        let result = (|| -> Result<(), String> {
+            let agent = update_agent();
+            update_download_file(&app, &agent, "APK", &url, &dest)?;
+            // 自检：错误页/JSON 响应体积远小于真实 APK，拦下明显存坏的下载。
+            let size = fs::metadata(&dest).map(|meta| meta.len()).unwrap_or(0);
+            if size < 1_000_000 {
+                let _ = fs::remove_file(&dest);
+                return Err(format!("APK 更新包异常（仅 {size} 字节），已中止"));
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                update_emit(&app, "update://applied", json!({ "path": dest }));
+            }
+            Err(message) => {
+                update_emit(&app, "update://failed", json!({ "message": message }));
+            }
+        }
+    });
+    Ok(())
+}
+
 #[cfg(desktop)]
 #[tauri::command]
 fn reveal_main_window(app: AppHandle) -> Result<(), String> {
@@ -1415,12 +1369,6 @@ fn reveal_main_window(app: AppHandle) -> Result<(), String> {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
-    Ok(())
-}
-
-#[cfg(not(desktop))]
-#[tauri::command]
-fn reveal_main_window() -> Result<(), String> {
     Ok(())
 }
 
@@ -1686,9 +1634,6 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
 
     let builder = builder
         .invoke_handler(tauri::generate_handler![
-            load_state,
-            load_settings,
-            load_scheduler,
             resolve_executor_paths,
             resolve_executable_path,
             export_data,
@@ -1826,7 +1771,6 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
 }
 
 /// Generic GUI → Domain Core bridge (§4.3): frontend submits business commands.
-#[cfg(desktop)]
 #[tauri::command]
 fn core_dispatch(
     core: State<'_, Arc<domain::host::HostCore>>,
@@ -1853,14 +1797,12 @@ fn core_dispatch(
 /// Capability probe that never reads business data. Desktop answers true even
 /// when a domain file is corrupt so the frontend fails closed instead of using
 /// legacy full-file writes.
-#[cfg(desktop)]
 #[tauri::command]
 fn core_ping() -> Value {
-    serde_json::json!({ "available": true, "protocolVersion": domain::ipc::PROTOCOL_VERSION })
+    json!({ "available": true, "protocolVersion": domain::ipc::PROTOCOL_VERSION })
 }
 
 /// Snapshot read for GUI hydration (replaces full-file load_* paths).
-#[cfg(desktop)]
 #[tauri::command]
 fn core_snapshot(core: State<'_, Arc<domain::host::HostCore>>) -> Result<Value, String> {
     let data = core.repo.load_data().map_err(|error| error.to_string())?;
@@ -1905,6 +1847,79 @@ fn parse_host_mode_args(args: &[String]) -> Option<PathBuf> {
     Some(data_dir)
 }
 
+// ---------------------------------------------------------------------------
+// v0.2.0 mobile host wiring：进程内 HostCore（无 IPC 服务端、无调度器、
+// 无看门狗、无托盘）。前端与桌面走同一条 core_dispatch 业务命令层。
+// ---------------------------------------------------------------------------
+
+#[cfg(not(desktop))]
+struct MobileBackend {
+    app: AppHandle,
+}
+
+#[cfg(not(desktop))]
+impl domain::host::HostBackend for MobileBackend {
+    fn show_notification(
+        &self,
+        _payload: &Value,
+        _wait_rx: Option<std::sync::mpsc::Receiver<()>>,
+    ) -> Result<String, domain::CoreError> {
+        Err(domain::CoreError::execution(
+            "NOTIFY_UNSUPPORTED",
+            "移动端暂不支持后台通知",
+        ))
+    }
+
+    fn emit(&self, event: &str, payload: Value) {
+        use tauri::Emitter;
+        let _ = self.app.emit(event, payload);
+    }
+
+    fn apply_native_effect(
+        &self,
+        _name: &str,
+        _settings: &domain::model::SettingsFile,
+    ) -> Result<(), domain::CoreError> {
+        Ok(())
+    }
+
+    fn request_exit(&self) {}
+
+    fn has_gui(&self) -> bool {
+        true
+    }
+
+    fn show_main_window(&self) -> Result<(), domain::CoreError> {
+        Ok(())
+    }
+
+    fn autostart_enabled(&self) -> Result<bool, domain::CoreError> {
+        Ok(false)
+    }
+}
+
+#[cfg(not(desktop))]
+fn init_mobile_core(app: &AppHandle) -> Result<(), String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    ensure_storage_layout(app)?;
+    let repo = domain::repo::Repository::open(dir.clone()).map_err(|error| error.to_string())?;
+    if let Err(error) = repo.load_all() {
+        eprintln!("数据迁移失败：{error}");
+    }
+    if let Err(error) = repo.ensure_initialized() {
+        eprintln!("数据初始化失败：{error}");
+    }
+    let core = domain::host::HostCore::new(repo, dir, "gui", false);
+    core.set_backend(Box::new(MobileBackend { app: app.clone() }));
+    domain::host::retry_pending_recovery(&core);
+    app.manage(core);
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(desktop)]
@@ -1918,25 +1933,17 @@ pub fn run() {
 
     #[cfg(not(desktop))]
     {
-        let builder = tauri::Builder::default()
-            .manage(LifecycleState::default())
-            .plugin(tauri_plugin_opener::init());
-
         let context = tauri::generate_context!();
-        builder
+        tauri::Builder::default()
+            .plugin(tauri_plugin_opener::init())
             .plugin(tauri_plugin_dialog::init())
+            .plugin(tauri_plugin_notification::init())
             .invoke_handler(tauri::generate_handler![
-                load_state,
-                save_state,
-                load_settings,
-                save_settings,
-                load_scheduler,
-                save_scheduler,
-                resolve_executor_paths,
-                resolve_executable_path,
-                run_scheduled_action,
-                stop_scheduled_action,
-                export_data,
+                core_dispatch,
+                core_snapshot,
+                core_ping,
+                app_version,
+                open_url,
                 save_background_image,
                 load_background_image,
                 delete_background_image,
@@ -1950,19 +1957,10 @@ pub fn run() {
                 delete_node_images,
                 md_image_path,
                 save_md_image_data,
-                send_notification,
-                close_notification_window,
-                register_global_shortcut,
-                set_close_to_tray,
-                set_autostart,
-                get_autostart_enabled,
-                set_webview_zoom,
-                reveal_main_window,
-                app_version,
-                open_url
+                update_download_apk
             ])
             .setup(move |app| {
-                ensure_storage_layout(app.handle()).map_err(|error| {
+                init_mobile_core(app.handle()).map_err(|error| {
                     tauri::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, error))
                 })?;
                 Ok(())

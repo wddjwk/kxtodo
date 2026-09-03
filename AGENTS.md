@@ -21,6 +21,7 @@ kxtodo.exe (GUI)                    kxtodo-cli (CLI)
 - **GUI 是唯一常驻进程**：窗口关闭（默认隐藏到托盘）后 Host 继续跑调度与 IPC；无窗口、无启用任务时看门狗自动退出。
 - **CLI 不持有状态**：需要常驻能力（notify 弹通知、schedule run）时，CLI 通过 IPC 找 Host；Host 不在就拉起 GUI 同目录 exe 的隐藏 Host 模式（`--kxtodo-host`），找不到 GUI 则报 `GUI_NOT_FOUND`。
 - **GUI/CLI/Agent 三方写操作走同一条业务命令层**（Domain Core 的 Invocation → 域分发 → envelope 输出），不存在"读全量 JSON 改完写回"的路径。
+- **Android 同栈**：APK 内嵌同一个 kxtodo-core，HostCore 进程内直跑（`init_mobile_core`：Repository + 移动端 HostBackend），**不启 IPC server / 调度引擎 / 看门狗 / 托盘**；写操作与桌面走完全相同的 core_dispatch 命令层。浏览器 dev 预览（非 Tauri）才走 localStorage legacy 路径。
 
 ### 数据目录解析
 
@@ -30,9 +31,12 @@ kxtodo.exe (GUI)                    kxtodo-cli (CLI)
 
 ### 前端分层（src/）
 
-- **stores.ts**：Svelte stores 单一事实来源。`appState`/`appSettings` + derived（`selectedNode`/`visibleTasks`/`listCounts`/`accent`…）。core 模式下 hydrate 走 `coreSnapshot`，之后靠 `kxtodo://domain-changed` 事件 + `refreshFromCore` 增量回刷。
-- **actions.ts**：GUI 全部写操作的业务命令层。core 路径（`coreDispatch`）+ 移动端 legacy 回退。**新写操作一律加在这里，不要在组件里直接改 store 或 invoke。**
-- **backend.ts**：Tauri invoke 桥接（含浏览器 dev 回退）。
+- **stores.ts**：Svelte stores 单一事实来源。`appState`/`appSettings` + derived（`selectedNode`/`visibleTasks`/`listCounts`/`accent`…）。桌面与移动端 hydrate 都走 `coreSnapshot`，之后靠 `kxtodo://domain-changed` 事件 + `refreshFromCore` 增量回刷。
+- **actions.ts**：GUI 全部写操作的业务命令层，桌面/移动统一 coreDispatch。**新写操作一律加在这里，不要在组件里直接改 store 或 invoke。**
+- **backend.ts**：Tauri invoke 桥接。桌面专属能力（托盘/自启/全局快捷键/webview 缩放/原生文件对话框/导出落盘）经 capabilities 门控在移动端 no-op 或改走替代路径（file input + dataURL 命令、Kotlin 分享桥）；浏览器 dev 回退 localStorage。
+- **capabilities.ts**：平台能力层（scheduler/trayLifecycle/globalShortcuts/windowZoom/popupNotificationWindow/systemNotifications/nativeFileDialogs/updateChannel/desktop）。组件按能力裁剪 UI，不再散落 isMobile 判断；加新平台时只扩这里。
+- **platform.ts**：移动端检测（UA）+ 三层历史栈路由（list → content → editor/settings，`{mv:...}` history 条目，popstate 回写 store）。**`startMobileRouter()` 只能由 App onMount 调用**——模块顶层挂载会因 platform ↔ stores/backend/capabilities 循环依赖 TDZ 白屏。
+- **longpress.ts**：触摸长按 action（500ms、10px 移动容差、抑制窗去重 Chromium 补发的原生 contextmenu），树行/任务卡/侧栏空白区共用——移动端长按 = 桌面右键。
 - **scheduleAdapter.ts**：v9 ScheduleEntry（spec/state/ui 三段）↔ UI 编辑模型双向适配，patch 时保留 CLI 专属字段。
 - **纯逻辑**：`nodes.ts`（树查询）、`styles.ts`（样式计算）、`sort.ts`（7 种排序）、`markdown.ts`（渲染消毒）、`defaults.ts`（默认值 + 旧数据规范化）、`platform.ts`（移动端检测 + 导航）。
 - **组件**：`App.svelte`（协调器）→ `Sidebar`（导航 + 树 + 右键菜单）、`Workspace`（列表头 + TaskCard 列表 + 添加栏；`selectedNode.id === "scheduled"` 时切换为 `ScheduledTasksView`）、`SettingsDrawer`、`TitleBar`、`Toast`。
@@ -58,7 +62,7 @@ kxtodo.exe (GUI)                    kxtodo-cli (CLI)
 - **定时任务**：独立视图，卡片三态（compact/expanded/editing），新建后停在编辑态（ui.editing 持久化）。触发器 once/interval/calendar/condition；动作 脚本/可执行文件/通知；执行历史 `schedule logs`。
 - **我的一天**：标题下显示当天日期；灯泡 = 智能建议；日历 = 月/周视图回看各天完成项；已完成区只显示当天完成。
 - **设置抽屉**：个人资料（头像 dataURL）、外观（缩放/字号/链接打开方式）、生命周期（关闭到托盘/开机自启）、快捷键、云同步占位。
-- **移动端（Android）**：打开只见分类列表，点条目推入正文（顶部返回），硬件返回键经 History 回列表。桌面体验不受影响（isMobile 只看 userAgent）。
+- **移动端（Android）**：三级导航——主界面是分类列表，点分组展开、点条目/系统列表推入内容页（顶部返回键），设置是独立整页（侧栏资料卡进入），硬件返回键沿历史栈逐级回退（编辑器→内容→列表→退出，MainActivity 的 OnBackPressedCallback 驱动 webview.goBack）。长按 = 右键菜单；定时任务整体隐藏（无调度引擎）；通知走 tauri-plugin-notification 系统通知（首次发送请求 POST_NOTIFICATIONS）；更新 = 设置页检查 → 下载固定名 APK → Kotlin 桥（`window.kxtodoAndroid.installApk`）拉起系统安装器覆盖安装。导出走系统分享面板（shareText 桥），图片选择走隐藏 file input + dataURL 命令。桌面体验不受影响（isMobile 只看 userAgent，能力门控保证桌面命令面不变）。
 
 ## 如何修改 / 维护 / 拓展
 
@@ -81,12 +85,14 @@ npm install                # 依赖
 npm run desktop:dev        # 桌面开发（vite + tauri dev）
 scripts/cargo-msvc.sh test -p kxtodo-core   # Rust 测试（Git Bash 下必须用这个包装！）
 .\release.ps1 windows      # 本地构建 Windows 双产物
-.\scripts\publish.ps1      # 一键发布：构建 + gh release create（需要 gh 已登录）
+.\release.ps1 all          # Windows 双产物 + Android APK
+node scripts/mobile-ux-test.mjs   # 移动端 UX 回归（playwright-core + 系统 Edge，需先 npm run dev）
+.\scripts\publish.ps1      # 一键发布：三产物构建 + gh release create（需要 gh 已登录）
 ```
 
-**版本号只有 git 一个来源**：最近的 `v*` tag，其次最近一条 `vX.Y.Z` 开头的 commit message。`build.rs`（根 crate + crates/core）构建期调用 git 注入 `KXTODO_VERSION`，GUI 经 `app_version` 命令展示在设置页，CLI 的 `version` 命令同源。**仓库任何文件里都不写版本号**（Cargo.toml 是 0.0.0 占位、tauri.conf.json 无 version 字段、前端无常量）——发版只打 tag/写 commit，永远不要往文件里同步版本号。
+**版本号只有 git 一个来源**：最近的 `v*` tag，其次最近一条 `vX.Y.Z` 开头的 commit message。`build.rs`（根 crate + crates/core）构建期调用 git 注入 `KXTODO_VERSION`，GUI 经 `app_version` 命令展示在设置页，CLI 的 `version` 命令同源。**仓库任何文件里都不写版本号**（Cargo.toml 是 0.0.0 占位、tauri.conf.json 无 version 字段、前端无常量）——发版只打 tag/写 commit，永远不要往文件里同步版本号。注意 `git describe` 优先于 commit message：**发版必须先 commit 再在 HEAD 上打 tag**，否则 describe 回到旧 tag，构建/发布会拿旧版本号且不报错。
 
-产物：`release/KXToDo-<版本>.exe`（GUI）+ `KXToDo-CLI-<版本>.exe`（CLI）。没有 GitHub 构建流水线（已删），构建与发布全在本地。
+产物：`release/KXToDo-<版本>.exe`（GUI）+ `KXToDo-CLI-<版本>.exe`（CLI）+ `KXToDo.apk`（Android，固定名不带版本——覆盖安装不留历史包；旁挂 `KXToDo.apk.version` sidecar 记录构建版本供 publish 识别旧产物）。APK 的 versionName/versionCode 由 package.ps1 注入的 `KXTODO_VERSION` 环境变量进 gradle（versionCode = 900000000 + X*1000000 + Y*1000 + Z，基线高于旧构建的 8002001 保证升级不降级）。没有 GitHub 构建流水线（已删），构建与发布全在本地。
 
 ## 环境坑位（Windows 开发必读）
 
@@ -96,6 +102,7 @@ scripts/cargo-msvc.sh test -p kxtodo-core   # Rust 测试（Git Bash 下必须�
 4. **单实例标识 `com.wddjwk.kxtodo` 全局唯一**：debug、release、旧版本 exe 互相同标识，启动新实例会转发到已运行的旧实例（表现为"改了代码没生效"）。**调试前先把所有 kxtodo/KXToDo 进程杀光（含托盘）**；用户反馈"修复没生效"也优先怀疑旧进程残留。
 5. **tauri-plugin-window-state 默认管所有窗口**：动态 label 的窗口（通知窗 `notification-N` 按进程内计数器复用 label）会被恢复历史"不可见/旧位置"状态——曾导致通知窗建好了却看不见。必须用 `with_filter` 按前缀排除；主窗口可见性若由代码接管（conf `visible:false` + 前端 reveal），还要把 `StateFlags::VISIBLE` 从持久化里剥掉，否则恢复逻辑会绕过 reveal 提前显示窗口。
 6. **pwsh 5.1 写文件默认 GBK**：脚本里写中文文本一律 `[System.IO.File]::WriteAllText` + UTF-8 no-BOM。
+7. **裸 cargo 交叉检查 Android 目标需要 NDK clang 环境**：ureq/ring 是共享依赖后，`cargo check --target aarch64-linux-android` 会在 ring 的 cc-rs 构建脚本里找 clang 失败。gradle 的 rust 插件（`tauri android build`）会自己配好；手工 check 需导出：`PATH += $NDK_HOME/toolchains/llvm/prebuilt/windows-x86_64/bin`、`CC/CXX/AR_aarch64_linux_android=clang.exe/clang++.exe/llvm-ar.exe`、`CFLAGS/CXXFLAGS_aarch64_linux_android=--target=aarch64-linux-android24`。
 
 ## computer-use 调试经验（WebView2 应用）
 

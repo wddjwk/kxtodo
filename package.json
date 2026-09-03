@@ -23,6 +23,7 @@
     "@lucide/svelte": "^1.17.0",
     "@tauri-apps/api": "^2.5.0",
     "@tauri-apps/plugin-dialog": "^2.7.1",
+    "@tauri-apps/plugin-notification": "^2.4.0",
     "codemirror": "^6.0.2",
     "dompurify": "^3.2.4",
     "emoji-picker-element": "^1.29.1",
@@ -35,6 +36,7 @@
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
     "@tauri-apps/cli": "^2.5.0",
     "@tsconfig/svelte": "^5.0.4",
+    "playwright-core": "^1.62.1",
     "svelte-check": "^4.1.4",
     "typescript": "^5.7.3",
     "vite": "^6.1.0"

@@ -17,8 +17,9 @@
   import { normalizeState, normalizeSettings, defaultBackground, themePresets } from "../defaults";
   import {
     exportData, isTauriRuntime, deleteBackgroundImage, pickImageFile,
-    importBackgroundImage, backgroundImageUrl, deleteNodeImages
+    importBackgroundImage, backgroundImageUrl, deleteNodeImages, saveBackgroundImageFromDataUrl
   } from "../backend";
+  import { caps } from "../capabilities";
   import { isLocalImageRef, localImageFilename, localImageRef, primeImageCache } from "../images";
   import { showMobileList } from "../platform";
   import { sortLabels, type SortMode } from "../sort";
@@ -90,7 +91,8 @@
   }
 
   async function pickBackgroundImage(): Promise<void> {
-    if (!isTauriRuntime) {
+    // 浏览器与移动端（无原生对话框）都走隐藏 <input type=file> → uploadBackgroundImage。
+    if (!isTauriRuntime || !caps.nativeFileDialogs) {
       backgroundFileInput.click();
       return;
     }
@@ -113,7 +115,17 @@
     if (!(target instanceof HTMLInputElement) || !target.files?.[0]) return;
     try {
       const dataUrl = await fileToDataUrl(target.files[0]);
-      setBackground({ image: dataUrl });
+      if (isTauriRuntime) {
+        // Tauri（移动端 + 桌面兜底）：dataURL 交给 Rust 落盘为本地图片文件。
+        const previous = $selectedBackground.image;
+        const filename = await saveBackgroundImageFromDataUrl(dataUrl);
+        const url = await backgroundImageUrl(filename);
+        primeImageCache(filename, url);
+        setBackground({ image: localImageRef(filename) });
+        if (isLocalImageRef(previous)) void deleteBackgroundImage(localImageFilename(previous));
+      } else {
+        setBackground({ image: dataUrl });
+      }
     } catch (error) {
       showToast(`背景图片读取失败：${String(error)}`);
     } finally {
@@ -241,9 +253,13 @@
       nodeId: node.id,
       state: exportStateForNode(node, $appState)
     };
-    await exportData(payload, `${safeFileName(node.name)}-${$appVersion || "dev"}.json`);
+    try {
+      await exportData(payload, `${safeFileName(node.name)}-${$appVersion || "dev"}.json`);
+      showToast("导出完成");
+    } catch (error) {
+      showToast(`导出失败：${String(error)}`);
+    }
     onClose();
-    showToast("导出完成");
   }
 
   async function exportAll(): Promise<void> {
@@ -254,9 +270,13 @@
       state: $appState,
       settings: $appSettings
     };
-    await exportData(payload, `kxtodo-${$appVersion || "dev"}-all.json`);
+    try {
+      await exportData(payload, `kxtodo-${$appVersion || "dev"}-all.json`);
+      showToast("全部数据已导出");
+    } catch (error) {
+      showToast(`导出失败：${String(error)}`);
+    }
     onClose();
-    showToast("全部数据已导出");
   }
 
   async function importFromFile(event: Event): Promise<void> {

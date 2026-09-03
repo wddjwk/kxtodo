@@ -1,13 +1,16 @@
 // ---------------------------------------------------------------------------
-// updater.ts — GitHub latest release 检查 + Rust 侧下载/shim/重启。
-// 检查走 WebView2 fetch（api.github.com 允许 CORS）；下载、落盘、换链、重启
-// 全部由 Rust 的 update_download_and_apply 在后台线程完成，进度经事件回传。
+// updater.ts — GitHub latest release 检查 + 平台分支下载。
+// 桌面：Rust 的 update_download_and_apply 完成下载/shim/重启，进度经事件回传。
+// 移动端：update_download_apk 下载 APK 到 cacheDir，"update://applied" 带 path，
+// 由 Kotlin 桥 window.kxtodoAndroid.installApk 拉起系统安装器。
+// 检查走 WebView fetch（api.github.com 允许 CORS）。
 // ---------------------------------------------------------------------------
 
 import { writable } from "svelte/store";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { isTauriRuntime } from "./backend";
+import { caps } from "./capabilities";
 
 const RELEASE_API = "https://api.github.com/repos/wddjwk/kxtodo/releases/latest";
 const FETCH_TIMEOUT_MS = 15_000;
@@ -15,9 +18,10 @@ const FETCH_TIMEOUT_MS = 15_000;
 export type UpdateInfo = {
   version: string;
   tag: string;
-  guiUrl: string;
-  cliUrl: string;
   notes: string;
+  guiUrl?: string;
+  cliUrl?: string;
+  apkUrl?: string;
 };
 
 export type UpdateCheckResult =
@@ -25,16 +29,16 @@ export type UpdateCheckResult =
   | { status: "available"; info: UpdateInfo }
   | { status: "error"; message: string };
 
-export type UpdatePhase = "idle" | "downloading" | "restarting" | "failed";
+export type UpdatePhase = "idle" | "downloading" | "installing" | "restarting" | "failed";
 
 export type UpdateProgress = {
   phase: UpdatePhase;
-  stage: "GUI" | "CLI" | "";
+  stage: "GUI" | "CLI" | "APK" | "";
   percent: number;
   message: string;
 };
 
-/** 下载/重启全过程状态：SettingsDrawer 直接订阅渲染。 */
+/** 下载/安装/重启全过程状态：SettingsDrawer 直接订阅渲染。 */
 export const updateProgress = writable<UpdateProgress>({
   phase: "idle",
   stage: "",
@@ -44,14 +48,29 @@ export const updateProgress = writable<UpdateProgress>({
 
 if (isTauriRuntime) {
   void listen<{ stage: string; percent: number }>("update://progress", (event) => {
+    const stage = event.payload.stage;
     updateProgress.update((state) => ({
       ...state,
       phase: "downloading",
-      stage: event.payload.stage === "CLI" ? "CLI" : "GUI",
+      stage: stage === "CLI" ? "CLI" : stage === "APK" ? "APK" : "GUI",
       percent: event.payload.percent
     }));
   });
-  void listen("update://applied", () => {
+  void listen<{ path?: string }>("update://applied", (event) => {
+    const path = event.payload?.path;
+    if (path) {
+      // 移动端：APK 已落盘，交给 Kotlin 桥拉起 PackageInstaller。
+      const bridge = window.kxtodoAndroid;
+      if (bridge?.installApk) {
+        const err = bridge.installApk(path);
+        if (err) {
+          updateProgress.set({ phase: "failed", stage: "", percent: 0, message: err });
+          return;
+        }
+      }
+      updateProgress.set({ phase: "installing", stage: "", percent: 100, message: "" });
+      return;
+    }
     updateProgress.set({ phase: "restarting", stage: "", percent: 100, message: "" });
   });
   void listen<{ message: string }>("update://failed", (event) => {
@@ -80,7 +99,7 @@ async function fetchJson(url: string): Promise<unknown> {
   }
 }
 
-/** 查询 GitHub latest release；有更新返回版本与 GUI/CLI 下载地址。 */
+/** 查询 GitHub latest release；有更新时按平台返回 GUI/CLI 或 APK 下载地址。 */
 export async function checkForUpdate(currentVersion: string): Promise<UpdateCheckResult> {
   try {
     const data = (await fetchJson(RELEASE_API)) as {
@@ -94,6 +113,24 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateChec
       return { status: "up-to-date" };
     }
     const assets = data.assets ?? [];
+
+    if (caps.updateChannel === "apk") {
+      // 发布资产固定命名 KXToDo.apk（不带版本号，覆盖安装不留历史包）
+      const apk = assets.find((item) => item.name === "KXToDo.apk");
+      if (!apk?.browser_download_url) {
+        return { status: "error", message: "最新发布中缺少 APK 安装包，无法更新" };
+      }
+      return {
+        status: "available",
+        info: {
+          version: latest,
+          tag,
+          notes: data.body ?? "",
+          apkUrl: apk.browser_download_url
+        }
+      };
+    }
+
     const gui = assets.find((item) => {
       const name = item.name ?? "";
       return /^KXToDo-.*\.exe$/.test(name) && !name.includes("CLI");
@@ -117,8 +154,21 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateChec
   }
 }
 
-/** 触发 Rust 侧下载 → shim → 重启；进度与结果经 updateProgress store 回传。 */
+/** 触发 Rust 侧下载；桌面继续 shim → 重启，移动端落 APK 后经事件交给系统安装器。 */
 export async function startUpdate(info: UpdateInfo): Promise<void> {
+  if (caps.updateChannel === "apk") {
+    if (!info.apkUrl) {
+      throw new Error("缺少 APK 下载地址");
+    }
+    updateProgress.set({ phase: "downloading", stage: "APK", percent: 0, message: "" });
+    await invoke("update_download_apk", {
+      params: { version: info.version, apkUrl: info.apkUrl }
+    });
+    return;
+  }
+  if (!info.guiUrl || !info.cliUrl) {
+    throw new Error("缺少 GUI 或 CLI 下载地址");
+  }
   updateProgress.set({ phase: "downloading", stage: "GUI", percent: 0, message: "" });
   await invoke("update_download_and_apply", {
     params: { version: info.version, guiUrl: info.guiUrl, cliUrl: info.cliUrl }

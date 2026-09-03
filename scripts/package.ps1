@@ -1,4 +1,4 @@
-param(
+﻿param(
   [ValidateSet("all", "windows", "android")]
   [string]$Targets = "all",
   [switch]$Log
@@ -76,9 +76,9 @@ if ($Log) {
 }
 
 try {
-  if (!(Test-Path -LiteralPath (Join-Path $root "node_modules"))) {
-    npm install
-  }
+  # 无条件执行 npm install：有 lockfile 时很快，且保证新依赖（如 @tauri-apps/plugin-notification）就位。
+  npm install
+  if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
 
   # Regenerate app icons from logo.png so swapping logo.png + repackaging just works.
   # Best-effort: requires Python with Pillow. If unavailable, the committed icons are used.
@@ -167,6 +167,9 @@ try {
       Write-Host "Generated Android signing keystore: $keystoreFile" -ForegroundColor Green
     }
 
+    # 版本号唯一来源是 git：gradle 读取 KXTODO_VERSION 环境变量生成 versionName/versionCode。
+    $env:KXTODO_VERSION = $effectiveVersion
+
     npx tauri android build --apk $verboseFlag
     if ($LASTEXITCODE -ne 0) { throw "Android build failed" }
 
@@ -178,8 +181,15 @@ try {
       throw "Android build completed but no APK was found under $apkSearchRoot"
     }
 
-    $releaseApk = Join-Path $releaseDir "KXToDo-$effectiveVersion.apk"
+    # 发布资产固定命名 KXToDo.apk（安卓覆盖安装，不留历史版本包）；
+    # sidecar 记录本次构建版本，供 publish.ps1 识别同名旧产物。
+    $releaseApk = Join-Path $releaseDir "KXToDo.apk"
     Copy-Item -LiteralPath $apk.FullName -Destination $releaseApk -Force
+    [System.IO.File]::WriteAllText(
+      (Join-Path $releaseDir "KXToDo.apk.version"),
+      $effectiveVersion,
+      [System.Text.UTF8Encoding]::new($false)
+    )
     Write-Host "Built Android APK: $releaseApk" -ForegroundColor Green
   }
 
