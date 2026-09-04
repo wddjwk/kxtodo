@@ -78,18 +78,22 @@ export function buildAppShellStyle(appearance: Settings["appearance"]): string {
 }
 
 export function buildMobileShellStyle(appearance: Settings["appearance"]): string {
+  const scale = uiScaleValue(appearance.uiScale);
   const uiFontSize = fontSizeValue(appearance.uiFontSize, defaultSettings.appearance.uiFontSize, 14, 22);
   const markdownFontSize = fontSizeValue(appearance.markdownFontSize, defaultSettings.appearance.markdownFontSize, 14, 26);
   const editorFontSize = fontSizeValue(appearance.editorFontSize, defaultSettings.appearance.editorFontSize, 14, 26);
   const tagFontSize = fontSizeValue(appearance.tagFontSize, defaultSettings.appearance.tagFontSize, 11, 30);
   return [
-    `--ui-scale: 1`,
+    `--ui-scale: ${scale}`,
     `--ui-font-size: ${uiFontSize}px`,
     `--markdown-font-size: ${markdownFontSize}px`,
     `--editor-font-size: ${editorFontSize}px`,
     `--tag-font-size: ${tagFontSize}px`,
-    `--app-width: 100vw`,
-    `--app-height: 100vh`,
+    `--app-width: ${100 / scale}vw`,
+    `--app-height: ${100 / scale}vh`,
+    /* 安全区补偿系数：shell 被 transform 缩放后，env(safe-area-inset-*) 的物理像素
+        clearance 需乘以 1/scale 才能在缩放后的逻辑坐标系里保持实际视觉尺寸。 */
+    `--safe-inv: ${1 / scale}`,
     `--font-title: ${uiFontSize + 18}px`,
     `--font-list: ${uiFontSize + 1}px`,
     `--font-control: ${uiFontSize}px`,

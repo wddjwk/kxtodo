@@ -178,20 +178,20 @@
 
   <section>
     <h3>显示与链接</h3>
-    {#if caps.windowZoom}
-      <div class="settings-row number-row">
-        <span>界面缩放</span>
-        <NumberField
-          ariaLabel="界面缩放"
-          suffix="%"
-          min={50}
-          max={150}
-          live={true}
-          value={scalePercentValue($appSettings.appearance.uiScale)}
-          onCommit={(v) => updateAppearance("uiScale", v / 100)}
-        />
-      </div>
-    {/if}
+    <!-- 界面缩放对移动端同样生效（CSS transform 缩放）；原生 setWebviewZoom
+         仍由 backend.ts 的 caps.desktop 门控在移动端 no-op。 -->
+    <div class="settings-row number-row">
+      <span>界面缩放</span>
+      <NumberField
+        ariaLabel="界面缩放"
+        suffix="%"
+        min={50}
+        max={150}
+        live={true}
+        value={scalePercentValue($appSettings.appearance.uiScale)}
+        onCommit={(v) => updateAppearance("uiScale", v / 100)}
+      />
+    </div>
     <div class="settings-row number-row">
       <span>UI 字号</span>
       <NumberField

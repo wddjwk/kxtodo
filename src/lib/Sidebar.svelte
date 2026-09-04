@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
   import {
-    ChevronsDownUp, ChevronsUpDown, FilePlus2, FolderInput, FolderPlus, Pencil, Search, Shapes, Trash2, Upload
+    ChevronsDownUp, ChevronsUpDown, FilePlus2, FolderInput, FolderPlus, Pencil, Search, Shapes, Toolbox, Trash2, Upload
   } from "@lucide/svelte";
   import {
     appState, appSettings, showToast, showSettings,
@@ -24,7 +24,7 @@
   import ContextMenu from "./menu/ContextMenu.svelte";
   import MenuItem from "./menu/MenuItem.svelte";
   import MenuSeparator from "./menu/MenuSeparator.svelte";
-  import { showMobileContent } from "./platform";
+  import { mobileView, showMobileContent, showMobileToolbox } from "./platform";
   import { caps } from "./capabilities";
   import { longpress, isLongPressSuppressed } from "./longpress";
 
@@ -329,6 +329,14 @@
         {/if}
       </button>
     {/each}
+    {#if caps.toolbox}
+      <!-- 移动端专属：工具箱（预留能力位，不选中任何节点，走独立视图层） -->
+      <button class:selected={$mobileView === "toolbox"} class="nav-row" type="button" on:click={showMobileToolbox}>
+        <span class="active-rail"></span>
+        <span class="system-icon"><Toolbox size={19} /></span>
+        <span class="list-name">工具箱</span>
+      </button>
+    {/if}
   </nav>
 
   <div class="nav-divider"></div>
@@ -347,6 +355,7 @@
       on:renameInput={(e) => (renameDraft = e.detail)}
       on:renameCommit={(e) => commitRename(e.detail)}
       on:openMenu={(e) => { treeMenu = e.detail; emptyAreaMenu = null; }}
+      on:closeMenu={() => { treeMenu = null; emptyAreaMenu = null; }}
       on:pickIcon={(e) => openIconPicker(e.detail)}
       on:dragStart={(e) => (draggingId = e.detail || null)}
       on:dropNode={(e) => moveNode(e.detail.id, e.detail.targetId, e.detail.position)}

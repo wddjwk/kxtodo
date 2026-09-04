@@ -12,3 +12,4 @@ npm-debug.log*
 *.log
 .pi-subagents/
 .qoder/
+src-tauri/gen/schemas/

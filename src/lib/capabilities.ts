@@ -14,5 +14,6 @@ export const caps = {
   systemNotifications: mobile,
   updateChannel: (mobile ? "apk" : "desktop") as "apk" | "desktop",
   nativeFileDialogs: !mobile,
+  toolbox: mobile,
   desktop: !mobile
 };

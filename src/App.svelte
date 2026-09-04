@@ -16,6 +16,7 @@
   import Toast from "./lib/Toast.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
   import Workspace from "./lib/Workspace.svelte";
+  import ToolboxView from "./lib/ToolboxView.svelte";
   import SettingsDrawer from "./lib/SettingsDrawer.svelte";
   import IconPicker from "./lib/IconPicker.svelte";
 
@@ -107,6 +108,7 @@
   class:mobile={$isMobile}
   class:view-list={$isMobile && $mobileView === "list"}
   class:view-content={$isMobile && $mobileView === "content"}
+  class:view-toolbox={$isMobile && $mobileView === "toolbox"}
   class:view-settings={$isMobile && $showSettings}
   style={appShellStyle}
   on:click={closeOverlays}
@@ -119,6 +121,10 @@
     <Sidebar bind:this={sidebarRef} />
 
     <Workspace bind:this={workspaceRef} />
+
+    {#if $isMobile && $mobileView === "toolbox"}
+      <ToolboxView />
+    {/if}
 
     {#if $showSettings}
       <!-- 抽屉外任意点击一律关闭：遮罩在抽屉下层，挡住背后容器的 stopPropagation -->

@@ -1,10 +1,7 @@
 /* mobile.css — Android / mobile stacked layout (Microsoft To-Do style).
-   Desktop (Windows) is never given the `.mobile` class, so these rules are inert there. */
-
-.app-shell.mobile {
-  --app-width: 100vw;
-  --app-height: 100vh;
-}
+   Desktop (Windows) is never given the `.mobile` class, so these rules are inert there.
+   尺寸变量（--app-width/--app-height/--ui-scale/--safe-inv）全部由
+   buildMobileShellStyle 内联输出，这里不再覆盖。 */
 
 .app-shell.mobile .layout {
   position: relative;
@@ -29,17 +26,17 @@
    container padding to keep content clear of the system bars. */
 .app-shell.mobile .sidebar {
   padding:
-    calc(14px + env(safe-area-inset-top, 0px))
+    calc(14px + env(safe-area-inset-top, 0px) * var(--safe-inv, 1))
     10px
-    calc(8px + env(safe-area-inset-bottom, 0px))
+    calc(8px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1))
     10px;
 }
 
 .app-shell.mobile .workspace {
   padding:
-    calc(16px + env(safe-area-inset-top, 0px))
+    calc(16px + env(safe-area-inset-top, 0px) * var(--safe-inv, 1))
     18px
-    calc(16px + env(safe-area-inset-bottom, 0px))
+    calc(16px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1))
     18px;
 }
 
@@ -59,6 +56,12 @@
 /* Settings is a full-screen layer on mobile: hide both panes underneath. */
 .app-shell.mobile.view-settings .sidebar,
 .app-shell.mobile.view-settings .workspace {
+  display: none;
+}
+
+/* Toolbox is a full-screen layer too (mobile-only reserved capability slot). */
+.app-shell.mobile.view-toolbox .sidebar,
+.app-shell.mobile.view-toolbox .workspace {
   display: none;
 }
 
@@ -116,9 +119,9 @@
   height: 100% !important;
   border-radius: 0 !important;
   padding:
-    calc(20px + env(safe-area-inset-top, 0px))
+    calc(20px + env(safe-area-inset-top, 0px) * var(--safe-inv, 1))
     20px
-    calc(20px + env(safe-area-inset-bottom, 0px))
+    calc(20px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1))
     20px;
 }
 
@@ -132,20 +135,6 @@
   font-size: 24px;
 }
 
-.app-shell.mobile .mobile-title-tap {
-  cursor: pointer;
-  user-select: none;
-  -webkit-tap-highlight-color: rgb(0 0 0 / 8%);
-  border-radius: 6px;
-  padding: 2px 6px;
-  margin: -2px -6px;
-}
-
-/* Hide header actions on mobile by default; show on title tap */
-.app-shell.mobile .header-actions.mobile-hidden {
-  display: none;
-}
-
 .app-shell.mobile .header-actions {
   gap: 10px;
 }
@@ -155,29 +144,43 @@
   height: 32px;
 }
 
-/* Context menu: more compact on mobile, near touch point */
-.app-shell.mobile .tree-context-menu {
-  min-width: 180px;
+/* 齿轮下拉面板：锚在齿轮按钮下方右对齐（header-actions 是 absolute 包含块）。
+   坐标在缩放 shell 内部，无需除以 uiScale。 */
+.app-shell.mobile .header-menu-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 2200;
+  display: grid;
+  gap: 2px;
+  min-width: 168px;
   padding: 6px;
+  border: 1px solid #e5e5e5;
   border-radius: 12px;
-  box-shadow: 0 8px 32px rgb(0 0 0 / 20%);
+  background: #ffffff;
+  box-shadow: 0 16px 50px rgb(0 0 0 / 16%), 0 2px 8px rgb(0 0 0 / 8%);
+  animation: menu-fade-in 0.1s ease-out;
 }
 
-.app-shell.mobile .tree-context-menu button {
+.app-shell.mobile .header-menu-panel .menu-item-button {
   padding: 10px 12px;
   font-size: 15px;
   min-height: 44px;
 }
 
-/* Task context menu on mobile */
-.app-shell.mobile .task-context-menu {
-  min-width: 220px;
+/* Context menu on mobile: touch-sized rows and a deeper shadow. All menus
+   (tree / task / list) render through the shared ContextMenu component, so
+   one rule covers them. Only MenuItem buttons get the enlarged target —
+   inner panels (color swatches, calendars, tag editor) keep their own sizes. */
+.app-shell.mobile .context-menu {
+  padding: 6px;
   border-radius: 12px;
   box-shadow: 0 8px 32px rgb(0 0 0 / 20%);
 }
 
-.app-shell.mobile .task-context-menu button {
+.app-shell.mobile .context-menu .menu-item-button {
   padding: 10px 12px;
+  font-size: 15px;
   min-height: 44px;
 }
 
@@ -207,15 +210,189 @@
   padding-left: 48px;
 }
 
-/* List menu on mobile */
-.app-shell.mobile .list-menu {
-  max-height: calc(100vh - 80px);
-  overflow-y: auto;
+/* Planned group chip on mobile: same slot geometry as the my-day subtitle */
+.app-shell.mobile .planned-group-bar {
+  margin: -14px 0 12px;
+  padding-left: 48px;
 }
+
+.app-shell.mobile .planned-group-panel {
+  left: 48px;
+}
+
+.app-shell.mobile .planned-group-chip {
+  min-height: 36px;
+  font-size: 14px;
+}
+
+.app-shell.mobile .planned-group-panel .menu-item-button {
+  padding: 10px 12px;
+  font-size: 15px;
+  min-height: 44px;
+}
+
+/* List menu height capping is handled inside ContextMenu (max-height +
+   overflow when the menu is taller than the viewport). */
 
 /* Markdown images in task cards */
 .markdown-content img {
   max-width: 100%;
   border-radius: 6px;
   margin: 8px 0;
+}
+
+/* ---------- 工具箱（移动端专属整页视图） ---------- */
+
+.app-shell.mobile .toolbox-view {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding:
+    calc(14px + env(safe-area-inset-top, 0px) * var(--safe-inv, 1))
+    16px
+    calc(16px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1))
+    16px;
+  background: #f0f0f0;
+  overflow-y: auto;
+}
+
+.toolbox-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolbox-header-icon {
+  display: grid;
+  place-items: center;
+  color: #2564cf;
+}
+
+.toolbox-header-title {
+  font-size: 22px;
+  font-weight: 800;
+  color: #1f1f1f;
+}
+
+.toolbox-list {
+  display: grid;
+  gap: 12px;
+}
+
+.toolbox-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #ffffff;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease-out, border-color 0.12s ease-out;
+}
+
+.toolbox-card:hover {
+  background: #f2f4f7;
+  border-color: #dde1e6;
+}
+
+.toolbox-card:active {
+  background: #e9edf2;
+}
+
+.toolbox-card-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  border-radius: 10px;
+  color: #2564cf;
+  background: rgb(37 100 207 / 10%);
+}
+
+.toolbox-card-text {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.toolbox-card-text strong {
+  font-size: 16px;
+  color: #1f2937;
+}
+
+.toolbox-card-text span {
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.toolbox-sub {
+  display: grid;
+  gap: 14px;
+  justify-items: start;
+  align-content: start;
+}
+
+.toolbox-sub-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 10px;
+  margin-left: -10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #2564cf;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.toolbox-sub-back:hover {
+  background: rgb(0 0 0 / 6%);
+}
+
+.toolbox-sub-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #1f2937;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.toolbox-field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #374151;
+  font-size: 15px;
+}
+
+.toolbox-results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  width: 100%;
+}
+
+.toolbox-result-chip {
+  padding: 10px 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #1f2937;
+  font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }

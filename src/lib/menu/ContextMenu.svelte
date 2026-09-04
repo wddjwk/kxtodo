@@ -14,9 +14,19 @@
   let menuEl: HTMLElement;
   let left = -9999;
   let top = -9999;
+  let maxHeight = 0;
+  let minWidthPx = minWidth;
   let ready = false;
 
-  /** 跟手定位：先渲染测量，再收敛到视口内（超出右/下边界时自动翻转）。 */
+  /** 视口边缘保留的逻辑像素边距。 */
+  const MENU_MARGIN_PX = 8;
+
+  /**
+   * 跟手定位：调用方传视口像素（clientX/Y 或长按触点），这里统一除以 uiScale
+   * 换算成缩放 shell 内的逻辑坐标（只除一次，调用方不做换算）。
+   * 优先落在锚点右下；放不下时贴边收敛，下方溢出则向上翻转；
+   * 菜单比可用高度还高时限高并内部滚动。
+   */
   async function layout(): Promise<void> {
     await tick();
     if (!menuEl) return;
@@ -26,9 +36,26 @@
     const rect = menuEl.getBoundingClientRect();
     const width = rect.width / scale;
     const height = rect.height / scale;
-    const anchorLeft = xAlign === "right" ? x / scale - width : x / scale;
-    left = Math.max(8, Math.min(anchorLeft, viewWidth - width - 8));
-    top = Math.max(8, Math.min(y / scale, viewHeight - height - 8));
+    const anchorX = x / scale;
+    const anchorY = y / scale;
+    // 逻辑视口可能比固定 minWidth 还窄（移动端高缩放），先收敛宽度再定位。
+    minWidthPx = Math.min(minWidth, Math.max(160, viewWidth - MENU_MARGIN_PX * 2));
+    const anchorLeft = xAlign === "right" ? anchorX - width : anchorX;
+    left = Math.max(MENU_MARGIN_PX, Math.min(anchorLeft, viewWidth - width - MENU_MARGIN_PX));
+
+    const availableHeight = viewHeight - MENU_MARGIN_PX * 2;
+    if (height > availableHeight) {
+      maxHeight = Math.max(120, Math.round(availableHeight));
+      top = MENU_MARGIN_PX;
+    } else {
+      maxHeight = 0;
+      if (anchorY + height > viewHeight - MENU_MARGIN_PX) {
+        const flippedTop = anchorY - height;
+        top = flippedTop >= MENU_MARGIN_PX ? flippedTop : viewHeight - height - MENU_MARGIN_PX;
+      } else {
+        top = anchorY;
+      }
+    }
     ready = true;
   }
 
@@ -144,9 +171,10 @@
 <div
   bind:this={menuEl}
   class="context-menu"
+  class:capped={maxHeight > 0}
   role="menu"
   tabindex="-1"
-  style={`left: ${left}px; top: ${top}px; min-width: ${minWidth}px; visibility: ${ready ? "visible" : "hidden"};`}
+  style={`left: ${left}px; top: ${top}px; min-width: ${minWidthPx}px;${maxHeight ? ` max-height: ${maxHeight}px; overflow-y: auto;` : ""} visibility: ${ready ? "visible" : "hidden"};`}
   on:mousedown={handleMenuMouseDown}
   on:click|stopPropagation={handleMenuClick}
   on:focusin={markInputActivity}

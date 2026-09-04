@@ -1,8 +1,9 @@
 <script lang="ts">
+  import { get } from "svelte/store";
   import ContextMenu from "../menu/ContextMenu.svelte";
   import MenuItem from "../menu/MenuItem.svelte";
   import MenuSeparator from "../menu/MenuSeparator.svelte";
-  import { ArrowUpDown, Download, Eraser, FolderInput, Image, PenLine, RotateCcw, Trash2, Upload } from "@lucide/svelte";
+  import { ArrowUpDown, Download, Eraser, Eye, EyeOff, FolderInput, Image, PenLine, RotateCcw, Trash2, Upload } from "@lucide/svelte";
   import { appSettings, appState, selectedBackground, accent, showToast, now, safeFileName, fileToDataUrl, appVersion } from "../stores";
   import {
     deleteNodeCascade as deleteNodeCascadeAction,
@@ -30,6 +31,10 @@
   export let xAlign: "left" | "right" = "left";
   export let node: AppNode | undefined = undefined;
   export let isScheduled = false;
+  /** 计划内视图专属：是否显示"已完成"任务（父组件持有状态）。 */
+  export let isPlanned = false;
+  export let showCompleted = true;
+  export let onToggleShowCompleted: () => void = () => {};
   export let sortMode: SortMode = "created-desc";
   export let onSortMode: (mode: SortMode) => void = () => {};
   export let onRenameRequest: () => void = () => {};
@@ -42,6 +47,38 @@
   let presetNameDraft = "";
   let presetColorDraft = "";
   let presetEditOriginalColor = "";
+
+  /**
+   * 隐藏 file input 拿不到焦点：系统文件选择器打开 → 窗口 blur → ContextMenu
+   * 的 blur-close 把菜单连同 input 一起卸载 → change 事件永远丢失（移动端
+   * “上传背景后没反应”的根因）。选择器打开期间吞掉 onClose，窗口重新聚焦后
+   * 延时复位（覆盖用户取消选择、不触发 change 的路径）。
+   */
+  let filePickerOpen = false;
+  let filePickerResetTimer: number | undefined;
+
+  function markFilePickerOpen(): void {
+    filePickerOpen = true;
+    window.clearTimeout(filePickerResetTimer);
+    window.addEventListener("focus", scheduleFilePickerReset, { once: true });
+    // 兜底：选择器若始终不产生 blur/focus 回合（WebView 差异或 click 失败），
+    // 30s 后强制复位，避免菜单永久吞掉所有关闭路径。
+    filePickerResetTimer = window.setTimeout(() => {
+      filePickerOpen = false;
+    }, 30_000);
+  }
+
+  function scheduleFilePickerReset(): void {
+    window.clearTimeout(filePickerResetTimer);
+    filePickerResetTimer = window.setTimeout(() => {
+      filePickerOpen = false;
+    }, 600);
+  }
+
+  function handleClose(): void {
+    if (filePickerOpen) return;
+    onClose();
+  }
 
   $: isSystemNode = !node || node.kind === "system";
   $: moveTargets = node ? moveTargetOptions(node.id, $appState.nodes) : [];
@@ -93,6 +130,7 @@
   async function pickBackgroundImage(): Promise<void> {
     // 浏览器与移动端（无原生对话框）都走隐藏 <input type=file> → uploadBackgroundImage。
     if (!isTauriRuntime || !caps.nativeFileDialogs) {
+      markFilePickerOpen();
       backgroundFileInput.click();
       return;
     }
@@ -130,13 +168,25 @@
       showToast(`背景图片读取失败：${String(error)}`);
     } finally {
       target.value = "";
+      window.clearTimeout(filePickerResetTimer);
+      filePickerOpen = false;
     }
   }
 
-  function clearBackground(): void {
+  /** 清除背景 = 恢复默认：必须显式传 image: null（undefined 会被 actions.setBackground
+   * 视为“不修改”，沿用旧图片导致清除无效），颜色与透明度一并回默认值。 */
+  async function clearBackground(): Promise<void> {
+    if (!node) return;
     const previous = $selectedBackground.image;
-    setBackground({ image: undefined });
-    if (isLocalImageRef(previous)) void deleteBackgroundImage(localImageFilename(previous));
+    await setBackgroundAction(node.id, {
+      color: defaultBackground.color,
+      image: null,
+      imageOpacity: defaultBackground.imageOpacity
+    });
+    // 写入确认生效后再删旧文件，避免存储条目指向已删除的本地图片
+    if (isLocalImageRef(previous) && !get(appState).backgrounds[node.id]?.image) {
+      void deleteBackgroundImage(localImageFilename(previous));
+    }
   }
 
   function setUiColor(color: string): void {
@@ -328,7 +378,7 @@
   }
 </script>
 
-<ContextMenu {x} {y} {xAlign} minWidth={300} {onClose}>
+<ContextMenu {x} {y} {xAlign} minWidth={300} onClose={handleClose}>
   {#if !isSystemNode && node}
     <MenuItem icon={PenLine} label="重命名" onSelect={() => { onRenameRequest(); }} />
     <MenuItem icon={FolderInput} label="移动到分组">
@@ -358,6 +408,13 @@
       </div>
     </MenuItem>
   {/if}
+  {#if isPlanned}
+    <MenuItem
+      icon={showCompleted ? EyeOff : Eye}
+      label={showCompleted ? "隐藏已完成" : "显示已完成"}
+      onSelect={() => { onToggleShowCompleted(); onClose(); }}
+    />
+  {/if}
   {#if !isSystemNode}
     <MenuItem icon={Trash2} danger label="删除当前条目" onSelect={deleteCurrentNode} />
   {/if}
@@ -365,7 +422,7 @@
   <MenuSeparator />
   <MenuItem icon={Upload} label="导出当前" onSelect={() => void exportCurrentList()} />
   <MenuItem icon={Upload} label="一键全部导出" onSelect={() => void exportAll()} />
-  <MenuItem icon={Download} label="导入 JSON" onSelect={() => importInput.click()} />
+  <MenuItem icon={Download} label="导入 JSON" onSelect={() => { markFilePickerOpen(); importInput.click(); }} />
 
   <MenuSeparator />
   <div class="menu-section-title">UI颜色</div>

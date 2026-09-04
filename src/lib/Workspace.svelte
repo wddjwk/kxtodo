@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from "svelte";
+  import { onMount, tick } from "svelte";
   import {
     ArrowLeft, Calendar, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
     ChevronsDown, ChevronsUp, FolderInput,
@@ -33,7 +33,8 @@
   import MoveTargetTree from "./menu/MoveTargetTree.svelte";
   import ListMenu from "./workspace/ListMenu.svelte";
   import { sortTasks, type SortMode } from "./sort";
-  import { showMobileList, isMobile } from "./platform";
+  import { filterPlannedTasks, plannedGroupOptions, type PlannedGroupKey } from "./plannedGroups";
+  import { showMobileList, isMobile, mobileView } from "./platform";
   import { caps } from "./capabilities";
   import type { AppNode, TagColor, Task } from "./types";
 
@@ -42,6 +43,10 @@
   let showSuggestions = false;
   let showCalendar = false;
   let sortMode: SortMode = "created-desc";
+  // 计划内视图：日期分组过滤 + 已完成显隐（默认隐藏，且不渲染折叠的已完成区）
+  let plannedGroup: PlannedGroupKey = "all";
+  let plannedShowCompleted = false;
+  let showPlannedGroups = false;
   let taskMenu: { taskId: string; x: number; y: number } | null = null;
   let listMenuAt: { x: number; y: number } | null = null;
   let tagInputText = "";
@@ -53,8 +58,32 @@
   let headerRenameInput: HTMLInputElement;
   let taskInput: HTMLTextAreaElement;
   let schedulerViewRef: ScheduledTasksView;
-  let showMobileHeaderActions = false;
+  let showHeaderMenu = false;
+  let gearButtonEl: HTMLButtonElement;
   let linkPreviewUrl = "";
+  // 分钟级 tick：让计划内分组标签（周X/日期区间）在跨天后随下次重算刷新
+  let dayTick = 0;
+
+  onMount(() => {
+    const dayTimer = window.setInterval(() => {
+      dayTick += 1;
+    }, 60_000);
+    return () => window.clearInterval(dayTimer);
+  });
+
+  // 离开内容视图（移动端回列表/设置/工具箱）时收起下拉，避免再进入时残留开面板
+  $: if ($mobileView !== "content") {
+    showHeaderMenu = false;
+    showPlannedGroups = false;
+  }
+
+  function handlePanelKeydown(event: KeyboardEvent): void {
+    if (!showHeaderMenu && !showPlannedGroups) return;
+    if (event.key === "Escape" && !event.isComposing && event.keyCode !== 229) {
+      showHeaderMenu = false;
+      showPlannedGroups = false;
+    }
+  }
 
   // Calendar state
   let calViewMode: "month" | "week" = "month";
@@ -67,16 +96,27 @@
   $: resolvedBgImage = resolveImageSrc($selectedBackground.image, $imageCache);
   $: mainStyle = buildMainStyle($selectedBackground, $accent, resolvedBgImage);
   $: isMyDay = $selectedNode?.id === "my-day";
+  $: isPlanned = $selectedNode?.id === "planned" && !$isSearching;
   $: isScheduled = caps.scheduler && !$isSearching && $selectedNode?.id === "scheduled";
   $: if (!isMyDay && myDayViewDate !== todayIso()) myDayViewDate = todayIso();
   $: isMyDayHistory = isMyDay && myDayViewDate !== todayIso();
   $: sortedTasks = sortTasks($visibleTasks, sortMode);
-  $: incompleteTasks = isMyDayHistory ? [] : sortedTasks.filter((task) => !task.completed);
-  $: completedTasks = isMyDay
-    ? (isMyDayHistory
-        ? sortTasks(completedByDate[myDayViewDate] ?? [], sortMode)
-        : sortedTasks.filter((task) => task.completed && dateOnly(task.completedAt) === todayIso()))
-    : sortedTasks.filter((task) => task.completed);
+  // dayTick 仅用于提供响应式依赖（每分钟重算一次标签，跨天不陈旧）
+  $: plannedOptions = dayTick >= 0 ? plannedGroupOptions(todayIso()) : [];
+  $: plannedGroupLabel = plannedOptions.find((option) => option.key === plannedGroup)?.label ?? "全部";
+  $: plannedSortedTasks = isPlanned
+    ? sortTasks(filterPlannedTasks($visibleTasks, plannedGroup, todayIso()), sortMode)
+    : [];
+  $: incompleteTasks = isPlanned
+    ? (plannedShowCompleted ? plannedSortedTasks : plannedSortedTasks.filter((task) => !task.completed))
+    : isMyDayHistory ? [] : sortedTasks.filter((task) => !task.completed);
+  $: completedTasks = isPlanned
+    ? []
+    : isMyDay
+      ? (isMyDayHistory
+          ? sortTasks(completedByDate[myDayViewDate] ?? [], sortMode)
+          : sortedTasks.filter((task) => task.completed && dateOnly(task.completedAt) === todayIso()))
+      : sortedTasks.filter((task) => task.completed);
   $: taskMenuTask = taskMenu ? $appState.tasks.find((task) => task.id === taskMenu?.taskId) : null;
   $: hasTaskMoveTargets = taskMenu ? taskMoveTargets($appState.nodes, taskMenuTask?.nodeId ?? "").length > 0 : false;
   $: expandableTasks = $visibleTasks.filter((task) => hasMultipleMarkdownLines(task.markdown));
@@ -198,7 +238,8 @@
   export function closeOverlays(): void {
     showSuggestions = false;
     showCalendar = false;
-    showMobileHeaderActions = false;
+    showHeaderMenu = false;
+    showPlannedGroups = false;
     schedulerViewRef?.closeOverlays();
     taskMenu = null;
     listMenuAt = null;
@@ -228,6 +269,7 @@
   function toggleSuggestions(): void {
     showSuggestions = !showSuggestions;
     showCalendar = false;
+    showHeaderMenu = false;
     listMenuAt = null;
     taskMenu = null;
   }
@@ -235,6 +277,7 @@
   function toggleCalendar(): void {
     showCalendar = !showCalendar;
     showSuggestions = false;
+    showHeaderMenu = false;
     listMenuAt = null;
     taskMenu = null;
     if (showCalendar) {
@@ -242,6 +285,28 @@
       calYear = d.getFullYear();
       calMonth = d.getMonth();
     }
+  }
+
+  /** 移动端头部齿轮：开面板时收起其它头部浮层。 */
+  function toggleHeaderMenu(): void {
+    showHeaderMenu = !showHeaderMenu;
+    if (showHeaderMenu) {
+      showSuggestions = false;
+      showCalendar = false;
+      listMenuAt = null;
+      taskMenu = null;
+    }
+  }
+
+  /** 齿轮面板 → 列表菜单：锚在齿轮按钮右下角（视口像素，ContextMenu 内部除以缩放）。 */
+  function openListMenuFromGear(): void {
+    showHeaderMenu = false;
+    const rect = gearButtonEl?.getBoundingClientRect();
+    if (!rect) return;
+    listMenuAt = { x: rect.right, y: rect.bottom + 6 };
+    showSuggestions = false;
+    showCalendar = false;
+    taskMenu = null;
   }
 
   /** 展开全部 / 收起全部（两个独立动作，非 toggle）。 */
@@ -474,6 +539,8 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
+<svelte:window on:keydown={handlePanelKeydown} />
+
 <main class="workspace" style={mainStyle}>
   <section class="list-header">
     <div>
@@ -498,126 +565,150 @@
           on:click|stopPropagation
         />
       {:else}
-        <h1
-          class:mobile-title-tap={$isMobile}
-          on:click|stopPropagation={() => { if ($isMobile) showMobileHeaderActions = !showMobileHeaderActions; }}
-        >{$isSearching ? `搜索结果：${$searchQuery}` : $selectedNode?.name ?? "KXToDo"}</h1>
+        <h1>{$isSearching ? `搜索结果：${$searchQuery}` : $selectedNode?.name ?? "KXToDo"}</h1>
       {/if}
     </div>
-    <div class="header-actions" class:mobile-hidden={$isMobile && !showMobileHeaderActions} on:click|stopPropagation>
-      {#if isScheduled}
-        <button type="button" title="执行器路径" on:click|stopPropagation={() => schedulerViewRef?.toggleRuntimeSettings()}>
-          <SettingsIcon size={21} />
-        </button>
-      {/if}
-      {#if !isScheduled}
-        {#if isMyDay}
-          <button type="button" title="完成日历" on:click|stopPropagation={toggleCalendar}>
-            <Calendar size={21} />
-          </button>
-          <button type="button" title="建议添加" on:click|stopPropagation={toggleSuggestions}>
-            <Lightbulb size={21} />
+    <div class="header-actions" on:click|stopPropagation>
+      {#if $isMobile}
+        <!-- 移动端：单一齿轮按钮 + 下拉面板（替代旧版“点标题显示动作”的机制） -->
+        <button
+          bind:this={gearButtonEl}
+          type="button"
+          title="更多操作"
+          aria-label="更多操作"
+          aria-expanded={showHeaderMenu}
+          on:click|stopPropagation={toggleHeaderMenu}
+        ><SettingsIcon size={21} /></button>
+        {#if showHeaderMenu}
+          <div class="header-menu-panel" role="menu" tabindex="-1">
+            {#if isMyDay}
+              <MenuItem icon={Lightbulb} label="建议添加" onSelect={toggleSuggestions} />
+              <MenuItem icon={Calendar} label="完成日历" onSelect={toggleCalendar} />
+            {/if}
+            {#if !allExpanded}
+              <MenuItem icon={ChevronsDown} label="展开全部" onSelect={() => { showHeaderMenu = false; expandAll(true); }} />
+            {/if}
+            {#if !allCollapsed}
+              <MenuItem icon={ChevronsUp} label="收起全部" onSelect={() => { showHeaderMenu = false; expandAll(false); }} />
+            {/if}
+            <MenuItem icon={MoreHorizontal} label="列表菜单" onSelect={openListMenuFromGear} />
+          </div>
+        {/if}
+      {:else}
+        {#if isScheduled}
+          <button type="button" title="执行器路径" on:click|stopPropagation={() => schedulerViewRef?.toggleRuntimeSettings()}>
+            <SettingsIcon size={21} />
           </button>
         {/if}
-        {#if !allCollapsed}
-          <button
-            type="button"
-            title="收起全部"
-            on:click|stopPropagation={() => expandAll(false)}
-          ><ChevronsUp size={21} /></button>
-        {/if}
-        {#if !allExpanded}
-          <button
-            type="button"
-            title="展开全部"
-            on:click|stopPropagation={() => expandAll(true)}
-          ><ChevronsDown size={21} /></button>
+        {#if !isScheduled}
+          {#if isMyDay}
+            <button type="button" title="完成日历" on:click|stopPropagation={toggleCalendar}>
+              <Calendar size={21} />
+            </button>
+            <button type="button" title="建议添加" on:click|stopPropagation={toggleSuggestions}>
+              <Lightbulb size={21} />
+            </button>
+          {/if}
+          {#if !allCollapsed}
+            <button
+              type="button"
+              title="收起全部"
+              on:click|stopPropagation={() => expandAll(false)}
+            ><ChevronsUp size={21} /></button>
+          {/if}
+          {#if !allExpanded}
+            <button
+              type="button"
+              title="展开全部"
+              on:click|stopPropagation={() => expandAll(true)}
+            ><ChevronsDown size={21} /></button>
+          {/if}
         {/if}
 
-        {#if showSuggestions}
-        <section class="suggestion-panel" on:click|stopPropagation>
-          <div class="suggestion-panel-title">建议添加到我的一天</div>
-          {#if suggestedTasks.length === 0}
-            <div class="suggestion-empty">暂无建议</div>
+        <button
+          type="button"
+          title="列表菜单"
+          on:mousedown|preventDefault|stopPropagation={openListMenu}
+          on:click|stopPropagation
+        ><MoreHorizontal size={23} /></button>
+      {/if}
+
+      {#if showSuggestions && !isScheduled}
+      <section class="suggestion-panel" on:click|stopPropagation>
+        <div class="suggestion-panel-title">建议添加到我的一天</div>
+        {#if suggestedTasks.length === 0}
+          <div class="suggestion-empty">暂无建议</div>
+        {:else}
+          {#each suggestedTasks as task (task.id)}
+            <div class="suggestion-item">
+              <span class="suggestion-text">{collapsedLine(task.markdown)}</span>
+              <button class="suggestion-add" type="button" title="添加到我的一天" on:click|stopPropagation={() => addToMyDay(task.id)}>
+                <Plus size={16} />
+              </button>
+            </div>
+          {/each}
+        {/if}
+      </section>
+      {/if}
+
+      {#if showCalendar && !isScheduled}
+      <section class="calendar-panel" on:click|stopPropagation>
+        <div class="calendar-header">
+          <button type="button" on:click={calPrev}><ChevronLeft size={16} /></button>
+          <span>{calYear}年{calMonth + 1}月</span>
+          <button type="button" on:click={calNext}><ChevronRight size={16} /></button>
+        </div>
+        <div class="calendar-view-toggle">
+          <button type="button" class:active={calViewMode === "month"} on:click={() => (calViewMode = "month")}>月</button>
+          <button type="button" class:active={calViewMode === "week"} on:click={() => (calViewMode = "week")}>周</button>
+        </div>
+        {#if calViewMode === "month"}
+          <div class="calendar-grid">
+            {#each weekDayLabels as label}
+              <span class="day-header">{label}</span>
+            {/each}
+            {#each calMonthDays() as cell}
+              <button
+                type="button"
+                class="day-cell"
+                class:other-month={!cell.current}
+                class:today={cell.date === todayIso()}
+                class:selected={cell.date === myDayViewDate}
+                class:has-tasks={cell.hasTask}
+                on:click={() => (myDayViewDate = cell.date)}
+              >{cell.day}</button>
+            {/each}
+          </div>
+          <div class="calendar-tasks-title">
+            {(() => { const p = myDayViewDate.split("-").map(Number); return `${p[1]}月${p[2]}日 完成的任务`; })()}
+          </div>
+          {#if calSelectedTasks.length === 0}
+            <div class="calendar-no-tasks">无完成任务</div>
           {:else}
-            {#each suggestedTasks as task (task.id)}
-              <div class="suggestion-item">
-                <span class="suggestion-text">{collapsedLine(task.markdown)}</span>
-                <button class="suggestion-add" type="button" title="添加到我的一天" on:click|stopPropagation={() => addToMyDay(task.id)}>
-                  <Plus size={16} />
-                </button>
-              </div>
+            {#each calSelectedTasks as task (task.id)}
+              <div class="calendar-task-item">{collapsedLine(task.markdown)}</div>
             {/each}
           {/if}
-        </section>
-        {/if}
-
-        {#if showCalendar}
-        <section class="calendar-panel" on:click|stopPropagation>
-          <div class="calendar-header">
-            <button type="button" on:click={calPrev}><ChevronLeft size={16} /></button>
-            <span>{calYear}年{calMonth + 1}月</span>
-            <button type="button" on:click={calNext}><ChevronRight size={16} /></button>
+        {:else}
+          <div class="calendar-tasks-title">
+            {calWeekRange()} · 共 {weekSummaryTotal} 项
           </div>
-          <div class="calendar-view-toggle">
-            <button type="button" class:active={calViewMode === "month"} on:click={() => (calViewMode = "month")}>月</button>
-            <button type="button" class:active={calViewMode === "week"} on:click={() => (calViewMode = "week")}>周</button>
+          <div class="week-summary">
+            {#each weekSummary as day (day.date)}
+              <div class="week-summary-day" class:active={day.date === myDayViewDate}>
+                <button type="button" class="week-summary-head" class:is-today={day.date === todayIso()} on:click={() => (myDayViewDate = day.date)}>
+                  <span>{day.label}</span>
+                  <span class="week-summary-count">{day.tasks.length}</span>
+                </button>
+                {#each day.tasks as task (task.id)}
+                  <div class="calendar-task-item">{collapsedLine(task.markdown)}</div>
+                {/each}
+              </div>
+            {/each}
           </div>
-          {#if calViewMode === "month"}
-            <div class="calendar-grid">
-              {#each weekDayLabels as label}
-                <span class="day-header">{label}</span>
-              {/each}
-              {#each calMonthDays() as cell}
-                <button
-                  type="button"
-                  class="day-cell"
-                  class:other-month={!cell.current}
-                  class:today={cell.date === todayIso()}
-                  class:selected={cell.date === myDayViewDate}
-                  class:has-tasks={cell.hasTask}
-                  on:click={() => (myDayViewDate = cell.date)}
-                >{cell.day}</button>
-              {/each}
-            </div>
-            <div class="calendar-tasks-title">
-              {(() => { const p = myDayViewDate.split("-").map(Number); return `${p[1]}月${p[2]}日 完成的任务`; })()}
-            </div>
-            {#if calSelectedTasks.length === 0}
-              <div class="calendar-no-tasks">无完成任务</div>
-            {:else}
-              {#each calSelectedTasks as task (task.id)}
-                <div class="calendar-task-item">{collapsedLine(task.markdown)}</div>
-              {/each}
-            {/if}
-          {:else}
-            <div class="calendar-tasks-title">
-              {calWeekRange()} · 共 {weekSummaryTotal} 项
-            </div>
-            <div class="week-summary">
-              {#each weekSummary as day (day.date)}
-                <div class="week-summary-day" class:active={day.date === myDayViewDate}>
-                  <button type="button" class="week-summary-head" class:is-today={day.date === todayIso()} on:click={() => (myDayViewDate = day.date)}>
-                    <span>{day.label}</span>
-                    <span class="week-summary-count">{day.tasks.length}</span>
-                  </button>
-                  {#each day.tasks as task (task.id)}
-                    <div class="calendar-task-item">{collapsedLine(task.markdown)}</div>
-                  {/each}
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </section>
         {/if}
+      </section>
       {/if}
-
-      <button
-        type="button"
-        title="列表菜单"
-        on:mousedown|preventDefault|stopPropagation={openListMenu}
-        on:click|stopPropagation
-      ><MoreHorizontal size={23} /></button>
     </div>
   </section>
 
@@ -628,6 +719,9 @@
       xAlign="right"
       node={$selectedNode}
       {isScheduled}
+      {isPlanned}
+      showCompleted={plannedShowCompleted}
+      onToggleShowCompleted={() => (plannedShowCompleted = !plannedShowCompleted)}
       {sortMode}
       onSortMode={(mode) => (sortMode = mode)}
       onRenameRequest={beginHeaderRename}
@@ -645,6 +739,30 @@
         <button type="button" class="my-day-back" on:click={() => (myDayViewDate = todayIso())}>返回今天</button>
       {/if}
     </p>
+  {:else if isPlanned}
+    <div class="planned-group-bar">
+      <button
+        class="planned-group-chip"
+        type="button"
+        aria-expanded={showPlannedGroups}
+        on:click|stopPropagation={() => (showPlannedGroups = !showPlannedGroups)}
+      >
+        {plannedGroupLabel}
+        <ChevronDown size={15} />
+      </button>
+      {#if showPlannedGroups}
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <div class="planned-group-panel" role="menu" tabindex="-1" on:click|stopPropagation>
+          {#each plannedOptions as option (option.key)}
+            <MenuItem
+              label={option.label}
+              active={option.key === plannedGroup}
+              onSelect={() => { plannedGroup = option.key; showPlannedGroups = false; }}
+            />
+          {/each}
+        </div>
+      {/if}
+    </div>
   {/if}
 
   <section class="task-list">
@@ -696,8 +814,14 @@
 
     {#if incompleteTasks.length === 0 && completedTasks.length === 0}
       <div class="empty-state">
-        <strong>{$isSearching ? "没有搜索结果" : (isMyDayHistory ? "这一天没有完成任何事项" : "这个条目还没有内容")}</strong>
-        {#if !isMyDayHistory}
+        <strong>{$isSearching
+          ? "没有搜索结果"
+          : isMyDayHistory
+            ? "这一天没有完成任何事项"
+            : isPlanned && plannedGroup !== "all"
+              ? "该分组下暂无任务"
+              : "这个条目还没有内容"}</strong>
+        {#if !isMyDayHistory && !(isPlanned && plannedGroup !== "all")}
           <span>在下方输入 Markdown，按 Enter 添加；Shift + Enter 换行。</span>
         {/if}
       </div>

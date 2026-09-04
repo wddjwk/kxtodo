@@ -23,6 +23,7 @@
     renameInput: string;
     renameCommit: string;
     openMenu: { id: string; x: number; y: number };
+    closeMenu: void;
     pickIcon: string;
     dragStart: string;
     dropNode: { id: string; targetId: string; position: DropPosition };
@@ -31,6 +32,8 @@
   }>();
 
   const DRAG_THRESHOLD_PX = 6;
+  /** 长按开菜单后继续按住移动超过该距离 → 关菜单转入拖拽（Android 启动器式）。 */
+  const TOUCH_DRAG_THRESHOLD_PX = 12;
   const AUTO_SCROLL_ZONE_PX = 30;
   const AUTO_SCROLL_SPEED_PX = 14;
   const HOVER_EXPAND_MS = 600;
@@ -40,6 +43,7 @@
   let dropRootEnd = false;
   let suppressNextClick = false;
   let pointerDrag: { id: string; startX: number; startY: number; active: boolean } | null = null;
+  let touchDragArmed: { id: string; startX: number; startY: number } | null = null;
   let longPressFired = false;
   let scrollContainer: HTMLElement | null = null;
   let hoverExpandTimer: number | null = null;
@@ -89,13 +93,48 @@
     dispatch("openMenu", { id: node.id, x: event.clientX, y: event.clientY });
   }
 
-  /** 移动端触摸长按行：以原始触点为锚打开树菜单，并吞掉长按后的那次 click。 */
+  /** 移动端触摸长按行：以原始触点为锚打开树菜单，并吞掉长按后的那次 click。
+   * 长按后手指继续按住移动（Android 启动器式）→ 关菜单转入行拖拽。 */
   function handleRowLongPress(node: AppNode) {
     return (pos: { x: number; y: number }): void => {
       longPressFired = true;
       suppressNextClick = true;
       dispatch("openMenu", { id: node.id, x: pos.x, y: pos.y });
+      armTouchDrag(node.id, pos);
     };
+  }
+
+  function armTouchDrag(nodeId: string, pos: { x: number; y: number }): void {
+    disarmTouchDrag();
+    touchDragArmed = { id: nodeId, startX: pos.x, startY: pos.y };
+    window.addEventListener("pointermove", handleTouchDragMove);
+    window.addEventListener("pointerup", disarmTouchDrag, { once: true });
+    window.addEventListener("pointercancel", disarmTouchDrag);
+  }
+
+  function disarmTouchDrag(): void {
+    touchDragArmed = null;
+    window.removeEventListener("pointermove", handleTouchDragMove);
+    window.removeEventListener("pointerup", disarmTouchDrag);
+    window.removeEventListener("pointercancel", disarmTouchDrag);
+  }
+
+  /** 长按保持 + 移动超阈值：关菜单，用长按原始触点合成启动既有 pointerDrag 机制。 */
+  function handleTouchDragMove(event: PointerEvent): void {
+    const armed = touchDragArmed;
+    if (!armed) return;
+    if (Math.hypot(event.clientX - armed.startX, event.clientY - armed.startY) < TOUCH_DRAG_THRESHOLD_PX) return;
+    disarmTouchDrag();
+    dispatch("closeMenu");
+    suppressNextClick = true;
+    longPressFired = true;
+    pointerDrag = { id: armed.id, startX: armed.startX, startY: armed.startY, active: false };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp, { once: true });
+    window.addEventListener("pointercancel", cleanupPointerDrag);
+    window.addEventListener("keydown", handleDragKeydown, true);
+    // 当前这次移动立即生效，拖拽无感衔接
+    handlePointerMove(event);
   }
 
   function focusRename(node: HTMLInputElement): { destroy(): void } {
@@ -202,6 +241,13 @@
       }
     }
     cleanupPointerDrag();
+    // 触摸拖拽结束（位移超过 tap slop）时浏览器可能不再补发 click，抑制标志会
+    // 残留并吞掉用户下一次正常点按；宏任务里兜底复位（真正的 click 在同一轮
+    // 事件派发中先于定时器执行，抑制不受影响）。
+    window.setTimeout(() => {
+      suppressNextClick = false;
+      longPressFired = false;
+    }, 0);
   }
 
   function handleDragKeydown(event: KeyboardEvent): void {
@@ -234,6 +280,7 @@
 
   onDestroy(() => {
     cleanupPointerDrag();
+    disarmTouchDrag();
   });
 </script>
 
@@ -314,6 +361,7 @@
       on:renameInput={(event) => dispatch("renameInput", event.detail)}
       on:renameCommit={(event) => dispatch("renameCommit", event.detail)}
       on:openMenu={(event) => dispatch("openMenu", event.detail)}
+      on:closeMenu={() => dispatch("closeMenu")}
       on:pickIcon={(event) => dispatch("pickIcon", event.detail)}
       on:dragStart={(event) => dispatch("dragStart", event.detail)}
       on:dropNode={(event) => dispatch("dropNode", event.detail)}

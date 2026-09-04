@@ -434,7 +434,7 @@
 
 .icon-picker {
   width: 520px;
-  max-width: calc(100vw - 48px);
+  max-width: calc(var(--app-width, 100vw) - 48px);
   max-height: 640px;
   overflow-y: auto;
   overflow-x: hidden;

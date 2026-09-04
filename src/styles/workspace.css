@@ -1184,6 +1184,52 @@ h1 {
   opacity: 0.72;
 }
 
+/* 计划内视图：日期分组筛选 chip + 下拉面板（与 my-day-subtitle 同槽位）。
+   注意：.workspace > * 统一 z-index:1，bar 与 task-list 是同级层叠上下文，
+   DOM 靠后的 task-list 会盖住面板——bar 必须显式抬高。 */
+.planned-group-bar {
+  position: relative;
+  z-index: 30;
+  margin: -20px 0 18px;
+  padding-left: 58px;
+}
+
+.planned-group-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 4px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 72%);
+  color: var(--accent);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s ease-out;
+}
+
+.planned-group-chip:hover {
+  background: #ffffff;
+}
+
+.planned-group-panel {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 58px;
+  z-index: 2000;
+  display: grid;
+  gap: 2px;
+  min-width: 216px;
+  max-width: calc(var(--app-width, 100vw) - 66px);
+  padding: 6px;
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 16px 50px rgb(0 0 0 / 16%), 0 2px 8px rgb(0 0 0 / 8%);
+  animation: menu-fade-in 0.1s ease-out;
+}
+
 /* Suggestion panel */
 .suggestion-panel {
   position: absolute;
@@ -1191,7 +1237,7 @@ h1 {
   right: 0;
   z-index: 2000;
   display: grid;
-  width: 360px;
+  width: min(360px, calc(var(--app-width, 100vw) - 36px));
   max-height: 420px;
   overflow-y: auto;
   gap: 2px;
@@ -1264,7 +1310,7 @@ h1 {
   top: 42px;
   right: 0;
   z-index: 2000;
-  width: 360px;
+  width: min(360px, calc(var(--app-width, 100vw) - 36px));
   max-height: 520px;
   overflow-y: auto;
   border: 1px solid #e5e5e5;

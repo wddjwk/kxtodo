@@ -104,6 +104,24 @@ node scripts/mobile-ux-test.mjs   # 移动端 UX 回归（playwright-core + 系�
 6. **pwsh 5.1 写文件默认 GBK**：脚本里写中文文本一律 `[System.IO.File]::WriteAllText` + UTF-8 no-BOM。
 7. **裸 cargo 交叉检查 Android 目标需要 NDK clang 环境**：ureq/ring 是共享依赖后，`cargo check --target aarch64-linux-android` 会在 ring 的 cc-rs 构建脚本里找 clang 失败。gradle 的 rust 插件（`tauri android build`）会自己配好；手工 check 需导出：`PATH += $NDK_HOME/toolchains/llvm/prebuilt/windows-x86_64/bin`、`CC/CXX/AR_aarch64_linux_android=clang.exe/clang++.exe/llvm-ar.exe`、`CFLAGS/CXXFLAGS_aarch64_linux_android=--target=aarch64-linux-android24`。
 
+## Android 开发与构建经验（v0.2.0 实战沉淀）
+
+本机环境：`ANDROID_HOME=D:\software\Android\sdk`、`NDK_HOME=...\ndk\30.0.14904198`、JDK 23（keytool 在 PATH）。构建唯一入口 `.\release.ps1 android|all`（内部 gradle + cargo-ndk 自配工具链）；**不要手工跑 gradlew**。
+
+1. **gen/android 的所有权**：`app/build.gradle.kts`、`app/src/main/**`（Manifest、Kotlin、res）、`app/proguard-rules.pro` 是用户文件可改；`generated/`、`tauri.build.gradle.kts`、`build/` 每次构建再生成，别改。`tauri.properties` 会被 tauri CLI 再生成且内容可能过期（曾残留 versionName 8.2.1）——**版本一律走 package.ps1 注入的 `KXTODO_VERSION` 环境变量**，别信 tauri.properties。
+2. **返回键**：生成的 `TauriActivity` 把 `handleBackNavigation` 固定为 false（webview 历史不接管），必须在 `MainActivity.onCreate` 自己注册 `OnBackPressedCallback`（canGoBack→goBack 否则 finish），否则硬件返回直接退应用。goBack 触发的 popstate 由 platform.ts 路由消费。
+3. **Kotlin 桥（JS→原生）模式**：`MainActivity.onWebViewCreate` 里 `addJavascriptInterface`；方法标 `@JavascriptInterface`、同步返回 `""`=成功/错误串；**release 开了 minify，必须在 proguard-rules.pro 加 keep 规则**否则桥方法被摇掉。文件分享/安装走 FileProvider：authority = `packageName + ".fileprovider"`（Manifest 已声明，`res/xml/file_paths.xml` 的 cache-path "." 覆盖 cacheDir）；installApk 前校验路径 canonical 后落在 cacheDir 内。
+4. **tauri-plugin-dialog 在 Android 的 save() 返回 content:// URI**，Rust `fs::write` 写不了——移动端导出/落盘一律改 Kotlin 桥（shareText 写 cacheDir + ACTION_SEND）或 `<input type=file>` + dataURL 命令；导入用 file input 的 `file.text()`。
+5. **触摸长按语义**：Chromium/WebView 在触摸长按后会补发原生 `contextmenu`，自定义长按 handler 要用抑制窗（longpress.ts 的 `isLongPressSuppressed`）去重，否则一次手势开两次菜单；嵌套容器（行 + 外层 nav）会各武装一个长按定时器，外层 handler 必须检查抑制标志/内层菜单已开，否则行菜单被空白区菜单顶替。长按抬手补发的 click 也要吞掉，否则会冒泡关掉刚开的菜单。文本选中放大镜靠 mobile.css 的 `user-select:none + -webkit-touch-callout:none` 抑制。
+6. **坐标与缩放**：app-shell 是 transform 缩放的，`position:fixed` 子元素（菜单/浮层）的坐标系跟着缩放——所有用 clientX/Y 定位的浮层都要除以 `uiScaleValue()` 换算逻辑坐标（TaskCard 日期弹窗、ContextMenu 同套路）；移动端开启界面缩放后这条对所有浮层生效。
+7. **模块循环 TDZ 白屏**：platform↔stores/backend/capabilities 存在循环依赖，任何在模块顶层订阅 stores 的代码（如历史栈路由）会在启动时 ReferenceError 白屏（桌面+移动全平台）。订阅类初始化必须封装成函数由 App onMount 调用；验证手段：`node` 直接 eval 生产 bundle（配 DOM stub）能复现 TDZ，比肉眼看代码快。
+8. **移动端 UX 验证没有真机就用 Playwright 模拟**：`scripts/mobile-ux-test.mjs`（playwright-core + `channel:"msedge"`，Android UA + hasTouch + isMobile context 连 vite dev）。合成 PointerEvent（pointerType:"touch"）可驱动长按 action；浏览器 dev 走 localStorage legacy 路径，足够验证导航/菜单/设置页等纯前端逻辑。APK 原生侧（Kotlin 桥、安装器、返回键）只能靠代码评审 + `aapt dump badging` / `apksigner verify --print-certs` 核验产物元数据与签名。
+9. **签名与升级**：keystore 在 `src-tauri/gen/android/keystore/release.jks`（gitignore，密码 kxtodo，package.ps1 首跑自动生成）——**丢了它旧装就无法覆盖升级**。versionCode 公式 `900000000 + X*1000000 + Y*1000 + Z`（gradle 内），基线高于历史脏值 8002001；改公式前先确认单调递增，否则安装器报降级拒装。
+10. **APK 产物策略**：release 资产固定名 `KXToDo.apk`（不带版本，覆盖安装不留历史包），旁挂 `KXToDo.apk.version` sidecar 供 publish 识别旧产物；应用内更新 = 下载固定名到 cacheDir → 桥接 installApk 拉系统安装器，不做 shim/多版本/更新日志那套桌面逻辑。
+11. **图标同步**：`scripts/make-icon.py` 同时生成桌面 icons 与 android mipmap 五密度（launcher/round/foreground，foreground 按 108dp 画布 66% 安全区）；换 logo 后跑一次即全平台同步，package.ps1 每次构建前会自动跑。
+12. **通知**：移动端走 tauri-plugin-notification（Rust 注册插件 + capabilities/mobile.json 的 `notification:default` + Manifest `POST_NOTIFICATIONS`）；Android 13+ 需运行时权限，前端发送前 `isPermissionGranted/requestPermission`，拒绝则降级 Toast。桌面自绘通知窗逻辑不动。
+13. **能力门控优先于 isMobile 散落判断**：平台差异收敛到 `src/lib/capabilities.ts`（scheduler/trayLifecycle/globalShortcuts/windowZoom/popupNotificationWindow/systemNotifications/nativeFileDialogs/updateChannel/desktop）；Rust 侧对应 `#[cfg(desktop)]`/`#[cfg(not(desktop))]` 命令面。新增平台只扩这两处 + CSS 命名空间，不改业务组件。
+
 ## computer-use 调试经验（WebView2 应用）
 
 KXToDo 的窗口内容是 WebView2 渲染的，**UIA 拿不到 DOM 树**（accessibility 为空），只能用像素截图 + 坐标点击。多轮实战总结：

@@ -1253,10 +1253,18 @@ fn run_update(
     }
     #[cfg(windows)]
     {
+        // CREATE_NO_WINDOW：cmd 拿到一个不可见控制台跑完整个 bat，更新重启全程无黑窗
+        // （旧的 `cmd /c start /min` 会先为外层 cmd 弹一个可见控制台，再留一个最小化窗口）。
+        // bat 内容不变：`timeout` 等待、`start "" "KXToDo.exe"`（GUI 子系统目标不分配
+        // 控制台，不会重新开窗）、`del "%~f0"` 自删（纯文件操作，与控制台可见性无关）
+        // 在不可见控制台下行为一致（已实测 timeout 正常计时）。
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let bat = write_update_bat(dir, std::process::id(), &params.version)?;
         std::process::Command::new("cmd")
-            .args(["/c", "start", "/min", ""])
+            .arg("/c")
             .arg(&bat)
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn()
             .map_err(|error| format!("无法启动更新脚本：{error}"))?;
     }

@@ -107,7 +107,7 @@
   z-index: 3700;
   display: grid;
   min-width: 168px;
-  max-width: min(320px, 60vw);
+  max-width: min(320px, calc(var(--app-width, 100vw) - 32px));
   max-height: 60vh;
   overflow-y: auto;
   gap: 2px;
@@ -126,6 +126,25 @@
 .submenu-panel.flip-y {
   top: auto;
   bottom: -7px;
+}
+
+/* 限高菜单是滚动容器，会裁剪绝对定位的子面板；限高态子菜单改行内手风琴展开。 */
+.context-menu.capped .submenu-panel,
+.context-menu.capped .submenu-panel.flip-x,
+.context-menu.capped .submenu-panel.flip-y {
+  position: static;
+  left: auto;
+  right: auto;
+  top: auto;
+  bottom: auto;
+  z-index: auto;
+  max-width: none;
+  max-height: none;
+  margin: 4px 0 6px 14px;
+  border: none;
+  border-radius: 8px;
+  box-shadow: none;
+  background: rgb(0 0 0 / 4%);
 }
 
 .submenu-list {

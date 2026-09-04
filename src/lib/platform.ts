@@ -20,11 +20,11 @@ export const isMobile = writable(detectMobile());
  * Microsoft To-Do style mobile navigation: the app opens on the category list
  * and tapping an entry pushes the content view. The back button returns here.
  */
-export type MobileView = "list" | "content";
+export type MobileView = "list" | "content" | "toolbox";
 
 export const mobileView = writable<MobileView>("list");
 
-type MobileLayer = "content" | "settings" | "editor";
+type MobileLayer = "content" | "settings" | "editor" | "toolbox";
 
 function currentLayer(): string | undefined {
   if (typeof history === "undefined") return undefined;
@@ -56,6 +56,11 @@ function handlePopState(event: PopStateEvent): void {
   switch (layer) {
     case "content":
       mobileView.set("content");
+      showSettings.set(false);
+      editorTaskId.set(null);
+      break;
+    case "toolbox":
+      mobileView.set("toolbox");
       showSettings.set(false);
       editorTaskId.set(null);
       break;
@@ -120,11 +125,25 @@ export function showMobileContent(): void {
   }
 }
 
-export function showMobileList(): void {
-  if (get(isMobile) && typeof history !== "undefined" && currentLayer() === "content") {
-    // Let popstate drive the state change so browser history stays in sync.
-    history.back();
+export function showMobileToolbox(): void {
+  if (!get(isMobile)) {
     return;
+  }
+  mobileView.set("toolbox");
+  // 已在工具箱层时不重复压栈（硬件返回键经 popstate 回列表）。
+  if (currentLayer() !== "toolbox") {
+    pushLayer("toolbox");
+  }
+}
+
+export function showMobileList(): void {
+  if (get(isMobile) && typeof history !== "undefined") {
+    const layer = currentLayer();
+    if (layer === "content" || layer === "toolbox") {
+      // Let popstate drive the state change so browser history stays in sync.
+      history.back();
+      return;
+    }
   }
   mobileView.set("list");
 }
