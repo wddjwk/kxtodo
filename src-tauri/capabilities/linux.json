@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "linux",
+  "description": "Linux desktop permissions",
+  "platforms": ["linux"],
+  "windows": ["main"],
+  "permissions": ["notification:default"]
+}

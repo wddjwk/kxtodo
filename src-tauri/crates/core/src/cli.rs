@@ -102,12 +102,21 @@ impl GlobalArgs {
 // Command tree
 // ---------------------------------------------------------------------------
 
+/// 数据目录与 GUI 程序名的措辞按平台区分（Windows 为 %LOCALAPPDATA% 与 .exe）。
+const fn cli_long_about() -> &'static str {
+    if cfg!(windows) {
+        "KXToDo CLI\n\n数据目录解析：--data-dir > 系统默认数据目录\n（Windows %LOCALAPPDATA%\\kxtodo\\todo-note-data，Linux/macOS 为 XDG/系统数据目录下的 kxtodo\\todo-note-data）；\n目录中没有数据时直接报错。\nGUI 程序是独立的 kxtodo.exe（无参数启动图形界面）。\n默认输出 JSON envelope（ok/command/data|error/meta）。\n全局选项可放在任意命令之后；逐级帮助：kxtodo-cli <领域> --help、kxtodo-cli <领域> <动作> --help。"
+    } else {
+        "KXToDo CLI\n\n数据目录解析：--data-dir > 系统默认数据目录\n（$XDG_DATA_HOME 或 ~/.local/share 下的 kxtodo/todo-note-data）；\n目录中没有数据时直接报错。\nGUI 程序是独立的 kxtodo（无参数启动图形界面）。\n默认输出 JSON envelope（ok/command/data|error/meta）。\n全局选项可放在任意命令之后；逐级帮助：kxtodo-cli <领域> --help、kxtodo-cli <领域> <动作> --help。"
+    }
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "kxtodo-cli",
     version,
     about = "KXToDo CLI：操作 KXToDo 用户数据的命令行工具",
-    long_about = "KXToDo CLI\n\n数据目录解析：--data-dir > 系统默认数据目录\n（Windows %LOCALAPPDATA%\\kxtodo\\todo-note-data，Linux/macOS 为 XDG/系统数据目录下的 kxtodo\\todo-note-data）；\n目录中没有数据时直接报错。\nGUI 程序是独立的 kxtodo.exe（无参数启动图形界面）。\n默认输出 JSON envelope（ok/command/data|error/meta）。\n全局选项可放在任意命令之后；逐级帮助：kxtodo-cli <领域> --help、kxtodo-cli <领域> <动作> --help。",
+    long_about = cli_long_about(),
     subcommand_required = false,
     arg_required_else_help = true,
     disable_version_flag = true

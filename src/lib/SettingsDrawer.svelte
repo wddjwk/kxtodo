@@ -367,7 +367,7 @@
       </div>
     {:else if caps.systemNotifications}
       <div class="notification-setting-card">
-        <span>通知通过 Android 系统通知发送。</span>
+        <span>通知通过系统通知发送。</span>
         <button type="button" on:click={testNotification}>发送测试通知</button>
       </div>
     {/if}
@@ -431,42 +431,49 @@
       <span>当前版本</span>
       <span class="muted">v{$appVersion || "…"}</span>
     </div>
-    <div class="settings-row">
-      <span>自动检查更新</span>
-      <input
-        type="checkbox"
-        checked={$appSettings.updates.autoCheck}
-        on:change={(event) => updateAutoCheck(event.currentTarget.checked)}
-      />
-    </div>
-    <div class="settings-row">
-      <span>检查更新</span>
-      <button class="settings-button" type="button" disabled={checkingUpdate || updateBusy} on:click={checkUpdates}>
-        {checkingUpdate ? "检查中…" : "检查更新"}
-      </button>
-    </div>
-    {#if progress.phase === "downloading"}
-      <p class="update-status">正在下载 {progress.stage || "更新"} {progress.percent}%</p>
-    {:else if progress.phase === "installing"}
-      <p class="update-status">已下载，请在系统安装界面完成更新</p>
-    {:else if progress.phase === "restarting"}
-      <p class="update-status">下载完成，正在重启应用…</p>
-    {:else if progress.phase === "failed"}
-      <p class="update-error">更新失败：{progress.message}</p>
-    {/if}
-    {#if pendingUpdate}
-      <div class="update-available">
-        <p>发现新版本 <strong>v{pendingUpdate.version}</strong></p>
-        <button class="settings-button primary" type="button" disabled={updateBusy} on:click={downloadAndApply}>
-          {caps.updateChannel === "apk" ? "下载并安装更新" : "下载并重启更新"}
+    {#if caps.updateChannel === "none"}
+      <div class="settings-row">
+        <span>更新方式</span>
+        <span class="muted">Linux 版本通过 GitHub Releases 发布的 AppImage 更新</span>
+      </div>
+    {:else}
+      <div class="settings-row">
+        <span>自动检查更新</span>
+        <input
+          type="checkbox"
+          checked={$appSettings.updates.autoCheck}
+          on:change={(event) => updateAutoCheck(event.currentTarget.checked)}
+        />
+      </div>
+      <div class="settings-row">
+        <span>检查更新</span>
+        <button class="settings-button" type="button" disabled={checkingUpdate || updateBusy} on:click={checkUpdates}>
+          {checkingUpdate ? "检查中…" : "检查更新"}
         </button>
       </div>
-    {/if}
-    {#if upToDate && !pendingUpdate}
-      <p class="update-status">您当前已经是最新版本</p>
-    {/if}
-    {#if updateCheckError}
-      <p class="update-error">{updateCheckError}</p>
+      {#if progress.phase === "downloading"}
+        <p class="update-status">正在下载 {progress.stage || "更新"} {progress.percent}%</p>
+      {:else if progress.phase === "installing"}
+        <p class="update-status">已下载，请在系统安装界面完成更新</p>
+      {:else if progress.phase === "restarting"}
+        <p class="update-status">下载完成，正在重启应用…</p>
+      {:else if progress.phase === "failed"}
+        <p class="update-error">更新失败：{progress.message}</p>
+      {/if}
+      {#if pendingUpdate}
+        <div class="update-available">
+          <p>发现新版本 <strong>v{pendingUpdate.version}</strong></p>
+          <button class="settings-button primary" type="button" disabled={updateBusy} on:click={downloadAndApply}>
+            {caps.updateChannel === "apk" ? "下载并安装更新" : "下载并重启更新"}
+          </button>
+        </div>
+      {/if}
+      {#if upToDate && !pendingUpdate}
+        <p class="update-status">您当前已经是最新版本</p>
+      {/if}
+      {#if updateCheckError}
+        <p class="update-error">{updateCheckError}</p>
+      {/if}
     {/if}
   </section>
 </aside>

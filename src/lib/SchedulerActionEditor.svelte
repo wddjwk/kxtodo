@@ -3,6 +3,7 @@
   import NumberField from "./NumberField.svelte";
   import { FolderOpen, Search } from "@lucide/svelte";
   import { pickExecutableFile, resolveExecutablePath } from "./backend";
+  import { executablePathPlaceholder } from "./capabilities";
   import type { AppNotification, ScheduledTaskAction, SchedulerCondition } from "./types";
 
   export let title = "执行动作";
@@ -181,7 +182,7 @@
       <label class="wide">
         <span>可执行文件路径</span>
         <div class="path-input-row">
-          <input value={action.executablePath} placeholder="C:\Tools\demo.exe" on:input={(event) => onPatch({ executablePath: textValue(event) })} />
+          <input value={action.executablePath} placeholder={executablePathPlaceholder} on:input={(event) => onPatch({ executablePath: textValue(event) })} />
           <button type="button" title="选择文件" on:click={browseExecutable}>
             <FolderOpen size={15} />
           </button>

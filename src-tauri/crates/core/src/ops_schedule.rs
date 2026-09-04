@@ -20,7 +20,23 @@ pub const RUNTIME_KEYS: [&str; 5] = ["python", "node", "pwsh", "bash", "make"];
 // Path normalization (CLI cwd based, §3.5.2)
 // ---------------------------------------------------------------------------
 
+/// Windows 迁移数据里的绝对路径（盘符或 UNC）在 unix 上不是 PathBuf-absolute，
+/// 拼到 cwd 会产出畸形路径；原样保留，交给后续 is_file/is_dir 校验告警。
+#[cfg(not(windows))]
+fn is_foreign_windows_path(raw: &str) -> bool {
+    let bytes = raw.as_bytes();
+    let drive = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/');
+    drive || raw.starts_with("\\\\") || raw.starts_with("//")
+}
+
 pub fn normalize_path(raw: &str, cwd: &Path) -> String {
+    #[cfg(not(windows))]
+    if is_foreign_windows_path(raw) {
+        return raw.to_string();
+    }
     let path = PathBuf::from(raw);
     let absolute = if path.is_absolute() {
         path

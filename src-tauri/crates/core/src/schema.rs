@@ -54,6 +54,7 @@ fn strip_required(value: &mut Value) {
 
 /// Curated, validated examples referenced by `--example <name>`.
 pub fn spec_example(name: &str) -> Option<Value> {
+    let tool = if cfg!(windows) { "./tool.exe" } else { "./tool" };
     let example = match name {
         "once-notification" => json!({
             "name": "提交周报提醒",
@@ -126,7 +127,7 @@ pub fn spec_example(name: &str) -> Option<Value> {
             "trigger": { "type": "interval", "every": "1h" },
             "action": {
                 "type": "executable",
-                "program": "./tool.exe",
+                "program": tool,
                 "args": ["--mode", "check"],
                 "workingDirectory": "./work",
                 "timeout": "5m"

@@ -1,3 +1,4 @@
+import { platform as tauriPlatform } from "@tauri-apps/plugin-os";
 import type {
   AppNode,
   AppState,
@@ -48,6 +49,25 @@ export const themePresets: ThemePreset[] = [
   { name: "陶土玫瑰", color: "#e5d4cb" }
 ];
 
+/**
+ * 不从 platform.ts 导入 hostOs：defaults 被 stores 顶层引用，而 platform→stores
+ * 已存在，再加 defaults→platform 边会构成新环，模块求值顺序一变即 TDZ 白屏
+ * （见 AGENTS.md 模块循环坑位）。故此处内联同款检测（仅判 Linux）：官方 os
+ * 插件为准，UA 只是浏览器 dev / 未注册插件端的回退。
+ * Linux 桌面托盘常不可见（WSLg/GNOME），关闭按钮默认退出而非隐藏到托盘。
+ */
+function isLinuxHost(): boolean {
+  try {
+    return tauriPlatform() === "linux";
+  } catch {
+    if (typeof navigator === "undefined") {
+      return false;
+    }
+    const ua = navigator.userAgent || "";
+    return !/Android|iPhone|iPad|iPod/i.test(ua) && /Linux|X11/i.test(ua);
+  }
+}
+
 export const defaultSettings: Settings = {
   profile: {
     displayName: "Example User",
@@ -65,7 +85,7 @@ export const defaultSettings: Settings = {
     uiColors: {}
   },
   lifecycle: {
-    closeToTray: true,
+    closeToTray: !isLinuxHost(),
     launchAtStartup: false
   },
   notifications: {

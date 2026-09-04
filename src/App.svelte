@@ -11,6 +11,7 @@
   import { replaceTaskEmojis, selectNode as selectNodeAction } from "./lib/actions";
   import { isMobile, mobileView, startMobileRouter } from "./lib/platform";
   import { revealMainWindow } from "./lib/backend";
+  import { caps } from "./lib/capabilities";
   import { checkForUpdate } from "./lib/updater";
   import TitleBar from "./lib/TitleBar.svelte";
   import Toast from "./lib/Toast.svelte";
@@ -44,9 +45,9 @@
     void hydrateStores();
     void revealMainWindow();
     window.addEventListener("keydown", handleShortcut);
-    // 启动后静默检查一次更新（桌面 + 移动端，可关）
+    // 启动后静默检查一次更新（桌面 + 移动端，可关；Linux 无应用内更新通道不检查）
     const timer = window.setTimeout(() => {
-      if ($appSettings.updates.autoCheck && $appVersion) {
+      if ($appSettings.updates.autoCheck && $appVersion && caps.updateChannel !== "none") {
         void checkForUpdate($appVersion).then((result) => {
           if (result.status === "available") {
             showToast(`发现新版本 v${result.info.version}，可在设置中更新`, 6000);

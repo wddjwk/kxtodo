@@ -24,8 +24,10 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    LogicalPosition, WebviewUrl, WebviewWindowBuilder,
+    WebviewUrl, WebviewWindowBuilder,
 };
+#[cfg(all(desktop, not(target_os = "linux")))]
+use tauri::LogicalPosition;
 #[cfg(desktop)]
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 #[cfg(desktop)]
@@ -39,7 +41,7 @@ const IMG_DIR: &str = "img";
 const AVATAR_DIR: &str = "avator";
 const BACKGROUND_DIR: &str = "background";
 const ENTRY_IMAGE_DIR: &str = "data";
-#[cfg(desktop)]
+#[cfg(all(desktop, not(target_os = "linux")))]
 const DEFAULT_NOTIFICATION_DURATION_MS: u64 = 3_000;
 
 #[cfg(desktop)]
@@ -52,13 +54,15 @@ struct LifecycleState {
 impl Default for LifecycleState {
     fn default() -> Self {
         Self {
-            close_to_tray: AtomicBool::new(true),
+            // Linux 默认关闭即退出：WSLg/GNOME 托盘常不可见，隐藏到看不见的托盘
+            // 等于把应用弄丢；设置里仍可显式开启关闭到托盘。
+            close_to_tray: AtomicBool::new(!cfg!(target_os = "linux")),
             quitting: AtomicBool::new(false),
         }
     }
 }
 
-#[cfg(desktop)]
+#[cfg(all(desktop, not(target_os = "linux")))]
 #[derive(Debug, Clone, Copy)]
 enum NotificationPosition {
     BottomRight,
@@ -179,7 +183,7 @@ fn md_images_dir(app: &AppHandle, node_id: &str) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-#[cfg(desktop)]
+#[cfg(all(desktop, not(target_os = "linux")))]
 fn settings_file(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(data_dir(app)?.join("settings.json"))
 }
@@ -192,7 +196,7 @@ fn ensure_parent(path: &PathBuf) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(desktop)]
+#[cfg(all(desktop, not(target_os = "linux")))]
 fn read_json(path: PathBuf) -> Result<Value, String> {
     if !path.exists() {
         return Ok(json!(null));
@@ -358,7 +362,7 @@ fn resolve_executable_path(name: String) -> Option<String> {
     }
 }
 
-#[cfg(desktop)]
+#[cfg(all(desktop, not(target_os = "linux")))]
 fn clamp_notification_duration(duration_ms: u64, fallback: u64) -> u64 {
     let raw = if duration_ms == 0 {
         fallback
@@ -368,7 +372,7 @@ fn clamp_notification_duration(duration_ms: u64, fallback: u64) -> u64 {
     raw.clamp(1_200, 60_000)
 }
 
-#[cfg(desktop)]
+#[cfg(all(desktop, not(target_os = "linux")))]
 fn default_notification_duration(app: &AppHandle) -> u64 {
     let Ok(path) = settings_file(app) else {
         return DEFAULT_NOTIFICATION_DURATION_MS;
@@ -384,7 +388,7 @@ fn default_notification_duration(app: &AppHandle) -> u64 {
         .unwrap_or(DEFAULT_NOTIFICATION_DURATION_MS)
 }
 
-#[cfg(desktop)]
+#[cfg(all(desktop, not(target_os = "linux")))]
 fn parse_notification_position(raw: &str) -> NotificationPosition {
     match raw.trim().to_ascii_lowercase().as_str() {
         "top-right" => NotificationPosition::TopRight,
@@ -394,7 +398,7 @@ fn parse_notification_position(raw: &str) -> NotificationPosition {
     }
 }
 
-#[cfg(desktop)]
+#[cfg(all(desktop, not(target_os = "linux")))]
 fn default_notification_position(app: &AppHandle) -> NotificationPosition {
     let Ok(path) = settings_file(app) else {
         return NotificationPosition::BottomRight;
@@ -410,7 +414,7 @@ fn default_notification_position(app: &AppHandle) -> NotificationPosition {
         .unwrap_or(NotificationPosition::BottomRight)
 }
 
-#[cfg(desktop)]
+#[cfg(all(desktop, not(target_os = "linux")))]
 fn notification_setting_f64(app: &AppHandle, field: &str, fallback: f64) -> f64 {
     let Ok(path) = settings_file(app) else {
         return fallback;
@@ -426,7 +430,7 @@ fn notification_setting_f64(app: &AppHandle, field: &str, fallback: f64) -> f64 
         .unwrap_or(fallback)
 }
 
-#[cfg(desktop)]
+#[cfg(all(desktop, not(target_os = "linux")))]
 fn normalize_notification(
     app: &AppHandle,
     notification: NotificationRequest,
@@ -485,14 +489,14 @@ fn normalize_notification(
     }
 }
 
-#[cfg(desktop)]
+#[cfg(all(desktop, not(target_os = "linux")))]
 static NOTIFICATION_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// 近 3 秒内新建通知窗的出生时间：show 有最多 900ms 兜底延迟，新建时可能还不可见。
-#[cfg(desktop)]
+#[cfg(all(desktop, not(target_os = "linux")))]
 static NOTIFICATION_BIRTHS: std::sync::Mutex<Vec<std::time::Instant>> = std::sync::Mutex::new(Vec::new());
 
-#[cfg(desktop)]
+#[cfg(all(desktop, not(target_os = "linux")))]
 fn notification_position(
     app: &AppHandle,
     width: f64,
@@ -525,7 +529,7 @@ fn notification_position(
     Some(LogicalPosition::new(x, y))
 }
 
-#[cfg(desktop)]
+#[cfg(all(desktop, not(target_os = "linux")))]
 fn show_notification_window(
     app: &AppHandle,
     notification: NotificationRequest,
@@ -545,7 +549,7 @@ fn show_notification_window(
     rx.recv().map_err(|error| error.to_string())?
 }
 
-#[cfg(desktop)]
+#[cfg(all(desktop, not(target_os = "linux")))]
 fn build_notification_window(
     app: &AppHandle,
     label: String,
@@ -792,6 +796,47 @@ fn import_background_image(app: AppHandle, src_path: String) -> Result<String, S
     let filename = format!("bg-{stamp}-{counter}.{ext}");
     fs::copy(src, dir.join(&filename)).map_err(|error| error.to_string())?;
     Ok(filename)
+}
+
+/// 存储图像转 base64 dataURL（kind: avatar/background/md）。Linux 部分环境的
+/// WebKitGTK 对 asset 协议子资源不发请求（strace 实测零次文件打开），图像改走
+/// dataURL——与移动端既有路径同款；其余平台继续用 asset 协议。
+#[tauri::command]
+fn image_data_url(
+    app: AppHandle,
+    kind: String,
+    filename: String,
+    node_id: Option<String>,
+) -> Result<String, String> {
+    safe_image_name(&filename)?;
+    let dir = match kind.as_str() {
+        "avatar" => avatar_dir(&app)?,
+        "background" => images_dir(&app)?,
+        "md" => md_images_dir(&app, &node_id.unwrap_or_default())?,
+        _ => return Err("Invalid image kind".to_string()),
+    };
+    let path = dir.join(&filename);
+    let bytes = fs::read(&path).map_err(|_| "File not found".to_string())?;
+    if bytes.len() > 24 * 1024 * 1024 {
+        return Err("Image too large for data URL".to_string());
+    }
+    let mime = match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_lowercase())
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("svg") => "image/svg+xml",
+        _ => "application/octet-stream",
+    };
+    Ok(format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(&bytes)
+    ))
 }
 
 /// Absolute filesystem path of a stored background image, for `convertFileSrc`.
@@ -1202,7 +1247,7 @@ fn update_download_file(
 
 /// Windows shim 换链脚本：等本进程退出 → 删旧稳定名 → 硬链接到新版本 → 重启。
 /// 删名最多等 15 秒（防其他 kxtodo 进程短暂占用），失败细节写 kxtodo-update.log。
-#[cfg(desktop)]
+#[cfg(all(desktop, windows))]
 fn write_update_bat(dir: &std::path::Path, pid: u32, version: &str) -> Result<PathBuf, String> {
     let bat = dir.join("kxtodo-update.bat");
     let script = format!(
@@ -1429,43 +1474,90 @@ impl domain::host::HostBackend for TauriBackend {
         payload: &Value,
         _wait_rx: Option<std::sync::mpsc::Receiver<()>>,
     ) -> Result<String, domain::CoreError> {
-        let request = NotificationRequest {
-            title: payload
+        #[cfg(target_os = "linux")]
+        {
+            // Linux 用官方 notification 插件走系统通知守护进程（libnotify/D-Bus），
+            // 时长/位置/字号等呈现细节由守护进程决定，只映射标题与正文。
+            use tauri_plugin_notification::NotificationExt;
+            let title = payload
                 .get("title")
                 .and_then(Value::as_str)
-                .unwrap_or("KXToDo")
-                .to_string(),
-            message: payload
+                .unwrap_or("KXToDo");
+            let body = payload
                 .get("message")
                 .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            duration_ms: payload
-                .get("durationMs")
-                .and_then(Value::as_u64)
-                .unwrap_or(0),
-            tone: payload
-                .get("tone")
-                .and_then(Value::as_str)
-                .unwrap_or("info")
-                .to_string(),
-            position: payload
-                .get("position")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            title_font_size: payload
-                .get("titleFontSize")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0),
-            body_font_size: payload
-                .get("bodyFontSize")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0),
-        };
-        show_notification_window(&self.app, request).map_err(|error| {
-            domain::CoreError::execution("NOTIFY_FAILED", format!("通知窗口创建失败：{error}"))
-        })
+                .unwrap_or_default();
+            self.app
+                .notification()
+                .builder()
+                .title(title)
+                .body(body)
+                .show()
+                .map_err(|error| {
+                    domain::CoreError::execution(
+                        "NOTIFY_FAILED",
+                        format!("系统通知发送失败：{error}"),
+                    )
+                })?;
+            // 系统通知没有窗口关闭事件：core 在返回后才登记该 id，延迟把它关闭，
+            // 否则隐藏 Host 看门狗视通知为活跃永不退出，wait=true 也会挂满超时。
+            // id 必须唯一：NotificationTracker 按 id 键控，固定 id 会让并发通知
+            // 互相覆盖登记，先到的 wait=true 丢失唤醒方只能挂满超时。
+            static SYSTEM_NOTIFICATION_SEQ: AtomicU64 = AtomicU64::new(0);
+            let id = format!(
+                "system-notification-{}",
+                SYSTEM_NOTIFICATION_SEQ.fetch_add(1, Ordering::SeqCst) + 1
+            );
+            if let Some(core) = self.app.try_state::<Arc<domain::host::HostCore>>() {
+                let core = core.inner().clone();
+                let closed_id = id.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    core.notifications.closed(&closed_id);
+                });
+            }
+            return Ok(id);
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let request = NotificationRequest {
+                title: payload
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("KXToDo")
+                    .to_string(),
+                message: payload
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                duration_ms: payload
+                    .get("durationMs")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                tone: payload
+                    .get("tone")
+                    .and_then(Value::as_str)
+                    .unwrap_or("info")
+                    .to_string(),
+                position: payload
+                    .get("position")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                title_font_size: payload
+                    .get("titleFontSize")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0),
+                body_font_size: payload
+                    .get("bodyFontSize")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0),
+            };
+            show_notification_window(&self.app, request).map_err(|error| {
+                domain::CoreError::execution("NOTIFY_FAILED", format!("通知窗口创建失败：{error}"))
+            })
+        }
     }
 
     fn emit(&self, event: &str, payload: Value) {
@@ -1583,6 +1675,10 @@ fn init_host_core(
         app: app.clone(),
         allow_autostart,
     }));
+    // manage 必须先于 IPC/恢复/调度启动：Linux 系统通知的延迟关闭经 try_state
+    // 取 HostCore，状态未挂载的窗口期进来的通知会丢失关闭方（wait 挂满超时、
+    // 看门狗视通知为活跃不退出）。
+    app.manage(core.clone());
     let endpoint = domain::host::start_ipc_server(core.clone())
         .map_err(|error| format!("IPC/Host 所有权启动失败：{error}"))?;
     if let Ok(mut slot) = core.ipc_endpoint.write() {
@@ -1590,7 +1686,6 @@ fn init_host_core(
     }
     domain::host::retry_pending_recovery(&core);
     core.start_scheduler();
-    app.manage(core.clone());
     Ok(core)
 }
 
@@ -1616,7 +1711,12 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
             Some(vec!["--kxtodo-host"]),
         ))
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init());
+        .plugin(tauri_plugin_opener::init())
+        // 官方 os 插件：前端 capabilities 用同步 platform() 判定宿主系统（替代 UA 嗅探）。
+        .plugin(tauri_plugin_os::init());
+    // Linux 通知交给系统守护进程（libnotify/D-Bus）；Windows 保留自绘弹窗通知窗。
+    #[cfg(target_os = "linux")]
+    let builder = builder.plugin(tauri_plugin_notification::init());
     let builder = if default_host {
         builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             let wants_host = args.iter().any(|arg| arg == "--kxtodo-host");
@@ -1650,6 +1750,7 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
             delete_background_image,
             import_background_image,
             background_image_path,
+            image_data_url,
             save_avatar_image,
             delete_avatar_image,
             avatar_image_path,
@@ -1928,10 +2029,28 @@ fn init_mobile_core(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// AppImage 的 AppRun（linuxdeploy-plugin-gtk）为绕旧版 WebKitGTK 的 Wayland 崩溃
+/// （tauri#8541）强制 GDK_BACKEND=x11；但 WSLg 的 XWayland 光标通路是坏的（实测任何
+/// X11 客户端都丢鼠标光标，Wayland 原生一切正常）。Wayland 会话里撤掉这个强制值回
+/// 原生后端；纯 X11 会话（无 WAYLAND_DISPLAY）保持 x11 不动。
+#[cfg(target_os = "linux")]
+fn restore_wayland_backend_in_appimage() {
+    let forced_x11 = std::env::var_os("GDK_BACKEND").as_deref()
+        == Some(std::ffi::OsStr::new("x11"));
+    if std::env::var_os("APPDIR").is_some()
+        && std::env::var_os("WAYLAND_DISPLAY").is_some()
+        && forced_x11
+    {
+        std::env::remove_var("GDK_BACKEND");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(desktop)]
     {
+        #[cfg(target_os = "linux")]
+        restore_wayland_backend_in_appimage();
         let args: Vec<String> = env::args().skip(1).collect();
         match parse_host_mode_args(&args) {
             Some(data_dir) => run_desktop_app(AppMode::HiddenHost, data_dir),

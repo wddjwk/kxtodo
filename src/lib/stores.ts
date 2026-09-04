@@ -105,7 +105,7 @@ export function showNotification(
   }
 
   if (caps.systemNotifications) {
-    // 移动端：走 tauri-plugin-notification 的系统通知；任何失败降级为 Toast。
+    // 移动端与 Linux 桌面：走 tauri-plugin-notification 的系统通知；任何失败降级为 Toast。
     void (async () => {
       try {
         const { isPermissionGranted, requestPermission, sendNotification } = await import("@tauri-apps/plugin-notification");

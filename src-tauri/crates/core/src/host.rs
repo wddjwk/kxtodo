@@ -608,14 +608,17 @@ pub fn gui_exe_name() -> &'static str {
     }
 }
 
-/// 发布目录里 GUI 产物是带版本号的 KXToDo-<ver>.exe（CLI 是 KXToDo-CLI-<ver>.exe）；
+/// Windows 发布目录里 GUI 产物是带版本号的 KXToDo-<ver>.exe（CLI 是 KXToDo-CLI-<ver>.exe），
 /// 依次尝试：kxtodo.exe（开发/同目录标准名）→ 版本号最大的 KXToDo-*.exe。
+/// Linux 以 AppImage 分发，不存在带版本裸产物：只认稳定名 kxtodo
+/// （用户将 AppImage 或 GUI 二进制软链为 CLI 同目录的 kxtodo）。
 fn find_gui_exe(dir: &Path) -> Option<PathBuf> {
     let plain = dir.join(gui_exe_name());
-    if plain.is_file() {
+    if crate::exec::is_executable_file(&plain) {
         return Some(plain);
     }
-    if cfg!(windows) {
+    #[cfg(windows)]
+    {
         let mut candidates: Vec<PathBuf> = std::fs::read_dir(dir)
             .ok()?
             .filter_map(|entry| entry.ok())
@@ -654,7 +657,11 @@ fn gui_exe_path() -> CoreResult<PathBuf> {
             "GUI_NOT_FOUND",
             format!("未找到 GUI 程序（{}）", dir.join(gui_exe_name()).display()),
         )
-        .with_hint("notify / schedule run 需要 GUI 承担 Background Host：将 kxtodo.exe（或 KXToDo-<版本>.exe）与 kxtodo-cli.exe 放在同一目录")),
+        .with_hint(if cfg!(windows) {
+            "notify / schedule run 需要 GUI 承担 Background Host：将 kxtodo.exe（或 KXToDo-<版本>.exe）与 kxtodo-cli.exe 放在同一目录"
+        } else {
+            "notify / schedule run 需要 GUI 承担 Background Host：将 AppImage（或 GUI 二进制）软链为 kxtodo，与 kxtodo-cli 放在同一目录"
+        })),
     }
 }
 
@@ -672,6 +679,16 @@ fn launch_hidden_host(data_dir: &Path) -> CoreResult<HostDescriptor> {
         {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // 脱离 CLI：不持有终端、不随 CLI 进程组收到 SIGHUP/SIGINT。
+            command
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .process_group(0);
         }
         command.spawn().map_err(|error| {
             CoreError::new(

@@ -1,4 +1,5 @@
-﻿# KXToDo 一键发布：git 取版本 → 本地构建三产物（GUI exe + CLI exe + Android APK）→ gh release 上传。
+﻿# KXToDo 一键发布：git 取版本 → 本地构建三产物（GUI exe + CLI exe + Android APK）→ gh release 上传；
+# release\ 下存在同版本 Linux 双产物（AppImage + CLI -gnu，release.sh 在 Linux 上构建）时一并上传，缺失只警告。
 # 用法：
 #   .\scripts\publish.ps1            # 构建 + 发布当前 git 版本
 #   .\scripts\publish.ps1 -DryRun    # 只打印将要执行的步骤
@@ -48,6 +49,18 @@ $apkVersionFile = Join-Path $root "release\KXToDo.apk.version"
 $apkFresh = (Test-Path -LiteralPath $apk) -and (Test-Path -LiteralPath $apkVersionFile) -and
   ((Get-Content -LiteralPath $apkVersionFile -Raw).Trim() -eq $version)
 
+# Linux 双产物可选：在 Linux 上跑过 release.sh 并把产物放进 release\ 才会存在
+# （AppImage 是 tauri bundler 标准命名 productName_version_arch）。
+# 缺失只警告一次，不参与三产物的复用/重建判断——publish 通常在没有 Linux 产物的 Windows 上跑。
+$linuxAppImage = Join-Path $root "release\KXToDo_${version}_amd64.AppImage"
+$linuxCli = Join-Path $root "release\KXToDo-CLI-$version-gnu"
+$linuxArtifacts = @()
+if ((Test-Path -LiteralPath $linuxAppImage) -and (Test-Path -LiteralPath $linuxCli)) {
+  $linuxArtifacts = @($linuxAppImage, $linuxCli)
+} else {
+  Write-Warning "未找到 Linux 产物（$linuxAppImage / $linuxCli），本次发布不含 Linux 制品"
+}
+
 Write-Host "==> 版本：$tag" -ForegroundColor Cyan
 
 # 未提交改动会让构建产物与 git 版本对不上，直接拒绝。
@@ -61,6 +74,14 @@ if ($DryRun) {
   Write-Host "[DryRun]   $guiExe"
   Write-Host "[DryRun]   $cliExe"
   Write-Host "[DryRun]   $apk"
+  if ($linuxArtifacts.Count -gt 0) {
+    Write-Host "[DryRun] 另将上传 Linux 双产物："
+    foreach ($linuxArtifact in $linuxArtifacts) {
+      Write-Host "[DryRun]   $linuxArtifact"
+    }
+  } else {
+    Write-Host "[DryRun] Linux 产物缺失，本次发布不含 Linux 制品"
+  }
   return
 }
 
@@ -103,12 +124,13 @@ $ErrorActionPreference = "Continue"
 gh release view $tag *> $null
 $releaseExists = $LASTEXITCODE -eq 0
 if ($releaseExists) {
-  gh release upload $tag $guiExe $cliExe $apk --clobber
+  gh release upload $tag $guiExe $cliExe $apk @linuxArtifacts --clobber
 } else {
-  gh release create $tag $guiExe $cliExe $apk --title $tag --generate-notes
+  gh release create $tag $guiExe $cliExe $apk @linuxArtifacts --title $tag --generate-notes
 }
 $publishOk = $LASTEXITCODE -eq 0
 $ErrorActionPreference = $saved
 if (-not $publishOk) { throw "gh release 失败" }
 
-Write-Host "已发布 $tag ：GUI + CLI + APK 三产物" -ForegroundColor Green
+$linuxNote = if ($linuxArtifacts.Count -gt 0) { " + Linux 双产物（AppImage + CLI）" } else { "" }
+Write-Host "已发布 $tag ：GUI + CLI + APK 三产物$linuxNote" -ForegroundColor Green

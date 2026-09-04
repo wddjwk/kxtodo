@@ -1,4 +1,5 @@
 import { get, writable } from "svelte/store";
+import { platform as tauriPlatform } from "@tauri-apps/plugin-os";
 import { editorTaskId, showSettings } from "./stores";
 
 /**
@@ -15,6 +16,36 @@ function detectMobile(): boolean {
 }
 
 export const isMobile = writable(detectMobile());
+
+export type HostOs = "windows" | "linux" | "macos" | "android" | "ios" | "unknown";
+
+/**
+ * 宿主 OS 检测以官方 os 插件为准（同步读注入的 internals，浏览器 dev / 未注册
+ * 插件的端——如 Android APK——会抛异常），UA 仅是这些场景下的回退。
+ */
+function detectHostOs(): HostOs {
+  try {
+    const value = tauriPlatform();
+    if (value === "android" || value === "ios" || value === "linux" || value === "windows" || value === "macos") {
+      return value;
+    }
+    return "unknown";
+  } catch {
+    if (typeof navigator === "undefined") {
+      return "unknown";
+    }
+    const ua = navigator.userAgent || "";
+    if (/Android|iPhone|iPad|iPod/i.test(ua)) {
+      return /Android/i.test(ua) ? "android" : "ios";
+    }
+    if (/Linux|X11/i.test(ua)) return "linux";
+    if (/Windows/i.test(ua)) return "windows";
+    if (/Mac OS X|Macintosh/i.test(ua)) return "macos";
+    return "unknown";
+  }
+}
+
+export const hostOs: HostOs = detectHostOs();
 
 /**
  * Microsoft To-Do style mobile navigation: the app opens on the category list

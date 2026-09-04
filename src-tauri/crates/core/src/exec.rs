@@ -81,6 +81,20 @@ fn executable_candidates(name: &str) -> Vec<String> {
     vec![name.to_string()]
 }
 
+/// unix 还要求可执行位，否则会选中不可执行文件、到 spawn 才报 EACCES。
+#[cfg(unix)]
+pub(crate) fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata()
+        .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
+}
+
 fn env_executable(env_names: &[&str]) -> Option<String> {
     for name in env_names {
         let Ok(raw) = std::env::var(name) else {
@@ -90,7 +104,7 @@ fn env_executable(env_names: &[&str]) -> Option<String> {
         if value.is_empty() {
             continue;
         }
-        if Path::new(&value).is_file() {
+        if is_executable_file(Path::new(&value)) {
             return Some(value);
         }
     }
@@ -108,7 +122,7 @@ pub fn find_executable(names: &[&str], env_names: &[&str]) -> String {
         for name in names {
             for candidate in executable_candidates(name) {
                 let path = dir.join(candidate);
-                if path.is_file() {
+                if is_executable_file(&path) {
                     return path.to_string_lossy().to_string();
                 }
             }
@@ -134,6 +148,20 @@ pub fn detect_runtimes() -> Runtimes {
     }
 }
 
+/// 仅 Linux 校验配置的解释器是否可解析：路径形式查文件存在（含可执行位），裸名字走 PATH 查找，
+/// 从 Windows 迁移来的配置（如 C:\Python\python.exe）在本平台不存在时回退到检测结果，
+/// 避免运行期才报 SPAWN_FAILED。其余平台保持配置值直通：Windows 的相对路径由 spawn
+/// 按任务 workingDirectory 解析、裸名字还可能被 CreateProcess 搜索序（exe 目录/当前目录/
+/// System32）命中，按宿主进程上下文校验会误杀有效配置，静默换解释器比显式 SPAWN_FAILED 更糟。
+#[cfg(target_os = "linux")]
+fn resolves_as_executable(value: &str) -> bool {
+    if value.contains('/') || value.contains('\\') {
+        is_executable_file(Path::new(value))
+    } else {
+        !find_executable(&[value], &[]).is_empty()
+    }
+}
+
 pub fn runtime_path(runtimes: &Runtimes, key: &str) -> String {
     let configured = match key {
         "python" => runtimes.python.as_str(),
@@ -143,8 +171,13 @@ pub fn runtime_path(runtimes: &Runtimes, key: &str) -> String {
         "make" => runtimes.make.as_str(),
         _ => "",
     };
-    if !configured.trim().is_empty() {
-        return configured.trim().to_string();
+    let configured = configured.trim();
+    #[cfg(target_os = "linux")]
+    let configured_usable = !configured.is_empty() && resolves_as_executable(configured);
+    #[cfg(not(target_os = "linux"))]
+    let configured_usable = !configured.is_empty();
+    if configured_usable {
+        return configured.to_string();
     }
     let detected = detect_runtimes();
     match key {
@@ -376,6 +409,26 @@ pub struct ProcessRegistry {
 struct ChildHandle {
     child: Mutex<Child>,
     cancelled: Arc<AtomicBool>,
+    /// 子进程已被 wait 回收；此后不得再 kill（unix killpg 打到复用的 pid 会误杀）。
+    reaped: AtomicBool,
+}
+
+impl ChildHandle {
+    /// 终止子进程：unix 对整个进程组 SIGKILL（child 以 process_group(0) 启动、是组长），
+    /// 连带回收持有 stdout/stderr 管道的孙进程；其余平台保持 child.kill()。
+    fn kill(&self, child: &mut Child) {
+        if self.reaped.load(Ordering::SeqCst) {
+            return;
+        }
+        #[cfg(unix)]
+        {
+            let _ = unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = child.kill();
+        }
+    }
 }
 
 impl ProcessRegistry {
@@ -388,7 +441,7 @@ impl ProcessRegistry {
         if let Some(handle) = handle {
             handle.cancelled.store(true, Ordering::SeqCst);
             if let Ok(mut child) = handle.child.lock() {
-                let _ = child.kill();
+                handle.kill(&mut child);
             }
             true
         } else {
@@ -422,7 +475,7 @@ impl ProcessRegistry {
         for (_, handle) in &handles {
             handle.cancelled.store(true, Ordering::SeqCst);
             if let Ok(mut child) = handle.child.lock() {
-                let _ = child.kill();
+                handle.kill(&mut child);
             }
         }
         handles.into_iter().map(|(id, _)| id).collect()
@@ -478,6 +531,11 @@ impl ProcessRegistry {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
         let mut child = command.spawn().map_err(|error| {
             CoreError::execution(
                 "SPAWN_FAILED",
@@ -492,6 +550,7 @@ impl ProcessRegistry {
         let handle = Arc::new(ChildHandle {
             child: Mutex::new(child),
             cancelled,
+            reaped: AtomicBool::new(false),
         });
         self.children
             .lock()
@@ -501,7 +560,7 @@ impl ProcessRegistry {
         // run-slot token after the pre-spawn check but before registry insert.
         if handle.cancelled.load(Ordering::SeqCst) {
             if let Ok(mut child) = handle.child.lock() {
-                let _ = child.kill();
+                handle.kill(&mut child);
             }
         }
 
@@ -516,7 +575,11 @@ impl ProcessRegistry {
                     .lock()
                     .map_err(|error| CoreError::internal(error.to_string()))?;
                 match guard.try_wait() {
-                    Ok(Some(status)) => break Ok(status),
+                    Ok(Some(status)) => {
+                        // 持锁标记已回收，避免并发的 stop 打到复用的 pid。
+                        handle.reaped.store(true, Ordering::SeqCst);
+                        break Ok(status);
+                    }
                     Ok(None) => {}
                     Err(error) => {
                         break Err(CoreError::execution("WAIT_FAILED", error.to_string()))
@@ -527,7 +590,7 @@ impl ProcessRegistry {
                 if Instant::now() >= deadline && !timed_out {
                     timed_out = true;
                     if let Ok(mut guard) = handle.child.lock() {
-                        let _ = guard.kill();
+                        handle.kill(&mut guard);
                     }
                     // Next poll iterations reap the killed child.
                 }
@@ -587,10 +650,14 @@ fn read_pipe<R: Read>(mut reader: R) -> PipeCapture {
     }
     let text = match std::str::from_utf8(&retained) {
         Ok(text) => text.to_string(),
+        // GBK 回退只对 Windows 控制台输出（ANSI 代码页）有意义。
+        #[cfg(windows)]
         Err(_) => {
             let (decoded, _, _) = encoding_rs::GBK.decode(&retained);
             decoded.into_owned()
         }
+        #[cfg(not(windows))]
+        Err(_) => String::from_utf8_lossy(&retained).into_owned(),
     };
     let (text, expanded) = crate::history::truncate(&text, limit);
     PipeCapture {

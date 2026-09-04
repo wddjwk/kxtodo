@@ -164,8 +164,20 @@ export async function importBackgroundImage(srcPath: string): Promise<string> {
   return invoke<string>("import_background_image", { srcPath });
 }
 
+/** Linux：WebKitGTK 部分环境对 asset 协议子资源不发请求，图像改走 dataURL（与移动端同款）。 */
+export async function imageDataUrl(
+  kind: "avatar" | "background" | "md",
+  filename: string,
+  nodeId?: string
+): Promise<string> {
+  return invoke<string>("image_data_url", { kind, filename, nodeId: nodeId ?? null });
+}
+
 /** Resolve a stored background image filename to a webview-displayable URL (asset protocol, no base64). */
 export async function backgroundImageUrl(filename: string): Promise<string> {
+  if (caps.dataUrlImages) {
+    return imageDataUrl("background", filename);
+  }
   const path = await invoke<string>("background_image_path", { filename });
   return convertFileSrc(path);
 }
@@ -177,6 +189,9 @@ export async function saveAvatarImage(srcPath: string): Promise<string> {
 
 /** Resolve avatar filename to asset URL. */
 export async function avatarImageUrl(filename: string): Promise<string> {
+  if (caps.dataUrlImages) {
+    return imageDataUrl("avatar", filename);
+  }
   const path = await invoke<string>("avatar_image_path", { filename });
   return convertFileSrc(path);
 }
@@ -194,6 +209,9 @@ export async function deleteNodeImages(nodeId: string): Promise<void> {
 
 /** Resolve markdown image filename to asset URL. */
 export async function mdImageUrl(nodeId: string, filename: string): Promise<string> {
+  if (caps.dataUrlImages) {
+    return imageDataUrl("md", filename, nodeId);
+  }
   const path = await invoke<string>("md_image_path", { nodeId, filename });
   return convertFileSrc(path);
 }

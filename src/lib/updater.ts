@@ -15,6 +15,9 @@ import { caps } from "./capabilities";
 const RELEASE_API = "https://api.github.com/repos/wddjwk/kxtodo/releases/latest";
 const FETCH_TIMEOUT_MS = 15_000;
 
+/** Linux 无应用内更新通道：AppImage 由用户自行从 GitHub Releases 下载覆盖。 */
+const LINUX_UPDATE_HINT = "Linux 版本请前往 GitHub Releases 下载最新 AppImage";
+
 export type UpdateInfo = {
   version: string;
   tag: string;
@@ -101,6 +104,9 @@ async function fetchJson(url: string): Promise<unknown> {
 
 /** 查询 GitHub latest release；有更新时按平台返回 GUI/CLI 或 APK 下载地址。 */
 export async function checkForUpdate(currentVersion: string): Promise<UpdateCheckResult> {
+  if (caps.updateChannel === "none") {
+    return { status: "error", message: LINUX_UPDATE_HINT };
+  }
   try {
     const data = (await fetchJson(RELEASE_API)) as {
       tag_name?: string;
@@ -156,6 +162,9 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateChec
 
 /** 触发 Rust 侧下载；桌面继续 shim → 重启，移动端落 APK 后经事件交给系统安装器。 */
 export async function startUpdate(info: UpdateInfo): Promise<void> {
+  if (caps.updateChannel === "none") {
+    throw new Error(LINUX_UPDATE_HINT);
+  }
   if (caps.updateChannel === "apk") {
     if (!info.apkUrl) {
       throw new Error("缺少 APK 下载地址");
