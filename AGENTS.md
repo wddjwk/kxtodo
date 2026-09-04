@@ -103,6 +103,7 @@ node scripts/mobile-ux-test.mjs   # 移动端 UX 回归（playwright-core + 系�
 5. **tauri-plugin-window-state 默认管所有窗口**：动态 label 的窗口（通知窗 `notification-N` 按进程内计数器复用 label）会被恢复历史"不可见/旧位置"状态——曾导致通知窗建好了却看不见。必须用 `with_filter` 按前缀排除；主窗口可见性若由代码接管（conf `visible:false` + 前端 reveal），还要把 `StateFlags::VISIBLE` 从持久化里剥掉，否则恢复逻辑会绕过 reveal 提前显示窗口。
 6. **pwsh 5.1 写文件默认 GBK**：脚本里写中文文本一律 `[System.IO.File]::WriteAllText` + UTF-8 no-BOM。
 7. **裸 cargo 交叉检查 Android 目标需要 NDK clang 环境**：ureq/ring 是共享依赖后，`cargo check --target aarch64-linux-android` 会在 ring 的 cc-rs 构建脚本里找 clang 失败。gradle 的 rust 插件（`tauri android build`）会自己配好；手工 check 需导出：`PATH += $NDK_HOME/toolchains/llvm/prebuilt/windows-x86_64/bin`、`CC/CXX/AR_aarch64_linux_android=clang.exe/clang++.exe/llvm-ar.exe`、`CFLAGS/CXXFLAGS_aarch64_linux_android=--target=aarch64-linux-android24`。
+8. **Node 24 + vite 在 Windows 的退出期 libuv 断言 flake**：`npm run build` 可能已打印 `✓ built in Xs` 但进程退出时崩在 `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)`（exit -1073740791），package.ps1 会按约定报 "Frontend build failed"；`tauri android build` 的 beforeBuildCommand 再跑一次 npm 时同样会中。**偶发，直接重跑该目标即可**（产物以 release/ 下文件与 sidecar 为准）。另外：**跑 release/publish 脚本不要用 `| tail` 管道**——管道会把退出码掩成 0 造成"构建成功"误报，重定向到日志文件再 tail。
 
 ## Android 开发与构建经验（v0.2.0 实战沉淀）
 
