@@ -222,9 +222,9 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         is_map: false,
     },
     FieldMeta {
-        path: "sync.intervalMinutes",
-        kind: "integer(1-1440)",
-        description: "GUI Host 自动同步间隔（分钟）",
+        path: "sync.intervalSeconds",
+        kind: "integer(5-86400)",
+        description: "自动同步间隔（秒）",
         is_map: false,
     },
     FieldMeta {
@@ -309,7 +309,7 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "sync.syncData" => json!(settings.sync.sync_data),
         "sync.syncSettings" => json!(settings.sync.sync_settings),
         "sync.syncSchedules" => json!(settings.sync.sync_schedules),
-        "sync.intervalMinutes" => json!(settings.sync.interval_minutes),
+        "sync.intervalSeconds" => json!(settings.sync.interval_seconds),
         "updates.autoCheck" => json!(settings.updates.auto_check),
         "features.showCategoryBadges" => json!(settings.features.show_category_badges),
         _ => return Err(unknown_field(path)),
@@ -684,8 +684,8 @@ pub fn set_value(
         "sync.syncSchedules" => {
             settings.sync.sync_schedules = expect_bool(path, &value)?;
         }
-        "sync.intervalMinutes" => {
-            settings.sync.interval_minutes = expect_int(path, &value, 1, 1440)? as u32;
+        "sync.intervalSeconds" => {
+            settings.sync.interval_seconds = expect_int(path, &value, 5, 86400)? as u32;
         }
         "updates.autoCheck" => settings.updates.auto_check = expect_bool(path, &value)?,
         "features.showCategoryBadges" => {
@@ -839,8 +839,8 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "sync.syncData" => target.sync.sync_data = defaults.sync.sync_data,
         "sync.syncSettings" => target.sync.sync_settings = defaults.sync.sync_settings,
         "sync.syncSchedules" => target.sync.sync_schedules = defaults.sync.sync_schedules,
-        "sync.intervalMinutes" => {
-            target.sync.interval_minutes = defaults.sync.interval_minutes
+        "sync.intervalSeconds" => {
+            target.sync.interval_seconds = defaults.sync.interval_seconds
         }
         "updates.autoCheck" => target.updates.auto_check = defaults.updates.auto_check,
         "features.showCategoryBadges" => {

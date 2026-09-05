@@ -92,7 +92,7 @@ export type Settings = {
     syncData: boolean;
     syncSettings: boolean;
     syncSchedules: boolean;
-    intervalMinutes: number;
+    intervalSeconds: number;
   };
   syncUpdatedAt?: string;
   updates: {

@@ -950,7 +950,7 @@ export type SyncStatus = {
   username: string;
   email: string;
   scopes: { data: boolean; settings: boolean; schedules: boolean };
-  intervalMinutes: number;
+  intervalSeconds: number;
   deviceId: string;
   lastSyncAt?: string;
   lastResult?: { pulled: number; applied: number; pushed: number; conflicts: number } | null;
@@ -1008,6 +1008,7 @@ export async function setSyncScopes(scopes: {
   syncData?: boolean;
   syncSettings?: boolean;
   syncSchedules?: boolean;
+  intervalSeconds?: number;
 }): Promise<boolean> {
   if (!coreMode) return false;
   try {

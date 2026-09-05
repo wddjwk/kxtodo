@@ -111,7 +111,7 @@ export const defaultSettings: Settings = {
     syncData: true,
     syncSettings: false,
     syncSchedules: false,
-    intervalMinutes: 5
+    intervalSeconds: 30
   },
   updates: {
     autoCheck: true
@@ -663,10 +663,10 @@ export function normalizeSettings(raw: unknown): Settings {
       syncData: typeof source?.sync?.syncData === "boolean" ? source.sync.syncData : true,
       syncSettings: Boolean(source?.sync?.syncSettings),
       syncSchedules: Boolean(source?.sync?.syncSchedules),
-      intervalMinutes:
-        typeof source?.sync?.intervalMinutes === "number" && source.sync.intervalMinutes >= 1
-          ? Math.min(1440, Math.round(source.sync.intervalMinutes))
-          : 5
+      intervalSeconds:
+        typeof source?.sync?.intervalSeconds === "number" && source.sync.intervalSeconds >= 5
+          ? Math.min(86400, Math.round(source.sync.intervalSeconds))
+          : 30
     },
     updates: {
       autoCheck: typeof source?.updates?.autoCheck === "boolean" ? source.updates.autoCheck : true

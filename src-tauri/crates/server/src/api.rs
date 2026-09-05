@@ -4,8 +4,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -14,21 +15,36 @@ use serde_json::json;
 
 use crate::db::{entity_to_json, Db, UserRow};
 use crate::error::{ServerError, ServerResult};
+use crate::logging::Logger;
+use crate::settings::ServerSettings;
 use crate::util;
 
 pub const APP_VERSION: &str = env!("KXTODO_VERSION");
+/// 登录 token 有效期固定 30 天（个人同步服务，无需可调）
+pub const TOKEN_TTL_DAYS: i64 = 30;
 
 pub struct AppState {
     pub db: Db,
-    pub token_ttl_days: i64,
+    pub logger: Mutex<Logger>,
+    pub settings: ServerSettings,
     /// 登录挑战 nonce → (user_id, 过期时间)
     pub challenges: Mutex<HashMap<String, (String, String)>>,
+    /// 管理界面 session token → 过期时间
+    pub admin_sessions: Mutex<HashMap<String, String>>,
 }
 
 pub type SharedState = Arc<AppState>;
 
+impl AppState {
+    pub fn log(&self, kind: &str, message: &str) {
+        if let Ok(mut logger) = self.logger.lock() {
+            logger.log(kind, message);
+        }
+    }
+}
+
 pub fn router(state: SharedState) -> Router {
-    Router::new()
+    let api = Router::new()
         .route("/healthz", get(healthz))
         .route("/api/v1/register", post(register))
         .route("/api/v1/login-challenge", post(login_challenge))
@@ -37,7 +53,54 @@ pub fn router(state: SharedState) -> Router {
         .route("/api/v1/me", get(me))
         .route("/api/v1/changes", get(changes))
         .route("/api/v1/entities/{id}", get(get_entity).put(put_entity))
-        .with_state(state)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            request_log,
+        ))
+        .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
+        .with_state(state.clone());
+    let admin = crate::admin::router(state.clone()).layer(
+        middleware::from_fn_with_state(state, request_log),
+    );
+    api.nest("/admin", admin)
+}
+
+/// 请求日志 middleware：method path status 耗时 客户端IP。
+async fn request_log(
+    State(state): State<SharedState>,
+    request: axum::extract::Request,
+    next: Next,
+) -> Response {
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+    let client_ip = client_ip(request.headers());
+    let started = std::time::Instant::now();
+    let response = next.run(request).await;
+    let status = response.status().as_u16();
+    // 健康检查不刷日志（客户端轮询会刷屏）
+    if path != "/healthz" {
+        state.log(
+            "req",
+            &format!(
+                "{method} {path} -> {status}（{}ms）{client_ip}",
+                started.elapsed().as_millis()
+            ),
+        );
+    }
+    response
+}
+
+/// 客户端 IP：优先 X-Forwarded-For（反代场景）。
+fn client_ip(headers: &HeaderMap) -> String {
+    if let Some(forwarded) = headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+    {
+        if let Some(first) = forwarded.split(',').next() {
+            return format!(" ip={}", first.trim());
+        }
+    }
+    String::new()
 }
 
 // ---------------------------------------------------------------------------
@@ -106,6 +169,10 @@ async fn register(
         return Err(ServerError::bad_request("authKey 应为 64 位 hex"));
     }
     let user_id = state.db.create_user(&username, &email, &body.auth_key)?;
+    state.log(
+        "op",
+        &format!("注册账户：{username} / {email}（{user_id}）"),
+    );
     Ok((StatusCode::CREATED, Json(json!({ "userId": user_id }))).into_response())
 }
 
@@ -175,13 +242,15 @@ async fn login(
         body.nonce.as_bytes(),
     ));
     if !util::constant_time_eq(&expected, &body.proof) {
+        state.log("op", &format!("登录失败（proof 不匹配）：{username} / {email}"));
         return Err(ServerError::auth_failed());
     }
 
     let token = util::random_hex(32);
     let token_hash = util::sha256_hex(token.as_bytes());
-    let expires_at = util::iso_after_days(state.token_ttl_days);
+    let expires_at = util::iso_after_days(TOKEN_TTL_DAYS);
     state.db.insert_token(&token_hash, &user.id, &expires_at)?;
+    state.log("op", &format!("登录成功：{username} / {email}，token 有效期至 {expires_at}"));
     Ok(Json(json!({
         "token": token,
         "expiresAt": expires_at,
@@ -297,7 +366,19 @@ async fn put_entity(
         .db
         .put_entity(&user.id, &id, body.base, &body.nonce, &body.ciphertext, &body.hash)
     {
-        Ok(seq) => Ok(Json(json!({ "seq": seq, "changed": true })).into_response()),
+        Ok(seq) => {
+            state.log(
+                "op",
+                &format!(
+                    "上传实体：{id}（base={} → seq={seq}，{}字节密文）by {}/{}",
+                    body.base,
+                    body.ciphertext.len(),
+                    user.username,
+                    user.email
+                ),
+            );
+            Ok(Json(json!({ "seq": seq, "changed": true })).into_response())
+        }
         Err(error) => Err(error),
     }
 }

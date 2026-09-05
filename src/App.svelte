@@ -10,6 +10,7 @@
   } from "./lib/stores";
   import { replaceTaskEmojis, selectNode as selectNodeAction } from "./lib/actions";
   import { isMobile, mobileView, startMobileRouter } from "./lib/platform";
+  import { startAutoSync } from "./lib/syncRunner";
   import { revealMainWindow } from "./lib/backend";
   import { checkForUpdate } from "./lib/updater";
   import TitleBar from "./lib/TitleBar.svelte";
@@ -43,6 +44,8 @@
     // 调度引擎在 Rust Background Host 中运行，前端不再持有调度循环。
     void hydrateStores();
     void revealMainWindow();
+    // 自动同步循环（全平台：配对后按 intervalSeconds 周期 pull+push）
+    startAutoSync();
     window.addEventListener("keydown", handleShortcut);
     // 启动后静默检查一次更新（全平台，可在设置关闭）
     const timer = window.setTimeout(() => {

@@ -569,16 +569,16 @@ pub struct SyncSettings {
     /// 同步定时任务 spec（默认关；spec 含各机器绝对路径，跨平台通常不可执行）
     #[serde(rename = "syncSchedules", default)]
     pub sync_schedules: bool,
-    /// GUI Host 自动同步间隔（分钟）
-    #[serde(rename = "intervalMinutes", default = "default_sync_interval_minutes")]
-    pub interval_minutes: u32,
+    /// 自动同步间隔（秒）
+    #[serde(rename = "intervalSeconds", default = "default_sync_interval_seconds")]
+    pub interval_seconds: u32,
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
 }
 
-fn default_sync_interval_minutes() -> u32 {
-    5
+fn default_sync_interval_seconds() -> u32 {
+    30
 }
 
 impl Default for SyncSettings {
@@ -592,7 +592,7 @@ impl Default for SyncSettings {
             sync_data: default_true(),
             sync_settings: false,
             sync_schedules: false,
-            interval_minutes: default_sync_interval_minutes(),
+            interval_seconds: default_sync_interval_seconds(),
             extra: Map::new(),
         }
     }

@@ -280,6 +280,114 @@ impl Db {
             |row| row.get(0),
         )?)
     }
+
+    // -----------------------------------------------------------------------
+    // 管理界面查询
+    // -----------------------------------------------------------------------
+
+    pub fn overview(&self) -> ServerResult<serde_json::Value> {
+        let conn = self.conn.lock().unwrap();
+        let users: i64 = conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))?;
+        let entities: i64 =
+            conn.query_row("SELECT COUNT(*) FROM entities", [], |row| row.get(0))?;
+        let storage: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(LENGTH(ciphertext)), 0) FROM entities",
+            [],
+            |row| row.get(0),
+        )?;
+        let tokens: i64 = {
+            let now = crate::util::now_iso();
+            conn.query_row(
+                "SELECT COUNT(*) FROM tokens WHERE expires_at >= ?1",
+                [now],
+                |row| row.get(0),
+            )?
+        };
+        Ok(serde_json::json!({
+            "users": users,
+            "entities": entities,
+            "storageBytes": storage,
+            "tokens": tokens,
+        }))
+    }
+
+    pub fn list_users(&self) -> ServerResult<Vec<serde_json::Value>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT u.id, u.username, u.email, u.current_seq, u.created_at,
+                    (SELECT COUNT(*) FROM entities e WHERE e.user_id = u.id) AS entity_count,
+                    (SELECT COALESCE(SUM(LENGTH(e.ciphertext)), 0) FROM entities e WHERE e.user_id = u.id) AS storage
+             FROM users u ORDER BY u.created_at",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            out.push(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "username": row.get::<_, String>(1)?,
+                "email": row.get::<_, String>(2)?,
+                "currentSeq": row.get::<_, i64>(3)?,
+                "createdAt": row.get::<_, String>(4)?,
+                "entityCount": row.get::<_, i64>(5)?,
+                "storageBytes": row.get::<_, i64>(6)?,
+            }));
+        }
+        Ok(out)
+    }
+
+    pub fn list_user_entities(&self, user_id: &str) -> ServerResult<Vec<serde_json::Value>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT entity_id, seq, LENGTH(ciphertext) FROM entities
+             WHERE user_id = ?1 ORDER BY seq DESC LIMIT 500",
+        )?;
+        let mut rows = stmt.query([user_id])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let seq: i64 = row.get(1)?;
+            out.push(serde_json::json!({
+                "entityId": row.get::<_, String>(0)?,
+                "seq": seq,
+                "ciphertextBytes": row.get::<_, i64>(2)?,
+                "updatedAt": format!("seq#{seq}"),
+            }));
+        }
+        Ok(out)
+    }
+
+    pub fn list_tokens(&self) -> ServerResult<Vec<serde_json::Value>> {
+        let conn = self.conn.lock().unwrap();
+        let now = crate::util::now_iso();
+        let mut stmt = conn.prepare(
+            "SELECT t.token_hash, t.expires_at, u.username FROM tokens t
+             JOIN users u ON u.id = t.user_id WHERE t.expires_at >= ?1 ORDER BY t.expires_at",
+        )?;
+        let mut rows = stmt.query([now])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let digest: String = row.get(0)?;
+            out.push(serde_json::json!({
+                "tokenDigest": format!("{}…", &digest[..12.min(digest.len())]),
+                "expiresAt": row.get::<_, String>(1)?,
+                "username": row.get::<_, String>(2)?,
+            }));
+        }
+        Ok(out)
+    }
+
+    /// 删除用户及其全部数据，返回清除的实体数。
+    pub fn delete_user(&self, user_id: &str) -> ServerResult<usize> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let removed = tx.execute("DELETE FROM entities WHERE user_id = ?1", [user_id])?;
+        tx.execute("DELETE FROM tokens WHERE user_id = ?1", [user_id])?;
+        let users = tx.execute("DELETE FROM users WHERE id = ?1", [user_id])?;
+        tx.commit()?;
+        if users == 0 {
+            return Err(ServerError::not_found());
+        }
+        Ok(removed)
+    }
 }
 
 fn bump_seq(tx: &rusqlite::Transaction<'_>, user_id: &str) -> ServerResult<u64> {

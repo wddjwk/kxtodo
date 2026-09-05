@@ -43,6 +43,8 @@ kxtodo.exe (GUI)                    kxtodo-cli (CLI)
 - **踩坑记录**：①拉取水位更新必须在合并事务**之后**读最新文件对账（早前先更新水位导致刚拉下的实体被误判脏又推回，服务端 seq 暴涨）；②PowerShell 5.1 跑 CLI 测试脚本要 `[Console]::OutputEncoding=UTF8`，否则 GBK 解码 UTF-8 JSON 炸；③WSL 镜像网络下 Windows↔WSL 的 localhost/LAN 直连默认被 Hyper-V 防火墙拦（需管理员开规则），跨机验证用真实 LAN 机器；④**Windows CLI 中文参数乱码**（代码页 936）：`std::env::args()` 按系统 ANSI 代码页解码命令行，中文必乱码——cli 入口已改 `args_os` + `embed-manifest` crate 嵌入进程级 UTF-8 代码页 manifest（手写 `/MANIFESTINPUT` 链接参数会造成 side-by-side 启动错误，勿回退）；⑤PowerShell 5.1 脚本文件本身必须带 UTF-8 BOM 否则中文按 GBK 解析直接语法错误。
 - **跨机验证记录（v0.4.0，已通过）**：WSL 客户端 + Windows 客户端 + kklaptop Ubuntu 客户端 三端连同一 kklaptop server（真实 LAN HTTP），双向建/改/删/中文任务全部收敛一致。
 - **发布**：kxtodo-server 双平台发布——Linux `kxtodo-server`（release.sh 构建）+ Windows `kxtodo-server.exe`（package.ps1 / release.yml windows job 构建）；server 自带 `--update`（按平台从 GitHub latest release 下载对应固定名制品原子替换自身+重启）。CI 的 cargo test 已含 `-p kxtodo-server`（spawn 真实 server 的 e2e 收敛测试）。
+- **server 运维（v0.4.1）**：启动参数持久化在 `server/settings.json`（listen/db/adminUser/密码哈希；显式指定则覆盖，未指定则沿用，首次必须给 `--admin-user/--admin-password`）；日志双写 stdout + `server/log/server-YYYYMMDD.log`（按日轮转留 7 天：`[req]` 每请求 method/path/status/耗时/XFF-IP、`[op]` 注册/登录/上传实体/管理操作、`[info]` 启动与配置）；管理界面 `http://host:port/admin`（账密登录 → 概览/用户/实体/在线 token/删用户，session cookie 12h）；登录 token 有效期固定 30 天（`--token-ttl-days` 已删除）。
+- **自动同步（v0.4.1）**：`sync.intervalSeconds`（默认 30，5-86400）取代旧 intervalMinutes；前端 `syncRunner.ts` 由 App onMount 启动（全平台含 Android，浏览器预览不启动），周期 pull+push，设置变化自动重排定时器。同步面板已去掉 caps.desktop 门控（移动端可用），配对表单默认填 displayName/email；面板/启动日志不再展示任何加密安全口号。
 
 ### 数据目录解析
 

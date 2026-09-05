@@ -838,7 +838,7 @@ pub enum SyncAction {
     Status,
     /// 立即执行一次同步（Risk: write）
     Now,
-    /// 调整同步范围/开关/间隔（Risk: write）
+    /// 调整同步范围/开关/自动同步间隔（Risk: write）
     Configure(SyncConfigureArgs),
     /// 解除本机配对（Risk: write）
     #[command(
@@ -888,9 +888,9 @@ pub struct SyncConfigureArgs {
     /// 同步定时任务 spec
     #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
     pub sync_schedules: Option<bool>,
-    /// GUI Host 自动同步间隔（分钟）
-    #[arg(long, value_name = "1-1440")]
-    pub interval_minutes: Option<u64>,
+    /// 自动同步间隔（秒）
+    #[arg(long, value_name = "5-86400")]
+    pub interval_seconds: Option<u64>,
 }
 
 #[derive(Debug, Subcommand)]

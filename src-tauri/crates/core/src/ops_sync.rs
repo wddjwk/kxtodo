@@ -126,7 +126,7 @@ fn sync_status(ctx: &ExecContext) -> CoreResult<Value> {
             "settings": sync.sync_settings,
             "schedules": sync.sync_schedules,
         },
-        "intervalMinutes": sync.interval_minutes,
+        "intervalSeconds": sync.interval_seconds,
         "deviceId": state.device_id,
         "lastPulledSeq": state.last_pulled_seq,
         "lastSyncAt": state.last_sync_at,
@@ -179,7 +179,7 @@ fn sync_configure(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
     let settings_scope = params.get("syncSettings").and_then(Value::as_bool);
     let schedules = params.get("syncSchedules").and_then(Value::as_bool);
     let enabled = params.get("enabled").and_then(Value::as_bool);
-    let interval = params.get("intervalMinutes").and_then(Value::as_u64);
+    let interval = params.get("intervalSeconds").and_then(Value::as_u64);
     if data.is_none()
         && settings_scope.is_none()
         && schedules.is_none()
@@ -188,7 +188,7 @@ fn sync_configure(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
     {
         return Err(CoreError::validation(
             "MISSING_PARAM",
-            "至少提供一个配置项（syncData/syncSettings/syncSchedules/enabled/intervalMinutes）",
+            "至少提供一个配置项（syncData/syncSettings/syncSchedules/enabled/intervalSeconds）",
         ));
     }
     let settings_before = ctx.repo.load_settings()?;
@@ -208,13 +208,13 @@ fn sync_configure(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
                 file.sync.sync_schedules = value;
             }
             if let Some(value) = interval {
-                if !(1..=1440).contains(&value) {
+                if !(5..=86400).contains(&value) {
                     return Err(CoreError::validation(
                         "INVALID_INTERVAL",
-                        "intervalMinutes 应在 1-1440 之间",
+                        "intervalSeconds 应在 5-86400 之间",
                     ));
                 }
-                file.sync.interval_minutes = value as u32;
+                file.sync.interval_seconds = value as u32;
             }
             // 不在此处刷新 syncUpdatedAt：开启设置同步的设备应先收敛到服务端版本，
             // 本地设置只有真的变化后（config.set 触发）才会推送。
