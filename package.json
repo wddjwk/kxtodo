@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "prepare": "node scripts/install-git-hooks.mjs",
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",

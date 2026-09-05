@@ -1,4 +1,4 @@
-param(
+﻿param(
   # 默认只构建 Windows + Android；unix（Linux，经 WSL 原生克隆）需要显式指定。
   [string[]]$Targets = @("windows", "android"),
   [switch]$Log
@@ -26,27 +26,37 @@ $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Resolve-Path (Join-Path $scriptPath "..")
 Set-Location $root
 
-# 版本号唯一来源是 git：最近的 v* tag 优先，其次最近一条 vX.Y.Z 开头的 commit message。
+# 版本号唯一来源是 git，与 src-tauri/build.rs 同一套优先级：HEAD 上的精确 v* tag →
+# 最近一条 vX.Y.Z 开头的 commit subject → 最近的祖先 v* tag。
 function Get-GitVersion {
   # pwsh 7 的 PSNativeCommandUseErrorActionPreference 会让 git 的非零退出码变成
   # 终止性 NativeCommandError；这里局部降级并吞掉，缺 tag 是正常情况。
   $saved = $ErrorActionPreference
   $ErrorActionPreference = "Continue"
+  $exact = $null
   $tag = $null
   $subjects = @()
   try {
+    # 精确 tag 必须排在祖先 tag 之前：describe --abbrev=0 在未打 tag 的 commit 上返回的是
+    # 上一个 tag，那样 subject 里写的版本号永远轮不到，制品会静默带旧版本号。
+    $exact = git describe --tags --match "v*" --exact-match 2>$null
     $tag = git describe --tags --match "v*" --abbrev=0 2>$null
     $subjects = @(git log -30 --pretty=%s 2>$null)
   } catch {
   }
   $ErrorActionPreference = $saved
-  if ($tag) {
-    return $tag.Trim().TrimStart("v")
+  if ($exact) {
+    return $exact.Trim().TrimStart("v")
   }
   foreach ($subject in $subjects) {
-    if ($subject -match '^v(\d+\.\d+\.\d+)') {
+    # -cmatch 而不是 -match：PowerShell 的 -match 默认大小写不敏感，会把 "V1.3.0" 当成
+    # 合法版本号，与 build.rs 的 strip_prefix('v') 和 commit-msg hook 的判据不一致。
+    if ($subject -cmatch '^v(\d+\.\d+\.\d+)(?![\d.])') {
       return $Matches[1]
     }
+  }
+  if ($tag) {
+    return $tag.Trim().TrimStart("v")
   }
   return "0.0.0-dev"
 }

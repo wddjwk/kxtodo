@@ -2,3 +2,8 @@
 # straight from the Windows working tree via `wsl.exe ... /mnt/d/...`, and release.sh
 # runs inside WSL. Under core.autocrlf=true a CRLF checkout would break them ($'\r' errors).
 *.sh text eol=lf
+
+# The versioned git hooks have no .sh extension, so the rule above does not cover them.
+# git runs them through sh: a CRLF checkout turns the shebang into "#!/bin/sh\r" and the
+# hook silently dies, which would drop the vX.Y.Z commit-message enforcement entirely.
+scripts/git-hooks/** text eol=lf

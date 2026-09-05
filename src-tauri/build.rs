@@ -1,38 +1,44 @@
 use std::process::Command;
 
-/// 版本号的唯一来源是 git：最近的 v* tag 优先，其次最近一条以 vX.Y.Z 开头的
-/// commit message。构建期注入 KXTODO_VERSION，仓库文件里不再维护版本号。
+/// 版本号的唯一来源是 git，优先级：HEAD 上的精确 v* tag → 最近一条以 vX.Y.Z 开头的
+/// commit subject → 最近的祖先 v* tag。构建期注入 KXTODO_VERSION，仓库文件里不再维护版本号。
 fn git_version() -> Option<String> {
-    let tag = Command::new("git")
-        .args(["describe", "--tags", "--match", "v*", "--abbrev=0"])
+    // 精确 tag 必须排在祖先 tag 之前：describe --abbrev=0 在未打 tag 的 commit 上返回的是
+    // 上一个 tag，那样 subject 里写的版本号永远轮不到，构建会静默报旧版本号。
+    let exact = run_git(&["describe", "--tags", "--match", "v*", "--exact-match"]);
+    if let Some(version) = exact.as_deref().and_then(parse_version) {
+        return Some(version);
+    }
+    if let Some(log) = run_git(&["log", "-30", "--pretty=%s"]) {
+        if let Some(version) = log.lines().find_map(parse_version) {
+            return Some(version);
+        }
+    }
+    run_git(&["describe", "--tags", "--match", "v*", "--abbrev=0"])
+        .as_deref()
+        .and_then(parse_version)
+}
+
+fn run_git(args: &[&str]) -> Option<String> {
+    Command::new("git")
+        .args(args)
         .output()
         .ok()
         .filter(|o| o.status.success())
         .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().trim_start_matches('v').to_string())
-        .filter(|v| !v.is_empty());
-    if tag.is_some() {
-        return tag;
-    }
-    let log = Command::new("git")
-        .args(["log", "-30", "--pretty=%s"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())?;
-    for line in log.lines() {
-        let Some(candidate) = line.trim().strip_prefix('v') else {
-            continue;
-        };
-        let valid = !candidate.is_empty()
-            && candidate
-                .split('.')
-                .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()));
-        if valid {
-            return Some(candidate.to_string());
-        }
-    }
-    None
+}
+
+/// "v0.4.2" / "v0.4.2 修复同步水位" → "0.4.2"；不是小写 v + 三段纯数字则 None。
+/// 只取第一个空白前的 token——拿整行去校验会被后面的说明文字带崩（旧实现的 bug：
+/// 整行 split('.') 的最后一段必然含中文，导致这条回退对所有真实 subject 都失效）。
+fn parse_version(text: &str) -> Option<String> {
+    let candidate = text.trim().split_whitespace().next()?.strip_prefix('v')?;
+    let parts: Vec<&str> = candidate.split('.').collect();
+    let valid = parts.len() == 3
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()));
+    valid.then(|| candidate.to_string())
 }
 
 fn main() {

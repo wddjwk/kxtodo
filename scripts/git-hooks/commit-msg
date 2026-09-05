@@ -1,0 +1,33 @@
+#!/bin/sh
+# 强制 commit message 以 vX.Y.Z 开头（恰好三段数字）。
+# 版本号只有 git 一个来源，build.rs / release.sh / package.ps1 同一套优先级：
+# HEAD 上的精确 v* tag → 最近一条 vX.Y.Z 开头的 commit subject → 最近的祖先 v* tag。
+# subject 不带版本号会让构建静默回落到祖先 tag 的旧版本号且不报错。
+# 本文件是版本化源，安装到 .git/hooks 由 scripts/install-git-hooks.mjs 负责（npm install 自动触发）。
+
+msg_file="$1"
+
+# commit-msg 阶段 git 还没清理注释行与空行，先取第一行有效内容作为 subject
+subject=$(grep -v -e '^#' -e '^[[:space:]]*$' "$msg_file" | head -n 1)
+
+if printf '%s' "$subject" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+($|[^0-9.])'; then
+	exit 0
+fi
+
+cat >&2 <<EOF
+
+ERROR: commit 被拒绝——message 必须以 vX.Y.Z 开头（恰好三段数字）
+
+  规则    版本号只有 git 一个来源，优先级：HEAD 上的精确 v* tag → 最近一条
+          vX.Y.Z 开头的 commit subject → 最近的祖先 v* tag。subject 不带版本号
+          会让构建静默回落到祖先 tag 的旧版本号且不报错。
+  正确    v0.4.2 修复同步水位重置
+  错误    fix: 修复同步水位重置 ／ v0.4 少一段 ／ v0.4.2.1 多一段 ／ V0.4.2 大写
+  当前    ${subject:-<空 message>}
+
+  同一版本已提交后用户反馈有问题：在用户没有明确要求升版本号时，
+  一律 git commit --amend 并进该版本那笔 commit，不要新开一笔。
+  merge / revert 等自动生成的消息用 git commit --no-verify 显式绕过。
+
+EOF
+exit 1

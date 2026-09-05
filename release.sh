@@ -23,37 +23,46 @@ for cmd in git cargo npm npx pkg-config file; do
 done
 
 # ---------- 版本号解析 ----------
-# 版本号唯一来源是 git，解析语义与 src-tauri/build.rs 完全一致：
-# v* tag 优先（去 v 前缀，不校验格式），其次近 30 条 commit 里第一条
-# “v + 点分纯数字”的主题，都没有则回退 0.0.0-dev。
+# 版本号唯一来源是 git，解析语义与 src-tauri/build.rs 完全一致，优先级：
+# HEAD 上的精确 v* tag → 近 30 条 commit 里第一条 “vX.Y.Z” 主题 → 最近的祖先 v* tag，
+# 都没有则回退 0.0.0-dev。
 is_dotted_numeric() {
   local candidate="$1" part
   local -a parts
   [[ -n "$candidate" ]] || return 1
   IFS='.' read -ra parts <<< "$candidate"
+  [[ "${#parts[@]}" -eq 3 ]] || return 1
   for part in "${parts[@]}"; do
     [[ "$part" =~ ^[0-9]+$ ]] || return 1
   done
 }
 
 resolve_version() {
-  local tag candidate subject
-  tag="$(git describe --tags --match 'v*' --abbrev=0 2>/dev/null || true)"
+  local tag candidate subject token
+  # 精确 tag 必须排在祖先 tag 之前：describe --abbrev=0 在未打 tag 的 commit 上返回的是
+  # 上一个 tag，那样主题里写的版本号永远轮不到，制品会静默带旧版本号。
+  tag="$(git describe --tags --match 'v*' --exact-match 2>/dev/null || true)"
   candidate="${tag#v}"
   if [[ -n "$candidate" ]]; then
     printf '%s\n' "$candidate"
     return 0
   fi
   while IFS= read -r subject; do
-    subject="${subject#"${subject%%[![:space:]]*}"}"
-    subject="${subject%"${subject##*[![:space:]]}"}"
-    [[ "$subject" == v* ]] || continue
-    candidate="${subject#v}"
+    # 只取第一个空白前的 token：整段主题拿去校验会被后面的说明文字带崩
+    read -r token _ <<<"$subject"
+    [[ "$token" == v* ]] || continue
+    candidate="${token#v}"
     if is_dotted_numeric "$candidate"; then
       printf '%s\n' "$candidate"
       return 0
     fi
   done < <(git log -30 --pretty=%s 2>/dev/null || true)
+  tag="$(git describe --tags --match 'v*' --abbrev=0 2>/dev/null || true)"
+  candidate="${tag#v}"
+  if [[ -n "$candidate" ]]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
   return 1
 }
 

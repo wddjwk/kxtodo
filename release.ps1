@@ -1,4 +1,4 @@
-# KXToDo release build.
+﻿# KXToDo release build.
 # Usage:
 #   .\release.ps1                  # 默认：Windows + Android（KXToDo.exe + kxtodo-cli.exe + KXToDo.apk）
 #   .\release.ps1 win              # 仅 Windows

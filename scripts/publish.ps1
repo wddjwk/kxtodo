@@ -1,4 +1,4 @@
-# KXToDo 一键发布：git 取版本 → 本地重建目标平台产物 → gh release 上传（固定名制品，不带版本号）。
+﻿# KXToDo 一键发布：git 取版本 → 本地重建目标平台产物 → gh release 上传（固定名制品，不带版本号）。
 # 默认目标 Windows + Android；Linux（unix）需显式指定：.\scripts\publish.ps1 all 或 .\scripts\publish.ps1 win,unix。
 # 产物按目标推导（与应用内 updater 的精确名匹配一致）：
 #   windows → release\KXToDo.exe + release\kxtodo-cli.exe
