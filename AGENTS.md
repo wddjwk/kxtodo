@@ -22,7 +22,7 @@ kxtodo.exe (GUI)                    kxtodo-cli (CLI)
 - **CLI 不持有状态**：需要常驻能力（notify 弹通知、schedule run）时，CLI 通过 IPC 找 Host；Host 不在就拉起 GUI 同目录 exe 的隐藏 Host 模式（`--kxtodo-host`），找不到 GUI 则报 `GUI_NOT_FOUND`。
 - **GUI/CLI/Agent 三方写操作走同一条业务命令层**（Domain Core 的 Invocation → 域分发 → envelope 输出），不存在"读全量 JSON 改完写回"的路径。
 - **Android 同栈**：APK 内嵌同一个 kxtodo-core，HostCore 进程内直跑（`init_mobile_core`：Repository + 移动端 HostBackend），**不启 IPC server / 调度引擎 / 看门狗 / 托盘**；写操作与桌面走完全相同的 core_dispatch 命令层。浏览器 dev 预览（非 Tauri）才走 localStorage legacy 路径。
-- **Linux 桌面与 Windows 同拓扑**：GUI 常驻 Host（IPC 服务端 + 调度引擎）+ CLI 经 IPC 找 Host；IPC 传输为抽象命名空间 Unix socket，数据目录 `$XDG_DATA_HOME/kxtodo/todo-note-data`（无则 `~/.local/share`）。GUI 以 **AppImage** 分发，而 CLI 的 `notify` / `schedule run` 需要 GUI 承担隐藏 Host（`--kxtodo-host`）：把 AppImage（或解包出的 GUI 二进制）以 `kxtodo` 为名软链到 CLI 同目录即可被 `find_gui_exe` 找到，否则报 `GUI_NOT_FOUND`。core 内的 unix 差异：子进程输出 lossy UTF-8 解码、PATH 解析校验可执行位、调度动作进程树用 process_group + killpg 整组控制、隐藏 Host 以 `Stdio::null` + 独立进程组脱离终端、迁移自 Windows 的外来盘符路径（`C:\...`）防止被当相对路径拼到 cwd、runtime 缓存配置失效时回退重新探测（仅 Linux）。
+- **Linux 桌面与 Windows 同拓扑**：GUI 常驻 Host（IPC 服务端 + 调度引擎）+ CLI 经 IPC 找 Host；IPC 传输为抽象命名空间 Unix socket，数据目录 `$XDG_DATA_HOME/kxtodo/todo-note-data`（无则 `~/.local/share`）。GUI 以 **AppImage**（固定名 `KXToDo.AppImage`）分发，CLI 裸二进制固定名 `kxtodo-cli`；CLI 的 `notify` / `schedule run` 需要 GUI 承担隐藏 Host（`--kxtodo-host`）：把 `KXToDo.AppImage` 与 `kxtodo-cli` 放同一目录即可（`find_gui_exe` 认固定名 `KXToDo.AppImage`，也认软链为 `kxtodo` 的 GUI），否则报 `GUI_NOT_FOUND`。应用内更新会把这两个固定名制品下载到 `~/.local/share/kxtodo/bin/` 替换后重启。core 内的 unix 差异：子进程输出 lossy UTF-8 解码、PATH 解析校验可执行位、调度动作进程树用 process_group + killpg 整组控制、隐藏 Host 以 `Stdio::null` + 独立进程组脱离终端、迁移自 Windows 的外来盘符路径（`C:\...`）防止被当相对路径拼到 cwd、runtime 缓存配置失效时回退重新探测（仅 Linux）。
 
 ### 数据目录解析
 
@@ -35,7 +35,7 @@ kxtodo.exe (GUI)                    kxtodo-cli (CLI)
 - **stores.ts**：Svelte stores 单一事实来源。`appState`/`appSettings` + derived（`selectedNode`/`visibleTasks`/`listCounts`/`accent`…）。桌面与移动端 hydrate 都走 `coreSnapshot`，之后靠 `kxtodo://domain-changed` 事件 + `refreshFromCore` 增量回刷。
 - **actions.ts**：GUI 全部写操作的业务命令层，桌面/移动统一 coreDispatch。**新写操作一律加在这里，不要在组件里直接改 store 或 invoke。**
 - **backend.ts**：Tauri invoke 桥接。桌面专属能力（托盘/自启/全局快捷键/webview 缩放/原生文件对话框/导出落盘）经 capabilities 门控在移动端 no-op 或改走替代路径（file input + dataURL 命令、Kotlin 分享桥）；浏览器 dev 回退 localStorage。
-- **capabilities.ts**：平台能力层（scheduler/trayLifecycle/globalShortcuts/windowZoom/popupNotificationWindow/systemNotifications/nativeFileDialogs/updateChannel/desktop）。Linux 取值：`updateChannel = "none"`（应用内更新关闭）、`systemNotifications = true` + `popupNotificationWindow = false`（走系统通知，不自绘通知窗）。组件按能力裁剪 UI，不再散落 isMobile 判断；加新平台时只扩这里。
+- **capabilities.ts**：平台能力层（scheduler/trayLifecycle/globalShortcuts/windowZoom/popupNotificationWindow/systemNotifications/nativeFileDialogs/updateChannel/desktop）。`updateChannel`：移动端 `"apk"`，桌面（Windows/Linux）一律 `"desktop"`（下载固定名制品→替换→重启；已无 `"none"` 通道）。Linux 其余取值：`systemNotifications = true` + `popupNotificationWindow = false`（走系统通知，不自绘通知窗）。组件按能力裁剪 UI，不再散落 isMobile 判断；加新平台时只扩这里。
 - **platform.ts**：hostOs 检测（官方 `@tauri-apps/plugin-os` 的同步 `platform()`，UA 仅作回退）+ 移动端检测 + 三层历史栈路由（list → content → editor/settings，`{mv:...}` history 条目，popstate 回写 store）。**`startMobileRouter()` 只能由 App onMount 调用**——模块顶层挂载会因 platform ↔ stores/backend/capabilities 循环依赖 TDZ 白屏。
 - **longpress.ts**：触摸长按 action（500ms、10px 移动容差、抑制窗去重 Chromium 补发的原生 contextmenu），树行/任务卡/侧栏空白区共用——移动端长按 = 桌面右键。
 - **scheduleAdapter.ts**：v9 ScheduleEntry（spec/state/ui 三段）↔ UI 编辑模型双向适配，patch 时保留 CLI 专属字段。
@@ -63,7 +63,7 @@ kxtodo.exe (GUI)                    kxtodo-cli (CLI)
 - **定时任务**：独立视图，卡片三态（compact/expanded/editing），新建后停在编辑态（ui.editing 持久化）。触发器 once/interval/calendar/condition；动作 脚本/可执行文件/通知；执行历史 `schedule logs`。
 - **我的一天**：标题下显示当天日期；灯泡 = 智能建议；日历 = 月/周视图回看各天完成项；已完成区只显示当天完成。
 - **设置抽屉**：个人资料（头像 dataURL）、外观（缩放/字号/链接打开方式）、生命周期（关闭到托盘/开机自启）、快捷键、云同步占位。
-- **Linux 桌面**：与 Windows 同一套现代 UI（`decorations:false` + 自绘 TitleBar，不换原生窗口装饰）；通知走 tauri-plugin-notification 系统通知（libnotify/D-Bus，`capabilities/linux.json` 授权），不自绘通知窗（客户端绝对定位在 Wayland 下不可行）；关闭按钮默认**退出应用**而非隐藏到托盘（WSLg/GNOME 托盘常不可见，设置里可改回 close-to-tray）；应用内更新在 Linux 关闭（`updateChannel = "none"`，用户从 GitHub Releases 下载新 AppImage 覆盖）；全局快捷键受插件平台能力限制（X11 可用，纯 Wayland 抓不到），不做会话嗅探特判。
+- **Linux 桌面**：与 Windows 同一套现代 UI（`decorations:false` + 自绘 TitleBar，不换原生窗口装饰）；通知走 tauri-plugin-notification 系统通知（libnotify/D-Bus，`capabilities/linux.json` 授权），不自绘通知窗（客户端绝对定位在 Wayland 下不可行）；关闭按钮默认**退出应用**而非隐藏到托盘（WSLg/GNOME 托盘常不可见，设置里可改回 close-to-tray）；应用内更新与 Windows 同机制（`updateChannel = "desktop"`：下载固定名 `KXToDo.AppImage` + `kxtodo-cli` 到 `~/.local/share/kxtodo/bin/` 替换后尝试自动重启，拉起失败则提示手动重启）；全局快捷键受插件平台能力限制（X11 可用，纯 Wayland 抓不到），不做会话嗅探特判。
 - **移动端（Android）**：三级导航——主界面是分类列表，点分组展开、点条目/系统列表推入内容页（顶部返回键），设置是独立整页（侧栏资料卡进入），硬件返回键沿历史栈逐级回退（编辑器→内容→列表→退出，MainActivity 的 OnBackPressedCallback 驱动 webview.goBack）。长按 = 右键菜单；定时任务整体隐藏（无调度引擎）；通知走 tauri-plugin-notification 系统通知（首次发送请求 POST_NOTIFICATIONS）；更新 = 设置页检查 → 下载固定名 APK → Kotlin 桥（`window.kxtodoAndroid.installApk`）拉起系统安装器覆盖安装。导出走系统分享面板（shareText 桥），图片选择走隐藏 file input + dataURL 命令。桌面体验不受影响（isMobile 只看 userAgent，能力门控保证桌面命令面不变）。
 
 ## 如何修改 / 维护 / 拓展
@@ -86,16 +86,18 @@ kxtodo.exe (GUI)                    kxtodo-cli (CLI)
 npm install                # 依赖
 npm run desktop:dev        # 桌面开发（vite + tauri dev）
 scripts/cargo-msvc.sh test -p kxtodo-core   # Rust 测试（Git Bash 下必须用这个包装！）
-.\release.ps1 windows      # 本地构建 Windows 双产物
-.\release.ps1 all          # Windows 双产物 + Android APK
-./release.sh               # 本地构建 Linux 制品（AppImage + CLI，须在 Linux 上跑）
+.\release.ps1 win          # Windows 制品（KXToDo.exe + kxtodo-cli.exe）
+.\release.ps1 android      # Android APK（KXToDo.apk）
+.\release.ps1 unix         # 经 WSL 原生克隆构建 Linux 制品（KXToDo.AppImage + kxtodo-cli）
+.\release.ps1 all          # Windows + Android + Linux 三平台（某平台环境未就绪则告警跳过，不终止其它）
+./release.sh               # Linux 构建入口（须在 Linux/WSL 上跑；release.ps1 unix 会在原生克隆里调它）
 node scripts/mobile-ux-test.mjs   # 移动端 UX 回归（playwright-core + 系统 Edge，需先 npm run dev）
-.\scripts\publish.ps1      # 一键发布：三产物构建 + gh release create（需要 gh 已登录；release/ 下有同版本 Linux 制品则一并上传，缺失只警告）
+.\scripts\publish.ps1      # 一键发布：重建三平台产物 + gh release 上传五个固定名制品（需 gh 已登录；缺环境的平台告警跳过）
 ```
 
-**版本号只有 git 一个来源**：最近的 `v*` tag，其次最近一条 `vX.Y.Z` 开头的 commit message。`build.rs`（根 crate + crates/core）构建期调用 git 注入 `KXTODO_VERSION`，GUI 经 `app_version` 命令展示在设置页，CLI 的 `version` 命令同源。**仓库任何文件里都不写版本号**（Cargo.toml 是 0.0.0 占位、tauri.conf.json 无 version 字段、前端无常量）——发版只打 tag/写 commit，永远不要往文件里同步版本号。注意 `git describe` 优先于 commit message：**发版必须先 commit 再在 HEAD 上打 tag**，否则 describe 回到旧 tag，构建/发布会拿旧版本号且不报错。
+**版本号只有 git 一个来源**：最近的 `v*` tag，其次最近一条 `vX.Y.Z` 开头的 commit message。`build.rs`（根 crate + crates/core）构建期调用 git 注入 `KXTODO_VERSION`，GUI 经 `app_version` 命令展示在设置页，CLI 的 `version` 命令同源。**仓库任何文件里都不写版本号**（Cargo.toml 是 0.0.0 占位、tauri.conf.json 无 version 字段、前端无常量）——发版只打 tag/写 commit，永远不要往文件里同步版本号。注意 `git describe` 优先于 commit message：**发版必须先 commit 再在 HEAD 上打 tag**，否则 describe 回到旧 tag，构建/发布会拿旧版本号且不报错（`publish.ps1` 已内置兜底：HEAD 无精确 tag 时按提交主题的 `vX.Y.Z` 当场在 HEAD 打 tag，再构建，规避此坑）。
 
-产物：`release/KXToDo-<版本>.exe`（GUI）+ `KXToDo-CLI-<版本>.exe`（CLI）+ `KXToDo.apk`（Android，固定名不带版本——覆盖安装不留历史包；旁挂 `KXToDo.apk.version` sidecar 记录构建版本供 publish 识别旧产物）。Linux：`release/KXToDo_<版本>_amd64.AppImage`（官方 tauri bundler 标准命名 `productName_version_arch`；bundle 由 `src-tauri/tauri.linux.conf.json` 平台覆盖启用，`targets` 仅 `appimage`）+ `release/KXToDo-CLI-<版本>-gnu`（CLI 裸二进制，"-gnu" 是文件名一部分不是扩展名）；版本号构建期经 `tauri build --config "{\"version\":\"$VERSION\"}"` 内联 JSON 注入，**仓库文件仍不写版本号**。构建入口分工：Windows/Android 走 `release.ps1` → `package.ps1`；Linux 走 `release.sh`（版本解析与 build.rs 同语义，AppImage 由 tauri CLI 的 beforeBuildCommand 顺带跑前端构建，不另行 `npm run build`）。APK 的 versionName/versionCode 由 package.ps1 注入的 `KXTODO_VERSION` 环境变量进 gradle（versionCode = 900000000 + X*1000000 + Y*1000 + Z，基线高于旧构建的 8002001 保证升级不降级）。没有 GitHub 构建流水线（已删），构建与发布全在本地。
+产物：五个固定名（不带版本号）——Windows `release/KXToDo.exe`（GUI）+ `release/kxtodo-cli.exe`（CLI）；Android `release/KXToDo.apk`（覆盖安装不留历史包，已不再写 `.version` sidecar）；Linux `release/KXToDo.AppImage`（GUI）+ `release/kxtodo-cli`（CLI 裸二进制）。**仓库文件仍不写版本号**：GUI/CLI 二进制里的版本由 `build.rs` 构建期解析 git 注入 `KXTODO_VERSION`；AppImage 的版本经 `tauri build --config "{\"version\":\"$VERSION\"}"` 内联 JSON 注入，bundler 仍按官方 `productName_version_arch` 产出 `KXToDo_<版本>_amd64.AppImage`，`release.sh` 校验其含正确版本后改名成固定名 `KXToDo.AppImage`（bundle 由 `src-tauri/tauri.linux.conf.json` 平台覆盖启用，`targets` 仅 `appimage`）。构建入口分工：Windows/Android 走 `release.ps1` → `package.ps1`；Linux 走 `release.ps1 unix`，它经 `wsl.exe` 调 `scripts/wsl-linux-build.sh` 在 **WSL 原生克隆**（默认 `~/projects/kxtodo`，可用环境变量 `KXTODO_WSL_REPO` 覆盖）里同步到 Windows HEAD+tag → 跑 `release.sh` → 把 `KXToDo.AppImage`+`kxtodo-cli` 回拷到 Windows 的 `release/`（用原生克隆而非 /mnt/d：AppImage 打包在 ext4 上更快更稳；克隆有未提交跟踪改动时拒绝同步并告警跳过）。APK 的 versionName/versionCode 由 package.ps1 注入的 `KXTODO_VERSION` 环境变量进 gradle（versionCode = 900000000 + X*1000000 + Y*1000 + Z，基线高于旧构建的 8002001 保证升级不降级）。`publish.ps1` 每次**重建**五产物（先删旧产物避免误传上一版本，缺环境的平台告警跳过），确保 HEAD 带 tag（无则按提交主题当场打）后推送并 `gh release` 上传。没有 GitHub 构建流水线（已删），构建与发布全在本地。
 
 ## 环境坑位（Windows 开发必读）
 
@@ -106,14 +108,14 @@ node scripts/mobile-ux-test.mjs   # 移动端 UX 回归（playwright-core + 系�
 5. **tauri-plugin-window-state 默认管所有窗口**：动态 label 的窗口（通知窗 `notification-N` 按进程内计数器复用 label）会被恢复历史"不可见/旧位置"状态——曾导致通知窗建好了却看不见。必须用 `with_filter` 按前缀排除；主窗口可见性若由代码接管（conf `visible:false` + 前端 reveal），还要把 `StateFlags::VISIBLE` 从持久化里剥掉，否则恢复逻辑会绕过 reveal 提前显示窗口。
 6. **pwsh 5.1 写文件默认 GBK**：脚本里写中文文本一律 `[System.IO.File]::WriteAllText` + UTF-8 no-BOM。
 7. **裸 cargo 交叉检查 Android 目标需要 NDK clang 环境**：ureq/ring 是共享依赖后，`cargo check --target aarch64-linux-android` 会在 ring 的 cc-rs 构建脚本里找 clang 失败。gradle 的 rust 插件（`tauri android build`）会自己配好；手工 check 需导出：`PATH += $NDK_HOME/toolchains/llvm/prebuilt/windows-x86_64/bin`、`CC/CXX/AR_aarch64_linux_android=clang.exe/clang++.exe/llvm-ar.exe`、`CFLAGS/CXXFLAGS_aarch64_linux_android=--target=aarch64-linux-android24`。
-8. **Node 24 + vite 在 Windows 的退出期 libuv 断言 flake**：`npm run build` 可能已打印 `✓ built in Xs` 但进程退出时崩在 `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)`（exit -1073740791），package.ps1 会按约定报 "Frontend build failed"；`tauri android build` 的 beforeBuildCommand 再跑一次 npm 时同样会中。**偶发，直接重跑该目标即可**（产物以 release/ 下文件与 sidecar 为准）。另外：**跑 release/publish 脚本不要用 `| tail` 管道**——管道会把退出码掩成 0 造成"构建成功"误报，重定向到日志文件再 tail。
+8. **Node 24 + vite 在 Windows 的退出期 libuv 断言 flake**：`npm run build` 可能已打印 `✓ built in Xs` 但进程退出时崩在 `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)`（exit -1073740791），package.ps1 会按约定报 "Frontend build failed"；`tauri android build` 的 beforeBuildCommand 再跑一次 npm 时同样会中。**偶发，直接重跑该目标即可**（产物以 release/ 下文件为准）。另外：**跑 release/publish 脚本不要用 `| tail` 管道**——管道会把退出码掩成 0 造成"构建成功"误报，重定向到日志文件再 tail。
 
 ### Linux 开发坑位
 
 1. **官方 apt 依赖清单**：`sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev`。release.sh 启动时门控：pkg-config 查 `webkit2gtk-4.1` / `gtk+-3.0` / `librsvg-2.0` / `openssl`，appindicator 接受 `ayatana-appindicator3-0.1` **或** `appindicator3-0.1` 任一；**libxdo 例外**——Debian/Ubuntu 的 `libxdo-dev` 只装 `/usr/include/xdo.h` 不带 `libxdo.pc`，所以改查头文件 + `libxdo.so*`（有 .pc 时优先 pkg-config），否则会在装齐依赖的机器上误报缺库。缺库直接打印上面这行安装命令并退出。
 2. **裸 cargo 构建出 dev 模式制品（整窗白屏的真正根因）**：Tauri 的 dev/prod 由编译期 `custom-protocol` feature 决定（`tauri::is_dev() = !cfg!(feature = "custom-protocol")`），该 feature **只有 tauri CLI 构建时才会启用**。裸 `cargo build --release` 产出的二进制会去加载 `devUrl`（127.0.0.1:1420），没有 vite 服务时整窗空白——webview 的网络日志里能看到连 1420 的痕迹，极易误判为渲染/GPU 问题。Linux 制品一律走 `npx tauri build`（release.sh 已如此）；手工验证构建用同命令或显式 `cargo build --release --features tauri/custom-protocol`。WSLg 下 stderr 的 MESA ZINK / libEGL 警告与 Gtk-CRITICAL scale-factor 告警是渲染栈噪音，与白屏无关；个别 GPU 栈真遇渲染问题才手动 `export WEBKIT_DISABLE_DMABUF_RENDERER=1`（WebKit 官方开关）。
 3. **托盘依赖 appindicator 宿主**：GNOME 默认不显示托盘图标（需装 AppIndicator 扩展），WSLg 下基本不可见——因此 Linux 默认关闭 close-to-tray（关闭按钮直接退出应用），设置项仍可改回。
-4. **AppImage 运行需 FUSE**：WSL2 有 `/dev/fuse` 可直接跑；无 FUSE 的环境用 `./KXToDo_<版本>_amd64.AppImage --appimage-extract-and-run`。**首次构建**时 tauri CLI 会自动下载 linuxdeploy，需要网络（之后走缓存）。
+4. **AppImage 运行需 FUSE**：WSL2 有 `/dev/fuse` 可直接跑；无 FUSE 的环境用 `./KXToDo.AppImage --appimage-extract-and-run`。**首次构建**时 tauri CLI 会自动下载 linuxdeploy，需要网络（之后走缓存）。
 5. **cargo 在 Linux 直接可用**：`scripts/cargo-msvc.sh` 只是 Git Bash 下 `link.exe` 被遮蔽的解法，Linux 裸 cargo 即可；构建输出同样不要接 `| tail` 之类管道（掩退出码），release.sh 一律直通终端。
 6. **WSLg 的 XWayland 丢光标 + AppImage 强制 x11**：本机 WSLg 实测——任何 X11 客户端（连系统 GTK 探针程序）都看不见鼠标光标，Wayland 原生一切正常；而 AppImage 的 AppRun（linuxdeploy-plugin-gtk 钩子）为绕旧版 WebKitGTK 的 Wayland 崩溃（tauri#8541）强制 `GDK_BACKEND=x11`，正好踩进坏通路（表现：整窗交互正常但光标消失，连进程内原生 GTK 对话框也丢光标）。`run()` 在「APPDIR 存在 + WAYLAND_DISPLAY 存在 + GDK_BACKEND==x11」时撤掉该强制值回 Wayland 原生；纯 X11 会话保持 x11。若将来在旧 WebKitGTK 环境遇 Wayland 崩溃，重新评估这段撤销逻辑。
 
@@ -130,7 +132,7 @@ node scripts/mobile-ux-test.mjs   # 移动端 UX 回归（playwright-core + 系�
 7. **模块循环 TDZ 白屏**：platform↔stores/backend/capabilities 存在循环依赖，任何在模块顶层订阅 stores 的代码（如历史栈路由）会在启动时 ReferenceError 白屏（桌面+移动全平台）。订阅类初始化必须封装成函数由 App onMount 调用；验证手段：`node` 直接 eval 生产 bundle（配 DOM stub）能复现 TDZ，比肉眼看代码快。
 8. **移动端 UX 验证没有真机就用 Playwright 模拟**：`scripts/mobile-ux-test.mjs`（playwright-core + `channel:"msedge"`，Android UA + hasTouch + isMobile context 连 vite dev）。合成 PointerEvent（pointerType:"touch"）可驱动长按 action；浏览器 dev 走 localStorage legacy 路径，足够验证导航/菜单/设置页等纯前端逻辑。APK 原生侧（Kotlin 桥、安装器、返回键）只能靠代码评审 + `aapt dump badging` / `apksigner verify --print-certs` 核验产物元数据与签名。
 9. **签名与升级**：keystore 在 `src-tauri/gen/android/keystore/release.jks`（gitignore，密码 kxtodo，package.ps1 首跑自动生成）——**丢了它旧装就无法覆盖升级**。versionCode 公式 `900000000 + X*1000000 + Y*1000 + Z`（gradle 内），基线高于历史脏值 8002001；改公式前先确认单调递增，否则安装器报降级拒装。
-10. **APK 产物策略**：release 资产固定名 `KXToDo.apk`（不带版本，覆盖安装不留历史包），旁挂 `KXToDo.apk.version` sidecar 供 publish 识别旧产物；应用内更新 = 下载固定名到 cacheDir → 桥接 installApk 拉系统安装器，不做 shim/多版本/更新日志那套桌面逻辑。
+10. **APK 产物策略**：release 资产固定名 `KXToDo.apk`（不带版本，覆盖安装不留历史包）；应用内更新 = 下载固定名到 cacheDir → 桥接 installApk 拉系统安装器。桌面（Windows/Linux）更新同为“下载固定名制品→替换→重启”，不再做 shim/带版本旧包/更新日志那套；publish 每次重建三平台产物，已不再用 `.version` sidecar 识别旧产物。
 11. **图标同步**：`scripts/make-icon.py` 同时生成桌面 icons 与 android mipmap 五密度（launcher/round/foreground，foreground 按 108dp 画布 66% 安全区）；换 logo 后跑一次即全平台同步，package.ps1 每次构建前会自动跑。
 12. **通知**：移动端走 tauri-plugin-notification（Rust 注册插件 + capabilities/mobile.json 的 `notification:default` + Manifest `POST_NOTIFICATIONS`）；Android 13+ 需运行时权限，前端发送前 `isPermissionGranted/requestPermission`，拒绝则降级 Toast。桌面自绘通知窗逻辑不动。
 13. **能力门控优先于 isMobile 散落判断**：平台差异收敛到 `src/lib/capabilities.ts`（scheduler/trayLifecycle/globalShortcuts/windowZoom/popupNotificationWindow/systemNotifications/nativeFileDialogs/updateChannel/desktop）；Rust 侧对应 `#[cfg(desktop)]`/`#[cfg(not(desktop))]` 命令面。新增平台只扩这两处 + CSS 命名空间，不改业务组件。

@@ -1163,7 +1163,6 @@ fn app_version() -> String {
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UpdateApplyParams {
-    version: String,
     gui_url: String,
     cli_url: String,
 }
@@ -1245,91 +1244,129 @@ fn update_download_file(
     Ok(())
 }
 
-/// Windows shim 换链脚本：等本进程退出 → 删旧稳定名 → 硬链接到新版本 → 重启。
-/// 删名最多等 15 秒（防其他 kxtodo 进程短暂占用），失败细节写 kxtodo-update.log。
+/// Windows 换文件脚本：等本进程退出 → 删旧固定名产物 → 把 .new 暂存文件改名就位 → 重启 → 自删。
+/// 删名/改名各最多等 15 秒（防其他 kxtodo 进程短暂占用）。产物固定名不带版本号，也不写任何更新日志。
 #[cfg(all(desktop, windows))]
-fn write_update_bat(dir: &std::path::Path, pid: u32, version: &str) -> Result<PathBuf, String> {
+fn write_update_bat(dir: &std::path::Path, pid: u32) -> Result<PathBuf, String> {
     let bat = dir.join("kxtodo-update.bat");
     let script = format!(
-        "@echo off\r\ncd /d \"{dir}\"\r\nset LOG=kxtodo-update.log\r\necho [%date% %time%] update to {version} (pid {pid}) > \"%LOG%\"\r\n:wait\r\ntasklist /FI \"PID eq {pid}\" | findstr /C:\" {pid} \" >nul\r\nif %errorlevel%==0 (timeout /t 1 /nobreak >nul & goto wait)\r\nfor /l %%i in (1,1,15) do (\r\n  if not exist \"KXToDo.exe\" goto linkgui\r\n  del /f /q \"KXToDo.exe\" >nul 2>&1\r\n  timeout /t 1 /nobreak >nul\r\n)\r\n:linkgui\r\nmklink /H \"KXToDo.exe\" \"KXToDo-{version}.exe\" >> \"%LOG%\" 2>&1\r\nfor /l %%i in (1,1,15) do (\r\n  if not exist \"kxtodo-cli.exe\" goto linkcli\r\n  del /f /q \"kxtodo-cli.exe\" >nul 2>&1\r\n  timeout /t 1 /nobreak >nul\r\n)\r\n:linkcli\r\nmklink /H \"kxtodo-cli.exe\" \"KXToDo-CLI-{version}.exe\" >> \"%LOG%\" 2>&1\r\necho [%date% %time%] links done, start KXToDo.exe >> \"%LOG%\"\r\nstart \"\" \"KXToDo.exe\"\r\ndel \"%~f0\"\r\n",
+        "@echo off\r\ncd /d \"{dir}\"\r\n:wait\r\ntasklist /FI \"PID eq {pid}\" | findstr /C:\" {pid} \" >nul\r\nif %errorlevel%==0 (timeout /t 1 /nobreak >nul & goto wait)\r\nfor /l %%i in (1,1,15) do (\r\n  if not exist \"KXToDo.exe\" goto movegui\r\n  del /f /q \"KXToDo.exe\" >nul 2>&1\r\n  timeout /t 1 /nobreak >nul\r\n)\r\n:movegui\r\nmove /y \"KXToDo.exe.new\" \"KXToDo.exe\" >nul 2>&1\r\nfor /l %%i in (1,1,15) do (\r\n  if not exist \"kxtodo-cli.exe\" goto movecli\r\n  del /f /q \"kxtodo-cli.exe\" >nul 2>&1\r\n  timeout /t 1 /nobreak >nul\r\n)\r\n:movecli\r\nmove /y \"kxtodo-cli.exe.new\" \"kxtodo-cli.exe\" >nul 2>&1\r\nstart \"\" \"KXToDo.exe\"\r\ndel \"%~f0\"\r\n",
         dir = dir.display(),
-        pid = pid,
-        version = version
+        pid = pid
     );
     fs::write(&bat, script).map_err(|error| format!("写入更新脚本失败：{error}"))?;
     Ok(bat)
 }
 
+/// Linux 更新制品目录：$XDG_DATA_HOME/kxtodo/bin，缺省回退 ~/.local/share/kxtodo/bin。
+/// 与数据目录（kxtodo/todo-note-data）同一数据根，是 GUI/CLI 的规范安装位置。
 #[cfg(all(desktop, not(windows)))]
-fn stage_unix_shims(dir: &std::path::Path, version: &str) -> Result<(), String> {
-    use std::os::unix::fs::symlink;
-    for (link, target) in [
-        ("kxtodo", format!("KXToDo-{version}")),
-        ("kxtodo-cli", format!("KXToDo-CLI-{version}")),
-    ] {
-        let link_path = dir.join(link);
-        let tmp = dir.join(format!(".{link}.link"));
-        let _ = fs::remove_file(&tmp);
-        symlink(dir.join(&target), &tmp)
-            .map_err(|error| format!("创建 {link} 软链接失败：{error}"))?;
-        fs::rename(&tmp, &link_path)
-            .map_err(|error| format!("替换 {link} 软链接失败：{error}"))?;
-    }
-    Ok(())
+fn linux_update_bin_dir() -> Result<PathBuf, String> {
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local").join("share"))
+        })
+        .ok_or_else(|| "无法定位 ~/.local/share（XDG_DATA_HOME 与 HOME 均未设置）".to_string())?;
+    Ok(base.join("kxtodo").join("bin"))
+}
+
+/// 桌面更新应用结果：决定命令层是自动退出重启，还是提示用户手动重启。
+#[cfg(desktop)]
+enum UpdateOutcome {
+    /// 新实例已/将被拉起，本进程应退出。
+    Restarting,
+    /// 制品已替换但无法自动拉起（如 Linux AppImage 启动失败），提示用户手动重启。
+    /// 仅非 Windows 桌面会构造（Windows 一律走 bat 自动重启），故对 Windows 构建放行 dead_code。
+    #[allow(dead_code)]
+    ManualRestart(String),
 }
 
 #[cfg(desktop)]
-fn run_update(
-    app: &AppHandle,
-    dir: &std::path::Path,
-    params: &UpdateApplyParams,
-) -> Result<(), String> {
+fn run_update(app: &AppHandle, params: &UpdateApplyParams) -> Result<UpdateOutcome, String> {
     let agent = update_agent();
-    let gui_dest = dir.join(format!("KXToDo-{}.exe", params.version));
-    let cli_dest = dir.join(format!("KXToDo-CLI-{}.exe", params.version));
-    update_download_file(app, &agent, "GUI", &params.gui_url, &gui_dest)?;
-    update_download_file(app, &agent, "CLI", &params.cli_url, &cli_dest)?;
-    // 自检：错误页/JSON 响应体积远小于真实产物，拦下明显存坏的下载。
-    for (stage, path) in [("GUI", &gui_dest), ("CLI", &cli_dest)] {
-        let size = fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
-        if size < 64 * 1024 {
-            return Err(format!("{stage} 更新包异常（仅 {size} 字节），已中止"));
-        }
-    }
+
     #[cfg(windows)]
     {
-        // CREATE_NO_WINDOW：cmd 拿到一个不可见控制台跑完整个 bat，更新重启全程无黑窗
-        // （旧的 `cmd /c start /min` 会先为外层 cmd 弹一个可见控制台，再留一个最小化窗口）。
-        // bat 内容不变：`timeout` 等待、`start "" "KXToDo.exe"`（GUI 子系统目标不分配
-        // 控制台，不会重新开窗）、`del "%~f0"` 自删（纯文件操作，与控制台可见性无关）
-        // 在不可见控制台下行为一致（已实测 timeout 正常计时）。
+        // Windows：下载到 exe 同目录的 .new 暂存文件（运行中的 KXToDo.exe 被锁定，不能直接覆盖），
+        // 由 bat 等本进程退出后删旧、把 .new 改名就位并重启。产物固定名不带版本号，也不写更新日志。
+        let dir = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
+            .ok_or_else(|| "无法定位程序目录".to_string())?;
+        let gui_dest = dir.join("KXToDo.exe.new");
+        let cli_dest = dir.join("kxtodo-cli.exe.new");
+        update_download_file(app, &agent, "GUI", &params.gui_url, &gui_dest)?;
+        update_download_file(app, &agent, "CLI", &params.cli_url, &cli_dest)?;
+        // 自检：错误页/JSON 响应体积远小于真实产物，拦下明显存坏的下载。
+        for (stage, path) in [("GUI", &gui_dest), ("CLI", &cli_dest)] {
+            let size = fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
+            if size < 64 * 1024 {
+                return Err(format!("{stage} 更新包异常（仅 {size} 字节），已中止"));
+            }
+        }
+        // CREATE_NO_WINDOW：cmd 拿到一个不可见控制台跑完整个 bat，更新重启全程无黑窗。
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let bat = write_update_bat(dir, std::process::id(), &params.version)?;
+        let bat = write_update_bat(&dir, std::process::id())?;
         std::process::Command::new("cmd")
             .arg("/c")
             .arg(&bat)
             .creation_flags(CREATE_NO_WINDOW)
             .spawn()
             .map_err(|error| format!("无法启动更新脚本：{error}"))?;
+        return Ok(UpdateOutcome::Restarting);
     }
+
     #[cfg(not(windows))]
     {
-        stage_unix_shims(dir, &params.version)?;
-        std::process::Command::new(dir.join("kxtodo"))
+        // Linux：下载固定名 KXToDo.AppImage + kxtodo-cli 到 ~/.local/share/kxtodo/bin 替换，
+        // 再尝试拉起新 AppImage；成功则本进程退出（新实例接管），失败则提示用户手动重启。
+        use std::os::unix::fs::PermissionsExt;
+        let bin = linux_update_bin_dir()?;
+        fs::create_dir_all(&bin)
+            .map_err(|error| format!("无法创建 {}：{error}", bin.display()))?;
+        let gui_dest = bin.join("KXToDo.AppImage");
+        let cli_dest = bin.join("kxtodo-cli");
+        update_download_file(app, &agent, "GUI", &params.gui_url, &gui_dest)?;
+        update_download_file(app, &agent, "CLI", &params.cli_url, &cli_dest)?;
+        // 自检：错误页/JSON 响应体积远小于真实产物，拦下明显存坏的下载。
+        for (stage, path) in [("GUI", &gui_dest), ("CLI", &cli_dest)] {
+            let size = fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
+            if size < 64 * 1024 {
+                return Err(format!("{stage} 更新包异常（仅 {size} 字节），已中止"));
+            }
+        }
+        // AppImage 与 CLI 都要可执行位，否则 spawn / 用户直接跑会 EACCES。
+        for path in [&gui_dest, &cli_dest] {
+            let mut perms = fs::metadata(path)
+                .map(|meta| meta.permissions())
+                .map_err(|error| format!("读取 {} 权限失败：{error}", path.display()))?;
+            perms.set_mode(0o755);
+            fs::set_permissions(path, perms)
+                .map_err(|error| format!("设置 {} 可执行位失败：{error}", path.display()))?;
+        }
+        // 脱离终端拉起新 AppImage；本进程退出后新实例由 init 接管。
+        match std::process::Command::new(&gui_dest)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .spawn()
-            .map_err(|error| format!("无法重启应用：{error}"))?;
+        {
+            Ok(_) => Ok(UpdateOutcome::Restarting),
+            Err(error) => Ok(UpdateOutcome::ManualRestart(format!(
+                "已下载新版本到 {}，自动重启失败（{error}），请手动重启应用完成更新",
+                bin.display()
+            ))),
+        }
     }
-    Ok(())
 }
 
-/// 下载 GUI + CLI 到 exe 目录，布置 shim 与重启（后台线程执行，进度走事件）。
+/// 下载 GUI + CLI（固定名制品）替换并重启（后台线程执行，进度走事件）。
 #[cfg(desktop)]
 #[tauri::command]
-fn update_download_and_apply(
-    app: AppHandle,
-    params: UpdateApplyParams,
-) -> Result<(), String> {
+fn update_download_and_apply(app: AppHandle, params: UpdateApplyParams) -> Result<(), String> {
     for url in [&params.gui_url, &params.cli_url] {
         if !url.starts_with("https://github.com/wddjwk/kxtodo/releases/download/")
             && !url.starts_with("https://objects.githubusercontent.com/")
@@ -1337,14 +1374,18 @@ fn update_download_and_apply(
             return Err(format!("更新地址不受信任：{url}"));
         }
     }
-    let dir = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
-        .ok_or_else(|| "无法定位程序目录".to_string())?;
-    std::thread::spawn(move || match run_update(&app, &dir, &params) {
-        Ok(()) => {
+    std::thread::spawn(move || match run_update(&app, &params) {
+        Ok(UpdateOutcome::Restarting) => {
             update_emit(&app, "update://applied", serde_json::json!({}));
             let _ = app.exit(0);
+        }
+        Ok(UpdateOutcome::ManualRestart(message)) => {
+            // 制品已替换但无法自动拉起：通知前端提示手动重启，本进程不退出。
+            update_emit(
+                &app,
+                "update://applied",
+                serde_json::json!({ "manualRestart": true, "message": message }),
+            );
         }
         Err(message) => {
             update_emit(&app, "update://failed", serde_json::json!({ "message": message }));

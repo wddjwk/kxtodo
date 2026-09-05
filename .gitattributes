@@ -1,0 +1,4 @@
+# Shell scripts must keep LF endings: scripts/wsl-linux-build.sh is executed by bash
+# straight from the Windows working tree via `wsl.exe ... /mnt/d/...`, and release.sh
+# runs inside WSL. Under core.autocrlf=true a CRLF checkout would break them ($'\r' errors).
+*.sh text eol=lf

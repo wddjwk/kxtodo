@@ -608,34 +608,20 @@ pub fn gui_exe_name() -> &'static str {
     }
 }
 
-/// Windows 发布目录里 GUI 产物是带版本号的 KXToDo-<ver>.exe（CLI 是 KXToDo-CLI-<ver>.exe），
-/// 依次尝试：kxtodo.exe（开发/同目录标准名）→ 版本号最大的 KXToDo-*.exe。
-/// Linux 以 AppImage 分发，不存在带版本裸产物：只认稳定名 kxtodo
-/// （用户将 AppImage 或 GUI 二进制软链为 CLI 同目录的 kxtodo）。
+/// 在 CLI 同目录里找 GUI 产物（均为固定名，不带版本号）：
+/// - Windows：kxtodo.exe（即发布产物 KXToDo.exe，大小写不敏感命中）。
+/// - Linux：先认稳定名 kxtodo（用户可把 AppImage 软链为它），再认发布产物 KXToDo.AppImage 本身
+///   （应用内更新会把 KXToDo.AppImage 与 kxtodo-cli 一并下载到 ~/.local/share/kxtodo/bin）。
 fn find_gui_exe(dir: &Path) -> Option<PathBuf> {
     let plain = dir.join(gui_exe_name());
     if crate::exec::is_executable_file(&plain) {
         return Some(plain);
     }
-    #[cfg(windows)]
+    #[cfg(target_os = "linux")]
     {
-        let mut candidates: Vec<PathBuf> = std::fs::read_dir(dir)
-            .ok()?
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.extension().and_then(|ext| ext.to_str()) == Some("exe")
-                    && path
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .map(|name| name.starts_with("KXToDo-") && !name.starts_with("KXToDo-CLI-"))
-                        .unwrap_or(false)
-            })
-            .collect();
-        // 版本号最大的优先（文件名降序即可，版本段是数字点分且等宽场景足够）。
-        candidates.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
-        if let Some(found) = candidates.into_iter().next() {
-            return Some(found);
+        let appimage = dir.join("KXToDo.AppImage");
+        if crate::exec::is_executable_file(&appimage) {
+            return Some(appimage);
         }
     }
     None
@@ -658,9 +644,9 @@ fn gui_exe_path() -> CoreResult<PathBuf> {
             format!("未找到 GUI 程序（{}）", dir.join(gui_exe_name()).display()),
         )
         .with_hint(if cfg!(windows) {
-            "notify / schedule run 需要 GUI 承担 Background Host：将 kxtodo.exe（或 KXToDo-<版本>.exe）与 kxtodo-cli.exe 放在同一目录"
+            "notify / schedule run 需要 GUI 承担 Background Host：将 KXToDo.exe 与 kxtodo-cli.exe 放在同一目录"
         } else {
-            "notify / schedule run 需要 GUI 承担 Background Host：将 AppImage（或 GUI 二进制）软链为 kxtodo，与 kxtodo-cli 放在同一目录"
+            "notify / schedule run 需要 GUI 承担 Background Host：将 KXToDo.AppImage 与 kxtodo-cli 放在同一目录（或把 AppImage 软链为 kxtodo）"
         })),
     }
 }

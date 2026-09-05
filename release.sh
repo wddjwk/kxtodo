@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # ./release.sh 构建 Linux 制品（AppImage + CLI）；版本号取 git，构建期经 --config 注入，不写入任何文件。
 #
-# 产物（官方 Tauri bundler 标准流程）：
-#   release/KXToDo_<版本>_amd64.AppImage   —— npx tauri build --bundles appimage（GUI）
-#   release/KXToDo-CLI-<版本>-gnu          —— cargo build --release -p kxtodo-cli（CLI 裸二进制）
+# 产物（固定命名，不带版本号；官方 Tauri bundler 标准流程）：
+#   release/KXToDo.AppImage   —— npx tauri build --bundles appimage（GUI，bundler 产物校验版本后改固定名）
+#   release/kxtodo-cli        —— cargo build --release -p kxtodo-cli（CLI 裸二进制）
 #
 # 前置（官方 v2.tauri.app Linux 依赖清单，release.sh 会用 pkg-config 门控）：
 #   sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 # AppImage 运行需要 FUSE；首次构建 tauri CLI 会自动下载 linuxdeploy，需要网络。
-# Linux 不做应用内更新（前端 updateChannel "none"），用户从 GitHub Releases 下载新 AppImage。
+# Linux 应用内更新：GUI 下载新的 KXToDo.AppImage + kxtodo-cli 到 ~/.local/share/kxtodo/bin/ 替换后重启。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -161,11 +161,10 @@ if ! cargo build --release --manifest-path src-tauri/Cargo.toml -p kxtodo-cli; t
   exit 1
 fi
 
-# ---------- 收集产物 ----------
+# ---------- 收集产物（固定命名，不带版本号） ----------
 mkdir -p release
-appimage_out="release/$appimage_name"
-# "-gnu" 是文件名一部分不是扩展名，Linux 二进制无扩展名。
-cli_out="release/KXToDo-CLI-$VERSION-gnu"
+appimage_out="release/KXToDo.AppImage"
+cli_out="release/kxtodo-cli"
 cp -f "$appimage_src" "$appimage_out"
 cp -f "$CARGO_TARGET_DIR/release/kxtodo-cli" "$cli_out"
 chmod +x "$appimage_out" "$cli_out"

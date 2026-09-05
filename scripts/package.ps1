@@ -1,5 +1,5 @@
-﻿param(
-  [ValidateSet("all", "windows", "android")]
+param(
+  [ValidateSet("all", "windows", "android", "unix", "linux")]
   [string]$Targets = "all",
   [switch]$Log
 )
@@ -36,27 +36,16 @@ function Get-GitVersion {
 }
 $script:GitVersion = Get-GitVersion
 
-# MSVC 环境自举：cl.exe 不在 PATH 时，尝试从本机已知的 setup bat 导入环境变量。
-if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
-  $msvcSetup = "D:\env\MSVC\msvc\setup_x64.bat"
-  if (Test-Path -LiteralPath $msvcSetup) {
-    Write-Host "cl.exe not in PATH; importing MSVC environment from $msvcSetup" -ForegroundColor DarkGray
-    cmd /c "`"$msvcSetup`" >nul 2>&1 && set" | ForEach-Object {
-      if ($_ -match "^([^=]+)=(.*)$") {
-        [Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
-      }
-    }
-  } else {
-    Write-Warning "cl.exe not found in PATH and no known MSVC setup script; the Rust build may fail."
-  }
-}
-
 $env:CARGO_HOME = Join-Path $root ".cargo-home"
 $env:CARGO_TARGET_DIR = Join-Path $root "src-tauri\target"
 New-Item -ItemType Directory -Force -Path $env:CARGO_HOME | Out-Null
 
 $buildWindows = $Targets -eq "all" -or $Targets -eq "windows"
 $buildAndroid = $Targets -eq "all" -or $Targets -eq "android"
+$buildUnix = $Targets -eq "all" -or $Targets -eq "unix" -or $Targets -eq "linux"
+
+$built = New-Object System.Collections.Generic.List[string]
+$skipped = New-Object System.Collections.Generic.List[string]
 
 $releaseDir = Join-Path $root "release"
 New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
@@ -75,125 +64,218 @@ if ($Log) {
   Write-Host "Logging build output to $logFile" -ForegroundColor Cyan
 }
 
-try {
-  # 无条件执行 npm install：有 lockfile 时很快，且保证新依赖（如 @tauri-apps/plugin-notification）就位。
-  npm install
-  if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
+$effectiveVersion = $script:GitVersion
+Write-Host "==> 版本：$effectiveVersion（目标：$Targets）" -ForegroundColor Cyan
 
-  # Regenerate app icons from logo.png so swapping logo.png + repackaging just works.
-  # Best-effort: requires Python with Pillow. If unavailable, the committed icons are used.
-  $logoPath = Join-Path $root "logo.png"
-  if (Test-Path -LiteralPath $logoPath) {
-    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
-    if ($pythonCmd) {
-      & $pythonCmd.Source (Join-Path $root "scripts\make-icon.py")
-      if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Icon regeneration skipped (Pillow not available). Using committed icons."
+try {
+  # -------------------------------------------------------------------------
+  # 前端准备（Windows / Android 共用；Linux 在 WSL 原生克隆里自行 npm install/build）
+  # -------------------------------------------------------------------------
+  if ($buildWindows -or $buildAndroid) {
+    $prepOk = $true
+    try {
+      # 无条件执行 npm install：有 lockfile 时很快，且保证新依赖就位。
+      npm install
+      if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
+
+      # 从 logo.png 再生成图标（尽力而为：需要 Python + Pillow，缺则沿用已提交图标）。
+      $logoPath = Join-Path $root "logo.png"
+      if (Test-Path -LiteralPath $logoPath) {
+        $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+        if ($pythonCmd) {
+          & $pythonCmd.Source (Join-Path $root "scripts\make-icon.py")
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Icon regeneration skipped (Pillow not available). Using committed icons."
+          }
+        } else {
+          Write-Warning "Python not found; skipping icon regeneration. Using committed icons."
+        }
       }
-    } else {
-      Write-Warning "Python not found; skipping icon regeneration. Using committed icons."
+
+      npm run build
+      if ($LASTEXITCODE -ne 0) { throw "Frontend build failed" }
+    } catch {
+      Write-Warning "前端准备失败，跳过 Windows/Android 构建：$_"
+      $prepOk = $false
+    }
+    if (-not $prepOk) {
+      if ($buildWindows) { $skipped.Add("windows") }
+      if ($buildAndroid) { $skipped.Add("android") }
+      $buildWindows = $false
+      $buildAndroid = $false
     }
   }
 
-  npm run build
-  if ($LASTEXITCODE -ne 0) { throw "Frontend build failed" }
-
-  $effectiveVersion = $script:GitVersion
+  # -------------------------------------------------------------------------
+  # MSVC 环境自举（仅 Windows）：cl.exe 不在 PATH 时尝试从本机 setup bat 导入。
+  # -------------------------------------------------------------------------
+  if ($buildWindows -and -not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
+    $msvcSetup = "D:\env\MSVC\msvc\setup_x64.bat"
+    if (Test-Path -LiteralPath $msvcSetup) {
+      Write-Host "cl.exe not in PATH; importing MSVC environment from $msvcSetup" -ForegroundColor DarkGray
+      cmd /c "`"$msvcSetup`" >nul 2>&1 && set" | ForEach-Object {
+        if ($_ -match "^([^=]+)=(.*)$") {
+          [Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
+        }
+      }
+    }
+    if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
+      Write-Warning "未找到 MSVC（cl.exe），跳过 Windows 构建"
+      $skipped.Add("windows")
+      $buildWindows = $false
+    }
+  }
 
   # -------------------------------------------------------------------------
-  # Windows desktop build
+  # Windows desktop build（固定名 KXToDo.exe + kxtodo-cli.exe）
   # -------------------------------------------------------------------------
   if ($buildWindows) {
-    Write-Host "==> Building Windows GUI binary (kxtodo.exe)..." -ForegroundColor Cyan
-    $binaryPath = Join-Path $root "src-tauri\target\release\kxtodo.exe"
-    Remove-Item -LiteralPath $binaryPath -Force -ErrorAction SilentlyContinue
-    npx tauri build --no-bundle $verboseFlag
-    if ($LASTEXITCODE -ne 0) { throw "Windows GUI build failed" }
+    try {
+      Write-Host "==> Building Windows GUI (KXToDo.exe)..." -ForegroundColor Cyan
+      $binaryPath = Join-Path $root "src-tauri\target\release\kxtodo.exe"
+      Remove-Item -LiteralPath $binaryPath -Force -ErrorAction SilentlyContinue
+      npx tauri build --no-bundle $verboseFlag
+      if ($LASTEXITCODE -ne 0) { throw "Windows GUI build failed" }
+      Copy-Item -LiteralPath $binaryPath -Destination (Join-Path $releaseDir "KXToDo.exe") -Force
 
-    $releaseBinary = Join-Path $releaseDir "KXToDo-$effectiveVersion.exe"
-    Copy-Item -LiteralPath $binaryPath -Destination $releaseBinary -Force
-    Write-Host "Built Windows GUI binary: $releaseBinary" -ForegroundColor Green
+      Write-Host "==> Building Windows CLI (kxtodo-cli.exe)..." -ForegroundColor Cyan
+      $cliBinaryPath = Join-Path $root "src-tauri\target\release\kxtodo-cli.exe"
+      Remove-Item -LiteralPath $cliBinaryPath -Force -ErrorAction SilentlyContinue
+      cargo build --release -p kxtodo-cli --manifest-path (Join-Path $root "src-tauri\Cargo.toml")
+      if ($LASTEXITCODE -ne 0) { throw "Windows CLI build failed" }
+      Copy-Item -LiteralPath $cliBinaryPath -Destination (Join-Path $releaseDir "kxtodo-cli.exe") -Force
 
-    Write-Host "==> Building Windows CLI binary (kxtodo-cli.exe)..." -ForegroundColor Cyan
-    $cliBinaryPath = Join-Path $root "src-tauri\target\release\kxtodo-cli.exe"
-    Remove-Item -LiteralPath $cliBinaryPath -Force -ErrorAction SilentlyContinue
-    cargo build --release -p kxtodo-cli --manifest-path (Join-Path $root "src-tauri\Cargo.toml")
-    if ($LASTEXITCODE -ne 0) { throw "Windows CLI build failed" }
-
-    $releaseCliBinary = Join-Path $releaseDir "KXToDo-CLI-$effectiveVersion.exe"
-    Copy-Item -LiteralPath $cliBinaryPath -Destination $releaseCliBinary -Force
-    Write-Host "Built Windows CLI binary: $releaseCliBinary" -ForegroundColor Green
+      $built.Add("windows")
+      Write-Host "Built Windows: KXToDo.exe + kxtodo-cli.exe" -ForegroundColor Green
+    } catch {
+      Write-Warning "Windows 构建失败，跳过：$_"
+      $skipped.Add("windows")
+    }
   }
 
   # -------------------------------------------------------------------------
-  # Android build (APK)
+  # Android build（固定名 KXToDo.apk，覆盖安装不留历史包）
   # -------------------------------------------------------------------------
   if ($buildAndroid) {
-    Write-Host "==> Building Android APK..." -ForegroundColor Cyan
-
     if (-not $env:ANDROID_HOME) {
-      throw "ANDROID_HOME is not set. Install the Android SDK and set ANDROID_HOME before building Android."
-    }
-    if (-not $env:NDK_HOME -and -not $env:ANDROID_NDK_HOME) {
-      Write-Warning "NDK_HOME is not set; Tauri will try to auto-detect an installed NDK."
-    }
+      Write-Warning "ANDROID_HOME 未设置，跳过 Android 构建"
+      $skipped.Add("android")
+    } else {
+      try {
+        Write-Host "==> Building Android APK..." -ForegroundColor Cyan
+        if (-not $env:NDK_HOME -and -not $env:ANDROID_NDK_HOME) {
+          Write-Warning "NDK_HOME is not set; Tauri will try to auto-detect an installed NDK."
+        }
 
-    # Ensure the Android Rust targets are installed (idempotent).
-    rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android | Out-Null
+        # Ensure the Android Rust targets are installed (idempotent).
+        rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android | Out-Null
 
-    # Initialise the Gradle project on first run.
-    if (-not (Test-Path -LiteralPath (Join-Path $root "src-tauri\gen\android"))) {
-      Write-Host "Android project not found; running 'tauri android init'..." -ForegroundColor Yellow
-      npx tauri android init
-      if ($LASTEXITCODE -ne 0) { throw "tauri android init failed" }
-    }
+        # Initialise the Gradle project on first run.
+        if (-not (Test-Path -LiteralPath (Join-Path $root "src-tauri\gen\android"))) {
+          Write-Host "Android project not found; running 'tauri android init'..." -ForegroundColor Yellow
+          npx tauri android init
+          if ($LASTEXITCODE -ne 0) { throw "tauri android init failed" }
+        }
 
-    # Ensure Android signing keystore exists (auto-generate on first run).
-    $keystoreDir = Join-Path $root "src-tauri\gen\android\keystore"
-    $keystoreFile = Join-Path $keystoreDir "release.jks"
-    if (-not (Test-Path -LiteralPath $keystoreFile)) {
-      New-Item -ItemType Directory -Force -Path $keystoreDir | Out-Null
-      $keytool = Get-Command keytool -ErrorAction SilentlyContinue
-      if (-not $keytool) {
-        throw "keytool not found. Install the JDK and ensure JAVA_HOME or keytool is in PATH."
+        # Ensure Android signing keystore exists (auto-generate on first run).
+        $keystoreDir = Join-Path $root "src-tauri\gen\android\keystore"
+        $keystoreFile = Join-Path $keystoreDir "release.jks"
+        if (-not (Test-Path -LiteralPath $keystoreFile)) {
+          New-Item -ItemType Directory -Force -Path $keystoreDir | Out-Null
+          $keytool = Get-Command keytool -ErrorAction SilentlyContinue
+          if (-not $keytool) {
+            throw "keytool not found. Install the JDK and ensure JAVA_HOME or keytool is in PATH."
+          }
+          & $keytool.Source -genkey -v `
+            -keystore $keystoreFile `
+            -storepass kxtodo `
+            -alias kxtodo `
+            -keypass kxtodo `
+            -keyalg RSA -keysize 2048 -validity 10000 `
+            -dname "CN=KXToDo, O=KXToDo, C=CN" 2>&1 | Out-Null
+          Write-Host "Generated Android signing keystore: $keystoreFile" -ForegroundColor Green
+        }
+
+        # 版本号唯一来源是 git：gradle 读取 KXTODO_VERSION 环境变量生成 versionName/versionCode。
+        $env:KXTODO_VERSION = $effectiveVersion
+
+        npx tauri android build --apk $verboseFlag
+        if ($LASTEXITCODE -ne 0) { throw "Android build failed" }
+
+        $apkSearchRoot = Join-Path $root "src-tauri\gen\android\app\build\outputs\apk"
+        $apk = Get-ChildItem -Path $apkSearchRoot -Recurse -Filter "*.apk" -ErrorAction SilentlyContinue |
+          Sort-Object LastWriteTime -Descending |
+          Select-Object -First 1
+        if (-not $apk) {
+          throw "Android build completed but no APK was found under $apkSearchRoot"
+        }
+        Copy-Item -LiteralPath $apk.FullName -Destination (Join-Path $releaseDir "KXToDo.apk") -Force
+
+        $built.Add("android")
+        Write-Host "Built Android APK: KXToDo.apk" -ForegroundColor Green
+      } catch {
+        Write-Warning "Android 构建失败，跳过：$_"
+        $skipped.Add("android")
       }
-      & $keytool.Source -genkey -v `
-        -keystore $keystoreFile `
-        -storepass kxtodo `
-        -alias kxtodo `
-        -keypass kxtodo `
-        -keyalg RSA -keysize 2048 -validity 10000 `
-        -dname "CN=KXToDo, O=KXToDo, C=CN" 2>&1 | Out-Null
-      Write-Host "Generated Android signing keystore: $keystoreFile" -ForegroundColor Green
     }
-
-    # 版本号唯一来源是 git：gradle 读取 KXTODO_VERSION 环境变量生成 versionName/versionCode。
-    $env:KXTODO_VERSION = $effectiveVersion
-
-    npx tauri android build --apk $verboseFlag
-    if ($LASTEXITCODE -ne 0) { throw "Android build failed" }
-
-    $apkSearchRoot = Join-Path $root "src-tauri\gen\android\app\build\outputs\apk"
-    $apk = Get-ChildItem -Path $apkSearchRoot -Recurse -Filter "*.apk" -ErrorAction SilentlyContinue |
-      Sort-Object LastWriteTime -Descending |
-      Select-Object -First 1
-    if (-not $apk) {
-      throw "Android build completed but no APK was found under $apkSearchRoot"
-    }
-
-    # 发布资产固定命名 KXToDo.apk（安卓覆盖安装，不留历史版本包）；
-    # sidecar 记录本次构建版本，供 publish.ps1 识别同名旧产物。
-    $releaseApk = Join-Path $releaseDir "KXToDo.apk"
-    Copy-Item -LiteralPath $apk.FullName -Destination $releaseApk -Force
-    [System.IO.File]::WriteAllText(
-      (Join-Path $releaseDir "KXToDo.apk.version"),
-      $effectiveVersion,
-      [System.Text.UTF8Encoding]::new($false)
-    )
-    Write-Host "Built Android APK: $releaseApk" -ForegroundColor Green
   }
 
-  Write-Host "Done. Artifacts are in $releaseDir" -ForegroundColor Green
+  # -------------------------------------------------------------------------
+  # Linux build（经 WSL 在原生克隆里构建，产物回拷 release/KXToDo.AppImage + kxtodo-cli）
+  # 环境未就绪（无 wsl.exe / 无原生克隆 / 克隆脏）或构建失败 → 告警跳过，不终止其它平台。
+  # -------------------------------------------------------------------------
+  if ($buildUnix) {
+    try {
+      $wslCmd = Get-Command wsl.exe -ErrorAction SilentlyContinue
+      if (-not $wslCmd) { throw "未找到 wsl.exe（Windows 未启用 WSL）" }
+
+      $savedEap = $ErrorActionPreference
+      $ErrorActionPreference = "Continue"
+      $probe = (& wsl.exe -e bash -lc "echo __wsl_ok__" 2>$null) -join ""
+      $ErrorActionPreference = $savedEap
+      if ($probe -notmatch "__wsl_ok__") { throw "WSL 默认发行版不可用" }
+
+      $winRepoWsl = (((& wsl.exe -e wslpath -u "$root") -join "") -replace "\r", "").Trim()
+      if (-not $winRepoWsl) { throw "无法解析 Windows 仓库的 WSL 路径" }
+      $nativeRepo = if ($env:KXTODO_WSL_REPO) { $env:KXTODO_WSL_REPO } else { "~/projects/kxtodo" }
+      $headSha = ((git rev-parse HEAD) -join "").Trim()
+      if (-not $headSha) { throw "无法取得 Windows 仓库 HEAD SHA" }
+      $linuxScript = "$winRepoWsl/scripts/wsl-linux-build.sh"
+
+      Write-Host "==> Building Linux via WSL（原生克隆 $nativeRepo @ $($headSha.Substring(0, [Math]::Min(12, $headSha.Length)))）..." -ForegroundColor Cyan
+      # 用登录 shell（-lc）保证 cargo/npm/node 的 PATH；构建输出直通控制台。
+      # 局部降级 ErrorActionPreference：WSL 会经 stderr 输出大量构建日志，避免被当成终止性错误。
+      $savedEap2 = $ErrorActionPreference
+      $ErrorActionPreference = "Continue"
+      & wsl.exe -e bash -lc "bash '$linuxScript' '$winRepoWsl' '$nativeRepo' '$headSha'"
+      $wslExit = $LASTEXITCODE
+      $ErrorActionPreference = $savedEap2
+      if ($wslExit -ne 0) { throw "WSL Linux 构建退出码 $wslExit（详见上方日志）" }
+
+      $appimage = Join-Path $releaseDir "KXToDo.AppImage"
+      $linuxCli = Join-Path $releaseDir "kxtodo-cli"
+      if (-not (Test-Path -LiteralPath $appimage) -or -not (Test-Path -LiteralPath $linuxCli)) {
+        throw "Linux 产物缺失（release/KXToDo.AppImage 或 release/kxtodo-cli）"
+      }
+
+      $built.Add("unix")
+      Write-Host "Built Linux: KXToDo.AppImage + kxtodo-cli" -ForegroundColor Green
+    } catch {
+      Write-Warning "Linux 构建跳过：$_"
+      $skipped.Add("unix")
+    }
+  }
+
+  # -------------------------------------------------------------------------
+  # 汇总
+  # -------------------------------------------------------------------------
+  Write-Host ""
+  $builtLabel = if ($built.Count -gt 0) { $built -join ", " } else { "（无）" }
+  Write-Host "构建完成：$builtLabel" -ForegroundColor Green
+  if ($skipped.Count -gt 0) {
+    Write-Warning "已跳过：$($skipped -join ', ')（环境未就绪或构建失败）"
+  }
+  Write-Host "产物目录：$releaseDir" -ForegroundColor Green
 }
 finally {
   if ($transcriptStarted) {
