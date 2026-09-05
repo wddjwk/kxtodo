@@ -176,7 +176,7 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
     FieldMeta {
         path: "sync.enabled",
         kind: "boolean",
-        description: "已配对并启用数据同步",
+        description: "启用数据同步（false = 暂停同步，服务器与账户配置保留）",
         is_map: false,
     },
     FieldMeta {
@@ -192,27 +192,21 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         is_map: false,
     },
     FieldMeta {
-        path: "sync.email",
-        kind: "string",
-        description: "同步账户邮箱",
-        is_map: false,
-    },
-    FieldMeta {
         path: "sync.secret",
         kind: "string",
-        description: "同步密钥（派生认证/加密密钥，只存本机）",
+        description: "同步密码（派生认证/加密密钥，只存本机）",
         is_map: false,
     },
     FieldMeta {
         path: "sync.syncData",
         kind: "boolean",
-        description: "同步数据（节点/任务）",
+        description: "同步数据（节点/任务/插图图片本体）",
         is_map: false,
     },
     FieldMeta {
         path: "sync.syncSettings",
         kind: "boolean",
-        description: "同步设置共享子集",
+        description: "同步设置共享子集（配置/配色/背景与头像图片本体）",
         is_map: false,
     },
     FieldMeta {
@@ -225,12 +219,6 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         path: "sync.intervalSeconds",
         kind: "integer(5-86400)",
         description: "自动同步间隔（秒）",
-        is_map: false,
-    },
-    FieldMeta {
-        path: "sync.syncImages",
-        kind: "boolean",
-        description: "同步图片文件本体（markdown 插图/列表背景/头像）",
         is_map: false,
     },
     FieldMeta {
@@ -316,13 +304,11 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "sync.enabled" => json!(settings.sync.enabled),
         "sync.serverUrl" => json!(settings.sync.server_url),
         "sync.username" => json!(settings.sync.username),
-        "sync.email" => json!(settings.sync.email),
         "sync.secret" => json!(settings.sync.secret),
         "sync.syncData" => json!(settings.sync.sync_data),
         "sync.syncSettings" => json!(settings.sync.sync_settings),
         "sync.syncSchedules" => json!(settings.sync.sync_schedules),
         "sync.intervalSeconds" => json!(settings.sync.interval_seconds),
-        "sync.syncImages" => json!(settings.sync.sync_images),
         "sync.reconnectSeconds" => json!(settings.sync.reconnect_seconds),
         "updates.autoCheck" => json!(settings.updates.auto_check),
         "features.showCategoryBadges" => json!(settings.features.show_category_badges),
@@ -674,14 +660,6 @@ pub fn set_value(
             }
             settings.sync.username = trimmed;
         }
-        "sync.email" => {
-            let raw = expect_string(path, &value)?;
-            let trimmed = raw.trim().to_lowercase();
-            if trimmed.is_empty() {
-                return Err(invalid_value(path, "不能为空"));
-            }
-            settings.sync.email = trimmed;
-        }
         "sync.secret" => {
             let raw = expect_string(path, &value)?;
             if raw.trim().is_empty() {
@@ -702,9 +680,6 @@ pub fn set_value(
             // 低于下限按下限生效（与 sync configure、前端 NumberField 一致）
             settings.sync.interval_seconds =
                 expect_int(path, &value, 1, 86400)?.clamp(5, 86400) as u32;
-        }
-        "sync.syncImages" => {
-            settings.sync.sync_images = expect_bool(path, &value)?;
         }
         "sync.reconnectSeconds" => {
             settings.sync.reconnect_seconds =
@@ -857,7 +832,6 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "sync.enabled" => target.sync.enabled = defaults.sync.enabled,
         "sync.serverUrl" => target.sync.server_url = defaults.sync.server_url.clone(),
         "sync.username" => target.sync.username = defaults.sync.username.clone(),
-        "sync.email" => target.sync.email = defaults.sync.email.clone(),
         "sync.secret" => target.sync.secret = defaults.sync.secret.clone(),
         "sync.syncData" => target.sync.sync_data = defaults.sync.sync_data,
         "sync.syncSettings" => target.sync.sync_settings = defaults.sync.sync_settings,
@@ -865,7 +839,6 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "sync.intervalSeconds" => {
             target.sync.interval_seconds = defaults.sync.interval_seconds
         }
-        "sync.syncImages" => target.sync.sync_images = defaults.sync.sync_images,
         "sync.reconnectSeconds" => {
             target.sync.reconnect_seconds = defaults.sync.reconnect_seconds
         }

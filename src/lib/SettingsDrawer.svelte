@@ -1,7 +1,8 @@
 <script lang="ts">
+  import { onDestroy, onMount } from "svelte";
   import {
     appSettings, showSettings, showToast, showNotification, fileToDataUrl, appVersion,
-    syncConnection
+    syncConnection, nextSyncAt
   } from "./stores";
   import { setConfig as setConfigAction } from "./actions";
   import {
@@ -12,13 +13,17 @@
     syncUnpair as syncUnpairAction,
     syncProbe as syncProbeAction,
     syncDiscover as syncDiscoverAction,
+    syncHistory as syncHistoryAction,
+    syncHistoryRemove as syncHistoryRemoveAction,
     setSyncScopes,
-    type DiscoveredServer
+    setSyncEnabled,
+    type DiscoveredServer,
+    type SyncHistoryEntry
   } from "./actions";
   import { checkForUpdate, startUpdate, updateProgress, type UpdateInfo } from "./updater";
   import { isMobile } from "./platform";
   import { caps } from "./capabilities";
-  import { ArrowLeft } from "@lucide/svelte";
+  import { ArrowLeft, Eye, EyeOff, History, LoaderCircle, Search, X } from "@lucide/svelte";
   import {
     scalePercentValue, buildSettingsDrawerStyle, avatarStyle, avatarInitial
   } from "./styles";
@@ -76,31 +81,63 @@
   }
 
   // ---- 数据同步 ----
-  let syncForm = { serverUrl: "", username: "", email: "", secret: "", syncSettings: false, syncSchedules: false };
+  let syncForm = { serverUrl: "", username: "", secret: "", syncSettings: true, syncSchedules: false };
   let syncBusy = false;
   let syncStatus: import("./actions").SyncStatus | null = null;
   let syncFormPrefilled = false;
   let discovering = false;
   let discovered: DiscoveredServer[] = [];
-  let discoveryRan = false;
+  let discoveryOpen = false;
+  let historyOpen = false;
+  let history: SyncHistoryEntry[] = [];
+  let historySecretsVisible = false;
+  /** 秒级 ticker：只用于「下次同步」倒计时显示 */
+  let clock = Date.now();
+  let clockTimer: number | undefined;
 
-  $: syncPaired = Boolean($appSettings.sync?.enabled && $appSettings.sync?.serverUrl);
+  onMount(() => {
+    clockTimer = window.setInterval(() => {
+      clock = Date.now();
+    }, 1000);
+  });
+  onDestroy(() => {
+    if (clockTimer !== undefined) window.clearInterval(clockTimer);
+  });
+
+  // 配对 = 有服务器地址 + 有密码；enabled=false 只是「暂停」，配置全部保留
+  $: syncPaired = Boolean($appSettings.sync?.serverUrl && $appSettings.sync?.secret);
+  $: syncPaused = syncPaired && !$appSettings.sync?.enabled;
   $: connection = $syncConnection;
-  $: connectionLabel = connection.online === null
-    ? "未探测"
+  $: connectionState = connection.online === null
+    ? "unknown"
     : connection.online
-      ? "🟢 已连接"
-      : "🔴 已掉线";
+      ? "online"
+      : "offline";
+  $: connectionText = connection.checking
+    ? "探测中"
+    : connection.online === null
+      ? "未探测"
+      : connection.online
+        ? "已连接"
+        : "已掉线";
+  // 倒计时：让「自动同步间隔到底有没有生效」一眼可见
+  $: nextSyncText = !syncPaired || syncPaused
+    ? ""
+    : $nextSyncAt === null
+      ? ""
+      : `下次同步 ${Math.max(0, Math.round(($nextSyncAt - clock) / 1000))}s`;
+
   let syncStatusLoaded = false;
   $: if ($showSettings && syncPaired && !syncStatusLoaded) {
     syncStatusLoaded = true;
     void refreshSyncStatus();
   }
   $: if (!syncPaired) syncStatusLoaded = false;
-  $: if (!syncFormPrefilled && !$appSettings.sync?.enabled) {
+  // 未配对时预填：解除配对后地址与用户名仍在设置里，直接带出来省得重敲
+  $: if (!syncFormPrefilled && !syncPaired) {
     syncFormPrefilled = true;
-    syncForm.username = $appSettings.profile.displayName || "";
-    syncForm.email = $appSettings.profile.email || "";
+    syncForm.serverUrl = $appSettings.sync?.serverUrl || "";
+    syncForm.username = $appSettings.sync?.username || $appSettings.profile.displayName || "";
   }
 
   /** 本地状态立即渲染，网络探测丢到后台（掉线时也不阻塞设置界面）。 */
@@ -112,14 +149,18 @@
     });
   }
 
-  /** 「发现」：UDP 广播/组播查询局域网内的 kxtodo-server。 */
+  /** 放大镜：UDP 广播/组播查询局域网内的 kxtodo-server，结果以下拉浮层展示。 */
   async function runDiscovery(): Promise<void> {
     if (discovering) return;
     discovering = true;
+    discoveryOpen = true;
     try {
       const result = await syncDiscoverAction();
-      if (result === null) return; // 当前环境不支持，actions 已提示过
-      discoveryRan = true;
+      if (result === null) {
+        // 当前环境不支持（浏览器预览），actions 已提示过
+        discoveryOpen = false;
+        return;
+      }
       discovered = result;
       if (result.length === 0) {
         showToast("局域网内没发现服务器（需在跑、同一局域网、监听 0.0.0.0）");
@@ -131,8 +172,34 @@
 
   function pickDiscovered(server: DiscoveredServer): void {
     syncForm.serverUrl = server.url;
+    discoveryOpen = false;
     discovered = [];
     showToast(`已填入 ${server.name || server.host}`);
+  }
+
+  async function toggleHistory(): Promise<void> {
+    historyOpen = !historyOpen;
+    if (historyOpen) await loadHistory();
+  }
+
+  async function loadHistory(): Promise<void> {
+    history = (await syncHistoryAction()) ?? [];
+  }
+
+  function applyHistory(entry: SyncHistoryEntry): void {
+    historyOpen = false;
+    if (syncPaired) {
+      showToast("当前已配对：先解除配对，再用历史账户登录");
+      return;
+    }
+    syncForm.serverUrl = entry.serverUrl;
+    syncForm.username = entry.username;
+    syncForm.secret = entry.secret;
+    showToast("已回填历史账户");
+  }
+
+  async function removeHistory(index: number): Promise<void> {
+    history = (await syncHistoryRemoveAction(index)) ?? [];
   }
 
   async function registerSync(): Promise<void> {
@@ -170,12 +237,25 @@
     }
   }
 
+  /** 暂停/恢复：只切开关，服务器地址与账户凭据全部保留。 */
+  async function togglePause(): Promise<void> {
+    if (syncBusy) return;
+    syncBusy = true;
+    try {
+      await setSyncEnabled(!$appSettings.sync?.enabled);
+      await refreshSyncStatus({ probe: false });
+    } finally {
+      syncBusy = false;
+    }
+  }
+
   async function unpairSync(): Promise<void> {
     if (syncBusy) return;
     syncBusy = true;
     try {
       if (await syncUnpairAction()) {
         syncStatus = null;
+        syncFormPrefilled = false;
       }
     } finally {
       syncBusy = false;
@@ -183,7 +263,7 @@
   }
 
   async function updateSyncScope(
-    field: "syncData" | "syncSettings" | "syncSchedules" | "syncImages",
+    field: "syncData" | "syncSettings" | "syncSchedules",
     value: boolean
   ): Promise<void> {
     await setSyncScopes({ [field]: value });
@@ -530,18 +610,77 @@
   {/if}
 
   <section>
-    <h3>数据同步</h3>
+    <div class="section-head">
+      <h3>数据同步</h3>
+      <button
+        class="icon-button"
+        type="button"
+        title="配对历史：此前用过的服务器地址与账户"
+        aria-label="配对历史"
+        on:click={toggleHistory}
+      ><History size={16} /></button>
+    </div>
+
+    {#if historyOpen}
+      <div class="sync-popover">
+        <div class="sync-popover-head">
+          <span>配对历史</span>
+          <span class="spacer"></span>
+          <button
+            class="icon-button"
+            type="button"
+            title={historySecretsVisible ? "隐藏密码" : "显示密码"}
+            aria-label={historySecretsVisible ? "隐藏密码" : "显示密码"}
+            on:click={() => (historySecretsVisible = !historySecretsVisible)}
+          >{#if historySecretsVisible}<EyeOff size={14} />{:else}<Eye size={14} />{/if}</button>
+          <button class="icon-button" type="button" title="关闭" aria-label="关闭" on:click={() => (historyOpen = false)}><X size={14} /></button>
+        </div>
+        {#if history.length === 0}
+          <p class="muted">还没有历史记录：成功配对一次后会自动记住（最多 8 条，只存本机）。</p>
+        {:else}
+          <div class="sync-popover-list">
+            {#each history as entry, index (entry.serverUrl + "|" + entry.username)}
+              <div class="sync-popover-row">
+                <button class="menu-action-button discovery-item" type="button" on:click={() => applyHistory(entry)}>
+                  <span class="discovery-name">{entry.username || "（无用户名）"}</span>
+                  <span class="muted">{entry.serverUrl}</span>
+                  <span class="muted secret">{historySecretsVisible ? entry.secret : "••••••"}</span>
+                </button>
+                <button
+                  class="icon-button"
+                  type="button"
+                  title="删除这条历史"
+                  aria-label="删除这条历史"
+                  on:click={() => removeHistory(index)}
+                ><X size={13} /></button>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
+
     {#if syncPaired}
       <div class="sync-card">
         <div class="settings-row">
-          <span>服务器（{connectionLabel}{#if connection.checking}，探测中…{/if}）</span>
-          <span class="muted">{$appSettings.sync.serverUrl}</span>
+          <span class="sync-label">
+            服务器
+            <span class="conn-state" data-state={connectionState}>
+              <i class="conn-dot"></i>
+              <span class="conn-text">{connectionText}</span>
+            </span>
+          </span>
+          <span class="muted sync-side">{nextSyncText}</span>
         </div>
-        <div class="settings-row"><span>账户</span><span class="muted">{$appSettings.sync.username} / {$appSettings.sync.email}</span></div>
+        <div class="sync-url">{$appSettings.sync.serverUrl}</div>
+        <div class="settings-row"><span>账户</span><span class="muted sync-side">{$appSettings.sync.username}</span></div>
+        {#if syncPaused}
+          <p class="sync-note">同步已暂停：不会自动同步，服务器与账户配置都还在。</p>
+        {/if}
         {#if syncStatus?.lastSyncAt}
           <div class="settings-row">
             <span>最近同步</span>
-            <span class="muted">
+            <span class="muted sync-side">
               {new Date(syncStatus.lastSyncAt).toLocaleString()}
               {#if syncStatus?.lastResult}
                 （拉 {syncStatus.lastResult.pulled} / 推 {syncStatus.lastResult.pushed}
@@ -556,16 +695,13 @@
         {#if connection.online === false && connection.lastError}
           <p class="update-error">服务器不可达：{connection.lastError}（每 {$appSettings.sync.reconnectSeconds || 300} 秒静默重连）</p>
         {/if}
-        <div class="settings-row"><span>同步数据（节点/任务）</span>
+        <div class="settings-row"><span>同步数据（节点/任务/插图）</span>
           <input type="checkbox" checked={$appSettings.sync.syncData} on:change={(event) => updateSyncScope("syncData", event.currentTarget.checked)} />
         </div>
-        <div class="settings-row"><span>同步图片（插图/背景/头像文件本体）</span>
-          <input type="checkbox" checked={$appSettings.sync.syncImages} on:change={(event) => updateSyncScope("syncImages", event.currentTarget.checked)} />
-        </div>
-        <div class="settings-row"><span>同步设置（个人资料/配色）</span>
+        <div class="settings-row"><span>同步设置（配置/配色/背景）</span>
           <input type="checkbox" checked={$appSettings.sync.syncSettings} on:change={(event) => updateSyncScope("syncSettings", event.currentTarget.checked)} />
         </div>
-        <div class="settings-row"><span>同步定时任务（跨平台路径通常不可执行）</span>
+        <div class="settings-row"><span>同步任务（跨平台路径通常不可执行）</span>
           <input type="checkbox" checked={$appSettings.sync.syncSchedules} on:change={(event) => updateSyncScope("syncSchedules", event.currentTarget.checked)} />
         </div>
         <div class="settings-row number-row">
@@ -590,66 +726,81 @@
             onCommit={(v) => updateReconnectSeconds(v)}
           />
         </div>
-        <div class="settings-row">
-          <button class="settings-button" type="button" disabled={syncBusy} on:click={runSyncNow}>
+        <div class="settings-row sync-actions">
+          <button class="settings-button" type="button" disabled={syncBusy} on:click={unpairSync}>解除配对</button>
+          <button class="settings-button" type="button" disabled={syncBusy} on:click={togglePause}>
+            {syncPaused ? "恢复同步" : "暂停同步"}
+          </button>
+          <button class="settings-button primary" type="button" disabled={syncBusy || syncPaused} on:click={runSyncNow}>
             {syncBusy ? "同步中…" : "立即同步"}
           </button>
-          <button class="settings-button" type="button" disabled={syncBusy} on:click={unpairSync}>解除配对</button>
         </div>
       </div>
     {:else}
       <div class="sync-card">
         <label class="settings-row">
           服务器地址
-          <input
-            bind:value={syncForm.serverUrl}
-            placeholder="http://192.168.1.10:52177"
-          />
+          <span class="sync-input-wrap">
+            <input
+              bind:value={syncForm.serverUrl}
+              placeholder="http://192.168.1.10:52177"
+              on:input={() => (discoveryOpen = false)}
+            />
+            <button
+              class="icon-button inline"
+              type="button"
+              disabled={discovering}
+              title="搜索局域网内的服务器"
+              aria-label="搜索局域网内的服务器"
+              on:click={runDiscovery}
+            >{#if discovering}<span class="spin"><LoaderCircle size={15} /></span>{:else}<Search size={15} />{/if}</button>
+          </span>
         </label>
-        <div class="settings-row">
-          <button class="settings-button" type="button" disabled={discovering} on:click={runDiscovery}>
-            {discovering ? "发现中…" : "发现"}
-          </button>
-          <span class="muted">探测局域网内的 kxtodo-server（UDP 52177 广播查询）</span>
-        </div>
-        {#if discovered.length > 0}
-          <div class="discovery-list">
-            {#each discovered as server (server.url)}
-              <button class="menu-action-button discovery-item" type="button" on:click={() => pickDiscovered(server)}>
-                <span class="discovery-name">{server.name || "未命名服务器"}</span>
-                <span class="muted">{server.host}:{server.port}</span>
-                {#if !server.verified}<span class="muted">（未复核）</span>{/if}
-              </button>
-            {/each}
+        {#if discoveryOpen}
+          <div class="sync-popover">
+            <div class="sync-popover-head">
+              <span>{discovering ? "正在搜索…" : `发现 ${discovered.length} 台服务器`}</span>
+              <span class="spacer"></span>
+              <button class="icon-button" type="button" title="关闭" aria-label="关闭" on:click={() => (discoveryOpen = false)}><X size={14} /></button>
+            </div>
+            {#if discovering}
+              <p class="muted">在 UDP 52177 上广播查询，收集局域网内 kxtodo-server 的应答…</p>
+            {:else if discovered.length === 0}
+              <p class="muted">没发现服务器：确认它在跑、与本机同一局域网、监听在非回环地址（0.0.0.0）。</p>
+            {:else}
+              <div class="sync-popover-list">
+                {#each discovered as server (server.url)}
+                  <button class="menu-action-button discovery-item" type="button" on:click={() => pickDiscovered(server)}>
+                    <span class="discovery-name">{server.name || "未命名服务器"}</span>
+                    <span class="muted">{server.host}:{server.port}</span>
+                    {#if !server.verified}<span class="muted">（未复核）</span>{/if}
+                  </button>
+                {/each}
+              </div>
+            {/if}
           </div>
-        {:else if discoveryRan && !discovering}
-          <p class="muted">没发现服务器：确认它在跑、与本机同一局域网、监听在非回环地址（0.0.0.0）。</p>
         {/if}
         <label class="settings-row">
           用户名
-          <input bind:value={syncForm.username} placeholder="用户名（与邮箱共同确定账户）" />
+          <input bind:value={syncForm.username} placeholder="账户名" />
         </label>
         <label class="settings-row">
-          邮箱
-          <input bind:value={syncForm.email} placeholder="仅作账户标识，不验证" />
-        </label>
-        <label class="settings-row">
-          同步密钥
+          密码
           <input type="password" bind:value={syncForm.secret} placeholder="用于派生加密密钥，丢失无法找回" />
         </label>
-        <div class="settings-row">
+        <div class="settings-row sync-scope-row">
           <input id="sync-scope-settings" type="checkbox" bind:checked={syncForm.syncSettings} />
-          <label for="sync-scope-settings" class="inline-label">同步设置（个人资料/配色）</label>
+          <label for="sync-scope-settings" class="inline-label">同步设置（配置/配色/背景）</label>
           <input id="sync-scope-schedules" type="checkbox" bind:checked={syncForm.syncSchedules} />
-          <label for="sync-scope-schedules" class="inline-label">同步定时任务</label>
+          <label for="sync-scope-schedules" class="inline-label">同步任务</label>
         </div>
-        <div class="settings-row">
+        <div class="settings-row sync-actions">
           <button class="settings-button primary" type="button" disabled={syncBusy} on:click={registerSync}>
             {syncBusy ? "处理中…" : "注册新账户"}
           </button>
           <button class="settings-button" type="button" disabled={syncBusy} on:click={loginSync}>登录已有账户</button>
         </div>
-        <p class="muted">注册 = 创建账户并配对本机；已有账户在其它设备上用“登录”。数据（节点/任务）与图片默认同步。</p>
+        <p class="muted">注册 = 创建账户并配对本机；已有账户在其它设备上用「登录」。数据（节点/任务/插图）默认同步。</p>
       </div>
     {/if}
   </section>

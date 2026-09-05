@@ -20,6 +20,7 @@ mod db;
 mod discovery;
 mod error;
 mod logging;
+mod metrics;
 mod settings;
 mod update;
 mod util;
@@ -300,11 +301,29 @@ async fn main() {
             std::process::exit(3);
         }
     };
+    // v0.5.1 账户模型改为「用户名 + 密码」：旧库里的账户（用户名+邮箱）整体归档，
+    // 否则同名注册会被 ACCOUNT_EXISTS 拒掉且永远登录不上。
+    match database.migrate_legacy_accounts() {
+        Ok(0) => {}
+        Ok(count) => logger.log(
+            "info",
+            &format!(
+                "检测到 v0.5.0 及以前的账户表：{count} 个旧账户已归档到 users_legacy。\
+                 旧账户的密钥由「用户名+邮箱」派生，新客户端只填用户名+密码，无法再登录；\
+                 其数据仍保留在库中，可在管理界面查看或删除。"
+            ),
+        ),
+        Err(error) => {
+            eprintln!("旧账户归档失败：{error}");
+            std::process::exit(3);
+        }
+    }
 
     let state = Arc::new(AppState {
         db: database,
         logger: Mutex::new(logger),
         settings: merged.clone(),
+        metrics: metrics::Metrics::new(util::now_iso()),
         challenges: Mutex::new(std::collections::HashMap::new()),
         admin_sessions: Mutex::new(std::collections::HashMap::new()),
     });
@@ -378,7 +397,12 @@ async fn main() {
     }
 
     let shutdown_flag = discovery_running.clone();
-    axum::serve(listener, app)
+    // with_connect_info：handler 用 ConnectInfo 取真实对端地址（管理台要展示来源 IP，
+    // 局域网直连场景没有 X-Forwarded-For）
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
         .with_graceful_shutdown(async move {
             shutdown_signal().await;
             shutdown_flag.store(false, std::sync::atomic::Ordering::SeqCst);

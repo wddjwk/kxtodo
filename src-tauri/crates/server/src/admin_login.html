@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2.5' y='2.5' width='27' height='27' rx='8' fill='none' stroke='%236d8dff' stroke-width='3'/%3E%3Cpath d='M9 16.5l4.6 4.5L23 11.5' fill='none' stroke='%2322d3ee' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<title>KXToDo Server · 管理登录</title>
+<style>
+:root{
+  --bg:#070b16; --panel:rgba(255,255,255,.05); --line:rgba(255,255,255,.1);
+  --text:#e9eefb; --muted:#8d9ab4; --accent:#6d8dff; --accent2:#22d3ee;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;display:flex;align-items:center;justify-content:center;
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+  background:var(--bg);color:var(--text);overflow:hidden;
+}
+body::before,body::after{
+  content:"";position:fixed;border-radius:50%;filter:blur(90px);opacity:.5;pointer-events:none;
+}
+body::before{width:520px;height:520px;left:-140px;top:-160px;background:radial-gradient(circle,#2b4bd8,transparent 70%);animation:drift 18s ease-in-out infinite}
+body::after{width:460px;height:460px;right:-120px;bottom:-180px;background:radial-gradient(circle,#0e7490,transparent 70%);animation:drift 22s ease-in-out infinite reverse}
+@keyframes drift{0%,100%{transform:translate3d(0,0,0)}50%{transform:translate3d(40px,30px,0)}}
+.card{
+  position:relative;width:min(380px,calc(100vw - 40px));padding:34px 30px 28px;
+  background:var(--panel);border:1px solid var(--line);border-radius:20px;
+  backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);
+  box-shadow:0 24px 70px rgba(0,0,0,.5);animation:rise .5s cubic-bezier(.2,.8,.2,1) both;
+}
+@keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+.mark{display:flex;align-items:center;gap:11px;margin-bottom:26px}
+.mark svg{width:34px;height:34px;flex:none}
+.mark b{font-size:16px;letter-spacing:.2px;display:block}
+.mark span{font-size:12px;color:var(--muted)}
+label{display:block;font-size:12px;color:var(--muted);margin:16px 0 7px;letter-spacing:.3px}
+input{
+  width:100%;padding:11px 13px;font-size:14px;color:var(--text);
+  background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:11px;
+  outline:none;transition:border-color .18s,background .18s,box-shadow .18s;
+}
+input::placeholder{color:#61708c}
+input:focus{border-color:var(--accent);background:rgba(109,141,255,.09);box-shadow:0 0 0 3px rgba(109,141,255,.16)}
+button{
+  width:100%;margin-top:24px;padding:12px;border:0;border-radius:11px;cursor:pointer;
+  font-size:14px;font-weight:600;color:#08101f;letter-spacing:.4px;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  transition:transform .12s,filter .18s,box-shadow .18s;
+  box-shadow:0 10px 26px rgba(70,120,255,.28);
+}
+button:hover{filter:brightness(1.07)}
+button:active{transform:translateY(1px)}
+button:disabled{opacity:.6;cursor:progress}
+.err{min-height:18px;margin-top:14px;font-size:12.5px;color:#ff9d9d;text-align:center}
+.hint{margin-top:18px;font-size:11.5px;color:#61708c;text-align:center;line-height:1.6}
+</style>
+</head>
+<body>
+<form class="card" id="form" autocomplete="on">
+  <div class="mark">
+    <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
+      <rect x="2.5" y="2.5" width="27" height="27" rx="8" stroke="url(#g)" stroke-width="2"/>
+      <path d="M9 16.5l4.6 4.5L23 11.5" stroke="url(#g)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+      <defs><linearGradient id="g" x1="2" y1="2" x2="30" y2="30">
+        <stop stop-color="#6d8dff"/><stop offset="1" stop-color="#22d3ee"/>
+      </linearGradient></defs>
+    </svg>
+    <div><b>KXToDo Server</b><span>同步服务管理控制台</span></div>
+  </div>
+  <label for="u">管理员用户名</label>
+  <input id="u" placeholder="admin" autocomplete="username" required>
+  <label for="p">密码</label>
+  <input id="p" type="password" placeholder="••••••••" autocomplete="current-password" required>
+  <button id="go" type="submit">登录</button>
+  <div class="err" id="err"></div>
+  <div class="hint">管理员凭据由启动参数 --admin-user / --admin-password 设定</div>
+</form>
+<script>
+const form = document.getElementById('form');
+const err = document.getElementById('err');
+const go = document.getElementById('go');
+form.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  err.textContent = '';
+  go.disabled = true;
+  go.textContent = '登录中…';
+  try {
+    const response = await fetch('/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: document.getElementById('u').value,
+        password: document.getElementById('p').value,
+      }),
+    });
+    if (response.ok) { location.replace('/admin/'); return; }
+    const body = await response.json().catch(() => ({}));
+    err.textContent = body.error ? body.error.message : '登录失败';
+  } catch (error) {
+    err.textContent = '网络错误：' + error;
+  } finally {
+    go.disabled = false;
+    go.textContent = '登录';
+  }
+});
+document.getElementById('u').focus();
+</script>
+</body>
+</html>

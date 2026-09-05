@@ -555,16 +555,14 @@ pub struct SyncSettings {
     pub server_url: String,
     #[serde(default)]
     pub username: String,
-    #[serde(default)]
-    pub email: String,
-    /// 同步密钥（派生 auth/enc 密钥；只存本机，不随设置同步）
+    /// 同步密码（派生 auth/enc 密钥；只存本机，不随设置同步）
     #[serde(default)]
     pub secret: String,
-    /// 同步数据（节点/任务，默认开）
+    /// 同步数据（节点/任务 + markdown 插图文件本体，默认开）
     #[serde(rename = "syncData", default = "default_true")]
     pub sync_data: bool,
-    /// 同步设置共享子集（默认关）
-    #[serde(rename = "syncSettings", default)]
+    /// 同步设置共享子集（配置/配色 + 背景与头像文件本体，默认开）
+    #[serde(rename = "syncSettings", default = "default_true")]
     pub sync_settings: bool,
     /// 同步定时任务 spec（默认关；spec 含各机器绝对路径，跨平台通常不可执行）
     #[serde(rename = "syncSchedules", default)]
@@ -572,9 +570,6 @@ pub struct SyncSettings {
     /// 自动同步间隔（秒）
     #[serde(rename = "intervalSeconds", default = "default_sync_interval_seconds")]
     pub interval_seconds: u32,
-    /// 同步图片文件本体（markdown 插图 / 列表背景 / 头像，默认开）
-    #[serde(rename = "syncImages", default = "default_true")]
-    pub sync_images: bool,
     /// 掉线后的静默重连探测间隔（秒）
     #[serde(rename = "reconnectSeconds", default = "default_sync_reconnect_seconds")]
     pub reconnect_seconds: u32,
@@ -591,19 +586,29 @@ fn default_sync_reconnect_seconds() -> u32 {
     300
 }
 
+impl SyncSettings {
+    /// 是否已配对：有服务器地址 + 用户名 + 密码。
+    ///
+    /// 与 `enabled` 是两件事——`enabled = false` 表示用户「暂停同步」，配置全部保留；
+    /// 只有 `sync unpair` 才会清掉密码（于是这里变成 false）。
+    pub fn is_paired(&self) -> bool {
+        !self.server_url.trim().is_empty()
+            && !self.username.trim().is_empty()
+            && !self.secret.trim().is_empty()
+    }
+}
+
 impl Default for SyncSettings {
     fn default() -> Self {
         Self {
             enabled: false,
             server_url: String::new(),
             username: String::new(),
-            email: String::new(),
             secret: String::new(),
             sync_data: default_true(),
-            sync_settings: false,
+            sync_settings: default_true(),
             sync_schedules: false,
             interval_seconds: default_sync_interval_seconds(),
-            sync_images: default_true(),
             reconnect_seconds: default_sync_reconnect_seconds(),
             extra: Map::new(),
         }

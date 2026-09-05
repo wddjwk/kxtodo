@@ -889,7 +889,6 @@ export async function importState(
 export type SyncPairInput = {
   serverUrl: string;
   username: string;
-  email: string;
   secret: string;
   syncSettings?: boolean;
   syncSchedules?: boolean;
@@ -904,7 +903,6 @@ export async function syncRegister(input: SyncPairInput): Promise<boolean> {
     await coreDispatch("sync.register", {
       serverUrl: input.serverUrl,
       username: input.username,
-      email: input.email,
       secret: input.secret,
       syncSettings: input.syncSettings,
       syncSchedules: input.syncSchedules
@@ -928,7 +926,6 @@ export async function syncLogin(input: SyncPairInput): Promise<boolean> {
     await coreDispatch("sync.login", {
       serverUrl: input.serverUrl,
       username: input.username,
-      email: input.email,
       secret: input.secret,
       syncSettings: input.syncSettings,
       syncSchedules: input.syncSchedules
@@ -946,10 +943,11 @@ export async function syncLogin(input: SyncPairInput): Promise<boolean> {
 export type SyncStatus = {
   paired: boolean;
   enabled: boolean;
+  /** 已配对但被用户暂停（配置保留） */
+  paused?: boolean;
   serverUrl: string;
   username: string;
-  email: string;
-  scopes: { data: boolean; settings: boolean; schedules: boolean; images?: boolean };
+  scopes: { data: boolean; settings: boolean; schedules: boolean };
   intervalSeconds: number;
   reconnectSeconds?: number;
   deviceId: string;
@@ -1058,7 +1056,7 @@ async function dispatchSyncNow(): Promise<SyncReport> {
 
 /**
  * 执行一次同步。`silent` = 自动同步：不发通知（周期性同步一直弹通知很烦人），
- * 结果只在设置页「最近同步」里体现。
+ * 结果只在设置页「最近同步」里体现。返回是否成功（暂停也算「没跑」，返回 false）。
  */
 export async function syncNow(options: { silent?: boolean } = {}): Promise<boolean> {
   if (!coreMode) return false;
@@ -1067,6 +1065,11 @@ export async function syncNow(options: { silent?: boolean } = {}): Promise<boole
   try {
     result = await dispatchSyncNow();
   } catch (error) {
+    // 暂停不是故障：不动连接状态缓存（🟢/🔴 保持上次探测结论）
+    if (error instanceof CoreCommandError && error.code === "SYNC_PAUSED") {
+      if (!silent) showToast("同步已暂停，点「恢复同步」继续");
+      return false;
+    }
     if (!silent) await report(error, "同步失败");
     await refreshSyncConnection();
     return false;
@@ -1106,7 +1109,7 @@ export async function setSyncScopes(scopes: {
   syncData?: boolean;
   syncSettings?: boolean;
   syncSchedules?: boolean;
-  syncImages?: boolean;
+  enabled?: boolean;
   intervalSeconds?: number;
   reconnectSeconds?: number;
 }): Promise<boolean> {
@@ -1119,6 +1122,45 @@ export async function setSyncScopes(scopes: {
   }
   await refreshFromCore();
   return true;
+}
+
+/** 暂停/恢复同步：只切开关，服务器地址与账户凭据全部保留。 */
+export async function setSyncEnabled(enabled: boolean): Promise<boolean> {
+  const ok = await setSyncScopes({ enabled });
+  if (ok) showToast(enabled ? "已恢复同步" : "已暂停同步（配置保留）");
+  return ok;
+}
+
+export type SyncHistoryEntry = {
+  serverUrl: string;
+  username: string;
+  secret: string;
+  usedAt?: string;
+};
+
+/** 本机配对历史（服务器地址 + 用户名 + 密码），设置页「历史」一键回填。 */
+export async function syncHistory(): Promise<SyncHistoryEntry[] | null> {
+  if (!coreMode) return null;
+  try {
+    const envelope = await coreDispatch<{ entries: SyncHistoryEntry[] }>("sync.history", {});
+    return envelope.data.entries ?? [];
+  } catch (error) {
+    await report(error, "读取配对历史失败");
+    return [];
+  }
+}
+
+export async function syncHistoryRemove(index: number): Promise<SyncHistoryEntry[] | null> {
+  if (!coreMode) return null;
+  try {
+    const envelope = await coreDispatch<{ entries: SyncHistoryEntry[] }>("sync.historyRemove", {
+      index
+    });
+    return envelope.data.entries ?? [];
+  } catch (error) {
+    await report(error, "删除配对历史失败");
+    return [];
+  }
 }
 
 function flattenSettings(source: Settings): Array<[string, unknown]> {

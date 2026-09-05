@@ -29,6 +29,12 @@ export type SyncConnection = {
 
 export const syncConnection = writable<SyncConnection>({ online: null });
 
+/**
+ * 下一次自动同步的时间戳（毫秒）。由 syncRunner 排程时写入，`null` = 没有排程
+ * （未配对或已暂停）。设置面板据此显示倒计时，用户能直接核对节奏是否与设定一致。
+ */
+export const nextSyncAt = writable<number | null>(null);
+
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }

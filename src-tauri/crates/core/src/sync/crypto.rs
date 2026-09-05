@@ -24,13 +24,10 @@ pub struct SyncKeys {
     pub enc_key: [u8; 32],
 }
 
-/// 确定性盐：同一 (username, email, secret) 在任意设备派生出相同密钥。
-fn derive_salt(username: &str, email: &str) -> String {
-    format!(
-        "kxtodo|{}|{}",
-        username.trim().to_lowercase(),
-        email.trim().to_lowercase()
-    )
+/// 确定性盐：同一 (username, secret) 在任意设备派生出相同密钥。
+/// 账户标识就是用户名（v0.5.1 起不再拼邮箱），所以盐里也只有用户名。
+fn derive_salt(username: &str) -> String {
+    format!("kxtodo|{}", username.trim().to_lowercase())
 }
 
 /// 派生结果进程内缓存：Argon2id 单次约 1s，而自动同步最短 5s 一轮，
@@ -42,14 +39,20 @@ fn key_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, Sy
     CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
-pub fn derive_keys(username: &str, email: &str, secret: &str) -> CoreResult<SyncKeys> {
+pub fn derive_keys(username: &str, secret: &str) -> CoreResult<SyncKeys> {
+    if username.trim().is_empty() {
+        return Err(CoreError::validation(
+            "SYNC_USERNAME_REQUIRED",
+            "同步用户名不能为空",
+        ));
+    }
     if secret.trim().is_empty() {
         return Err(CoreError::validation(
             "SYNC_SECRET_REQUIRED",
             "同步密钥不能为空",
         ));
     }
-    let salt = derive_salt(username, email);
+    let salt = derive_salt(username);
     let cache_key = sha256_hex(format!("{salt}\u{0}{secret}").as_bytes());
     if let Ok(cache) = key_cache().lock() {
         if let Some(keys) = cache.get(&cache_key) {
@@ -187,18 +190,22 @@ mod tests {
 
     #[test]
     fn keys_are_deterministic_and_separated() {
-        let a = derive_keys("user", "a@b.c", "secret-1").unwrap();
-        let b = derive_keys("USER", "A@B.C", "secret-1").unwrap();
-        assert_eq!(a.auth_key, b.auth_key, "用户名/邮箱大小写不敏感");
+        let a = derive_keys("user", "secret-1").unwrap();
+        let b = derive_keys("USER", "secret-1").unwrap();
+        assert_eq!(a.auth_key, b.auth_key, "用户名大小写不敏感");
         assert_eq!(a.enc_key, b.enc_key);
-        let c = derive_keys("user", "a@b.c", "secret-2").unwrap();
+        let c = derive_keys("user", "secret-2").unwrap();
         assert_ne!(a.auth_key, c.auth_key);
+        let d = derive_keys("other", "secret-1").unwrap();
+        assert_ne!(a.auth_key, d.auth_key, "不同用户名必须是不同账户");
         assert_ne!(a.auth_key, a.enc_key, "认证与加密密钥必须分离");
+        assert!(derive_keys("", "secret-1").is_err());
+        assert!(derive_keys("user", " ").is_err());
     }
 
     #[test]
     fn seal_open_roundtrip_and_tamper() {
-        let keys = derive_keys("u", "u@x.y", "s").unwrap();
+        let keys = derive_keys("u", "s").unwrap();
         let (nonce, cipher) = seal_entity(&keys.enc_key, "task-abc", "{\"a\":1}").unwrap();
         let plain = open_entity(&keys.enc_key, "task-abc", &nonce, &cipher).unwrap();
         assert_eq!(plain, "{\"a\":1}");
@@ -206,7 +213,7 @@ mod tests {
         // 换实体 ID（AAD 不匹配）→ 拒绝
         assert!(open_entity(&keys.enc_key, "task-xyz", &nonce, &cipher).is_err());
         // 换密钥 → 拒绝
-        let other = derive_keys("u2", "u@x.y", "s").unwrap();
+        let other = derive_keys("u2", "s").unwrap();
         assert!(open_entity(&other.enc_key, "task-abc", &nonce, &cipher).is_err());
         // 篡改密文 → 拒绝
         let mut bytes = cipher.clone();

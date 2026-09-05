@@ -166,7 +166,7 @@ pub enum Commands {
     },
     /// 数据多端同步（v0.4.0，端到端加密）
     #[command(
-        long_about = "与 kxtodo-server 同步数据：端到端加密（服务器只见密文）+ 逐实体 LWW + 删除墓碑。\n数据与图片（markdown 插图/列表背景/头像的文件本体）一起同步。\n\n动作：\n  register  注册账户并配对（空数据目录也可用，会初始化）\n  login     已有账户配对新设备\n  discover  局域网自动发现服务器（UDP 52177 广播查询，与服务器 TCP 端口无关）\n  status    查看配对/范围/最近同步结果（纯本地读，不碰网络）\n  probe     探测服务器连通性并刷新在线状态缓存\n  now       立即执行一次同步（pull → merge → push → 图片）\n  configure 调整同步范围/开关/间隔\n  unpair    解除本机配对（服务器数据保留）\n\n示例：\n  kxtodo-cli sync discover\n  kxtodo-cli sync register --server http://192.168.1.10:52177 --username me --email me@x.com --secret MySecret --sync-settings\n  kxtodo-cli sync now"
+        long_about = "与 kxtodo-server 同步数据：端到端加密（服务器只见密文）+ 逐实体 LWW + 删除墓碑。\n账户 = 用户名 + 密码（密码派生认证/加密密钥，服务器只存认证密钥的同值证明）。\n图片文件本体一并同步：markdown 插图跟随「同步数据」，列表背景与头像跟随「同步设置」。\n\n动作：\n  register  注册账户并配对（空数据目录也可用，会初始化）\n  login     已有账户配对新设备\n  discover  局域网自动发现服务器（UDP 52177 广播查询，与服务器 TCP 端口无关）\n  status    查看配对/范围/最近同步结果（纯本地读，不碰网络）\n  probe     探测服务器连通性并刷新在线状态缓存\n  now       立即执行一次同步（pull → merge → push → 图片）\n  configure 调整同步范围/开关/间隔（--enabled false = 暂停同步，配置保留）\n  unpair    解除本机配对（服务器数据保留）\n  history   列出/删除本机用过的服务器地址+用户名+密码\n\n示例：\n  kxtodo-cli sync discover\n  kxtodo-cli sync register --server http://192.168.1.10:52177 --username me --secret MySecret\n  kxtodo-cli sync now"
     )]
     Sync {
         #[command(subcommand)]
@@ -826,12 +826,12 @@ pub struct RuntimeSetArgs {
 pub enum SyncAction {
     /// 注册新账户并配对本机（Risk: write）
     #[command(
-        long_about = "Risk: write\n\n在服务器上创建账户（用户名+邮箱唯一确定，密钥派生认证/加密密钥）并配对本机，随后立即执行首次同步。\n账户已存在时报 ACCOUNT_EXISTS，改用 sync login。\n\n同步范围：数据默认开；--sync-settings / --sync-schedules 按需开启（定时任务 spec 含各机器绝对路径，跨平台通常不可执行）。"
+        long_about = "Risk: write\n\n在服务器上创建账户（用户名唯一确定账户，密码派生认证/加密密钥）并配对本机，随后立即执行首次同步。\n账户已存在时报 ACCOUNT_EXISTS，改用 sync login。\n\n同步范围：数据（节点/任务/插图）与设置（配置/配色/背景与头像）默认开；--sync-schedules 按需开启（定时任务 spec 含各机器绝对路径，跨平台通常不可执行）。"
     )]
     Register(SyncPairArgs),
     /// 已有账户配对本机（Risk: write）
     #[command(
-        long_about = "Risk: write\n\n用既有账户（用户名+邮箱+密钥）配对本机并执行首次同步；凭据错误返回 AUTH_FAILED。"
+        long_about = "Risk: write\n\n用既有账户（用户名 + 密码）配对本机并执行首次同步；凭据错误返回 AUTH_FAILED。"
     )]
     Login(SyncPairArgs),
     /// 查看配对与最近同步结果（Risk: read）
@@ -849,12 +849,20 @@ pub enum SyncAction {
     /// 立即执行一次同步（Risk: write）
     Now,
     /// 调整同步范围/开关/自动同步间隔（Risk: write）
+    #[command(
+        long_about = "Risk: write\n\n--enabled false 即「暂停同步」：停止自动与手动同步，但服务器地址/用户名/密码全部保留，\n--enabled true 恢复；要彻底清掉本机配对用 sync unpair。"
+    )]
     Configure(SyncConfigureArgs),
     /// 解除本机配对（Risk: write）
     #[command(
-        long_about = "Risk: write\n\n清除本机 token 与同步状态，关闭同步开关；服务器数据与其它设备不受影响。\nserverUrl/用户名/邮箱保留，便于重新配对。"
+        long_about = "Risk: write\n\n清除本机 token 与同步状态，关闭同步开关并清掉密码；服务器数据与其它设备不受影响。\nserverUrl/用户名保留，便于重新配对。只想停一会儿请用 sync configure --enabled false。"
     )]
     Unpair,
+    /// 查看/删除本机配对历史（Risk: read）
+    #[command(
+        long_about = "Risk: read\n\n列出本机用过的「服务器地址 + 用户名 + 密码」（runtime/sync-history.json，0600，最多 8 条，最近使用在前），\n便于换设备/重装后一键回填。--remove <下标> 删除其中一条（Risk: write）。"
+    )]
+    History(SyncHistoryArgs),
 }
 
 #[derive(Debug, Args, Serialize)]
@@ -863,19 +871,16 @@ pub struct SyncPairArgs {
     /// 同步服务器地址
     #[arg(long, value_name = "http://host:port")]
     pub server: String,
-    /// 用户名（与邮箱共同唯一确定账户）
+    /// 用户名（唯一确定账户）
     #[arg(long, value_name = "text")]
     pub username: String,
-    /// 邮箱（仅作账户标识，不验证）
-    #[arg(long, value_name = "text")]
-    pub email: String,
-    /// 同步密钥（派生认证/加密密钥；丢失无法找回数据）
+    /// 密码（派生认证/加密密钥；丢失无法找回数据）
     #[arg(long, value_name = "secret")]
     pub secret: String,
-    /// 同步数据（节点/任务，默认开）
+    /// 同步数据（节点/任务/插图，默认开）
     #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
     pub sync_data: Option<bool>,
-    /// 同步设置共享子集（个人资料/配色/特性开关）
+    /// 同步设置共享子集（配置/配色/背景与头像，默认开）
     #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
     pub sync_settings: Option<bool>,
     /// 同步定时任务 spec（跨平台路径通常不可执行，慎开）
@@ -886,27 +891,32 @@ pub struct SyncPairArgs {
 #[derive(Debug, Args, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncConfigureArgs {
-    /// 启用/停用同步
+    /// 启用/暂停同步（暂停保留全部配对配置）
     #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
     pub enabled: Option<bool>,
-    /// 同步数据（节点/任务）
+    /// 同步数据（节点/任务/插图）
     #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
     pub sync_data: Option<bool>,
-    /// 同步设置共享子集
+    /// 同步设置共享子集（配置/配色/背景与头像）
     #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
     pub sync_settings: Option<bool>,
     /// 同步定时任务 spec
     #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
     pub sync_schedules: Option<bool>,
-    /// 同步图片文件本体（markdown 插图/背景/头像）
-    #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
-    pub sync_images: Option<bool>,
     /// 自动同步间隔（秒）
     #[arg(long, value_name = "5-86400")]
     pub interval_seconds: Option<u64>,
     /// 掉线后的静默重连探测间隔（秒）
     #[arg(long, value_name = "5-86400")]
     pub reconnect_seconds: Option<u64>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncHistoryArgs {
+    /// 删除第 N 条历史（0 起；不传则只列出）
+    #[arg(long, value_name = "index")]
+    pub remove: Option<usize>,
 }
 
 #[derive(Debug, Args, Serialize)]
@@ -1385,6 +1395,12 @@ fn build_sync_invocation(action: &SyncAction) -> CoreResult<Invocation> {
         SyncAction::Now => Invocation::new("sync.now", serde_json::json!({})),
         SyncAction::Configure(args) => Invocation::new("sync.configure", serialize_args(args)),
         SyncAction::Unpair => Invocation::new("sync.unpair", serde_json::json!({})),
+        SyncAction::History(args) => match args.remove {
+            Some(index) => {
+                Invocation::new("sync.historyRemove", serde_json::json!({ "index": index }))
+            }
+            None => Invocation::new("sync.history", serde_json::json!({})),
+        },
     })
 }
 

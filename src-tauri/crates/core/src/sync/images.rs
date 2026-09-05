@@ -20,11 +20,22 @@ use crate::error::{CoreError, CoreResult};
 use crate::repo::Layout;
 use crate::sync::crypto::{open_bytes, seal_bytes, sha256_hex, to_hex};
 use crate::sync::engine::SyncClient;
+use crate::sync::merge::Scopes;
 use crate::sync::state::SyncStateFile;
 
 pub const KIND_ENTRY: &str = "entry";
 pub const KIND_BACKGROUND: &str = "background";
 pub const KIND_AVATAR: &str = "avatar";
+
+/// 图片类别归属哪个同步范围（v0.5.1 起没有独立的「同步图片」开关）：
+/// markdown 插图属于数据，列表背景与头像属于设置（配色/背景/个人资料）。
+fn kind_enabled(kind: &str, scopes: &Scopes) -> bool {
+    match kind {
+        KIND_ENTRY => scopes.data,
+        KIND_BACKGROUND | KIND_AVATAR => scopes.settings,
+        _ => false,
+    }
+}
 
 /// 单张图片下载体积上限（防御服务端返回异常大响应）。
 const MAX_IMAGE_BYTES: u64 = 96 * 1024 * 1024;
@@ -208,11 +219,18 @@ fn collect_dir(
     }
 }
 
-/// 枚举本机全部可同步图片。
-pub fn inventory(layout: &Layout) -> Vec<LocalImage> {
+/// 枚举本机全部可同步图片（只含当前同步范围允许的类别）。
+pub fn inventory(layout: &Layout, scopes: &Scopes) -> Vec<LocalImage> {
     let mut out = Vec::new();
-    collect_dir(&layout.avatar_img_dir(), KIND_AVATAR, "", &mut out);
-    collect_dir(&layout.background_img_dir(), KIND_BACKGROUND, "", &mut out);
+    if kind_enabled(KIND_AVATAR, scopes) {
+        collect_dir(&layout.avatar_img_dir(), KIND_AVATAR, "", &mut out);
+    }
+    if kind_enabled(KIND_BACKGROUND, scopes) {
+        collect_dir(&layout.background_img_dir(), KIND_BACKGROUND, "", &mut out);
+    }
+    if !kind_enabled(KIND_ENTRY, scopes) {
+        return out;
+    }
     if let Ok(entries) = fs::read_dir(layout.entry_img_root()) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -243,10 +261,11 @@ pub fn sync_images(
     device_id: &str,
     scope: &str,
     layout: &Layout,
+    scopes: &Scopes,
     state: &mut SyncStateFile,
 ) -> CoreResult<ImageTally> {
     let mut tally = ImageTally::default();
-    let local = inventory(layout);
+    let local = inventory(layout, scopes);
 
     // 1. PULL：增量元数据 → 本地缺失/哈希不符的才下载密文
     let mut cursor = state.last_pulled_image_seq;
@@ -255,10 +274,13 @@ pub fn sync_images(
         let count = page.images.len();
         let mut max_seq = cursor;
         for meta in &page.images {
-            match pull_one(client, token, enc_key, layout, meta, &local) {
-                Ok(true) => tally.pulled += 1,
-                Ok(false) => {}
-                Err(error) => tally.warnings.push(error.message),
+            // 不在当前范围内的类别直接跳过（水位仍要越过它）
+            if kind_enabled(&meta.kind, scopes) {
+                match pull_one(client, token, enc_key, layout, meta, &local) {
+                    Ok(true) => tally.pulled += 1,
+                    Ok(false) => {}
+                    Err(error) => tally.warnings.push(error.message),
+                }
             }
             max_seq = max_seq.max(meta.seq);
         }
@@ -502,7 +524,12 @@ mod tests {
         fs::create_dir_all(&entry).unwrap();
         fs::write(entry.join("md-1-1.png"), b"md").unwrap();
 
-        let images = inventory(&layout);
+        let all = Scopes {
+            data: true,
+            settings: true,
+            schedules: false,
+        };
+        let images = inventory(&layout, &all);
         assert_eq!(images.len(), 3, "临时文件不计入清单");
         let kinds: Vec<&str> = images.iter().map(|image| image.kind.as_str()).collect();
         assert!(kinds.contains(&KIND_AVATAR));
@@ -511,5 +538,27 @@ mod tests {
         let md = images.iter().find(|image| image.kind == KIND_ENTRY).unwrap();
         assert_eq!(md.node_id, "node-1");
         assert_eq!(md.id, image_id(KIND_ENTRY, "node-1", "md-1-1.png"));
+
+        // 插图跟数据范围走，背景/头像跟设置范围走
+        let data_only = Scopes {
+            data: true,
+            settings: false,
+            schedules: false,
+        };
+        let data_images = inventory(&layout, &data_only);
+        let kinds: Vec<&str> = data_images.iter().map(|image| image.kind.as_str()).collect();
+        assert_eq!(kinds, vec![KIND_ENTRY]);
+        let settings_only = Scopes {
+            data: false,
+            settings: true,
+            schedules: false,
+        };
+        let settings_images = inventory(&layout, &settings_only);
+        let mut kinds: Vec<&str> = settings_images
+            .iter()
+            .map(|image| image.kind.as_str())
+            .collect();
+        kinds.sort_unstable();
+        assert_eq!(kinds, vec![KIND_AVATAR, KIND_BACKGROUND]);
     }
 }

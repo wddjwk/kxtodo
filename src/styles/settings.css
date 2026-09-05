@@ -142,18 +142,201 @@
   color: #444;
 }
 
-/* 局域网发现结果：整行可点，复用 menu-action-button 的视觉语言 */
-.discovery-list {
-  display: grid;
-  gap: 6px;
+/* 段落标题 + 右侧动作按钮（数据同步的「历史」） */
+.section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
 }
 
+.section-head h3 {
+  margin: 0;
+}
+
+.section-head > .icon-button {
+  margin-left: auto;
+}
+
+/* 连接状态：一个小圆点 + 文字。移动端只留圆点（文字会把服务器地址挤到重叠） */
+.sync-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.conn-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.conn-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #c2c2c2;
+}
+
+.conn-state[data-state="online"] .conn-dot {
+  background: #22a05a;
+  box-shadow: 0 0 0 3px rgb(34 160 90 / 16%);
+}
+
+.conn-state[data-state="offline"] .conn-dot {
+  background: #d64545;
+  box-shadow: 0 0 0 3px rgb(214 69 69 / 16%);
+}
+
+.conn-text {
+  color: #666;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* 服务器地址单独一行：长地址可断行，不再和标签挤在同一行里重叠 */
+.sync-url {
+  margin: -3px 0 3px;
+  color: #777;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.sync-side {
+  min-width: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.sync-note {
+  margin: 2px 0;
+  border: 1px solid #f0e0b4;
+  border-radius: 8px;
+  background: #fffaeb;
+  color: #8a6a17;
+  padding: 7px 10px;
+  font-size: 12.5px;
+}
+
+/* 三个动作按钮一行等宽：解除配对 / 暂停·恢复 / 立即同步 */
+.sync-card .settings-row.sync-actions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* 配对表单的范围勾选：勾选框紧跟各自文字，一行内联排布 */
+.sync-card .settings-row.sync-scope-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+}
+
+.sync-scope-row > input[type="checkbox"] {
+  justify-self: auto;
+}
+
+.sync-actions > .settings-button {
+  justify-self: stretch;
+  width: 100%;
+  padding: 7px 6px;
+  white-space: nowrap;
+}
+
+/* 输入框内嵌图标按钮（服务器地址右侧的放大镜） */
+.sync-input-wrap {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.sync-input-wrap > input {
+  width: 100%;
+  padding-right: 32px;
+}
+
+.sync-input-wrap > .icon-button.inline {
+  position: absolute;
+  top: 50%;
+  right: 3px;
+  transform: translateY(-50%);
+}
+
+.spin {
+  display: inline-grid;
+  place-items: center;
+  animation: sync-spin 1s linear infinite;
+}
+
+@keyframes sync-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 下拉浮层：局域网发现结果与配对历史共用 */
+.sync-popover {
+  border: 1px solid #e6e6e6;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 12px 30px rgb(0 0 0 / 12%);
+  padding: 8px;
+}
+
+.sync-popover-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 4px 7px;
+  color: #666;
+  font-size: 12px;
+}
+
+.sync-popover-head .spacer {
+  margin-left: auto;
+}
+
+.sync-popover-list {
+  display: grid;
+  gap: 4px;
+  max-height: 216px;
+  overflow-y: auto;
+}
+
+.sync-popover-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
+  align-items: center;
+}
+
+.sync-popover p.muted {
+  margin: 0;
+  padding: 4px;
+  font-size: 12px;
+}
+
+.sync-popover .secret {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* 整行可点，复用 menu-action-button 的视觉语言 */
 .discovery-item {
   display: flex;
   align-items: baseline;
   gap: 8px;
   width: 100%;
   text-align: left;
+}
+
+.discovery-item .muted {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .discovery-name {

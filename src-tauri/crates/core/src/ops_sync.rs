@@ -1,4 +1,5 @@
-//! sync 命令域：register / login / status / now / unpair / configure。
+//! sync 命令域：register / login / status / probe / discover / now / configure /
+//! unpair / history。
 
 use serde_json::{json, Value};
 
@@ -15,25 +16,18 @@ fn param_str(params: &Value, key: &str) -> Option<String> {
     params.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
-fn required_pairing_params(params: &Value) -> CoreResult<(String, String, String, String)> {
+/// 配对三要素：服务器地址 + 用户名 + 密码（v0.5.1 起不再有邮箱）。
+fn required_pairing_params(params: &Value) -> CoreResult<(String, String, String)> {
     let server_url = param_str(params, "serverUrl")
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| CoreError::validation("MISSING_PARAM", "缺少 --server（同步服务器地址）"))?;
     let username = param_str(params, "username")
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| CoreError::validation("MISSING_PARAM", "缺少 --username"))?;
-    let email = param_str(params, "email")
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| CoreError::validation("MISSING_PARAM", "缺少 --email"))?;
     let secret = param_str(params, "secret")
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| CoreError::validation("MISSING_PARAM", "缺少 --secret（同步密钥）"))?;
-    Ok((
-        server_url,
-        username.trim().to_lowercase(),
-        email.trim().to_lowercase(),
-        secret,
-    ))
+        .ok_or_else(|| CoreError::validation("MISSING_PARAM", "缺少 --secret（同步密码）"))?;
+    Ok((server_url, username.trim().to_lowercase(), secret))
 }
 
 fn scopes_from_params(params: &Value) -> Option<Scopes> {
@@ -45,7 +39,7 @@ fn scopes_from_params(params: &Value) -> Option<Scopes> {
     }
     Some(Scopes {
         data: data.unwrap_or(true),
-        settings: settings.unwrap_or(false),
+        settings: settings.unwrap_or(true),
         schedules: schedules.unwrap_or(false),
     })
 }
@@ -58,6 +52,16 @@ fn emit_sync_domains(ctx: &ExecContext, meta: &mut Meta, changed: &[Domain], ids
         host.emit_domain_event(*domain, 0, ids.clone());
     }
     let _ = meta;
+}
+
+/// sync 域写 settings.json 的动作（register/login/unpair/configure）都要通知前端回刷：
+/// 自动同步循环订阅 appSettings 来重排定时器，不发事件的话「用 CLI 改间隔」
+/// 对正在运行的 GUI 永远不生效（GUI 自己面板的路径靠显式 refreshFromCore 兜着）。
+fn notify_settings_changed(ctx: &ExecContext) {
+    let Some(host) = ctx.host else {
+        return;
+    };
+    host.emit_domain_event(Domain::Settings, 0, Vec::new());
 }
 
 pub fn sync_dispatch(
@@ -75,6 +79,8 @@ pub fn sync_dispatch(
         "now" => sync_now(inv, ctx, meta),
         "unpair" => sync_unpair(ctx),
         "configure" => sync_configure(inv, ctx),
+        "history" => sync_history(ctx),
+        "historyRemove" => sync_history_remove(inv, ctx),
         other => Err(CoreError::validation(
             "UNKNOWN_ACTION",
             format!("未知 sync 动作 `{other}`"),
@@ -84,31 +90,31 @@ pub fn sync_dispatch(
 
 fn sync_register(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
     // 新设备不预置默认数据：首次拉取直接落服务端内容，避免与服务端数据并集出重复实体。
-    let (server_url, username, email, secret) = required_pairing_params(&inv.params)?;
+    let (server_url, username, secret) = required_pairing_params(&inv.params)?;
     let scopes = scopes_from_params(&inv.params);
     let (device_id, report) =
-        engine::register_device(ctx.repo, &server_url, &username, &email, &secret, scopes)?;
+        engine::register_device(ctx.repo, &server_url, &username, &secret, scopes)?;
+    notify_settings_changed(ctx);
     Ok(json!({
         "registered": true,
         "deviceId": device_id,
         "serverUrl": server_url.trim().trim_end_matches('/'),
         "username": username,
-        "email": email,
         "sync": report,
     }))
 }
 
 fn sync_login(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
-    let (server_url, username, email, secret) = required_pairing_params(&inv.params)?;
+    let (server_url, username, secret) = required_pairing_params(&inv.params)?;
     let scopes = scopes_from_params(&inv.params);
     let (device_id, report) =
-        engine::pair_device(ctx.repo, &server_url, &username, &email, &secret, scopes)?;
+        engine::pair_device(ctx.repo, &server_url, &username, &secret, scopes)?;
+    notify_settings_changed(ctx);
     Ok(json!({
         "paired": true,
         "deviceId": device_id,
         "serverUrl": server_url.trim().trim_end_matches('/'),
         "username": username,
-        "email": email,
         "sync": report,
     }))
 }
@@ -120,17 +126,18 @@ fn sync_status(ctx: &ExecContext) -> CoreResult<Value> {
     let settings = ctx.repo.load_settings()?;
     let sync = &settings.sync;
     let state = load_state(&ctx.repo.layout);
+    let paired = sync.is_paired();
     Ok(json!({
-        "paired": sync.enabled && !sync.server_url.is_empty(),
+        "paired": paired,
         "enabled": sync.enabled,
+        // 已配对但被用户暂停（配置保留，恢复即继续）
+        "paused": paired && !sync.enabled,
         "serverUrl": sync.server_url,
         "username": sync.username,
-        "email": sync.email,
         "scopes": {
             "data": sync.sync_data,
             "settings": sync.sync_settings,
             "schedules": sync.sync_schedules,
-            "images": sync.sync_images,
         },
         "intervalSeconds": sync.interval_seconds,
         "reconnectSeconds": sync.reconnect_seconds,
@@ -190,6 +197,7 @@ fn sync_unpair(ctx: &ExecContext) -> CoreResult<Value> {
             Ok(json!({ "unpaired": true }))
         })?;
     let _ = outcome;
+    notify_settings_changed(ctx);
     Ok(json!({ "unpaired": true, "at": now_iso() }))
 }
 
@@ -198,24 +206,21 @@ fn sync_configure(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
     let data = params.get("syncData").and_then(Value::as_bool);
     let settings_scope = params.get("syncSettings").and_then(Value::as_bool);
     let schedules = params.get("syncSchedules").and_then(Value::as_bool);
-    let images = params.get("syncImages").and_then(Value::as_bool);
     let enabled = params.get("enabled").and_then(Value::as_bool);
     let interval = params.get("intervalSeconds").and_then(Value::as_u64);
     let reconnect = params.get("reconnectSeconds").and_then(Value::as_u64);
     if data.is_none()
         && settings_scope.is_none()
         && schedules.is_none()
-        && images.is_none()
         && enabled.is_none()
         && interval.is_none()
         && reconnect.is_none()
     {
         return Err(CoreError::validation(
             "MISSING_PARAM",
-            "至少提供一个配置项（syncData/syncSettings/syncSchedules/syncImages/enabled/intervalSeconds/reconnectSeconds）",
+            "至少提供一个配置项（syncData/syncSettings/syncSchedules/enabled/intervalSeconds/reconnectSeconds）",
         ));
     }
-    let settings_before = ctx.repo.load_settings()?;
     let (_file, _outcome) = ctx
         .repo
         .write_settings(None, None, "sync.configure", |file| {
@@ -231,9 +236,6 @@ fn sync_configure(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
             if let Some(value) = schedules {
                 file.sync.sync_schedules = value;
             }
-            if let Some(value) = images {
-                file.sync.sync_images = value;
-            }
             // 低于下限的间隔按下限生效（用户要的是「至少 5 秒」，不是报错）
             if let Some(value) = interval {
                 file.sync.interval_seconds = value.clamp(5, 86400) as u32;
@@ -245,25 +247,29 @@ fn sync_configure(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
             // 本地设置只有真的变化后（config.set 触发）才会推送。
             Ok(json!({ "configured": true }))
         })?;
-    // 开启某个 scope 时重置拉取水位：增量流里被旧 scope 过滤掉的记录必须全量重拉，
-    // 否则历史实体会永远消失在水位之下。
-    let scopes_opened = (data.unwrap_or(false) && !settings_before.sync.sync_data)
-        || (settings_scope.unwrap_or(false) && !settings_before.sync.sync_settings)
-        || (schedules.unwrap_or(false) && !settings_before.sync.sync_schedules);
-    // 打开图片同步同理：历史图片都在图片水位之下，必须从头拉一遍。
-    let images_opened = images.unwrap_or(false) && !settings_before.sync.sync_images;
-    if scopes_opened || images_opened {
-        let mut state = load_state(&ctx.repo.layout);
-        if scopes_opened {
-            state.last_pulled_seq = 0;
-        }
-        if images_opened {
-            state.last_pulled_image_seq = 0;
-        }
-        crate::sync::state::save_state(&ctx.repo.layout, &state)?;
-    }
+    // 范围变化后需要全量重拉的水位由同步引擎自己对账（runtime/sync.json 里记范围签名），
+    // 这里不再逐条重置——否则 config set 改范围就会漏掉重置。
+    notify_settings_changed(ctx);
+    Ok(json!({ "configured": true }))
+}
+
+/// 配对历史（本机 `runtime/sync-history.json`）：设置页「历史」一键回填。
+fn sync_history(ctx: &ExecContext) -> CoreResult<Value> {
+    let file = crate::sync::history::load_history(&ctx.repo.layout);
+    Ok(json!({ "entries": file.entries, "count": file.entries.len() }))
+}
+
+fn sync_history_remove(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
+    let index = inv
+        .params
+        .get("index")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| CoreError::validation("MISSING_PARAM", "缺少 index（历史条目下标）"))?;
+    let file = crate::sync::history::remove(&ctx.repo.layout, index as usize)?;
     Ok(json!({
-        "configured": true,
-        "fullRepull": scopes_opened || images_opened,
+        "removed": true,
+        "index": index,
+        "entries": file.entries,
+        "count": file.entries.len(),
     }))
 }

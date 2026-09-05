@@ -59,10 +59,11 @@ KXToDo v9 提供脚本化 CLI。本 SKILL 说明**何时调用、按什么步骤
 ## 数据同步
 
 - 找服务器：`sync discover`（局域网 UDP 广播查询，返回 name/host/port/url，`url` 可直接当 `--server`）。该命令**不需要数据目录已存在**，是配对前的第一步。
-- 配对：新账户 `sync register --server <url> --username --email --secret`；已有账户换设备用 `sync login`（同样四个参数）。密钥丢失=数据不可恢复，别替用户编密钥。
+- 配对：新账户 `sync register --server <url> --username --secret`；已有账户换设备用 `sync login`（同样三个参数）。账户 = **用户名 + 密码**，密码派生认证/加密密钥，丢失=数据不可恢复，别替用户编密码。
 - 日常：`sync now` 立即同步；`sync status` 是**纯本地读**（配对信息 + 最近同步结果 + 缓存的在线状态，不联网，可随时调用）；`sync probe` 才真的联网探测（短超时 /healthz + /me）并刷新在线状态。判断服务器通不通看 status 的 `online` 字段（`null` = 还没探测过），要最新结论先 probe。
-- 配置：`sync configure --interval-seconds N`（自动同步间隔，低于 5 按 5 生效）、`--reconnect-seconds N`（掉线后静默重连间隔）、`--sync-images/--sync-data/--sync-settings/--sync-schedules`。图片（markdown 插图/列表背景/头像的文件本体）默认随数据一起同步。
-- `sync unpair` 只清本机 token 并关同步开关，服务器数据保留。
+- 配置：`sync configure --interval-seconds N`（自动同步间隔，低于 5 按 5 生效）、`--reconnect-seconds N`（掉线后静默重连间隔）、范围三选 `--sync-data`（节点/任务/插图图片，默认开）/`--sync-settings`（配置/配色/背景与头像图片，默认开）/`--sync-schedules`（默认关）。图片文件本体没有独立开关：插图跟数据走，背景与头像跟设置走；改范围会自动全量重拉一次。
+- 暂停与恢复：`sync configure --enabled false` 暂停同步（服务器地址/用户名/密码全部保留，此时 `sync now` 报 `SYNC_PAUSED`，status 的 `paused` 为 true），`--enabled true` 恢复。`sync unpair` 才是解除配对（清 token 与密码，服务器数据保留）。
+- 历史：`sync history` 列出本机用过的「服务器地址 + 用户名 + 密码」（`runtime/sync-history.json`，0600，最多 8 条，最近使用在前），`sync history --remove <下标>` 删一条。给用户回填凭据前先问，别把密码写进日志或提交里。
 
 ## 幂等与并发
 

@@ -34,6 +34,10 @@ pub struct SyncStateFile {
     /// 图片 blob 流的拉取水位（与实体流共用服务端计数器，各自独立推进）
     #[serde(default)]
     pub last_pulled_image_seq: u64,
+    /// 上一次同步的范围签名（`data|settings|schedules`）：范围一变就把两条水位归零重拉，
+    /// 因为增量流是按范围过滤的，水位之下的记录不会再出现一次。
+    #[serde(default)]
+    pub scope_signature: String,
     #[serde(default)]
     pub pushed: Map<String, Value>,
     pub last_sync_at: Option<String>,
@@ -58,6 +62,7 @@ impl SyncStateFile {
             token_expires_at: None,
             last_pulled_seq: 0,
             last_pulled_image_seq: 0,
+            scope_signature: String::new(),
             pushed: Map::new(),
             last_sync_at: None,
             last_result: None,
@@ -118,10 +123,10 @@ pub fn clear_state(layout: &Layout) -> CoreResult<()> {
 }
 
 #[cfg(unix)]
-fn restrict_permissions(path: &Path) {
+pub(crate) fn restrict_permissions(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
     let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
 }
 
 #[cfg(not(unix))]
-fn restrict_permissions(_path: &Path) {}
+pub(crate) fn restrict_permissions(_path: &Path) {}

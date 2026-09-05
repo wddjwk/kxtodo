@@ -106,12 +106,10 @@ export const defaultSettings: Settings = {
     enabled: false,
     serverUrl: "",
     username: "",
-    email: "",
     secret: "",
     syncData: true,
-    syncSettings: false,
+    syncSettings: true,
     syncSchedules: false,
-    syncImages: true,
     intervalSeconds: 30,
     reconnectSeconds: 300
   },
@@ -660,12 +658,10 @@ export function normalizeSettings(raw: unknown): Settings {
       enabled: Boolean(source?.sync?.enabled),
       serverUrl: typeof source?.sync?.serverUrl === "string" ? source.sync.serverUrl : "",
       username: typeof source?.sync?.username === "string" ? source.sync.username : "",
-      email: typeof source?.sync?.email === "string" ? source.sync.email : "",
       secret: typeof source?.sync?.secret === "string" ? source.sync.secret : "",
       syncData: typeof source?.sync?.syncData === "boolean" ? source.sync.syncData : true,
-      syncSettings: Boolean(source?.sync?.syncSettings),
+      syncSettings: typeof source?.sync?.syncSettings === "boolean" ? source.sync.syncSettings : true,
       syncSchedules: Boolean(source?.sync?.syncSchedules),
-      syncImages: typeof source?.sync?.syncImages === "boolean" ? source.sync.syncImages : true,
       // 低于下限的间隔按下限生效（用户要的是「至少 5 秒」）
       intervalSeconds:
         typeof source?.sync?.intervalSeconds === "number" && Number.isFinite(source.sync.intervalSeconds)

@@ -2,10 +2,11 @@
 //! 服务器不理解业务数据：只保管密文与版本号。
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, Path, Query, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -30,6 +31,8 @@ pub struct AppState {
     pub db: Db,
     pub logger: Mutex<Logger>,
     pub settings: ServerSettings,
+    /// 进程内运行指标（本次运行的请求/写入/每用户活动），供管理台展示
+    pub metrics: crate::metrics::Metrics,
     /// 登录挑战 nonce → (user_id, 过期时间)
     pub challenges: Mutex<HashMap<String, (String, String)>>,
     /// 管理界面 session token → 过期时间
@@ -39,9 +42,17 @@ pub struct AppState {
 pub type SharedState = Arc<AppState>;
 
 impl AppState {
+    /// 关键操作：stdout + 持久化日志 + 管理台「操作日志」。
     pub fn log(&self, kind: &str, message: &str) {
         if let Ok(mut logger) = self.logger.lock() {
             logger.log(kind, message);
+        }
+    }
+
+    /// 高频噪音（每请求访问行、周期空同步、发现应答）：只进 stdout，不落盘。
+    pub fn console(&self, kind: &str, message: &str) {
+        if let Ok(mut logger) = self.logger.lock() {
+            logger.console(kind, message);
         }
     }
 }
@@ -65,27 +76,33 @@ pub fn router(state: SharedState) -> Router {
         ))
         .layer(DefaultBodyLimit::max(128 * 1024 * 1024))
         .with_state(state.clone());
-    let admin = crate::admin::router(state.clone()).layer(
-        middleware::from_fn_with_state(state, request_log),
-    );
-    api.nest("/admin", admin)
+    // 管理台自带 /admin 前缀（同时注册 /admin 与 /admin/），所以用 merge 而不是 nest
+    api.merge(
+        crate::admin::router(state.clone())
+            .layer(middleware::from_fn_with_state(state, request_log)),
+    )
 }
 
-/// 请求日志 middleware：method path status 耗时 客户端IP。
+/// 请求访问行：method path status 耗时 客户端IP。
+///
+/// **只进 stdout**：客户端自动同步最短 5 秒一轮，每轮至少两三个请求，
+/// 落盘的话一天就是十几万行纯噪音（持久化日志只留关键写操作）。
 async fn request_log(
     State(state): State<SharedState>,
+    connect: ConnectInfo<SocketAddr>,
     request: axum::extract::Request,
     next: Next,
 ) -> Response {
     let method = request.method().clone();
     let path = request.uri().path().to_string();
-    let client_ip = client_ip(request.headers());
+    let client_ip = client_ip(request.headers(), Some(&connect));
     let started = std::time::Instant::now();
     let response = next.run(request).await;
     let status = response.status().as_u16();
-    // 健康检查不刷日志（客户端轮询会刷屏）
+    state.metrics.hit(method.as_str(), &path, status < 400);
+    // 健康检查连 stdout 都不刷（探测/发现复核会频繁打它）
     if path != "/healthz" {
-        state.log(
+        state.console(
             "req",
             &format!(
                 "{method} {path} -> {status}（{}ms）{client_ip}",
@@ -96,17 +113,36 @@ async fn request_log(
     response
 }
 
-/// 客户端 IP：优先 X-Forwarded-For（反代场景）。
-fn client_ip(headers: &HeaderMap) -> String {
-    if let Some(forwarded) = headers
+/// X-Forwarded-For 里的第一个地址（反代场景），没有则空。
+fn client_ip_value(headers: &HeaderMap) -> String {
+    headers
         .get("x-forwarded-for")
         .and_then(|value| value.to_str().ok())
-    {
-        if let Some(first) = forwarded.split(',').next() {
-            return format!(" ip={}", first.trim());
-        }
+        .and_then(|forwarded| forwarded.split(',').next())
+        .map(|first| first.trim().to_string())
+        .filter(|first| !first.is_empty())
+        .unwrap_or_default()
+}
+
+/// 真实来源 IP：反代给的 XFF 优先，否则用 TCP 连接的对端地址
+/// （局域网直连没有 XFF，靠 ConnectInfo 才拿得到）。
+fn peer_ip(headers: &HeaderMap, connect: Option<&ConnectInfo<SocketAddr>>) -> String {
+    let forwarded = client_ip_value(headers);
+    if !forwarded.is_empty() {
+        return forwarded;
     }
-    String::new()
+    connect
+        .map(|info| info.0.ip().to_string())
+        .unwrap_or_default()
+}
+
+fn client_ip(headers: &HeaderMap, connect: Option<&ConnectInfo<SocketAddr>>) -> String {
+    let ip = peer_ip(headers, connect);
+    if ip.is_empty() {
+        String::new()
+    } else {
+        format!(" ip={ip}")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -158,7 +194,6 @@ async fn healthz(State(state): State<SharedState>) -> Json<serde_json::Value> {
 #[derive(Deserialize)]
 struct RegisterBody {
     username: String,
-    email: String,
     #[serde(rename = "authKey")]
     auth_key: String,
 }
@@ -168,25 +203,20 @@ async fn register(
     Json(body): Json<RegisterBody>,
 ) -> ApiResult<Response> {
     let username = body.username.trim().to_lowercase();
-    let email = body.email.trim().to_lowercase();
-    if username.is_empty() || email.is_empty() {
-        return Err(ServerError::bad_request("username/email 不能为空"));
+    if username.is_empty() {
+        return Err(ServerError::bad_request("username 不能为空"));
     }
     if body.auth_key.len() != 64 || !body.auth_key.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(ServerError::bad_request("authKey 应为 64 位 hex"));
     }
-    let user_id = state.db.create_user(&username, &email, &body.auth_key)?;
-    state.log(
-        "op",
-        &format!("注册账户：{username} / {email}（{user_id}）"),
-    );
+    let user_id = state.db.create_user(&username, &body.auth_key)?;
+    state.log("op", &format!("注册账户：{username}（{user_id}）"));
     Ok((StatusCode::CREATED, Json(json!({ "userId": user_id }))).into_response())
 }
 
 #[derive(Deserialize)]
 struct AccountBody {
     username: String,
-    email: String,
 }
 
 async fn login_challenge(
@@ -194,10 +224,9 @@ async fn login_challenge(
     Json(body): Json<AccountBody>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let username = body.username.trim().to_lowercase();
-    let email = body.email.trim().to_lowercase();
     let user = state
         .db
-        .find_user(&username, &email)?
+        .find_user(&username)?
         .ok_or_else(ServerError::account_not_found)?;
     let nonce = util::random_hex(32);
     let expires = (chrono::Utc::now() + chrono::Duration::seconds(60))
@@ -213,17 +242,18 @@ async fn login_challenge(
 #[derive(Deserialize)]
 struct LoginBody {
     username: String,
-    email: String,
     nonce: String,
     proof: String,
 }
 
 async fn login(
     State(state): State<SharedState>,
+    connect: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(body): Json<LoginBody>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let username = body.username.trim().to_lowercase();
-    let email = body.email.trim().to_lowercase();
+    let ip = peer_ip(&headers, Some(&connect));
     let challenge = state
         .challenges
         .lock()
@@ -236,7 +266,7 @@ async fn login(
     }
     let user = state
         .db
-        .find_user(&username, &email)?
+        .find_user(&username)?
         .ok_or_else(ServerError::auth_failed)?;
     if user.id != challenge.0 {
         return Err(ServerError::challenge_invalid());
@@ -249,7 +279,7 @@ async fn login(
         body.nonce.as_bytes(),
     ));
     if !util::constant_time_eq(&expected, &body.proof) {
-        state.log("op", &format!("登录失败（proof 不匹配）：{username} / {email}"));
+        state.log("op", &format!("登录失败（proof 不匹配）：{username}，ip={ip}"));
         return Err(ServerError::auth_failed());
     }
 
@@ -257,7 +287,16 @@ async fn login(
     let token_hash = util::sha256_hex(token.as_bytes());
     let expires_at = util::iso_after_days(TOKEN_TTL_DAYS);
     state.db.insert_token(&token_hash, &user.id, &expires_at)?;
-    state.log("op", &format!("登录成功：{username} / {email}，token 有效期至 {expires_at}"));
+    state.metrics.user_event(
+        &user.id,
+        &user.username,
+        crate::metrics::UserEvent::Login,
+        &ip,
+    );
+    state.log(
+        "op",
+        &format!("登录成功：{username}（{}），token 有效期至 {expires_at}", user.id),
+    );
     Ok(Json(json!({
         "token": token,
         "expiresAt": expires_at,
@@ -307,7 +346,6 @@ async fn me(
     Ok(Json(json!({
         "userId": user.id,
         "username": user.username,
-        "email": user.email,
         "currentSeq": user.current_seq,
         "entityCount": entities,
         "imageCount": images,
@@ -326,6 +364,7 @@ struct ChangesQuery {
 
 async fn changes(
     State(state): State<SharedState>,
+    connect: ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Query(query): Query<ChangesQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
@@ -333,6 +372,12 @@ async fn changes(
     let since = query.since.unwrap_or(0);
     let limit = query.limit.unwrap_or(500).clamp(1, 2000);
     let (rows, current_seq) = state.db.changes_since(&user.id, since, limit)?;
+    state.metrics.user_event(
+        &user.id,
+        &user.username,
+        crate::metrics::UserEvent::Pull,
+        &peer_ip(&headers, Some(&connect)),
+    );
     Ok(Json(json!({
         "entities": rows.iter().map(entity_to_json).collect::<Vec<_>>(),
         "currentSeq": current_seq,
@@ -362,6 +407,7 @@ struct PutBody {
 
 async fn put_entity(
     State(state): State<SharedState>,
+    connect: ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Path(id): Path<String>,
     Json(body): Json<PutBody>,
@@ -377,18 +423,28 @@ async fn put_entity(
         .db
         .put_entity(&user.id, &id, body.base, &body.nonce, &body.ciphertext, &body.hash)
     {
-        Ok(seq) => {
-            state.log(
-                "op",
-                &format!(
-                    "上传实体：{id}（base={} → seq={seq}，{}字节密文）by {}/{}",
-                    body.base,
-                    body.ciphertext.len(),
-                    user.username,
-                    user.email
-                ),
-            );
-            Ok(Json(json!({ "seq": seq, "changed": true })).into_response())
+        Ok((seq, changed)) => {
+            if changed {
+                state.metrics.wrote();
+                state.metrics.user_event(
+                    &user.id,
+                    &user.username,
+                    crate::metrics::UserEvent::Push,
+                    &peer_ip(&headers, Some(&connect)),
+                );
+                // 只有真的改动了才落持久化日志：周期同步里的幂等重放不值得留痕
+                state.log(
+                    "op",
+                    &format!(
+                        "写入实体：{id}（{}，base={} → seq={seq}，密文 {} 字节）by {}",
+                        if body.base == 0 { "新建" } else { "更新" },
+                        body.base,
+                        body.ciphertext.len(),
+                        user.username,
+                    ),
+                );
+            }
+            Ok(Json(json!({ "seq": seq, "changed": changed })).into_response())
         }
         Err(error) => Err(error),
     }
@@ -456,6 +512,7 @@ async fn image_check(
 
 async fn get_image(
     State(state): State<SharedState>,
+    connect: ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> ApiResult<Response> {
@@ -465,6 +522,12 @@ async fn get_image(
         .db
         .get_image(&user.id, &id)?
         .ok_or_else(ServerError::not_found)?;
+    state.metrics.user_event(
+        &user.id,
+        &user.username,
+        crate::metrics::UserEvent::ImagePull,
+        &peer_ip(&headers, Some(&connect)),
+    );
     let ciphertext = row.ciphertext.unwrap_or_default();
     let mut response_headers = HeaderMap::new();
     let nonce = axum::http::HeaderValue::from_str(&row.nonce)
@@ -496,6 +559,7 @@ struct ImagePutQuery {
 
 async fn put_image(
     State(state): State<SharedState>,
+    connect: ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Path(id): Path<String>,
     Query(query): Query<ImagePutQuery>,
@@ -523,7 +587,7 @@ async fn put_image(
     }
     let updated_at = query.updated_at.unwrap_or_else(util::now_iso);
     let updated_by = query.updated_by.unwrap_or_else(|| user.id.clone());
-    let seq = state.db.put_image(
+    let (seq, changed) = state.db.put_image(
         &user.id,
         &id,
         &query.kind,
@@ -535,18 +599,31 @@ async fn put_image(
         &updated_at,
         &updated_by,
     )?;
-    state.log(
-        "op",
-        &format!(
-            "上传图片：{}（{}，{}字节密文 → seq={seq}）by {}/{}",
-            query.filename,
-            query.kind,
-            body.len(),
-            user.username,
-            user.email
-        ),
-    );
-    Ok(Json(json!({ "seq": seq, "changed": true })).into_response())
+    if changed {
+        state.metrics.wrote();
+        state.metrics.user_event(
+            &user.id,
+            &user.username,
+            crate::metrics::UserEvent::ImagePush,
+            &peer_ip(&headers, Some(&connect)),
+        );
+        state.log(
+            "op",
+            &format!(
+                "写入图片：{}（{}{}，密文 {} 字节 → seq={seq}）by {}",
+                query.filename,
+                query.kind,
+                if node_id.is_empty() {
+                    String::new()
+                } else {
+                    format!(" / {node_id}")
+                },
+                body.len(),
+                user.username,
+            ),
+        );
+    }
+    Ok(Json(json!({ "seq": seq, "changed": changed })).into_response())
 }
 
 fn is_hex(raw: &str) -> bool {

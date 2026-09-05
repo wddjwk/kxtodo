@@ -7,7 +7,6 @@ use std::time::Duration;
 use kxtodo_core::repo::Repository;
 
 const USERNAME: &str = "tester";
-const EMAIL: &str = "tester@example.com";
 const SECRET: &str = "e2e-secret-123";
 
 struct ServerGuard {
@@ -135,7 +134,6 @@ fn two_devices_converge_with_edits_and_deletes() {
         &a,
         &base,
         USERNAME,
-        EMAIL,
         SECRET,
         Some(kxtodo_core::sync::merge::Scopes {
             data: true,
@@ -184,7 +182,6 @@ fn two_devices_converge_with_edits_and_deletes() {
         &b,
         &base,
         USERNAME,
-        EMAIL,
         SECRET,
         Some(kxtodo_core::sync::merge::Scopes {
             data: true,
@@ -325,7 +322,7 @@ fn images_converge_between_devices() {
     let base = format!("http://127.0.0.1:{port}");
 
     let (a, _dir_a) = device_repo("img-a");
-    kxtodo_core::sync::engine::register_device(&a, &base, "imguser", "img@x.y", "img-secret", None)
+    kxtodo_core::sync::engine::register_device(&a, &base, "imguser", "img-secret", None)
         .expect("register");
     let entry_id = a
         .load_data()
@@ -350,7 +347,7 @@ fn images_converge_between_devices() {
 
     // 全新设备 B 配对：图片必须自动落盘，字节完全一致
     let (b, _dir_b) = fresh_device_repo("img-b");
-    kxtodo_core::sync::engine::pair_device(&b, &base, "imguser", "img@x.y", "img-secret", None)
+    kxtodo_core::sync::engine::pair_device(&b, &base, "imguser", "img-secret", None)
         .expect("B pair");
     assert_eq!(
         std::fs::read(b.layout.entry_img_dir(&entry_id).join("md-1-1.png")).unwrap(),
@@ -396,11 +393,11 @@ fn wrong_secret_is_rejected() {
     let base = format!("http://127.0.0.1:{port}");
 
     let (a, _dir_a) = device_repo("wrong");
-    kxtodo_core::sync::engine::register_device(&a, &base, "u2", "u2@x.y", "right-secret", None)
+    kxtodo_core::sync::engine::register_device(&a, &base, "u2", "right-secret", None)
         .expect("register");
 
     let (b, _dir_b) = device_repo("wrong-b");
-    let result = kxtodo_core::sync::engine::pair_device(&b, &base, "u2", "u2@x.y", "WRONG", None);
+    let result = kxtodo_core::sync::engine::pair_device(&b, &base, "u2", "WRONG", None);
     assert!(result.is_err(), "密钥错误必须登录失败");
     let _ = std::fs::remove_file(&db);
 }
@@ -415,7 +412,7 @@ fn server_ciphertext_is_opaque() {
     let base = format!("http://127.0.0.1:{port}");
 
     let (a, _dir_a) = device_repo("opaque");
-    kxtodo_core::sync::engine::register_device(&a, &base, "u3", "u3@x.y", "sec", None).expect("register");
+    kxtodo_core::sync::engine::register_device(&a, &base, "u3", "sec", None).expect("register");
     let marker = "绝密明文标记XYZ";
     let data = a.load_data().unwrap();
     let entry_id = data
@@ -454,6 +451,57 @@ fn server_ciphertext_is_opaque() {
     assert!(
         !text.contains(marker),
         "服务器数据库不得包含明文任务内容"
+    );
+    let _ = std::fs::remove_file(&db);
+}
+
+#[test]
+fn paused_sync_is_refused_and_resumes() {
+    let port = free_port();
+    let db = std::env::temp_dir().join(format!("kxtodo-sync-e2e-pause-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&db);
+    let _server = spawn_server(port, &db);
+    let base = format!("http://127.0.0.1:{port}");
+
+    let (a, _dir_a) = device_repo("pause");
+    kxtodo_core::sync::engine::register_device(&a, &base, "pauseuser", "pause-secret", None)
+        .expect("register");
+
+    // 暂停：只关开关，服务器地址/用户名/密码全部保留
+    let _ = a
+        .write_settings(None, None, "test.pause", |file| {
+            file.sync.enabled = false;
+            Ok(serde_json::json!({}))
+        })
+        .unwrap();
+    let settings = a.load_settings().unwrap();
+    assert!(settings.sync.is_paired(), "暂停不等于解除配对");
+    let error = kxtodo_core::sync::engine::run_sync(&a).unwrap_err();
+    assert_eq!(error.code, "SYNC_PAUSED", "暂停时同步必须被拒绝：{error:?}");
+    // 探测是只读动作，暂停时照常可用（面板仍要显示在线状态）
+    assert!(kxtodo_core::sync::engine::probe_connection(&a).is_ok());
+
+    // 恢复：立刻又能同步
+    let _ = a
+        .write_settings(None, None, "test.resume", |file| {
+            file.sync.enabled = true;
+            Ok(serde_json::json!({}))
+        })
+        .unwrap();
+    kxtodo_core::sync::engine::run_sync(&a).expect("恢复后同步应成功");
+
+    // 解除配对才会清掉密码，此后 is_paired 为 false
+    let _ = a
+        .write_settings(None, None, "test.unpair", |file| {
+            file.sync.enabled = false;
+            file.sync.secret = String::new();
+            Ok(serde_json::json!({}))
+        })
+        .unwrap();
+    assert!(!a.load_settings().unwrap().sync.is_paired());
+    assert_eq!(
+        kxtodo_core::sync::engine::run_sync(&a).unwrap_err().code,
+        "SYNC_NOT_CONFIGURED"
     );
     let _ = std::fs::remove_file(&db);
 }

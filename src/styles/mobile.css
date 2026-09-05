@@ -130,6 +130,29 @@
   min-height: 48px;
 }
 
+/* 数据同步（窄屏）：连接状态只留圆点——文字会把服务器地址挤到重叠。 */
+.app-shell.mobile .conn-text {
+  display: none;
+}
+
+.app-shell.mobile .sync-label {
+  gap: 6px;
+}
+
+.app-shell.mobile .sync-card .settings-row.sync-actions {
+  gap: 6px;
+}
+
+.app-shell.mobile .sync-actions > .settings-button {
+  padding: 9px 4px;
+  font-size: 12.5px;
+}
+
+.app-shell.mobile .sync-popover .discovery-item {
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
 /* Smaller title font on mobile */
 .app-shell.mobile h1 {
   font-size: 24px;

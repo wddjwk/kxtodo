@@ -82,8 +82,8 @@ fn responder_loop(
             continue;
         }
         if socket.send_to(reply.as_bytes(), from).is_ok() {
-            state.log(
-                "info",
+            state.console(
+                "discovery",
                 &format!("发现应答：{name} → {}（TCP 端口 {tcp_port}）", from.ip()),
             );
         }

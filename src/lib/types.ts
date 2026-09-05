@@ -87,12 +87,10 @@ export type Settings = {
     enabled: boolean;
     serverUrl: string;
     username: string;
-    email: string;
     secret: string;
     syncData: boolean;
     syncSettings: boolean;
     syncSchedules: boolean;
-    syncImages: boolean;
     intervalSeconds: number;
     reconnectSeconds: number;
   };

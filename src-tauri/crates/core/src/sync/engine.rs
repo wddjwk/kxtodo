@@ -136,10 +136,9 @@ impl SyncClient {
             .map_err(|e| CoreError::io(format!("healthz 响应无效：{e}")))
     }
 
-    pub fn register(&self, username: &str, email: &str, auth_key: &[u8; 32]) -> CoreResult<String> {
+    pub fn register(&self, username: &str, auth_key: &[u8; 32]) -> CoreResult<String> {
         let body = json!({
             "username": username,
-            "email": email,
             "authKey": crate::sync::crypto::to_hex(auth_key),
         });
         let response = self
@@ -149,7 +148,7 @@ impl SyncClient {
             .map_err(|error| match error {
                 ureq::Error::Status(409, _) => CoreError::conflict(
                     "ACCOUNT_EXISTS",
-                    format!("账户 {username} / {email} 已注册，请改用 login 配对"),
+                    format!("账户 {username} 已注册，请改用 login 配对"),
                 ),
                 _ => network_error(error),
             })?;
@@ -164,8 +163,8 @@ impl SyncClient {
         Ok(parsed.user_id)
     }
 
-    pub fn login_challenge(&self, username: &str, email: &str) -> CoreResult<String> {
-        let body = json!({ "username": username, "email": email });
+    pub fn login_challenge(&self, username: &str) -> CoreResult<String> {
+        let body = json!({ "username": username });
         let response = self
             .agent
             .post(&format!("{}/api/v1/login-challenge", self.base))
@@ -184,14 +183,12 @@ impl SyncClient {
     pub fn login(
         &self,
         username: &str,
-        email: &str,
         auth_key: &[u8; 32],
     ) -> CoreResult<(String, Option<String>, u64)> {
-        let nonce = self.login_challenge(username, email)?;
+        let nonce = self.login_challenge(username)?;
         let proof = crate::sync::crypto::to_hex(&hmac_sha256(auth_key, nonce.as_bytes()));
         let body = json!({
             "username": username,
-            "email": email,
             "nonce": nonce,
             "proof": proof,
         });
@@ -202,7 +199,7 @@ impl SyncClient {
             .map_err(|error| match error {
                 ureq::Error::Status(401, _) => CoreError::conflict(
                     "AUTH_FAILED",
-                    "登录失败：账户不存在或同步密钥不正确".to_string(),
+                    "登录失败：用户名不存在或密码不正确".to_string(),
                 ),
                 _ => network_error(error),
             })?;
@@ -600,19 +597,40 @@ fn run_sync_inner(repo: &Repository) -> CoreResult<SyncReport> {
 
     let settings = repo.load_settings()?;
     let sync = &settings.sync;
-    if !sync.enabled || sync.server_url.is_empty() {
+    if !sync.is_paired() {
         return Err(CoreError::conflict(
             "SYNC_NOT_CONFIGURED",
             "本机未配置同步（先 kxtodo-cli sync register / login）".to_string(),
         ));
     }
-    let keys: SyncKeys = derive_keys(&sync.username, &sync.email, &sync.secret)?;
+    if !sync.enabled {
+        return Err(CoreError::conflict(
+            "SYNC_PAUSED",
+            "同步已暂停（设置 → 数据同步 → 恢复同步，或 kxtodo-cli sync configure --enabled true）"
+                .to_string(),
+        ));
+    }
+    let keys: SyncKeys = derive_keys(&sync.username, &sync.secret)?;
     let client = SyncClient::new(&sync.server_url)?;
     let mut state = load_state(&repo.layout);
+    let scopes = Scopes::from_settings(&settings);
+
+    // 范围签名自愈：增量流是按范围过滤的，改范围后水位之下的记录永远不会再来一次，
+    // 所以签名一变就把实体与图片水位归零全量重拉（LWW 合并，重拉是安全的）。
+    // 放在这里而不是 sync configure 里，是为了让 config set 改范围也同样生效。
+    let scope_signature = format!(
+        "{}|{}|{}",
+        scopes.data, scopes.settings, scopes.schedules
+    );
+    if state.scope_signature != scope_signature {
+        state.last_pulled_seq = 0;
+        state.last_pulled_image_seq = 0;
+        state.scope_signature = scope_signature;
+    }
 
     // 1. 确保 token
     if state.token.is_empty() || token_expired(&state.token_expires_at) {
-        let (token, expires_at, _) = client.login(&sync.username, &sync.email, &keys.auth_key)?;
+        let (token, expires_at, _) = client.login(&sync.username, &keys.auth_key)?;
         state.token = token;
         state.token_expires_at = expires_at;
     }
@@ -638,8 +656,6 @@ fn run_sync_inner(repo: &Repository) -> CoreResult<SyncReport> {
         }
     }
     report.pulled = records.len();
-
-    let scopes = Scopes::from_settings(&settings);
 
     // 3. MERGE（按域分事务）
     let data_records: Vec<EntityRecord> = records
@@ -878,8 +894,8 @@ fn run_sync_inner(repo: &Repository) -> CoreResult<SyncReport> {
         }
     }
 
-    // 4.5 图片 blob：markdown 插图 / 列表背景 / 头像的文件本体
-    if settings.sync.sync_images {
+    // 4.5 图片 blob：markdown 插图跟「同步数据」，列表背景与头像跟「同步设置」
+    if scopes.data || scopes.settings {
         let device_id = state.device_id.clone();
         let scope = format!("{}|{}", sync.server_url, sync.username);
         match crate::sync::images::sync_images(
@@ -889,6 +905,7 @@ fn run_sync_inner(repo: &Repository) -> CoreResult<SyncReport> {
             &device_id,
             &scope,
             &repo.layout,
+            &scopes,
             &mut state,
         ) {
             Ok(tally) => {
@@ -1039,18 +1056,16 @@ pub fn register_device(
     repo: &Repository,
     server_url: &str,
     username: &str,
-    email: &str,
     secret: &str,
     scopes: Option<Scopes>,
 ) -> CoreResult<(String, SyncReport)> {
-    let keys = derive_keys(username, email, secret)?;
+    let keys = derive_keys(username, secret)?;
     let client = SyncClient::new(server_url)?;
-    let user_id = client.register(username, email, &keys.auth_key)?;
+    client.register(username, &keys.auth_key)?;
     if !repo.layout.data_file().exists() {
         repo.ensure_initialized()?;
     }
-    let (device_id, report) = pair_device(repo, server_url, username, email, secret, scopes)?;
-    let _ = user_id;
+    let (device_id, report) = pair_device(repo, server_url, username, secret, scopes)?;
     Ok((device_id, report))
 }
 
@@ -1059,13 +1074,12 @@ pub fn pair_device(
     repo: &Repository,
     server_url: &str,
     username: &str,
-    email: &str,
     secret: &str,
     scopes: Option<Scopes>,
 ) -> CoreResult<(String, SyncReport)> {
-    let keys = derive_keys(username, email, secret)?;
+    let keys = derive_keys(username, secret)?;
     let client = SyncClient::new(server_url)?;
-    let (token, expires_at, _) = client.login(username, email, &keys.auth_key)?;
+    let (token, expires_at, _) = client.login(username, &keys.auth_key)?;
     let device_id = crate::ids::gen_device_id();
     // 重新配对：进程内「图片已齐全」的旧结论作废（服务端数据可能被删过）
     crate::sync::images::invalidate_manifest_cache();
@@ -1076,7 +1090,6 @@ pub fn pair_device(
         file.sync.enabled = true;
         file.sync.server_url = server_url.trim().trim_end_matches('/').to_string();
         file.sync.username = username.trim().to_lowercase();
-        file.sync.email = email.trim().to_lowercase();
         file.sync.secret = secret.to_string();
         if let Some(scopes) = scopes {
             file.sync.sync_data = scopes.data;
@@ -1088,6 +1101,8 @@ pub fn pair_device(
         }
         Ok(json!({ "paired": true }))
     })?;
+    // 登录成功才记历史：设置页「历史」按钮据此一键回填地址/用户名/密码
+    crate::sync::history::remember(&repo.layout, server_url, username, secret)?;
 
     let mut state = SyncStateFile::fresh(device_id.clone());
     state.token = token;
@@ -1106,14 +1121,14 @@ pub fn pair_device(
 pub fn fetch_me(repo: &Repository) -> CoreResult<Option<Value>> {
     let settings = repo.load_settings()?;
     let sync = &settings.sync;
-    if !sync.enabled || sync.server_url.is_empty() {
+    if !sync.is_paired() {
         return Ok(None);
     }
-    let keys = derive_keys(&sync.username, &sync.email, &sync.secret)?;
+    let keys = derive_keys(&sync.username, &sync.secret)?;
     let client = SyncClient::new(&sync.server_url)?;
     let mut state = load_state(&repo.layout);
     if state.token.is_empty() || token_expired(&state.token_expires_at) {
-        let (token, expires_at, _) = client.login(&sync.username, &sync.email, &keys.auth_key)?;
+        let (token, expires_at, _) = client.login(&sync.username, &keys.auth_key)?;
         state.token = token;
         state.token_expires_at = expires_at;
         save_state(&repo.layout, &state)?;
@@ -1128,7 +1143,7 @@ pub fn fetch_me(repo: &Repository) -> CoreResult<Option<Value>> {
 pub fn probe_connection(repo: &Repository) -> CoreResult<Value> {
     let settings = repo.load_settings()?;
     let sync = &settings.sync;
-    if !sync.enabled || sync.server_url.is_empty() {
+    if !sync.is_paired() {
         return Err(CoreError::conflict(
             "SYNC_NOT_CONFIGURED",
             "本机未配置同步（先 kxtodo-cli sync register / login）".to_string(),
