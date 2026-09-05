@@ -149,35 +149,77 @@ fn write_json(path: &Path, value: &Value) -> CoreResult<()> {
 }
 
 // ---------------------------------------------------------------------------
-// data.json v4 → v5
+// data.json v4 → v5（legacy）+ v5 → v6（order 字段）
 // ---------------------------------------------------------------------------
 
 fn migrate_data(value: &mut Value) -> Vec<String> {
     let mut warnings = Vec::new();
+    let from = value
+        .get("schemaVersion")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let Some(root) = value.as_object_mut() else {
         warnings.push("data.json 顶层不是对象，跳过迁移".to_string());
         return warnings;
     };
-    root.insert("schemaVersion".to_string(), json!(DATA_SCHEMA_VERSION));
-    let mut meta = Map::new();
-    meta.insert("revision".to_string(), json!(0));
-    meta.insert("idempotency".to_string(), json!([]));
-    root.insert("_meta".to_string(), Value::Object(meta));
 
-    let now = now_iso();
-    if let Some(nodes) = root.get_mut("nodes").and_then(Value::as_array_mut) {
-        for node in nodes.iter_mut().filter_map(Value::as_object_mut) {
-            let has_updated = node.get("updatedAt").and_then(Value::as_str).is_some();
-            if !has_updated {
-                let fallback = node
-                    .get("createdAt")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| now.clone());
-                node.insert("updatedAt".to_string(), json!(fallback));
+    if from < 5 {
+        // v4 → v5：补 _meta / updatedAt（旧结构没有 _meta，可以整体插入）。
+        root.insert("schemaVersion".to_string(), json!(5));
+        let mut meta = Map::new();
+        meta.insert("revision".to_string(), json!(0));
+        meta.insert("idempotency".to_string(), json!([]));
+        root.insert("_meta".to_string(), Value::Object(meta));
+        let now = now_iso();
+        if let Some(nodes) = root.get_mut("nodes").and_then(Value::as_array_mut) {
+            for node in nodes.iter_mut().filter_map(Value::as_object_mut) {
+                let has_updated = node.get("updatedAt").and_then(Value::as_str).is_some();
+                if !has_updated {
+                    let fallback = node
+                        .get("createdAt")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| now.clone());
+                    node.insert("updatedAt".to_string(), json!(fallback));
+                }
             }
         }
     }
+
+    if from < 6 {
+        // v5 → v6：按数组位置补 order（同级分组内 0,1,2...）。
+        if let Some(nodes) = root.get_mut("nodes").and_then(Value::as_array_mut) {
+            let mut counters: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+            for node in nodes.iter_mut().filter_map(Value::as_object_mut) {
+                let parent = node
+                    .get("parentId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let next = counters.entry(parent).or_insert(0.0);
+                node.insert("order".to_string(), json!(*next));
+                *next += 1.0;
+            }
+        }
+        if let Some(tasks) = root.get_mut("tasks").and_then(Value::as_array_mut) {
+            let mut counters: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+            for task in tasks.iter_mut().filter_map(Value::as_object_mut) {
+                let node_id = task
+                    .get("nodeId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let next = counters.entry(node_id).or_insert(0.0);
+                task.insert("order".to_string(), json!(*next));
+                *next += 1.0;
+            }
+        }
+    }
+
+    root.insert(
+        "schemaVersion".to_string(),
+        json!(DATA_SCHEMA_VERSION),
+    );
     warnings
 }
 

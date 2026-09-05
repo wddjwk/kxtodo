@@ -164,6 +164,14 @@ pub enum Commands {
         #[command(subcommand)]
         action: ConfigAction,
     },
+    /// 数据多端同步（v0.4.0，端到端加密）
+    #[command(
+        long_about = "与 kxtodo-server 同步数据：端到端加密（服务器只见密文）+ 逐实体 LWW + 删除墓碑。\n\n动作：\n  register  注册账户并配对（空数据目录也可用，会初始化）\n  login     已有账户配对新设备\n  status    查看配对/范围/最近同步结果\n  now       立即执行一次同步（pull → merge → push）\n  configure 调整同步范围/开关/间隔\n  unpair    解除本机配对（服务器数据保留）\n\n示例：\n  kxtodo-cli sync register --server http://192.168.1.10:8765 --username me --email me@x.com --secret MySecret --sync-settings\n  kxtodo-cli sync now"
+    )]
+    Sync {
+        #[command(subcommand)]
+        action: SyncAction,
+    },
     /// 查看命令的机器可读输入结构（Risk: read）
     #[command(
         long_about = "Risk: read\n\n返回由当前版本模型/命令树生成的 JSON Schema、示例与 jq 子集说明。\n\n目标：\n  task.add / task.list / ...   任意命令的参数结构\n  schedule.spec                ScheduleSpec JSON Schema\n  schedule.patch               SchedulePatch JSON Schema（自动派生）\n  notification / match         复用结构\n  jq                           --jq 支持的子集\n\n示例：\n  kxtodo-cli schema schedule.spec --example interval-script"
@@ -815,6 +823,77 @@ pub struct RuntimeSetArgs {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum SyncAction {
+    /// 注册新账户并配对本机（Risk: write）
+    #[command(
+        long_about = "Risk: write\n\n在服务器上创建账户（用户名+邮箱唯一确定，密钥派生认证/加密密钥）并配对本机，随后立即执行首次同步。\n账户已存在时报 ACCOUNT_EXISTS，改用 sync login。\n\n同步范围：数据默认开；--sync-settings / --sync-schedules 按需开启（定时任务 spec 含各机器绝对路径，跨平台通常不可执行）。"
+    )]
+    Register(SyncPairArgs),
+    /// 已有账户配对本机（Risk: write）
+    #[command(
+        long_about = "Risk: write\n\n用既有账户（用户名+邮箱+密钥）配对本机并执行首次同步；凭据错误返回 AUTH_FAILED。"
+    )]
+    Login(SyncPairArgs),
+    /// 查看配对与最近同步结果（Risk: read）
+    Status,
+    /// 立即执行一次同步（Risk: write）
+    Now,
+    /// 调整同步范围/开关/间隔（Risk: write）
+    Configure(SyncConfigureArgs),
+    /// 解除本机配对（Risk: write）
+    #[command(
+        long_about = "Risk: write\n\n清除本机 token 与同步状态，关闭同步开关；服务器数据与其它设备不受影响。\nserverUrl/用户名/邮箱保留，便于重新配对。"
+    )]
+    Unpair,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncPairArgs {
+    /// 同步服务器地址
+    #[arg(long, value_name = "http://host:port")]
+    pub server: String,
+    /// 用户名（与邮箱共同唯一确定账户）
+    #[arg(long, value_name = "text")]
+    pub username: String,
+    /// 邮箱（仅作账户标识，不验证）
+    #[arg(long, value_name = "text")]
+    pub email: String,
+    /// 同步密钥（派生认证/加密密钥；丢失无法找回数据）
+    #[arg(long, value_name = "secret")]
+    pub secret: String,
+    /// 同步数据（节点/任务，默认开）
+    #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
+    pub sync_data: Option<bool>,
+    /// 同步设置共享子集（个人资料/配色/特性开关）
+    #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
+    pub sync_settings: Option<bool>,
+    /// 同步定时任务 spec（跨平台路径通常不可执行，慎开）
+    #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
+    pub sync_schedules: Option<bool>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncConfigureArgs {
+    /// 启用/停用同步
+    #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
+    pub enabled: Option<bool>,
+    /// 同步数据（节点/任务）
+    #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
+    pub sync_data: Option<bool>,
+    /// 同步设置共享子集
+    #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
+    pub sync_settings: Option<bool>,
+    /// 同步定时任务 spec
+    #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
+    pub sync_schedules: Option<bool>,
+    /// GUI Host 自动同步间隔（分钟）
+    #[arg(long, value_name = "1-1440")]
+    pub interval_minutes: Option<u64>,
+}
+
+#[derive(Debug, Subcommand)]
 pub enum ConfigAction {
     /// 列出配置，可按前缀过滤（Risk: read）
     List(ConfigListArgs),
@@ -967,6 +1046,10 @@ fn command_needs_data(cli: &Cli) -> bool {
         | Some(Commands::Skills { .. })
         | Some(Commands::Version)
         | Some(Commands::Doctor(_)) => false,
+        // 配对是显式的设备初始化动作：允许在空数据目录上执行（内部 ensure_initialized）
+        Some(Commands::Sync {
+            action: SyncAction::Register(_) | SyncAction::Login(_),
+        }) => false,
         Some(_) => true,
     }
 }
@@ -1244,12 +1327,35 @@ fn build_invocation(cli: &Cli, cwd: &Path) -> CoreResult<Option<(Invocation, Opt
         Commands::Task { action } => build_task_invocation(action)?,
         Commands::Schedule { action } => build_schedule_invocation(action)?,
         Commands::Config { action } => build_config_invocation(action)?,
+        Commands::Sync { action } => build_sync_invocation(action)?,
         Commands::Schema(args) => return build_schema_output(cli, args).map(Some),
         Commands::Skills { action } => return build_skills_output(cli, action, cwd).map(Some),
         Commands::Doctor(args) => Invocation::new("doctor", serialize_args(args)),
     };
     invocation.controls = controls;
     Ok(Some((invocation, None)))
+}
+
+fn build_sync_invocation(action: &SyncAction) -> CoreResult<Invocation> {
+    Ok(match action {
+        SyncAction::Register(args) | SyncAction::Login(args) => {
+            let command = match action {
+                SyncAction::Register(_) => "sync.register",
+                _ => "sync.login",
+            };
+            let mut params = serialize_args(args);
+            if let Some(map) = params.as_object_mut() {
+                if let Some(server) = map.remove("server") {
+                    map.insert("serverUrl".to_string(), server);
+                }
+            }
+            Invocation::new(command, params)
+        }
+        SyncAction::Status => Invocation::new("sync.status", serde_json::json!({})),
+        SyncAction::Now => Invocation::new("sync.now", serde_json::json!({})),
+        SyncAction::Configure(args) => Invocation::new("sync.configure", serialize_args(args)),
+        SyncAction::Unpair => Invocation::new("sync.unpair", serde_json::json!({})),
+    })
 }
 
 /// Pure commands executed locally without a Repository (schema/skills).

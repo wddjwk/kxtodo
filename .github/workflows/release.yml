@@ -1,6 +1,6 @@
-# tag v* → 三平台并行构建 + 发布 GitHub Release，五个固定名资产（与应用内 updater 的精确匹配一致）：
-#   KXToDo.exe / kxtodo-cli.exe（windows-latest）
-#   KXToDo.AppImage / kxtodo-cli（ubuntu-latest，复用 release.sh，与本地/WSL 构建同一入口）
+# tag v* → 三平台并行构建 + 发布 GitHub Release，七个固定名资产（与应用内 updater 的精确匹配一致）：
+#   KXToDo.exe / kxtodo-cli.exe / kxtodo-server.exe（windows-latest）
+#   KXToDo.AppImage / kxtodo-cli / kxtodo-server（ubuntu-latest，复用 release.sh，与本地/WSL 构建同一入口）
 #   KXToDo.apk（ubuntu-latest，官方 tauri mobile CI 模式：setup-ndk + NDK_HOME + tauri android build）
 # 某平台失败 → release 只发布成功的产物并告警（与 publish.ps1 的告警跳过语义一致），工作流整体标红。
 # workflow_dispatch：只构建验证，不发布（release job 仅在 tag ref 下运行）。
@@ -29,7 +29,7 @@ env:
 
 jobs:
   build-windows:
-    name: 构建 Windows（KXToDo.exe + kxtodo-cli.exe）
+    name: 构建 Windows（KXToDo.exe + kxtodo-cli.exe + kxtodo-server.exe）
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -48,14 +48,17 @@ jobs:
           shared-key: ci
       - name: 构建 GUI（tauri build --no-bundle，beforeBuildCommand 自带 npm run build）
         run: npx tauri build --no-bundle
-      - name: 构建 CLI
-        run: cargo build --release -p kxtodo-cli --manifest-path src-tauri/Cargo.toml
+      - name: 构建 CLI 与同步服务端
+        run: |
+          cargo build --release -p kxtodo-cli --manifest-path src-tauri/Cargo.toml
+          cargo build --release -p kxtodo-server --manifest-path src-tauri/Cargo.toml
       - name: 收集固定名产物（staging/ 独立于 vite 的 dist/——后者会被 beforeBuildCommand 灌满前端文件）
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force staging | Out-Null
           Copy-Item src-tauri\target\release\kxtodo.exe staging\KXToDo.exe
           Copy-Item src-tauri\target\release\kxtodo-cli.exe staging\kxtodo-cli.exe
+          Copy-Item src-tauri\target\release\kxtodo-server.exe staging\kxtodo-server.exe
       - uses: actions/upload-artifact@v4
         with:
           name: kxtodo-windows
@@ -85,7 +88,7 @@ jobs:
         with:
           workspaces: "src-tauri -> target"
           shared-key: ci
-      - name: release.sh 构建（npm install + AppImage 版本注入 + CLI + 固定名收集）
+      - name: release.sh 构建（npm install + AppImage 版本注入 + CLI + kxtodo-server + 固定名收集）
         run: bash ./release.sh
       - uses: actions/upload-artifact@v4
         with:
@@ -93,6 +96,7 @@ jobs:
           path: |
             release/KXToDo.AppImage
             release/kxtodo-cli
+            release/kxtodo-server
           if-no-files-found: error
 
   build-android:
@@ -208,18 +212,18 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p assets
-          # 白名单硬门控：只认五个固定名制品。就算 build job 误传了别的文件（v0.3.3 教训：
+          # 白名单硬门控：只认七个固定名制品。就算 build job 误传了别的文件（v0.3.3 教训：
           # 曾用仓库根 dist/ 当暂存目录，vite 输出的前端文件被整包带进 release），也进不了发布。
-          for name in KXToDo.exe kxtodo-cli.exe KXToDo.apk KXToDo.AppImage kxtodo-cli; do
+          for name in KXToDo.exe kxtodo-cli.exe kxtodo-server.exe KXToDo.apk KXToDo.AppImage kxtodo-cli kxtodo-server; do
             src="$(find assets-win assets-linux assets-android -type f -name "$name" 2>/dev/null | head -n1)"
             if [ -n "$src" ]; then
               cp -f "$src" "assets/$name"
             fi
           done
-          chmod +x assets/KXToDo.AppImage assets/kxtodo-cli 2>/dev/null || true
+          chmod +x assets/KXToDo.AppImage assets/kxtodo-cli assets/kxtodo-server 2>/dev/null || true
           count=$(find assets -type f | wc -l)
           {
-            echo "### 发布产物（$count/5）"
+            echo "### 发布产物（$count/7）"
             find assets -type f -printf '- `%f`（%s 字节）\n'
             echo ""
             echo "build-windows: ${{ needs.build-windows.result }} · build-linux: ${{ needs.build-linux.result }} · build-android: ${{ needs.build-android.result }}"
@@ -228,8 +232,8 @@ jobs:
             echo "::error::三平台构建全部失败，无产物可发布"
             exit 1
           fi
-          if [ "$count" -lt 5 ]; then
-            echo "::warning::仅 $count/5 个产物构建成功（其余平台失败，见各 build job 与本 job 的 Summary）"
+          if [ "$count" -lt 7 ]; then
+            echo "::warning::仅 $count/7 个产物构建成功（其余平台失败，见各 build job 与本 job 的 Summary）"
           fi
           TAG="${GITHUB_REF#refs/tags/}"
           if gh release view "$TAG" >/dev/null 2>&1; then

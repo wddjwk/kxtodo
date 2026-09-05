@@ -102,10 +102,16 @@ export const defaultSettings: Settings = {
     toggleWindow: "Ctrl+Shift+Space",
     openSettings: "Ctrl+,"
   },
-  cloud: {
-    provider: "none",
-    endpoint: "",
-    enabled: false
+  sync: {
+    enabled: false,
+    serverUrl: "",
+    username: "",
+    email: "",
+    secret: "",
+    syncData: true,
+    syncSettings: false,
+    syncSchedules: false,
+    intervalMinutes: 5
   },
   updates: {
     autoCheck: true
@@ -543,7 +549,7 @@ export function normalizeSettings(raw: unknown): Settings {
     display?: Partial<{ uiScale: number; closeToTray: boolean; launchAtStartup: boolean; notificationDurationMs: number }>;
     globalShortcut?: string;
     shortcuts?: Partial<Settings["shortcuts"]> | Array<{ id: string; combo: string }>;
-    cloudSync?: Partial<Settings["cloud"]>;
+    sync?: Partial<Settings["sync"]>;
     features?: Partial<Settings["features"]>;
   };
   const legacyShortcuts = Array.isArray(source?.shortcuts) ? source.shortcuts : [];
@@ -648,15 +654,19 @@ export function normalizeSettings(raw: unknown): Settings {
           : shortcutValue("toggleWindow", defaultSettings.shortcuts.toggleWindow),
       openSettings: shortcutValue("openSettings", defaultSettings.shortcuts.openSettings)
     },
-    cloud: {
-      provider:
-        source?.cloud?.provider === "webdav" || source?.cloud?.provider === "s3" || source?.cloud?.provider === "custom"
-          ? source.cloud.provider
-          : source?.cloudSync?.provider === "webdav" || source?.cloudSync?.provider === "s3" || source?.cloudSync?.provider === "custom"
-            ? source.cloudSync.provider
-            : "none",
-      endpoint: typeof source?.cloud?.endpoint === "string" ? source.cloud.endpoint : typeof source?.cloudSync?.endpoint === "string" ? source.cloudSync.endpoint : "",
-      enabled: Boolean(source?.cloud?.enabled ?? source?.cloudSync?.enabled)
+    sync: {
+      enabled: Boolean(source?.sync?.enabled),
+      serverUrl: typeof source?.sync?.serverUrl === "string" ? source.sync.serverUrl : "",
+      username: typeof source?.sync?.username === "string" ? source.sync.username : "",
+      email: typeof source?.sync?.email === "string" ? source.sync.email : "",
+      secret: typeof source?.sync?.secret === "string" ? source.sync.secret : "",
+      syncData: typeof source?.sync?.syncData === "boolean" ? source.sync.syncData : true,
+      syncSettings: Boolean(source?.sync?.syncSettings),
+      syncSchedules: Boolean(source?.sync?.syncSchedules),
+      intervalMinutes:
+        typeof source?.sync?.intervalMinutes === "number" && source.sync.intervalMinutes >= 1
+          ? Math.min(1440, Math.round(source.sync.intervalMinutes))
+          : 5
     },
     updates: {
       autoCheck: typeof source?.updates?.autoCheck === "boolean" ? source.updates.autoCheck : true

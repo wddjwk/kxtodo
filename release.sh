@@ -161,14 +161,24 @@ if ! cargo build --release --manifest-path src-tauri/Cargo.toml -p kxtodo-cli; t
   exit 1
 fi
 
+# ---------- 同步服务端（unix 部署） ----------
+printf '==> 构建 Linux 同步服务端（kxtodo-server）...\n'
+if ! cargo build --release --manifest-path src-tauri/Cargo.toml -p kxtodo-server; then
+  printf '错误：kxtodo-server 构建失败\n' >&2
+  exit 1
+fi
+
 # ---------- 收集产物（固定命名，不带版本号） ----------
 mkdir -p release
 appimage_out="release/KXToDo.AppImage"
 cli_out="release/kxtodo-cli"
+server_out="release/kxtodo-server"
 cp -f "$appimage_src" "$appimage_out"
 cp -f "$CARGO_TARGET_DIR/release/kxtodo-cli" "$cli_out"
-chmod +x "$appimage_out" "$cli_out"
+cp -f "$CARGO_TARGET_DIR/release/kxtodo-server" "$server_out"
+chmod +x "$appimage_out" "$cli_out" "$server_out"
 
 printf '==> 构建完成（版本 %s）：\n' "$VERSION"
 printf '  %s/%s（%s 字节）\n' "$SCRIPT_DIR" "$appimage_out" "$(stat -c %s "$appimage_out")"
 printf '  %s/%s（%s 字节）\n' "$SCRIPT_DIR" "$cli_out" "$(stat -c %s "$cli_out")"
+printf '  %s/%s（%s 字节）\n' "$SCRIPT_DIR" "$server_out" "$(stat -c %s "$server_out")"

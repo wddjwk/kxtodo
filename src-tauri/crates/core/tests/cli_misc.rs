@@ -11,7 +11,7 @@ use kxtodo_core::jq;
 fn version_reports_schema_versions() {
     let env = TestEnv::fresh();
     let data = env.ok(&["version"]);
-    assert_eq!(data["schemaVersions"]["data"], 5);
+    assert_eq!(data["schemaVersions"]["data"], 6);
     assert_eq!(data["schemaVersions"]["settings"], 1);
     assert_eq!(data["schemaVersions"]["schedule"], 2);
 }

@@ -65,6 +65,14 @@ pub fn default_data_dir() -> PathBuf {
     }
 }
 
+/// kxtodo-server 默认数据目录：平台数据根/kxtodo/server。
+pub fn default_server_dir() -> PathBuf {
+    match platform_data_root() {
+        Some(root) => root.join("kxtodo").join("server"),
+        None => PathBuf::from("server"),
+    }
+}
+
 pub const IDEMPOTENCY_MAX_RECORDS: usize = 1000;
 pub const IDEMPOTENCY_MAX_AGE_DAYS: i64 = 30;
 pub const BACKUP_KEEP: usize = 5;
@@ -436,6 +444,7 @@ impl Repository {
                     revision: 0,
                     schema_version: Some(SETTINGS_SCHEMA_VERSION),
                     idempotency: Vec::new(),
+                    tombstones: Vec::new(),
                     extra: Map::new(),
                 },
                 ..Default::default()
@@ -458,6 +467,7 @@ impl Repository {
                     revision: 0,
                     schema_version: Some(SCHEDULE_SCHEMA_VERSION),
                     idempotency: Vec::new(),
+                    tombstones: Vec::new(),
                     extra: Map::new(),
                 },
                 ..Default::default()
@@ -1051,7 +1061,8 @@ pub fn default_data_file() -> DataFile {
     let now = now_iso();
     let mut nodes: Vec<Node> = crate::model::SYSTEM_NODE_IDS
         .iter()
-        .map(|id| Node {
+        .enumerate()
+        .map(|(index, id)| Node {
             id: id.to_string(),
             kind: NodeKind::System,
             name: match *id {
@@ -1067,6 +1078,7 @@ pub fn default_data_file() -> DataFile {
                 _ => "clock".to_string(),
             },
             parent_id: None,
+            order: index as f64,
             collapsed: None,
             created_at: now.clone(),
             updated_at: Some(now.clone()),
@@ -1080,6 +1092,7 @@ pub fn default_data_file() -> DataFile {
         name: "收集箱".to_string(),
         icon: "inbox".to_string(),
         parent_id: None,
+        order: crate::model::SYSTEM_NODE_IDS.len() as f64,
         collapsed: None,
         created_at: now.clone(),
         updated_at: Some(now.clone()),
@@ -1096,6 +1109,7 @@ pub fn default_data_file() -> DataFile {
             revision: 0,
             schema_version: None,
             idempotency: Vec::new(),
+            tombstones: Vec::new(),
             extra: Map::new(),
         },
         nodes,

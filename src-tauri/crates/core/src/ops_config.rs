@@ -3,9 +3,28 @@
 use serde_json::{json, Map, Value};
 
 use crate::error::{CoreError, CoreResult};
-use crate::model::{
-    CloudProvider, LinkOpenMode, NotificationPosition, SettingsFile, ThemePreset,
-};
+use crate::model::{LinkOpenMode, NotificationPosition, SettingsFile, ThemePreset};
+use crate::time::now_iso;
+
+/// 这些配置项属于跨设备共享子集：值变化时刷新设置实体的 LWW 时间戳。
+/// lifecycle/shortcuts/notifications/字号缩放/sync 配置本身均为本机偏好，不共享。
+pub fn is_shared_settings_path(path: &str) -> bool {
+    matches!(
+        path,
+        "profile.displayName"
+            | "profile.email"
+            | "profile.avatar"
+            | "appearance.linkOpenMode"
+            | "appearance.themePresets"
+            | "appearance.uiColors"
+            | "updates.autoCheck"
+            | "features.showCategoryBadges"
+    )
+}
+
+fn bump_sync_updated_at(settings: &mut SettingsFile) {
+    settings.sync_updated_at = Some(now_iso());
+}
 
 #[derive(Debug, Clone)]
 pub struct FieldMeta {
@@ -155,21 +174,57 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         is_map: false,
     },
     FieldMeta {
-        path: "cloud.provider",
-        kind: "enum(none|webdav|s3|custom)",
-        description: "云同步提供商",
-        is_map: false,
-    },
-    FieldMeta {
-        path: "cloud.endpoint",
-        kind: "string",
-        description: "云同步端点",
-        is_map: false,
-    },
-    FieldMeta {
-        path: "cloud.enabled",
+        path: "sync.enabled",
         kind: "boolean",
-        description: "启用云同步",
+        description: "已配对并启用数据同步",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "sync.serverUrl",
+        kind: "string",
+        description: "同步服务器地址（http(s)://host:port）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "sync.username",
+        kind: "string",
+        description: "同步账户用户名",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "sync.email",
+        kind: "string",
+        description: "同步账户邮箱",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "sync.secret",
+        kind: "string",
+        description: "同步密钥（派生认证/加密密钥，只存本机）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "sync.syncData",
+        kind: "boolean",
+        description: "同步数据（节点/任务）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "sync.syncSettings",
+        kind: "boolean",
+        description: "同步设置共享子集",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "sync.syncSchedules",
+        kind: "boolean",
+        description: "同步定时任务 spec（跨平台路径通常不可执行）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "sync.intervalMinutes",
+        kind: "integer(1-1440)",
+        description: "GUI Host 自动同步间隔（分钟）",
         is_map: false,
     },
     FieldMeta {
@@ -246,14 +301,15 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "shortcuts.focusSearch" => json!(settings.shortcuts.focus_search),
         "shortcuts.toggleWindow" => json!(settings.shortcuts.toggle_window),
         "shortcuts.openSettings" => json!(settings.shortcuts.open_settings),
-        "cloud.provider" => json!(match settings.cloud.provider {
-            CloudProvider::None => "none",
-            CloudProvider::Webdav => "webdav",
-            CloudProvider::S3 => "s3",
-            CloudProvider::Custom => "custom",
-        }),
-        "cloud.endpoint" => json!(settings.cloud.endpoint),
-        "cloud.enabled" => json!(settings.cloud.enabled),
+        "sync.enabled" => json!(settings.sync.enabled),
+        "sync.serverUrl" => json!(settings.sync.server_url),
+        "sync.username" => json!(settings.sync.username),
+        "sync.email" => json!(settings.sync.email),
+        "sync.secret" => json!(settings.sync.secret),
+        "sync.syncData" => json!(settings.sync.sync_data),
+        "sync.syncSettings" => json!(settings.sync.sync_settings),
+        "sync.syncSchedules" => json!(settings.sync.sync_schedules),
+        "sync.intervalMinutes" => json!(settings.sync.interval_minutes),
         "updates.autoCheck" => json!(settings.updates.auto_check),
         "features.showCategoryBadges" => json!(settings.features.show_category_badges),
         _ => return Err(unknown_field(path)),
@@ -488,6 +544,9 @@ pub fn set_value(
             .appearance
             .ui_colors
             .insert(key.to_string(), json!(color));
+        if is_shared_settings_path(path) && outcome.previous != outcome.value {
+            bump_sync_updated_at(settings);
+        }
         return Ok(outcome);
     }
     if map_key.is_some() {
@@ -583,17 +642,51 @@ pub fn set_value(
             settings.shortcuts.open_settings = expect_shortcut(path, &value)?;
             outcome.native_effects.push("shortcuts");
         }
-        "cloud.provider" => {
-            settings.cloud.provider =
-                match expect_enum(path, &value, &["none", "webdav", "s3", "custom"])?.as_str() {
-                    "webdav" => CloudProvider::Webdav,
-                    "s3" => CloudProvider::S3,
-                    "custom" => CloudProvider::Custom,
-                    _ => CloudProvider::None,
-                };
+        "sync.enabled" => {
+            settings.sync.enabled = expect_bool(path, &value)?;
         }
-        "cloud.endpoint" => settings.cloud.endpoint = expect_string(path, &value)?,
-        "cloud.enabled" => settings.cloud.enabled = expect_bool(path, &value)?,
+        "sync.serverUrl" => {
+            let raw = expect_string(path, &value)?;
+            if !raw.is_empty() && !raw.starts_with("http://") && !raw.starts_with("https://") {
+                return Err(invalid_value(path, "应以 http:// 或 https:// 开头"));
+            }
+            settings.sync.server_url = raw.trim().trim_end_matches('/').to_string();
+        }
+        "sync.username" => {
+            let raw = expect_string(path, &value)?;
+            let trimmed = raw.trim().to_lowercase();
+            if trimmed.is_empty() {
+                return Err(invalid_value(path, "不能为空"));
+            }
+            settings.sync.username = trimmed;
+        }
+        "sync.email" => {
+            let raw = expect_string(path, &value)?;
+            let trimmed = raw.trim().to_lowercase();
+            if trimmed.is_empty() {
+                return Err(invalid_value(path, "不能为空"));
+            }
+            settings.sync.email = trimmed;
+        }
+        "sync.secret" => {
+            let raw = expect_string(path, &value)?;
+            if raw.trim().is_empty() {
+                return Err(invalid_value(path, "不能为空"));
+            }
+            settings.sync.secret = raw;
+        }
+        "sync.syncData" => {
+            settings.sync.sync_data = expect_bool(path, &value)?;
+        }
+        "sync.syncSettings" => {
+            settings.sync.sync_settings = expect_bool(path, &value)?;
+        }
+        "sync.syncSchedules" => {
+            settings.sync.sync_schedules = expect_bool(path, &value)?;
+        }
+        "sync.intervalMinutes" => {
+            settings.sync.interval_minutes = expect_int(path, &value, 1, 1440)? as u32;
+        }
         "updates.autoCheck" => settings.updates.auto_check = expect_bool(path, &value)?,
         "features.showCategoryBadges" => {
             settings.features.show_category_badges = expect_bool(path, &value)?;
@@ -601,6 +694,9 @@ pub fn set_value(
         _ => return Err(unknown_field(path)),
     }
     outcome.value = get_typed(settings, path)?;
+    if is_shared_settings_path(path) && outcome.previous != outcome.value {
+        bump_sync_updated_at(settings);
+    }
     Ok(outcome)
 }
 
@@ -631,6 +727,7 @@ pub fn unset_value(
     let previous = settings.appearance.ui_colors.remove(key).ok_or_else(|| {
         CoreError::not_found("MAP_KEY_NOT_FOUND", format!("{path} 中不存在键 `{key}`"))
     })?;
+    bump_sync_updated_at(settings);
     Ok(previous)
 }
 
@@ -638,6 +735,7 @@ pub fn unset_value(
 pub fn reset_values(settings: &mut SettingsFile, prefix: Option<&str>) -> CoreResult<Vec<Value>> {
     let defaults = default_settings();
     let mut changes = Vec::new();
+    let mut shared_changed = false;
     for field in KNOWN_FIELDS {
         if let Some(prefix) = prefix {
             let matches = field.path == prefix || field.path.starts_with(&format!("{prefix}."));
@@ -654,7 +752,13 @@ pub fn reset_values(settings: &mut SettingsFile, prefix: Option<&str>) -> CoreRe
                 "before": before,
                 "after": after,
             }));
+            if is_shared_settings_path(field.path) {
+                shared_changed = true;
+            }
         }
+    }
+    if shared_changed {
+        bump_sync_updated_at(settings);
     }
     if changes.is_empty() {
         if let Some(prefix) = prefix {
@@ -727,9 +831,17 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "shortcuts.openSettings" => {
             target.shortcuts.open_settings = defaults.shortcuts.open_settings.clone()
         }
-        "cloud.provider" => target.cloud.provider = defaults.cloud.provider,
-        "cloud.endpoint" => target.cloud.endpoint = defaults.cloud.endpoint.clone(),
-        "cloud.enabled" => target.cloud.enabled = defaults.cloud.enabled,
+        "sync.enabled" => target.sync.enabled = defaults.sync.enabled,
+        "sync.serverUrl" => target.sync.server_url = defaults.sync.server_url.clone(),
+        "sync.username" => target.sync.username = defaults.sync.username.clone(),
+        "sync.email" => target.sync.email = defaults.sync.email.clone(),
+        "sync.secret" => target.sync.secret = defaults.sync.secret.clone(),
+        "sync.syncData" => target.sync.sync_data = defaults.sync.sync_data,
+        "sync.syncSettings" => target.sync.sync_settings = defaults.sync.sync_settings,
+        "sync.syncSchedules" => target.sync.sync_schedules = defaults.sync.sync_schedules,
+        "sync.intervalMinutes" => {
+            target.sync.interval_minutes = defaults.sync.interval_minutes
+        }
         "updates.autoCheck" => target.updates.auto_check = defaults.updates.auto_check,
         "features.showCategoryBadges" => {
             target.features.show_category_badges = defaults.features.show_category_badges

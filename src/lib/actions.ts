@@ -882,6 +882,145 @@ export async function importState(
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// 数据同步（v0.4.0，端到端加密）
+// ---------------------------------------------------------------------------
+
+export type SyncPairInput = {
+  serverUrl: string;
+  username: string;
+  email: string;
+  secret: string;
+  syncSettings?: boolean;
+  syncSchedules?: boolean;
+};
+
+export async function syncRegister(input: SyncPairInput): Promise<boolean> {
+  if (!coreMode) {
+    showToast("浏览器预览不支持同步");
+    return false;
+  }
+  try {
+    await coreDispatch("sync.register", {
+      serverUrl: input.serverUrl,
+      username: input.username,
+      email: input.email,
+      secret: input.secret,
+      syncSettings: input.syncSettings,
+      syncSchedules: input.syncSchedules
+    });
+  } catch (error) {
+    await report(error, "注册失败");
+    return false;
+  }
+  const { refreshFromCore } = await import("./stores");
+  await refreshFromCore();
+  showToast("已注册并完成首次同步");
+  return true;
+}
+
+export async function syncLogin(input: SyncPairInput): Promise<boolean> {
+  if (!coreMode) {
+    showToast("浏览器预览不支持同步");
+    return false;
+  }
+  try {
+    await coreDispatch("sync.login", {
+      serverUrl: input.serverUrl,
+      username: input.username,
+      email: input.email,
+      secret: input.secret,
+      syncSettings: input.syncSettings,
+      syncSchedules: input.syncSchedules
+    });
+  } catch (error) {
+    await report(error, "配对失败");
+    return false;
+  }
+  const { refreshFromCore } = await import("./stores");
+  await refreshFromCore();
+  showToast("已配对并完成首次同步");
+  return true;
+}
+
+export type SyncStatus = {
+  paired: boolean;
+  enabled: boolean;
+  serverUrl: string;
+  username: string;
+  email: string;
+  scopes: { data: boolean; settings: boolean; schedules: boolean };
+  intervalMinutes: number;
+  deviceId: string;
+  lastSyncAt?: string;
+  lastResult?: { pulled: number; applied: number; pushed: number; conflicts: number } | null;
+  account?: { entityCount: number; currentSeq: number; serverVersion?: string };
+  serverError?: string;
+};
+
+export async function syncStatus(): Promise<SyncStatus | null> {
+  if (!coreMode) return null;
+  try {
+    const envelope = await coreDispatch<SyncStatus>("sync.status", {});
+    return envelope.data;
+  } catch {
+    return null;
+  }
+}
+
+export async function syncNow(): Promise<boolean> {
+  if (!coreMode) return false;
+  try {
+    const envelope = await coreDispatch<{ pulled: number; applied: number; pushed: number; conflicts: number }>(
+      "sync.now",
+      {}
+    );
+    const { pulled, applied, pushed, conflicts } = envelope.data;
+    showToast(
+      conflicts > 0
+        ? `同步完成：拉取 ${pulled}，推送 ${pushed}，冲突 ${conflicts}（下次同步重试）`
+        : `同步完成：拉取 ${pulled}，应用 ${applied}，推送 ${pushed}`
+    );
+  } catch (error) {
+    await report(error, "同步失败");
+    return false;
+  }
+  const { refreshFromCore } = await import("./stores");
+  await refreshFromCore();
+  return true;
+}
+
+export async function syncUnpair(): Promise<boolean> {
+  if (!coreMode) return false;
+  try {
+    await coreDispatch("sync.unpair", {});
+  } catch (error) {
+    await report(error, "解除配对失败");
+    return false;
+  }
+  const { refreshFromCore } = await import("./stores");
+  await refreshFromCore();
+  showToast("已解除本机配对（服务器数据保留）");
+  return true;
+}
+
+export async function setSyncScopes(scopes: {
+  syncData?: boolean;
+  syncSettings?: boolean;
+  syncSchedules?: boolean;
+}): Promise<boolean> {
+  if (!coreMode) return false;
+  try {
+    await coreDispatch("sync.configure", scopes);
+  } catch (error) {
+    await report(error, "同步范围设置失败");
+    return false;
+  }
+  const { refreshFromCore } = await import("./stores");
+  await refreshFromCore();
+  return true;
+}
+
 function flattenSettings(source: Settings): Array<[string, unknown]> {
   const out: Array<[string, unknown]> = [];
   const walk = (prefix: string, value: unknown) => {

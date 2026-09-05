@@ -845,7 +845,9 @@ pub fn remove_schedule(file: &mut ScheduleFile, id: &str) -> CoreResult<Schedule
         .ok_or_else(|| {
             CoreError::not_found("SCHEDULE_NOT_FOUND", format!("未找到定时任务 {id}"))
         })?;
-    Ok(file.tasks.remove(index))
+    let removed = file.tasks.remove(index);
+    file.meta.record_tombstone(id, "schedule", &now_iso());
+    Ok(removed)
 }
 
 // ---------------------------------------------------------------------------

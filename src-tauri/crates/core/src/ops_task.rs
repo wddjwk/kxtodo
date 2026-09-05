@@ -194,6 +194,30 @@ fn would_create_cycle(data: &DataFile, node_id: &str, new_parent: Option<&str>) 
 }
 
 // ---------------------------------------------------------------------------
+// sibling order helpers
+// ---------------------------------------------------------------------------
+
+/// 新节点在同级分组末尾的 order（max + 1）。
+pub fn next_node_order(nodes: &[Node], parent: Option<&str>) -> f64 {
+    nodes
+        .iter()
+        .filter(|node| node.parent_id.as_deref() == parent)
+        .map(|node| node.order)
+        .fold(0.0_f64, f64::max)
+        + 1.0
+}
+
+/// 新任务在目标条目内的 order（max + 1）。
+pub fn next_item_order(tasks: &[Item], node_id: &str) -> f64 {
+    tasks
+        .iter()
+        .filter(|item| item.node_id == node_id)
+        .map(|item| item.order)
+        .fold(0.0_f64, f64::max)
+        + 1.0
+}
+
+// ---------------------------------------------------------------------------
 // add
 // ---------------------------------------------------------------------------
 
@@ -236,7 +260,8 @@ pub fn add_node(data: &mut DataFile, kind: NodeKind, params: AddNodeParams) -> C
                 NodeKind::Category => "folder".to_string(),
                 _ => "notebook".to_string(),
             }),
-        parent_id,
+        parent_id: parent_id.clone(),
+        order: next_node_order(&data.nodes, parent_id.as_deref()),
         collapsed: match kind {
             NodeKind::Category => Some(params.collapsed.unwrap_or(false)),
             _ => params.collapsed,
@@ -319,7 +344,8 @@ pub fn add_item(data: &mut DataFile, params: AddItemParams) -> CoreResult<Item> 
     let completed = params.completed;
     let item = Item {
         id: gen_id("task"),
-        node_id: params.entry_id,
+        node_id: params.entry_id.clone(),
+        order: next_item_order(&data.tasks, &params.entry_id),
         markdown,
         completed,
         important: params.important,
@@ -867,9 +893,17 @@ pub fn modify_node(
         }
         if normalized != old_parent {
             let now = now_iso();
-            let node = find_node_mut(data, id).expect("node checked above");
+            let new_order = next_node_order(&data.nodes, normalized.as_deref());
+            let index = data
+                .nodes
+                .iter()
+                .position(|node| node.id == id)
+                .expect("node checked above");
+            let mut node = data.nodes.remove(index);
             node.parent_id = normalized;
+            node.order = new_order;
             node.updated_at = Some(now);
+            data.nodes.push(node);
         }
     }
 
@@ -929,6 +963,23 @@ pub fn modify_item(data: &mut DataFile, id: &str, changes: ItemChanges) -> CoreR
     if let Some(entry_id) = &changes.entry_id {
         ensure_entry_target(data, entry_id)?;
     }
+    // Compute move info before the mutable borrow of the item.
+    let moved = changes
+        .entry_id
+        .as_ref()
+        .map(|entry_id| {
+            (
+                entry_id.clone(),
+                find_item(data, id)
+                    .map(|item| item.node_id != *entry_id)
+                    .unwrap_or(false),
+            )
+        })
+        .filter(|(_, moved)| *moved);
+    let moved_entry = moved.as_ref().map(|(entry_id, _)| entry_id.clone());
+    let moved_order = moved_entry
+        .as_deref()
+        .map(|entry_id| next_item_order(&data.tasks, entry_id));
     let now = now_iso();
     let item = data
         .tasks
@@ -939,6 +990,9 @@ pub fn modify_item(data: &mut DataFile, id: &str, changes: ItemChanges) -> CoreR
 
     if let Some(entry_id) = changes.entry_id {
         item.node_id = entry_id;
+        if let Some(order) = moved_order {
+            item.order = order;
+        }
         touched = true;
     }
     if let Some(markdown) = changes.markdown {
@@ -1013,7 +1067,15 @@ pub fn modify_item(data: &mut DataFile, id: &str, changes: ItemChanges) -> CoreR
     if touched {
         item.updated_at = Some(now);
     }
-    Ok(item.clone())
+    let result = item.clone();
+    // Array order must follow order fields: moved items go to the end of the Vec.
+    if moved_entry.is_some() {
+        if let Some(index) = data.tasks.iter().position(|item| item.id == id) {
+            let moved_item = data.tasks.remove(index);
+            data.tasks.push(moved_item);
+        }
+    }
+    Ok(result)
 }
 
 // ---------------------------------------------------------------------------
@@ -1089,6 +1151,13 @@ pub fn non_empty_remove_error(data: &DataFile, id: &str, kind: NodeKind) -> Opti
 
 /// Apply a cascade removal (nodes + items + backgrounds). Image dirs removed by caller.
 pub fn apply_remove_node(data: &mut DataFile, plan: &RemovePlan) -> CoreResult<()> {
+    let now = now_iso();
+    for id in &plan.node_ids {
+        data.meta.record_tombstone(id, "node", &now);
+    }
+    for id in &plan.item_ids {
+        data.meta.record_tombstone(id, "task", &now);
+    }
     data.nodes.retain(|node| !plan.node_ids.contains(&node.id));
     data.tasks.retain(|item| !plan.item_ids.contains(&item.id));
     for key in &plan.background_keys {
@@ -1111,7 +1180,10 @@ pub fn remove_item(data: &mut DataFile, id: &str) -> CoreResult<Item> {
         .iter()
         .position(|item| item.id == id)
         .ok_or_else(|| CoreError::not_found("TASK_NOT_FOUND", format!("未找到任务 {id}")))?;
-    Ok(data.tasks.remove(index))
+    let removed = data.tasks.remove(index);
+    data.meta
+        .record_tombstone(id, "task", &now_iso());
+    Ok(removed)
 }
 
 // ---------------------------------------------------------------------------

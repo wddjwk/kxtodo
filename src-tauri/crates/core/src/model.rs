@@ -6,7 +6,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-pub const DATA_SCHEMA_VERSION: u32 = 5;
+pub const DATA_SCHEMA_VERSION: u32 = 6;
 pub const SETTINGS_SCHEMA_VERSION: u32 = 1;
 pub const SCHEDULE_SCHEMA_VERSION: u32 = 2;
 
@@ -24,9 +24,38 @@ pub struct DomainMeta {
     pub schema_version: Option<u32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub idempotency: Vec<IdempotencyRecord>,
+    /// 跨设备同步的删除墓碑（data/schedule 域使用；服务器只见密文，删除必须显式传播）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tombstones: Vec<Tombstone>,
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Tombstone {
+    pub id: String,
+    /// "node" | "task" | "schedule"
+    #[serde(rename = "type")]
+    pub kind: String,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: String,
+}
+
+impl DomainMeta {
+    /// 记录/覆盖墓碑（同 id 保留最新时间戳）。
+    pub fn record_tombstone(&mut self, id: &str, kind: &str, at: &str) {
+        if let Some(existing) = self.tombstones.iter_mut().find(|item| item.id == id) {
+            existing.kind = kind.to_string();
+            existing.updated_at = at.to_string();
+        } else {
+            self.tombstones.push(Tombstone {
+                id: id.to_string(),
+                kind: kind.to_string(),
+                updated_at: at.to_string(),
+            });
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -90,6 +119,9 @@ pub struct Node {
     pub icon: String,
     #[serde(rename = "parentId", default)]
     pub parent_id: Option<String>,
+    /// 同级排序（父节点内相对位置；跨设备合并按 (order, id) 排序）。
+    #[serde(default)]
+    pub order: f64,
     #[serde(rename = "collapsed", skip_serializing_if = "Option::is_none")]
     pub collapsed: Option<bool>,
     #[serde(rename = "createdAt", default)]
@@ -163,6 +195,9 @@ pub struct Item {
     pub id: String,
     #[serde(rename = "nodeId")]
     pub node_id: String,
+    /// 同级排序（条目内相对位置；跨设备合并按 (order, id) 排序）。
+    #[serde(default)]
+    pub order: f64,
     #[serde(default)]
     pub markdown: String,
     #[serde(default)]
@@ -211,11 +246,14 @@ pub struct SettingsFile {
     #[serde(default)]
     pub shortcuts: ShortcutSettings,
     #[serde(default)]
-    pub cloud: CloudSettings,
+    pub sync: SyncSettings,
     #[serde(default)]
     pub updates: UpdateSettings,
     #[serde(default)]
     pub features: FeatureSettings,
+    /// 设置同步实体的 LWW 时间戳（仅共享子集变化时刷新）。
+    #[serde(rename = "syncUpdatedAt", default, skip_serializing_if = "Option::is_none")]
+    pub sync_updated_at: Option<String>,
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
@@ -508,38 +546,53 @@ impl Default for ShortcutSettings {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
-pub enum CloudProvider {
-    #[default]
-    #[serde(rename = "none")]
-    None,
-    #[serde(rename = "webdav")]
-    Webdav,
-    #[serde(rename = "s3")]
-    S3,
-    #[serde(rename = "custom")]
-    Custom,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CloudSettings {
-    #[serde(default)]
-    pub provider: CloudProvider,
-    #[serde(default)]
-    pub endpoint: String,
+pub struct SyncSettings {
+    /// 已配对并启用同步
     #[serde(default)]
     pub enabled: bool,
+    #[serde(rename = "serverUrl", default)]
+    pub server_url: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub email: String,
+    /// 同步密钥（派生 auth/enc 密钥；只存本机，不随设置同步）
+    #[serde(default)]
+    pub secret: String,
+    /// 同步数据（节点/任务，默认开）
+    #[serde(rename = "syncData", default = "default_true")]
+    pub sync_data: bool,
+    /// 同步设置共享子集（默认关）
+    #[serde(rename = "syncSettings", default)]
+    pub sync_settings: bool,
+    /// 同步定时任务 spec（默认关；spec 含各机器绝对路径，跨平台通常不可执行）
+    #[serde(rename = "syncSchedules", default)]
+    pub sync_schedules: bool,
+    /// GUI Host 自动同步间隔（分钟）
+    #[serde(rename = "intervalMinutes", default = "default_sync_interval_minutes")]
+    pub interval_minutes: u32,
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
 }
 
-impl Default for CloudSettings {
+fn default_sync_interval_minutes() -> u32 {
+    5
+}
+
+impl Default for SyncSettings {
     fn default() -> Self {
         Self {
-            provider: CloudProvider::None,
-            endpoint: String::new(),
             enabled: false,
+            server_url: String::new(),
+            username: String::new(),
+            email: String::new(),
+            secret: String::new(),
+            sync_data: default_true(),
+            sync_settings: false,
+            sync_schedules: false,
+            interval_minutes: default_sync_interval_minutes(),
             extra: Map::new(),
         }
     }

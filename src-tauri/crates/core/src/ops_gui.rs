@@ -139,6 +139,10 @@ pub fn gui_dispatch(
             let image = inv.params.get("image").cloned();
             let image_opacity = inv.params.get("imageOpacity").and_then(Value::as_f64);
             let (_file, outcome) = ctx.repo.write_data(None, None, &inv.command, |file| {
+                // 背景属于 node 同步实体的一部分：变化需要刷新 updatedAt。
+                if let Some(node) = file.nodes.iter_mut().find(|n| n.id == node_id) {
+                    node.updated_at = Some(crate::time::now_iso());
+                }
                 let entry = file
                     .backgrounds
                     .entry(node_id.clone())
@@ -224,6 +228,21 @@ pub fn gui_dispatch(
                         .copied()
                         .unwrap_or(usize::MAX)
                 });
+                // 同步地基：排序后按同级分组写 order 字段，order/parent 变化的节点刷新 updatedAt。
+                let now = crate::time::now_iso();
+                let mut orders: std::collections::HashMap<String, f64> =
+                    std::collections::HashMap::new();
+                for node in file.nodes.iter_mut() {
+                    let group_key = node.parent_id.clone().unwrap_or_default();
+                    let next = orders.entry(group_key).or_insert(0.0);
+                    let new_order = *next;
+                    *next += 1.0;
+                    let changed = node.order != new_order;
+                    node.order = new_order;
+                    if changed {
+                        node.updated_at = Some(now.clone());
+                    }
+                }
                 Ok(json!({ "count": ordered_ids.len() }))
             })?;
             meta.revision_domain = Some(Domain::Data);
@@ -310,6 +329,23 @@ fn apply_import_state(file: &mut DataFile, state: &Value) -> CoreResult<()> {
     let imported: DataFile = serde_json::from_value(state.clone()).map_err(|error| {
         CoreError::validation("IMPORT_INVALID", format!("导入数据无效：{error}"))
     })?;
+    // 同步地基：导入前记录被替换掉的实体墓碑，避免旧数据在下次拉取时复活。
+    let now = crate::time::now_iso();
+    let new_node_ids: std::collections::HashSet<&str> =
+        imported.nodes.iter().map(|node| node.id.as_str()).collect();
+    let new_task_ids: std::collections::HashSet<&str> =
+        imported.tasks.iter().map(|item| item.id.as_str()).collect();
+    for node in &file.nodes {
+        if !new_node_ids.contains(node.id.as_str()) {
+            file.meta.record_tombstone(&node.id, "node", &now);
+        }
+    }
+    for item in &file.tasks {
+        if !new_task_ids.contains(item.id.as_str()) {
+            file.meta.record_tombstone(&item.id, "task", &now);
+        }
+    }
+    let mut imported = imported;
     let mut nodes: Vec<crate::model::Node> = Vec::new();
     for sys_id in SYSTEM_NODE_IDS {
         if let Some(node) = imported
@@ -331,9 +367,24 @@ fn apply_import_state(file: &mut DataFile, state: &Value) -> CoreResult<()> {
     nodes.extend(
         imported
             .nodes
-            .into_iter()
-            .filter(|node| node.kind != NodeKind::System),
+            .iter()
+            .filter(|node| node.kind != NodeKind::System)
+            .cloned(),
     );
+    // 按（导入文件给定的 order，数组位置）补齐同级 order，保证确定性。
+    let mut orders: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    for node in nodes.iter_mut() {
+        let group_key = node.parent_id.clone().unwrap_or_default();
+        let next = orders.entry(group_key).or_insert(0.0);
+        node.order = *next;
+        *next += 1.0;
+    }
+    let mut task_orders: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    for item in imported.tasks.iter_mut() {
+        let next = task_orders.entry(item.node_id.clone()).or_insert(0.0);
+        item.order = *next;
+        *next += 1.0;
+    }
     file.nodes = nodes;
     file.tasks = imported.tasks;
     file.backgrounds = imported.backgrounds;

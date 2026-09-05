@@ -13,9 +13,18 @@ fn data_migration_adds_meta_and_updated_at() {
     env.ok(&["task", "tree"]);
 
     let data = env.read_file("data.json");
-    assert_eq!(data["schemaVersion"], 5);
+    assert_eq!(data["schemaVersion"], 6);
     assert_eq!(data["_meta"]["revision"], 0);
     assert!(data["_meta"]["idempotency"].is_array());
+
+    // v5→v6：按数组位置补同级 order（root 组内 category-aaa 排第 5，order=4）
+    let category = data["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["id"] == "category-aaa")
+        .unwrap();
+    assert_eq!(category["order"], 4.0);
 
     // updatedAt 以 createdAt 回填
     let category = data["nodes"]

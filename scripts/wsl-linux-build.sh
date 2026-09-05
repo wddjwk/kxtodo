@@ -49,6 +49,7 @@ printf '==> 回拷 Linux 制品到 %s/release ...\n' "$WIN_REPO"
 mkdir -p "$WIN_REPO/release"
 cp -f release/KXToDo.AppImage "$WIN_REPO/release/KXToDo.AppImage"
 cp -f release/kxtodo-cli "$WIN_REPO/release/kxtodo-cli"
-chmod +x "$WIN_REPO/release/KXToDo.AppImage" "$WIN_REPO/release/kxtodo-cli"
+cp -f release/kxtodo-server "$WIN_REPO/release/kxtodo-server"
+chmod +x "$WIN_REPO/release/KXToDo.AppImage" "$WIN_REPO/release/kxtodo-cli" "$WIN_REPO/release/kxtodo-server"
 
-printf '==> Linux 制品就绪：KXToDo.AppImage + kxtodo-cli\n'
+printf '==> Linux 制品就绪：KXToDo.AppImage + kxtodo-cli + kxtodo-server\n'

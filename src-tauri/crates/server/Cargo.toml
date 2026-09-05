@@ -1,0 +1,29 @@
+[package]
+name = "kxtodo-server"
+version = "0.0.0"
+description = "KXToDo 数据同步服务端：账户 + 端到端加密实体存储（SQLite）。"
+edition = "2021"
+rust-version = "1.77.2"
+license = ""
+publish = false
+
+[[bin]]
+name = "kxtodo-server"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+ureq = { version = "2", default-features = false, features = ["tls", "json"] }
+rand = "0.8"
+sha2 = "0.10"
+hex = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+kxtodo-core = { path = "../core" }
+
+[dev-dependencies]
+tempfile = "3"

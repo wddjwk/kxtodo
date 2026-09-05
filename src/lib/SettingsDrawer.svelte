@@ -3,6 +3,14 @@
     appSettings, showSettings, showToast, showNotification, fileToDataUrl, appVersion
   } from "./stores";
   import { setConfig as setConfigAction } from "./actions";
+  import {
+    syncRegister as syncRegisterAction,
+    syncLogin as syncLoginAction,
+    syncStatus as syncStatusAction,
+    syncNow as syncNowAction,
+    syncUnpair as syncUnpairAction,
+    setSyncScopes
+  } from "./actions";
   import { checkForUpdate, startUpdate, updateProgress, type UpdateInfo } from "./updater";
   import { isMobile } from "./platform";
   import { caps } from "./capabilities";
@@ -63,12 +71,83 @@
     void setConfigAction(`shortcuts.${field}`, value);
   }
 
-  function updateCloudEndpoint(value: string): void {
-    void setConfigAction("cloud.endpoint", value);
+  // ---- 数据同步 ----
+  let syncForm = { serverUrl: "", username: "", email: "", secret: "", syncSettings: false, syncSchedules: false };
+  let syncBusy = false;
+  let syncStatus: import("./actions").SyncStatus | null = null;
+
+  $: syncPaired = Boolean($appSettings.sync?.enabled && $appSettings.sync?.serverUrl);
+  let syncStatusLoaded = false;
+  $: if ($showSettings && syncPaired && !syncStatusLoaded) {
+    syncStatusLoaded = true;
+    void refreshSyncStatus();
+  }
+  $: if (!syncPaired) syncStatusLoaded = false;
+
+  async function refreshSyncStatus(): Promise<void> {
+    syncStatus = await syncStatusAction();
   }
 
-  function updateCloudProvider(value: Settings["cloud"]["provider"]): void {
-    void setConfigAction("cloud.provider", value);
+  function fillSyncFormFromProfile(): void {
+    if (!syncForm.username) {
+      syncForm.username = $appSettings.profile.email ? $appSettings.profile.email : "";
+      syncForm.email = $appSettings.profile.email || "";
+    }
+  }
+
+  async function registerSync(): Promise<void> {
+    if (syncBusy) return;
+    syncBusy = true;
+    try {
+      if (await syncRegisterAction(syncForm)) {
+        await refreshSyncStatus();
+      }
+    } finally {
+      syncBusy = false;
+    }
+  }
+
+  async function loginSync(): Promise<void> {
+    if (syncBusy) return;
+    syncBusy = true;
+    try {
+      if (await syncLoginAction(syncForm)) {
+        await refreshSyncStatus();
+      }
+    } finally {
+      syncBusy = false;
+    }
+  }
+
+  async function runSyncNow(): Promise<void> {
+    if (syncBusy) return;
+    syncBusy = true;
+    try {
+      await syncNowAction();
+      await refreshSyncStatus();
+    } finally {
+      syncBusy = false;
+    }
+  }
+
+  async function unpairSync(): Promise<void> {
+    if (syncBusy) return;
+    syncBusy = true;
+    try {
+      if (await syncUnpairAction()) {
+        syncStatus = null;
+      }
+    } finally {
+      syncBusy = false;
+    }
+  }
+
+  async function updateSyncScope(
+    field: "syncData" | "syncSettings" | "syncSchedules",
+    value: boolean
+  ): Promise<void> {
+    await setSyncScopes({ [field]: value });
+    await refreshSyncStatus();
   }
 
   // ---- 更新 ----
@@ -401,27 +480,80 @@
 
   {#if caps.desktop}
     <section>
-      <h3>云同步预留</h3>
-      <div class="sync-card">
-        <label class="settings-row">
-          提供方
-          <Dropdown
-            value={$appSettings.cloud.provider}
-            options={[
-              { value: "none", label: "未启用" },
-              { value: "webdav", label: "WebDAV" },
-              { value: "s3", label: "S3" },
-              { value: "custom", label: "自定义 HTTP" }
-            ]}
-            on:change={(event) => updateCloudProvider(event.detail as Settings["cloud"]["provider"])}
-          />
-        </label>
-        <label class="settings-row">
-          地址
-          <input value={$appSettings.cloud.endpoint} placeholder="后续实现时使用" on:input={(event) => updateCloudEndpoint(event.currentTarget.value)} />
-        </label>
-        <p class="muted">当前版本只保留配置结构，不执行任何网络同步。</p>
-      </div>
+      <h3>数据同步</h3>
+      {#if syncPaired}
+        <div class="sync-card">
+          <div class="settings-row"><span>服务器</span><span class="muted">{$appSettings.sync.serverUrl}</span></div>
+          <div class="settings-row"><span>账户</span><span class="muted">{$appSettings.sync.username} / {$appSettings.sync.email}</span></div>
+          {#if syncStatus?.lastSyncAt}
+            <div class="settings-row">
+              <span>最近同步</span>
+              <span class="muted">
+                {new Date(syncStatus.lastSyncAt).toLocaleString()}
+                {#if syncStatus?.lastResult}
+                  （拉 {syncStatus.lastResult.pulled} / 推 {syncStatus.lastResult.pushed}
+                  {#if syncStatus.lastResult.conflicts} / 冲突 {syncStatus.lastResult.conflicts}{/if}）
+                {/if}
+              </span>
+            </div>
+          {/if}
+          {#if syncStatus?.serverError}
+            <p class="update-error">服务器异常：{syncStatus.serverError}</p>
+          {/if}
+          <div class="settings-row"><span>同步数据（节点/任务）</span>
+            <input type="checkbox" checked={$appSettings.sync.syncData} on:change={(event) => updateSyncScope("syncData", event.currentTarget.checked)} />
+          </div>
+          <div class="settings-row"><span>同步设置（个人资料/配色）</span>
+            <input type="checkbox" checked={$appSettings.sync.syncSettings} on:change={(event) => updateSyncScope("syncSettings", event.currentTarget.checked)} />
+          </div>
+          <div class="settings-row"><span>同步定时任务（跨平台路径通常不可执行）</span>
+            <input type="checkbox" checked={$appSettings.sync.syncSchedules} on:change={(event) => updateSyncScope("syncSchedules", event.currentTarget.checked)} />
+          </div>
+          <div class="settings-row">
+            <button class="settings-button" type="button" disabled={syncBusy} on:click={runSyncNow}>
+              {syncBusy ? "同步中…" : "立即同步"}
+            </button>
+            <button class="settings-button" type="button" disabled={syncBusy} on:click={unpairSync}>解除配对</button>
+          </div>
+          <p class="muted">端到端加密：服务器与抓包只能看到密文。密钥丢失无法找回数据。</p>
+        </div>
+      {:else}
+        <div class="sync-card">
+          <label class="settings-row">
+            服务器地址
+            <input
+              bind:value={syncForm.serverUrl}
+              placeholder="http://192.168.1.10:8765"
+              on:focus={fillSyncFormFromProfile}
+            />
+          </label>
+          <label class="settings-row">
+            用户名
+            <input bind:value={syncForm.username} placeholder="用户名（与邮箱共同确定账户）" />
+          </label>
+          <label class="settings-row">
+            邮箱
+            <input bind:value={syncForm.email} placeholder="仅作账户标识，不验证" />
+          </label>
+          <label class="settings-row">
+            同步密钥
+            <input type="password" bind:value={syncForm.secret} placeholder="用于派生加密密钥，丢失无法找回" />
+          </label>
+          <div class="settings-row">
+            <input id="sync-scope-settings" type="checkbox" bind:checked={syncForm.syncSettings} />
+            <label for="sync-scope-settings" class="inline-label">同步设置（个人资料/配色）</label>
+            <input id="sync-scope-schedules" type="checkbox" bind:checked={syncForm.syncSchedules} />
+            <label for="sync-scope-schedules" class="inline-label">同步定时任务</label>
+          </div>
+          <div class="settings-row">
+            <button class="settings-button primary" type="button" disabled={syncBusy} on:click={registerSync}>
+              {syncBusy ? "处理中…" : "注册新账户"}
+            </button>
+            <button class="settings-button" type="button" disabled={syncBusy} on:click={loginSync}>登录已有账户</button>
+          </div>
+          <p class="muted">注册 = 创建账户并配对本机；已有账户在其它设备上用“登录”。数据（节点/任务）默认同步。</p>
+        </div>
+      {/if}
     </section>
   {/if}
 

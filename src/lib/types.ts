@@ -6,6 +6,7 @@ export type AppNode = {
   name: string;
   icon: string;
   parentId: string | null;
+  order?: number;
   collapsed?: boolean;
   createdAt: string;
 };
@@ -21,6 +22,7 @@ export type Tag = {
 export type Task = {
   id: string;
   nodeId: string;
+  order?: number;
   markdown: string;
   completed: boolean;
   important: boolean;
@@ -81,11 +83,18 @@ export type Settings = {
     toggleWindow: string;
     openSettings: string;
   };
-  cloud: {
-    provider: "none" | "webdav" | "s3" | "custom";
-    endpoint: string;
+  sync: {
     enabled: boolean;
+    serverUrl: string;
+    username: string;
+    email: string;
+    secret: string;
+    syncData: boolean;
+    syncSettings: boolean;
+    syncSchedules: boolean;
+    intervalMinutes: number;
   };
+  syncUpdatedAt?: string;
   updates: {
     autoCheck: boolean;
   };

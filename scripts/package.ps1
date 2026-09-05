@@ -143,7 +143,7 @@ try {
   }
 
   # -------------------------------------------------------------------------
-  # Windows desktop build（固定名 KXToDo.exe + kxtodo-cli.exe）
+  # Windows desktop build（固定名 KXToDo.exe + kxtodo-cli.exe + kxtodo-server.exe）
   # -------------------------------------------------------------------------
   if ($buildWindows) {
     try {
@@ -161,8 +161,15 @@ try {
       if ($LASTEXITCODE -ne 0) { throw "Windows CLI build failed" }
       Copy-Item -LiteralPath $cliBinaryPath -Destination (Join-Path $releaseDir "kxtodo-cli.exe") -Force
 
+      Write-Host "==> Building Windows sync server (kxtodo-server.exe)..." -ForegroundColor Cyan
+      $serverBinaryPath = Join-Path $root "src-tauri\target\release\kxtodo-server.exe"
+      Remove-Item -LiteralPath $serverBinaryPath -Force -ErrorAction SilentlyContinue
+      cargo build --release -p kxtodo-server --manifest-path (Join-Path $root "src-tauri\Cargo.toml")
+      if ($LASTEXITCODE -ne 0) { throw "Windows kxtodo-server build failed" }
+      Copy-Item -LiteralPath $serverBinaryPath -Destination (Join-Path $releaseDir "kxtodo-server.exe") -Force
+
       $built.Add("windows")
-      Write-Host "Built Windows: KXToDo.exe + kxtodo-cli.exe" -ForegroundColor Green
+      Write-Host "Built Windows: KXToDo.exe + kxtodo-cli.exe + kxtodo-server.exe" -ForegroundColor Green
     } catch {
       Write-Warning "Windows 构建失败，跳过：$_"
       $skipped.Add("windows")
@@ -237,7 +244,7 @@ try {
   }
 
   # -------------------------------------------------------------------------
-  # Linux build（经 WSL 在原生克隆里构建，产物回拷 release/KXToDo.AppImage + kxtodo-cli）
+  # Linux build（经 WSL 在原生克隆里构建，产物回拷 release/KXToDo.AppImage + kxtodo-cli + kxtodo-server）
   # 环境未就绪（无 wsl.exe / 无原生克隆 / 克隆脏）或构建失败 → 告警跳过，不终止其它平台。
   # -------------------------------------------------------------------------
   if ($buildUnix) {
@@ -270,12 +277,13 @@ try {
 
       $appimage = Join-Path $releaseDir "KXToDo.AppImage"
       $linuxCli = Join-Path $releaseDir "kxtodo-cli"
-      if (-not (Test-Path -LiteralPath $appimage) -or -not (Test-Path -LiteralPath $linuxCli)) {
-        throw "Linux 产物缺失（release/KXToDo.AppImage 或 release/kxtodo-cli）"
+      $linuxServer = Join-Path $releaseDir "kxtodo-server"
+      if (-not (Test-Path -LiteralPath $appimage) -or -not (Test-Path -LiteralPath $linuxCli) -or -not (Test-Path -LiteralPath $linuxServer)) {
+        throw "Linux 产物缺失（release/KXToDo.AppImage、release/kxtodo-cli 或 release/kxtodo-server）"
       }
 
       $built.Add("unix")
-      Write-Host "Built Linux: KXToDo.AppImage + kxtodo-cli" -ForegroundColor Green
+      Write-Host "Built Linux: KXToDo.AppImage + kxtodo-cli + kxtodo-server" -ForegroundColor Green
     } catch {
       Write-Warning "Linux 构建跳过：$_"
       $skipped.Add("unix")

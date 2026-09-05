@@ -101,6 +101,7 @@ fn run(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value
         ["schedule", action] => schedule_dispatch(action, inv, ctx, meta),
         ["schedule", "runtime", action] => schedule_runtime_dispatch(action, inv, ctx, meta),
         ["config", action] => config_dispatch(action, inv, ctx, meta),
+        ["sync", action] => crate::ops_sync::sync_dispatch(action, inv, ctx, meta),
         ["doctor"] => crate::doctor::run_doctor(inv, ctx, meta),
         ["gui", action] => crate::ops_gui::gui_dispatch(action, inv, ctx, meta),
         _ => Err(CoreError::validation(

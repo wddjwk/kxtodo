@@ -17,6 +17,7 @@ pub mod model;
 pub mod ops_config;
 pub mod ops_gui;
 pub mod ops_schedule;
+pub mod ops_sync;
 pub mod ops_task;
 pub mod plan;
 pub mod render;
@@ -24,6 +25,7 @@ pub mod repo;
 pub mod scheduler;
 pub mod schema;
 pub mod skills;
+pub mod sync;
 pub mod time;
 
 pub use error::CoreError;

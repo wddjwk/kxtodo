@@ -72,6 +72,7 @@ fn concurrent_writers_do_not_lose_updates() {
                         name: "x".to_string(),
                         icon: String::new(),
                         parent_id: None,
+                        order: 0.0,
                         collapsed: None,
                         created_at: kxtodo_core::time::now_iso(),
                         updated_at: None,

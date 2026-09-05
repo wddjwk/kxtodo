@@ -43,8 +43,12 @@ export function dateOnly(value?: string): string | undefined {
 }
 
 export function createTaskId(): string {
-  if (crypto.randomUUID) return `task-${crypto.randomUUID().slice(0, 8)}`;
-  return `task-${Math.random().toString(36).slice(2, 10)}`;
+  if (crypto.randomUUID) return `task-${crypto.randomUUID().replace(/-/g, "")}`;
+  return `task-${Math.random().toString(16).slice(2, 10)}${Math.random()
+    .toString(16)
+    .slice(2, 10)}${Math.random().toString(16).slice(2, 10)}${Math.random()
+    .toString(16)
+    .slice(2, 10)}`;
 }
 
 export function safeFileName(name: string): string {

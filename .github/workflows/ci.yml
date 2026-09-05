@@ -57,7 +57,7 @@ jobs:
           workspaces: "src-tauri -> target"
           shared-key: ci
       - run: cargo check --workspace --manifest-path src-tauri/Cargo.toml
-      - run: cargo test -p kxtodo-core --manifest-path src-tauri/Cargo.toml
+      - run: cargo test -p kxtodo-core -p kxtodo-server --manifest-path src-tauri/Cargo.toml
 
   rust-linux:
     name: Rust 编译检查（Linux）
@@ -81,4 +81,4 @@ jobs:
           workspaces: "src-tauri -> target"
           shared-key: ci
       - run: cargo check --workspace --manifest-path src-tauri/Cargo.toml
-      - run: cargo test -p kxtodo-core --manifest-path src-tauri/Cargo.toml
+      - run: cargo test -p kxtodo-core -p kxtodo-server --manifest-path src-tauri/Cargo.toml

@@ -13,8 +13,8 @@ name = "todo_note_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [workspace]
-members = ["crates/core", "crates/cli"]
-# tauri build / cargo build 默认只构建 GUI 与 core；kxtodo-cli 用 -p kxtodo-cli 显式构建。
+members = ["crates/core", "crates/cli", "crates/server"]
+# tauri build / cargo build 默认只构建 GUI 与 core；kxtodo-cli / kxtodo-server 用 -p 显式构建。
 default-members = [".", "crates/core"]
 
 [build-dependencies]
