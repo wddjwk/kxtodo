@@ -50,16 +50,16 @@ jobs:
         run: npx tauri build --no-bundle
       - name: 构建 CLI
         run: cargo build --release -p kxtodo-cli --manifest-path src-tauri/Cargo.toml
-      - name: 收集固定名产物
+      - name: 收集固定名产物（staging/ 独立于 vite 的 dist/——后者会被 beforeBuildCommand 灌满前端文件）
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item src-tauri\target\release\kxtodo.exe dist\KXToDo.exe
-          Copy-Item src-tauri\target\release\kxtodo-cli.exe dist\kxtodo-cli.exe
+          New-Item -ItemType Directory -Force staging | Out-Null
+          Copy-Item src-tauri\target\release\kxtodo.exe staging\KXToDo.exe
+          Copy-Item src-tauri\target\release\kxtodo-cli.exe staging\kxtodo-cli.exe
       - uses: actions/upload-artifact@v4
         with:
           name: kxtodo-windows
-          path: dist/
+          path: staging/
           if-no-files-found: error
 
   build-linux:
@@ -159,9 +159,9 @@ jobs:
           NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: npx tauri android build --apk
-      - name: 收集固定名产物（优先 universal APK，与 package.ps1 的产物一致）
+      - name: 收集固定名产物（优先 universal APK，与 package.ps1 的产物一致；staging/ 独立于 vite 的 dist/）
         run: |
-          mkdir -p dist
+          mkdir -p staging
           apk_dir=src-tauri/gen/android/app/build/outputs/apk
           apk="$(find "$apk_dir/universal" -name '*.apk' 2>/dev/null | head -n1)"
           if [ -z "$apk" ]; then
@@ -171,11 +171,11 @@ jobs:
             echo "::error::未找到 APK 产物"
             exit 1
           fi
-          cp "$apk" dist/KXToDo.apk
+          cp "$apk" staging/KXToDo.apk
       - uses: actions/upload-artifact@v4
         with:
           name: kxtodo-android
-          path: dist/
+          path: staging/
           if-no-files-found: error
 
   release:
@@ -208,9 +208,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p assets
-          for dir in assets-win assets-linux assets-android; do
-            if [ -d "$dir" ]; then
-              find "$dir" -type f -exec cp -f {} assets/ \;
+          # 白名单硬门控：只认五个固定名制品。就算 build job 误传了别的文件（v0.3.3 教训：
+          # 曾用仓库根 dist/ 当暂存目录，vite 输出的前端文件被整包带进 release），也进不了发布。
+          for name in KXToDo.exe kxtodo-cli.exe KXToDo.apk KXToDo.AppImage kxtodo-cli; do
+            src="$(find assets-win assets-linux assets-android -type f -name "$name" 2>/dev/null | head -n1)"
+            if [ -n "$src" ]; then
+              cp -f "$src" "assets/$name"
             fi
           done
           chmod +x assets/KXToDo.AppImage assets/kxtodo-cli 2>/dev/null || true
