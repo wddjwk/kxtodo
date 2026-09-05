@@ -1,13 +1,16 @@
-# KXToDo 一键发布：git 取版本 → 本地构建三平台五产物（Windows GUI/CLI + Android APK + Linux AppImage/CLI）→ gh release 上传。
-# 五个固定名产物（不带版本号）：
-#   release\KXToDo.exe        Windows GUI
-#   release\kxtodo-cli.exe    Windows CLI
-#   release\KXToDo.apk        Android
-#   release\KXToDo.AppImage   Linux GUI（经 WSL 原生克隆构建）
-#   release\kxtodo-cli        Linux CLI
+# KXToDo 一键发布：git 取版本 → 本地重建目标平台产物 → gh release 上传（固定名制品，不带版本号）。
+# 默认目标 Windows + Android；Linux（unix）需显式指定：.\scripts\publish.ps1 all 或 .\scripts\publish.ps1 win,unix。
+# 产物按目标推导（与应用内 updater 的精确名匹配一致）：
+#   windows → release\KXToDo.exe + release\kxtodo-cli.exe
+#   android → release\KXToDo.apk
+#   unix    → release\KXToDo.AppImage + release\kxtodo-cli（经 WSL 原生克隆构建）
 # 用法：
-#   .\scripts\publish.ps1            # 构建 + 发布当前 git 版本
+#   .\scripts\publish.ps1            # 构建 + 发布 Windows + Android
+#   .\scripts\publish.ps1 all        # 三平台五产物
 #   .\scripts\publish.ps1 -DryRun    # 只打印将要执行的步骤
+#
+# 没有本地构建环境时：直接推 v* tag（git tag vX.Y.Z && git push origin vX.Y.Z），
+# GitHub Actions 的 release.yml 会在云端构建三平台并发布同样的固定名产物。
 #
 # 版本号唯一来源是 git，且构建期由 build.rs/release.sh 同源解析（最近的 v* tag 优先）。
 # 为避免“HEAD 未打 tag → describe 回落到旧 tag → 产物版本错”的坑：本脚本先确保 HEAD 带有
@@ -15,6 +18,8 @@
 # 前置：gh 已登录；git 工作区已提交；某一平台环境未就绪（缺 MSVC/ANDROID_HOME/WSL/原生克隆）
 # 时该平台告警跳过，发布其余产物。
 param(
+  [Parameter(Position = 0)]
+  [string]$Targets = "windows,android",
   [switch]$DryRun
 )
 
@@ -66,8 +71,27 @@ function Resolve-ReleaseVersion {
 $version = Resolve-ReleaseVersion
 $tag = "v$version"
 
-# 五个固定名产物。
-$artifactNames = @("KXToDo.exe", "kxtodo-cli.exe", "KXToDo.apk", "KXToDo.AppImage", "kxtodo-cli")
+# 目标解析（与 release.ps1 同一套 token）：默认 Windows+Android，unix 需显式指定。
+$targetAliases = @{ win = "windows"; windows = "windows"; droid = "android"; android = "android"; unix = "unix"; linux = "unix" }
+$targetSet = New-Object System.Collections.Generic.HashSet[string]
+foreach ($token in ($Targets -split "[,+]")) {
+  $t = $token.Trim().ToLower()
+  if ($t -eq "") { continue }
+  if ($t -eq "all") {
+    foreach ($canonical in @("windows", "android", "unix")) { [void]$targetSet.Add($canonical) }
+  } elseif ($targetAliases.ContainsKey($t)) {
+    [void]$targetSet.Add($targetAliases[$t])
+  } else {
+    throw "Unknown target '$token'. Use: win, android, unix, all（可逗号组合，如 win,unix）"
+  }
+}
+if ($targetSet.Count -eq 0) { throw "No target specified. Use: win, android, unix, all" }
+
+# 固定名产物按目标推导（名字与应用内 updater 的精确匹配一致）。
+$artifactNames = @()
+if ($targetSet.Contains("windows")) { $artifactNames += @("KXToDo.exe", "kxtodo-cli.exe") }
+if ($targetSet.Contains("android")) { $artifactNames += @("KXToDo.apk") }
+if ($targetSet.Contains("unix")) { $artifactNames += @("KXToDo.AppImage", "kxtodo-cli") }
 $artifactPaths = $artifactNames | ForEach-Object { Join-Path $root "release\$_" }
 
 Write-Host "==> 版本：$tag" -ForegroundColor Cyan
@@ -79,7 +103,7 @@ if ($dirty -and -not $DryRun) {
 }
 
 if ($DryRun) {
-  Write-Host "[DryRun] 将构建 $tag 并发布五个固定名产物（环境未就绪的平台告警跳过）："
+  Write-Host "[DryRun] 将构建 $tag 并发布固定名产物（目标：$($targetSet -join "+")；环境未就绪的平台告警跳过）："
   foreach ($p in $artifactPaths) { Write-Host "[DryRun]   $p" }
   return
 }
@@ -102,9 +126,9 @@ foreach ($p in $artifactPaths) {
   Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
 }
 
-# 构建三平台（release.ps1 → package.ps1：windows + android + unix，内部对缺环境/失败告警跳过）。
-& (Join-Path $root "release.ps1") all
-if ($LASTEXITCODE -ne 0) { throw "构建失败（release.ps1 all 退出码 $LASTEXITCODE）" }
+# 构建目标平台（release.ps1 → package.ps1；内部对缺环境/失败告警跳过）。
+& (Join-Path $root "release.ps1") ($targetSet -join ",")
+if ($LASTEXITCODE -ne 0) { throw "构建失败（release.ps1 退出码 $LASTEXITCODE）" }
 
 # 收集实际产出的产物；缺失只告警（对应平台被跳过），一个都没有才终止。
 $present = @($artifactPaths | Where-Object { Test-Path -LiteralPath $_ })

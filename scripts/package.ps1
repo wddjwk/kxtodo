@@ -1,10 +1,26 @@
 param(
-  [ValidateSet("all", "windows", "android", "unix", "linux")]
-  [string]$Targets = "all",
+  # 默认只构建 Windows + Android；unix（Linux，经 WSL 原生克隆）需要显式指定。
+  [string[]]$Targets = @("windows", "android"),
   [switch]$Log
 )
 
 $ErrorActionPreference = "Stop"
+
+# 目标规范化：all 展开三平台；linux 是 unix 别名；非法值报错。
+$targetAliases = @{ windows = "windows"; android = "android"; unix = "unix"; linux = "unix"; all = "all" }
+$targetSet = New-Object System.Collections.Generic.HashSet[string]
+foreach ($token in $Targets) {
+  $t = "$token".Trim().ToLower()
+  if (-not $targetAliases.ContainsKey($t)) {
+    Write-Error "Unknown target '$token'. Use: windows, android, unix/linux, all"
+    exit 1
+  }
+  if ($t -eq "all") {
+    foreach ($canonical in @("windows", "android", "unix")) { [void]$targetSet.Add($canonical) }
+  } else {
+    [void]$targetSet.Add($targetAliases[$t])
+  }
+}
 
 $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 $root = Resolve-Path (Join-Path $scriptPath "..")
@@ -40,9 +56,9 @@ $env:CARGO_HOME = Join-Path $root ".cargo-home"
 $env:CARGO_TARGET_DIR = Join-Path $root "src-tauri\target"
 New-Item -ItemType Directory -Force -Path $env:CARGO_HOME | Out-Null
 
-$buildWindows = $Targets -eq "all" -or $Targets -eq "windows"
-$buildAndroid = $Targets -eq "all" -or $Targets -eq "android"
-$buildUnix = $Targets -eq "all" -or $Targets -eq "unix" -or $Targets -eq "linux"
+$buildWindows = $targetSet.Contains("windows")
+$buildAndroid = $targetSet.Contains("android")
+$buildUnix = $targetSet.Contains("unix")
 
 $built = New-Object System.Collections.Generic.List[string]
 $skipped = New-Object System.Collections.Generic.List[string]
@@ -65,7 +81,7 @@ if ($Log) {
 }
 
 $effectiveVersion = $script:GitVersion
-Write-Host "==> 版本：$effectiveVersion（目标：$Targets）" -ForegroundColor Cyan
+Write-Host "==> 版本：$effectiveVersion（目标：$($targetSet -join "+")）" -ForegroundColor Cyan
 
 try {
   # -------------------------------------------------------------------------

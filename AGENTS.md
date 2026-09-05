@@ -86,18 +86,25 @@ kxtodo.exe (GUI)                    kxtodo-cli (CLI)
 npm install                # 依赖
 npm run desktop:dev        # 桌面开发（vite + tauri dev）
 scripts/cargo-msvc.sh test -p kxtodo-core   # Rust 测试（Git Bash 下必须用这个包装！）
-.\release.ps1 win          # Windows 制品（KXToDo.exe + kxtodo-cli.exe）
-.\release.ps1 android      # Android APK（KXToDo.apk）
-.\release.ps1 unix         # 经 WSL 原生克隆构建 Linux 制品（KXToDo.AppImage + kxtodo-cli）
-.\release.ps1 all          # Windows + Android + Linux 三平台（某平台环境未就绪则告警跳过，不终止其它）
-./release.sh               # Linux 构建入口（须在 Linux/WSL 上跑；release.ps1 unix 会在原生克隆里调它）
+.\release.ps1              # 默认 Windows + Android（KXToDo.exe + kxtodo-cli.exe + KXToDo.apk）
+.\release.ps1 win / android / unix   # 单平台（unix = 经 WSL 原生克隆构建 KXToDo.AppImage + kxtodo-cli）
+.\release.ps1 win,unix     # 逗号组合；.\release.ps1 all = 三平台（环境未就绪告警跳过，不终止其它）
+./release.sh               # Linux 构建入口（须在 Linux/WSL 上跑；release.ps1 unix 与 CI release.yml 都复用它）
 node scripts/mobile-ux-test.mjs   # 移动端 UX 回归（playwright-core + 系统 Edge，需先 npm run dev）
-.\scripts\publish.ps1      # 一键发布：重建三平台产物 + gh release 上传五个固定名制品（需 gh 已登录；缺环境的平台告警跳过）
+.\scripts\publish.ps1      # 一键发布：默认 Windows+Android；all = 三平台五产物（需 gh 已登录；缺环境平台告警跳过）
+git tag vX.Y.Z; git push origin main vX.Y.Z   # 云端发布：触发 GitHub Actions release.yml 构建三平台并发 release（无需本地构建环境）
 ```
 
 **版本号只有 git 一个来源**：最近的 `v*` tag，其次最近一条 `vX.Y.Z` 开头的 commit message。`build.rs`（根 crate + crates/core）构建期调用 git 注入 `KXTODO_VERSION`，GUI 经 `app_version` 命令展示在设置页，CLI 的 `version` 命令同源。**仓库任何文件里都不写版本号**（Cargo.toml 是 0.0.0 占位、tauri.conf.json 无 version 字段、前端无常量）——发版只打 tag/写 commit，永远不要往文件里同步版本号。注意 `git describe` 优先于 commit message：**发版必须先 commit 再在 HEAD 上打 tag**，否则 describe 回到旧 tag，构建/发布会拿旧版本号且不报错（`publish.ps1` 已内置兜底：HEAD 无精确 tag 时按提交主题的 `vX.Y.Z` 当场在 HEAD 打 tag，再构建，规避此坑）。
 
-产物：五个固定名（不带版本号）——Windows `release/KXToDo.exe`（GUI）+ `release/kxtodo-cli.exe`（CLI）；Android `release/KXToDo.apk`（覆盖安装不留历史包，已不再写 `.version` sidecar）；Linux `release/KXToDo.AppImage`（GUI）+ `release/kxtodo-cli`（CLI 裸二进制）。**仓库文件仍不写版本号**：GUI/CLI 二进制里的版本由 `build.rs` 构建期解析 git 注入 `KXTODO_VERSION`；AppImage 的版本经 `tauri build --config "{\"version\":\"$VERSION\"}"` 内联 JSON 注入，bundler 仍按官方 `productName_version_arch` 产出 `KXToDo_<版本>_amd64.AppImage`，`release.sh` 校验其含正确版本后改名成固定名 `KXToDo.AppImage`（bundle 由 `src-tauri/tauri.linux.conf.json` 平台覆盖启用，`targets` 仅 `appimage`）。构建入口分工：Windows/Android 走 `release.ps1` → `package.ps1`；Linux 走 `release.ps1 unix`，它经 `wsl.exe` 调 `scripts/wsl-linux-build.sh` 在 **WSL 原生克隆**（默认 `~/projects/kxtodo`，可用环境变量 `KXTODO_WSL_REPO` 覆盖）里同步到 Windows HEAD+tag → 跑 `release.sh` → 把 `KXToDo.AppImage`+`kxtodo-cli` 回拷到 Windows 的 `release/`（用原生克隆而非 /mnt/d：AppImage 打包在 ext4 上更快更稳；克隆有未提交跟踪改动时拒绝同步并告警跳过）。APK 的 versionName/versionCode 由 package.ps1 注入的 `KXTODO_VERSION` 环境变量进 gradle（versionCode = 900000000 + X*1000000 + Y*1000 + Z，基线高于旧构建的 8002001 保证升级不降级）。`publish.ps1` 每次**重建**五产物（先删旧产物避免误传上一版本，缺环境的平台告警跳过），确保 HEAD 带 tag（无则按提交主题当场打）后推送并 `gh release` 上传。没有 GitHub 构建流水线（已删），构建与发布全在本地。
+产物：五个固定名（不带版本号）——Windows `release/KXToDo.exe`（GUI）+ `release/kxtodo-cli.exe`（CLI）；Android `release/KXToDo.apk`（覆盖安装不留历史包，已不再写 `.version` sidecar）；Linux `release/KXToDo.AppImage`（GUI）+ `release/kxtodo-cli`（CLI 裸二进制）。**仓库文件仍不写版本号**：GUI/CLI 二进制里的版本由 `build.rs` 构建期解析 git 注入 `KXTODO_VERSION`；AppImage 的版本经 `tauri build --config "{\"version\":\"$VERSION\"}"` 内联 JSON 注入，bundler 仍按官方 `productName_version_arch` 产出 `KXToDo_<版本>_amd64.AppImage`，`release.sh` 校验其含正确版本后改名成固定名 `KXToDo.AppImage`（bundle 由 `src-tauri/tauri.linux.conf.json` 平台覆盖启用，`targets` 仅 `appimage`）。构建入口分工：Windows/Android 走 `release.ps1` → `package.ps1`；Linux 走 `release.ps1 unix`，它经 `wsl.exe` 调 `scripts/wsl-linux-build.sh` 在 **WSL 原生克隆**（默认 `~/projects/kxtodo`，可用环境变量 `KXTODO_WSL_REPO` 覆盖）里同步到 Windows HEAD+tag → 跑 `release.sh` → 把 `KXToDo.AppImage`+`kxtodo-cli` 回拷到 Windows 的 `release/`（用原生克隆而非 /mnt/d：AppImage 打包在 ext4 上更快更稳；克隆有未提交跟踪改动时拒绝同步并告警跳过）。APK 的 versionName/versionCode 由 package.ps1 注入的 `KXTODO_VERSION` 环境变量进 gradle（versionCode = 900000000 + X*1000000 + Y*1000 + Z，基线高于旧构建的 8002001 保证升级不降级）。`publish.ps1` 默认重建 Windows+Android 产物（unix 需显式指定，如 `publish.ps1 all`；先删旧产物避免误传上一版本，缺环境的平台告警跳过），确保 HEAD 带 tag（无则按提交主题当场打）后推送并 `gh release` 上传。云端构建发布走 GitHub Actions（见下节），本地脚本与 CI 复用同一套构建入口（release.sh / tauri CLI / gradle）。
+
+### GitHub Actions 流水线（.github/workflows/）
+
+- **ci.yml**（push main / PR）：只做编译检查，不构建发布产物、不发 release——前端（svelte-check + vite build）、Windows 与 Linux 双平台 Rust（`cargo check --workspace` + core 测试）。Android 交叉编译重，不进 push CI（tag 发布时才构建，与 tauri 官方 test-android.yml 同思路）。Node 固定 22（规避 node 24 在 Windows 的退出期 libuv flake）。**workflow 级 `PYTHONUTF8=1` 不可删**：Windows runner 的 Python 默认 cp1252 stdout，core 调度测试的内联脚本 `print('中文')` 会 UnicodeEncodeError 退出 1 挂掉 3 个 host_scheduler 测试（Linux runner 与开发机 UTF-8 环境无感）。
+- **release.yml**（push tag `v*`）：三平台并行构建 → release job 汇总五个固定名产物 `gh release create/upload --clobber`（`--generate-notes`）。Windows = `tauri build --no-bundle` + cargo CLI；Linux = **直接复用 `release.sh`**（与本地/WSL 同一入口；ubuntu-latest 24.04 与开发机 WSL 一致，AppImage 不打包 glibc，更老发行版需自行评估）；Android = 官方 tauri mobile CI 模式（`nttld/setup-ndk` r29 + `NDK_HOME` + ubuntu 符号链接修复 + temurin 21 配 AGP 8.11/Gradle 8.14，产物优先 universal APK）。某平台失败 → 只发布成功产物并整体标红（与 publish.ps1 告警跳过语义一致）；`workflow_dispatch` 手动触发 = 只构建验证不发布（release job 仅 tag ref 运行）。构建 job 一律 `fetch-depth: 0`（build.rs/release.sh 的版本解析需要 tag 历史）；`Swatinem/rust-cache` 以 `workspaces: src-tauri -> target` 在 CI 与发布间共享缓存（Android 用独立 shared-key）。
+- **Android 签名**：keystore 存于仓库 secret `ANDROID_KEYSTORE_BASE64`（`base64 -w0 release.jks` 生成；轮换：`gh secret set ANDROID_KEYSTORE_BASE64`），CI 解码回 gradle 回退路径 `src-tauri/gen/android/keystore/release.jks`（密码/别名 `kxtodo` 在 build.gradle.kts 回退分支硬编码）——与本地 package.ps1 产物同签名，保证覆盖升级。**本地 keystore 与 secret 同时丢失 = 旧安装升级链断裂**（secret 本身也是一份异地备份）。
+- 云端发布流程：commit → `git tag vX.Y.Z` → `git push origin main vX.Y.Z`，Actions 自动构建并发布；本地 `publish.ps1` 仍是离线/自足路径。
 
 ## 环境坑位（Windows 开发必读）
 
@@ -131,7 +138,7 @@ node scripts/mobile-ux-test.mjs   # 移动端 UX 回归（playwright-core + 系�
 6. **坐标与缩放**：app-shell 是 transform 缩放的，`position:fixed` 子元素（菜单/浮层）的坐标系跟着缩放——所有用 clientX/Y 定位的浮层都要除以 `uiScaleValue()` 换算逻辑坐标（TaskCard 日期弹窗、ContextMenu 同套路）；移动端开启界面缩放后这条对所有浮层生效。
 7. **模块循环 TDZ 白屏**：platform↔stores/backend/capabilities 存在循环依赖，任何在模块顶层订阅 stores 的代码（如历史栈路由）会在启动时 ReferenceError 白屏（桌面+移动全平台）。订阅类初始化必须封装成函数由 App onMount 调用；验证手段：`node` 直接 eval 生产 bundle（配 DOM stub）能复现 TDZ，比肉眼看代码快。
 8. **移动端 UX 验证没有真机就用 Playwright 模拟**：`scripts/mobile-ux-test.mjs`（playwright-core + `channel:"msedge"`，Android UA + hasTouch + isMobile context 连 vite dev）。合成 PointerEvent（pointerType:"touch"）可驱动长按 action；浏览器 dev 走 localStorage legacy 路径，足够验证导航/菜单/设置页等纯前端逻辑。APK 原生侧（Kotlin 桥、安装器、返回键）只能靠代码评审 + `aapt dump badging` / `apksigner verify --print-certs` 核验产物元数据与签名。
-9. **签名与升级**：keystore 在 `src-tauri/gen/android/keystore/release.jks`（gitignore，密码 kxtodo，package.ps1 首跑自动生成）——**丢了它旧装就无法覆盖升级**。versionCode 公式 `900000000 + X*1000000 + Y*1000 + Z`（gradle 内），基线高于历史脏值 8002001；改公式前先确认单调递增，否则安装器报降级拒装。
+9. **签名与升级**：keystore 在 `src-tauri/gen/android/keystore/release.jks`（gitignore，密码 kxtodo，package.ps1 首跑自动生成；同一份已 base64 存仓库 secret `ANDROID_KEYSTORE_BASE64` 供 release.yml 云端签名，兼作异地备份）——**丢了它旧装就无法覆盖升级**。versionCode 公式 `900000000 + X*1000000 + Y*1000 + Z`（gradle 内），基线高于历史脏值 8002001；改公式前先确认单调递增，否则安装器报降级拒装。
 10. **APK 产物策略**：release 资产固定名 `KXToDo.apk`（不带版本，覆盖安装不留历史包）；应用内更新 = 下载固定名到 cacheDir → 桥接 installApk 拉系统安装器。桌面（Windows/Linux）更新同为“下载固定名制品→替换→重启”，不再做 shim/带版本旧包/更新日志那套；publish 每次重建三平台产物，已不再用 `.version` sidecar 识别旧产物。
 11. **图标同步**：`scripts/make-icon.py` 同时生成桌面 icons 与 android mipmap 五密度（launcher/round/foreground，foreground 按 108dp 画布 66% 安全区）；换 logo 后跑一次即全平台同步，package.ps1 每次构建前会自动跑。
 12. **通知**：移动端走 tauri-plugin-notification（Rust 注册插件 + capabilities/mobile.json 的 `notification:default` + Manifest `POST_NOTIFICATIONS`）；Android 13+ 需运行时权限，前端发送前 `isPermissionGranted/requestPermission`，拒绝则降级 Toast。桌面自绘通知窗逻辑不动。
