@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
-    appSettings, showSettings, showToast, showNotification, fileToDataUrl, appVersion
+    appSettings, showSettings, showToast, showNotification, fileToDataUrl, appVersion,
+    syncConnection
   } from "./stores";
   import { setConfig as setConfigAction } from "./actions";
   import {
@@ -9,7 +10,10 @@
     syncStatus as syncStatusAction,
     syncNow as syncNowAction,
     syncUnpair as syncUnpairAction,
-    setSyncScopes
+    syncProbe as syncProbeAction,
+    syncDiscover as syncDiscoverAction,
+    setSyncScopes,
+    type DiscoveredServer
   } from "./actions";
   import { checkForUpdate, startUpdate, updateProgress, type UpdateInfo } from "./updater";
   import { isMobile } from "./platform";
@@ -76,8 +80,17 @@
   let syncBusy = false;
   let syncStatus: import("./actions").SyncStatus | null = null;
   let syncFormPrefilled = false;
+  let discovering = false;
+  let discovered: DiscoveredServer[] = [];
+  let discoveryRan = false;
 
   $: syncPaired = Boolean($appSettings.sync?.enabled && $appSettings.sync?.serverUrl);
+  $: connection = $syncConnection;
+  $: connectionLabel = connection.online === null
+    ? "未探测"
+    : connection.online
+      ? "🟢 已连接"
+      : "🔴 已掉线";
   let syncStatusLoaded = false;
   $: if ($showSettings && syncPaired && !syncStatusLoaded) {
     syncStatusLoaded = true;
@@ -90,8 +103,36 @@
     syncForm.email = $appSettings.profile.email || "";
   }
 
-  async function refreshSyncStatus(): Promise<void> {
+  /** 本地状态立即渲染，网络探测丢到后台（掉线时也不阻塞设置界面）。 */
+  async function refreshSyncStatus(options: { probe?: boolean } = {}): Promise<void> {
     syncStatus = await syncStatusAction();
+    if (options.probe === false) return;
+    void syncProbeAction().then((status) => {
+      if (status) syncStatus = status;
+    });
+  }
+
+  /** 「发现」：UDP 广播/组播查询局域网内的 kxtodo-server。 */
+  async function runDiscovery(): Promise<void> {
+    if (discovering) return;
+    discovering = true;
+    try {
+      const result = await syncDiscoverAction();
+      if (result === null) return; // 当前环境不支持，actions 已提示过
+      discoveryRan = true;
+      discovered = result;
+      if (result.length === 0) {
+        showToast("局域网内没发现服务器（需在跑、同一局域网、监听 0.0.0.0）");
+      }
+    } finally {
+      discovering = false;
+    }
+  }
+
+  function pickDiscovered(server: DiscoveredServer): void {
+    syncForm.serverUrl = server.url;
+    discovered = [];
+    showToast(`已填入 ${server.name || server.host}`);
   }
 
   async function registerSync(): Promise<void> {
@@ -123,7 +164,7 @@
     syncBusy = true;
     try {
       await syncNowAction();
-      await refreshSyncStatus();
+      await refreshSyncStatus({ probe: false });
     } finally {
       syncBusy = false;
     }
@@ -142,15 +183,22 @@
   }
 
   async function updateSyncScope(
-    field: "syncData" | "syncSettings" | "syncSchedules",
+    field: "syncData" | "syncSettings" | "syncSchedules" | "syncImages",
     value: boolean
   ): Promise<void> {
     await setSyncScopes({ [field]: value });
-    await refreshSyncStatus();
+    await refreshSyncStatus({ probe: false });
   }
 
   async function updateSyncInterval(seconds: number): Promise<void> {
+    // 低于 5 秒按 5 秒生效（core 侧同样夹取）
     await setSyncScopes({ intervalSeconds: Math.max(5, Math.min(86400, Math.round(seconds))) });
+    await refreshSyncStatus({ probe: false });
+  }
+
+  async function updateReconnectSeconds(seconds: number): Promise<void> {
+    await setSyncScopes({ reconnectSeconds: Math.max(5, Math.min(86400, Math.round(seconds))) });
+    await refreshSyncStatus({ probe: false });
   }
 
   // ---- 更新 ----
@@ -485,7 +533,10 @@
     <h3>数据同步</h3>
     {#if syncPaired}
       <div class="sync-card">
-        <div class="settings-row"><span>服务器</span><span class="muted">{$appSettings.sync.serverUrl}</span></div>
+        <div class="settings-row">
+          <span>服务器（{connectionLabel}{#if connection.checking}，探测中…{/if}）</span>
+          <span class="muted">{$appSettings.sync.serverUrl}</span>
+        </div>
         <div class="settings-row"><span>账户</span><span class="muted">{$appSettings.sync.username} / {$appSettings.sync.email}</span></div>
         {#if syncStatus?.lastSyncAt}
           <div class="settings-row">
@@ -494,16 +545,22 @@
               {new Date(syncStatus.lastSyncAt).toLocaleString()}
               {#if syncStatus?.lastResult}
                 （拉 {syncStatus.lastResult.pulled} / 推 {syncStatus.lastResult.pushed}
+                {#if syncStatus.lastResult.imagesPulled || syncStatus.lastResult.imagesPushed}
+                  / 图片 ↓{syncStatus.lastResult.imagesPulled ?? 0} ↑{syncStatus.lastResult.imagesPushed ?? 0}
+                {/if}
                 {#if syncStatus.lastResult.conflicts} / 冲突 {syncStatus.lastResult.conflicts}{/if}）
               {/if}
             </span>
           </div>
         {/if}
-        {#if syncStatus?.serverError}
-          <p class="update-error">服务器异常：{syncStatus.serverError}</p>
+        {#if connection.online === false && connection.lastError}
+          <p class="update-error">服务器不可达：{connection.lastError}（每 {$appSettings.sync.reconnectSeconds || 300} 秒静默重连）</p>
         {/if}
         <div class="settings-row"><span>同步数据（节点/任务）</span>
           <input type="checkbox" checked={$appSettings.sync.syncData} on:change={(event) => updateSyncScope("syncData", event.currentTarget.checked)} />
+        </div>
+        <div class="settings-row"><span>同步图片（插图/背景/头像文件本体）</span>
+          <input type="checkbox" checked={$appSettings.sync.syncImages} on:change={(event) => updateSyncScope("syncImages", event.currentTarget.checked)} />
         </div>
         <div class="settings-row"><span>同步设置（个人资料/配色）</span>
           <input type="checkbox" checked={$appSettings.sync.syncSettings} on:change={(event) => updateSyncScope("syncSettings", event.currentTarget.checked)} />
@@ -522,6 +579,17 @@
             onCommit={(v) => updateSyncInterval(v)}
           />
         </div>
+        <div class="settings-row number-row">
+          <span>掉线重连间隔（秒）</span>
+          <NumberField
+            ariaLabel="掉线重连间隔（秒）"
+            suffix="s"
+            min={5}
+            max={86400}
+            value={$appSettings.sync.reconnectSeconds || 300}
+            onCommit={(v) => updateReconnectSeconds(v)}
+          />
+        </div>
         <div class="settings-row">
           <button class="settings-button" type="button" disabled={syncBusy} on:click={runSyncNow}>
             {syncBusy ? "同步中…" : "立即同步"}
@@ -535,9 +603,28 @@
           服务器地址
           <input
             bind:value={syncForm.serverUrl}
-            placeholder="http://192.168.1.10:8765"
+            placeholder="http://192.168.1.10:52177"
           />
         </label>
+        <div class="settings-row">
+          <button class="settings-button" type="button" disabled={discovering} on:click={runDiscovery}>
+            {discovering ? "发现中…" : "发现"}
+          </button>
+          <span class="muted">探测局域网内的 kxtodo-server（UDP 52177 广播查询）</span>
+        </div>
+        {#if discovered.length > 0}
+          <div class="discovery-list">
+            {#each discovered as server (server.url)}
+              <button class="menu-action-button discovery-item" type="button" on:click={() => pickDiscovered(server)}>
+                <span class="discovery-name">{server.name || "未命名服务器"}</span>
+                <span class="muted">{server.host}:{server.port}</span>
+                {#if !server.verified}<span class="muted">（未复核）</span>{/if}
+              </button>
+            {/each}
+          </div>
+        {:else if discoveryRan && !discovering}
+          <p class="muted">没发现服务器：确认它在跑、与本机同一局域网、监听在非回环地址（0.0.0.0）。</p>
+        {/if}
         <label class="settings-row">
           用户名
           <input bind:value={syncForm.username} placeholder="用户名（与邮箱共同确定账户）" />
@@ -562,7 +649,7 @@
           </button>
           <button class="settings-button" type="button" disabled={syncBusy} on:click={loginSync}>登录已有账户</button>
         </div>
-        <p class="muted">注册 = 创建账户并配对本机；已有账户在其它设备上用“登录”。数据（节点/任务）默认同步。</p>
+        <p class="muted">注册 = 创建账户并配对本机；已有账户在其它设备上用“登录”。数据（节点/任务）与图片默认同步。</p>
       </div>
     {/if}
   </section>

@@ -572,6 +572,12 @@ pub struct SyncSettings {
     /// 自动同步间隔（秒）
     #[serde(rename = "intervalSeconds", default = "default_sync_interval_seconds")]
     pub interval_seconds: u32,
+    /// 同步图片文件本体（markdown 插图 / 列表背景 / 头像，默认开）
+    #[serde(rename = "syncImages", default = "default_true")]
+    pub sync_images: bool,
+    /// 掉线后的静默重连探测间隔（秒）
+    #[serde(rename = "reconnectSeconds", default = "default_sync_reconnect_seconds")]
+    pub reconnect_seconds: u32,
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
@@ -579,6 +585,10 @@ pub struct SyncSettings {
 
 fn default_sync_interval_seconds() -> u32 {
     30
+}
+
+fn default_sync_reconnect_seconds() -> u32 {
+    300
 }
 
 impl Default for SyncSettings {
@@ -593,6 +603,8 @@ impl Default for SyncSettings {
             sync_settings: false,
             sync_schedules: false,
             interval_seconds: default_sync_interval_seconds(),
+            sync_images: default_true(),
+            reconnect_seconds: default_sync_reconnect_seconds(),
             extra: Map::new(),
         }
     }

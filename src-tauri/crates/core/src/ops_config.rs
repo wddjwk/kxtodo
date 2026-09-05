@@ -228,6 +228,18 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         is_map: false,
     },
     FieldMeta {
+        path: "sync.syncImages",
+        kind: "boolean",
+        description: "同步图片文件本体（markdown 插图/列表背景/头像）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "sync.reconnectSeconds",
+        kind: "integer(5-86400)",
+        description: "服务器掉线后的静默重连间隔（秒）",
+        is_map: false,
+    },
+    FieldMeta {
         path: "updates.autoCheck",
         kind: "boolean",
         description: "启动后自动检查更新",
@@ -310,6 +322,8 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "sync.syncSettings" => json!(settings.sync.sync_settings),
         "sync.syncSchedules" => json!(settings.sync.sync_schedules),
         "sync.intervalSeconds" => json!(settings.sync.interval_seconds),
+        "sync.syncImages" => json!(settings.sync.sync_images),
+        "sync.reconnectSeconds" => json!(settings.sync.reconnect_seconds),
         "updates.autoCheck" => json!(settings.updates.auto_check),
         "features.showCategoryBadges" => json!(settings.features.show_category_badges),
         _ => return Err(unknown_field(path)),
@@ -685,7 +699,16 @@ pub fn set_value(
             settings.sync.sync_schedules = expect_bool(path, &value)?;
         }
         "sync.intervalSeconds" => {
-            settings.sync.interval_seconds = expect_int(path, &value, 5, 86400)? as u32;
+            // 低于下限按下限生效（与 sync configure、前端 NumberField 一致）
+            settings.sync.interval_seconds =
+                expect_int(path, &value, 1, 86400)?.clamp(5, 86400) as u32;
+        }
+        "sync.syncImages" => {
+            settings.sync.sync_images = expect_bool(path, &value)?;
+        }
+        "sync.reconnectSeconds" => {
+            settings.sync.reconnect_seconds =
+                expect_int(path, &value, 1, 86400)?.clamp(5, 86400) as u32;
         }
         "updates.autoCheck" => settings.updates.auto_check = expect_bool(path, &value)?,
         "features.showCategoryBadges" => {
@@ -841,6 +864,10 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "sync.syncSchedules" => target.sync.sync_schedules = defaults.sync.sync_schedules,
         "sync.intervalSeconds" => {
             target.sync.interval_seconds = defaults.sync.interval_seconds
+        }
+        "sync.syncImages" => target.sync.sync_images = defaults.sync.sync_images,
+        "sync.reconnectSeconds" => {
+            target.sync.reconnect_seconds = defaults.sync.reconnect_seconds
         }
         "updates.autoCheck" => target.updates.auto_check = defaults.updates.auto_check,
         "features.showCategoryBadges" => {

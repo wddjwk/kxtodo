@@ -15,6 +15,9 @@ use crate::util;
 pub struct ServerSettings {
     pub listen: String,
     pub db: String,
+    /// 服务器展示名：局域网发现时客户端列表里显示的名字。
+    #[serde(default)]
+    pub name: String,
     #[serde(rename = "adminUser")]
     pub admin_user: String,
     #[serde(rename = "adminPasswordHash")]
@@ -74,6 +77,7 @@ impl Default for ServerSettings {
         Self {
             listen: String::new(),
             db: String::new(),
+            name: String::new(),
             admin_user: String::new(),
             admin_password_hash: String::new(),
             admin_password_salt: None,
@@ -87,6 +91,7 @@ impl ServerSettings {
         json!({
             "listen": self.listen,
             "db": self.db,
+            "name": self.name,
             "adminUser": self.admin_user,
             "version": self.version,
         })

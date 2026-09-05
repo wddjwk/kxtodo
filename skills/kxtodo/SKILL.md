@@ -56,6 +56,14 @@ KXToDo v9 提供脚本化 CLI。本 SKILL 说明**何时调用、按什么步骤
 - 动态 map（如 `appearance.uiColors`）必须带 `--map-key <entry-id>`，键不做点路径拆解。
 - `config reset` 为高风险，先 `--dry-run`。
 
+## 数据同步
+
+- 找服务器：`sync discover`（局域网 UDP 广播查询，返回 name/host/port/url，`url` 可直接当 `--server`）。该命令**不需要数据目录已存在**，是配对前的第一步。
+- 配对：新账户 `sync register --server <url> --username --email --secret`；已有账户换设备用 `sync login`（同样四个参数）。密钥丢失=数据不可恢复，别替用户编密钥。
+- 日常：`sync now` 立即同步；`sync status` 是**纯本地读**（配对信息 + 最近同步结果 + 缓存的在线状态，不联网，可随时调用）；`sync probe` 才真的联网探测（短超时 /healthz + /me）并刷新在线状态。判断服务器通不通看 status 的 `online` 字段（`null` = 还没探测过），要最新结论先 probe。
+- 配置：`sync configure --interval-seconds N`（自动同步间隔，低于 5 按 5 生效）、`--reconnect-seconds N`（掉线后静默重连间隔）、`--sync-images/--sync-data/--sync-settings/--sync-schedules`。图片（markdown 插图/列表背景/头像的文件本体）默认随数据一起同步。
+- `sync unpair` 只清本机 token 并关同步开关，服务器数据保留。
+
 ## 幂等与并发
 
 - 每个创建类写操作使用独立的 `--idempotency-key`，重试安全。

@@ -111,7 +111,9 @@ export const defaultSettings: Settings = {
     syncData: true,
     syncSettings: false,
     syncSchedules: false,
-    intervalSeconds: 30
+    syncImages: true,
+    intervalSeconds: 30,
+    reconnectSeconds: 300
   },
   updates: {
     autoCheck: true
@@ -663,10 +665,16 @@ export function normalizeSettings(raw: unknown): Settings {
       syncData: typeof source?.sync?.syncData === "boolean" ? source.sync.syncData : true,
       syncSettings: Boolean(source?.sync?.syncSettings),
       syncSchedules: Boolean(source?.sync?.syncSchedules),
+      syncImages: typeof source?.sync?.syncImages === "boolean" ? source.sync.syncImages : true,
+      // 低于下限的间隔按下限生效（用户要的是「至少 5 秒」）
       intervalSeconds:
-        typeof source?.sync?.intervalSeconds === "number" && source.sync.intervalSeconds >= 5
-          ? Math.min(86400, Math.round(source.sync.intervalSeconds))
-          : 30
+        typeof source?.sync?.intervalSeconds === "number" && Number.isFinite(source.sync.intervalSeconds)
+          ? Math.min(86400, Math.max(5, Math.round(source.sync.intervalSeconds)))
+          : 30,
+      reconnectSeconds:
+        typeof source?.sync?.reconnectSeconds === "number" && Number.isFinite(source.sync.reconnectSeconds)
+          ? Math.min(86400, Math.max(5, Math.round(source.sync.reconnectSeconds)))
+          : 300
     },
     updates: {
       autoCheck: typeof source?.updates?.autoCheck === "boolean" ? source.updates.autoCheck : true

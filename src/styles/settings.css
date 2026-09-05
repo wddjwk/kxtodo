@@ -142,6 +142,25 @@
   color: #444;
 }
 
+/* 局域网发现结果：整行可点，复用 menu-action-button 的视觉语言 */
+.discovery-list {
+  display: grid;
+  gap: 6px;
+}
+
+.discovery-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+}
+
+.discovery-name {
+  font-weight: 600;
+  color: #333;
+}
+
 .notification-setting-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

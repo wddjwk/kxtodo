@@ -15,6 +15,20 @@ import { caps } from "./capabilities";
 /** 运行时版本号：构建期由 build.rs 从 git tag/commit 注入（KXTODO_VERSION），hydrate 时填充。 */
 export const appVersion = writable("");
 
+/**
+ * 与同步服务器的连接状态。来源是后台同步循环/探测写进 `runtime/sync.json` 的缓存，
+ * 面板只读它——打开设置界面绝不触发阻塞式网络探测。
+ * `online === null` 表示还没探测过（刚装好或从未同步）。
+ */
+export type SyncConnection = {
+  online: boolean | null;
+  lastSeenAt?: string | null;
+  lastError?: string | null;
+  checking?: boolean;
+};
+
+export const syncConnection = writable<SyncConnection>({ online: null });
+
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }

@@ -29,10 +29,12 @@ kxtodo.exe (GUI)                    kxtodo-cli (CLI)
 ```
 设备A (GUI/CLI, 任一平台)          设备B …
   └─ kxtodo-core::sync::engine     └─ 同一引擎
-       │ XChaCha20-Poly1305 密文（AAD=实体ID）
+       │ XChaCha20-Poly1305 密文（AAD=实体ID / 图片ID）
+       │ 实体走 JSON，图片走裸字节 blob 通道
        ▼
-  kxtodo-server（独立二进制，unix 部署；SQLite；只存密文+版本号，无配额）
-       数据默认 ~/.local/share/kxtodo/server/data.db，--db 覆盖
+  kxtodo-server（独立二进制；SQLite；只存密文+版本号，无配额）
+       默认监听 0.0.0.0:52177，数据默认 <平台数据根>/kxtodo/server/data.db（--db / --data-dir 覆盖）
+       局域网发现：固定 UDP 52177 收广播/组播查询 → 单播应答 --name + 真实 TCP 端口
 ```
 
 - **安全模型（Etebase 式）**：`Argon2id(secret, 确定性盐=username|email)` 派生 master，HKDF 分离 `auth_key`（登录证明，HMAC 挑战应答，服务器持有同值）与 `enc_key`（加密密钥，永不出设备）。抓包/拖库只见密文；纯 HTTP 的残留风险仅 token 被嗅探后**冒写密文**（无明文泄露）。密钥丢失=数据不可恢复。
@@ -44,7 +46,13 @@ kxtodo.exe (GUI)                    kxtodo-cli (CLI)
 - **跨机验证记录（v0.4.0，已通过）**：WSL 客户端 + Windows 客户端 + kklaptop Ubuntu 客户端 三端连同一 kklaptop server（真实 LAN HTTP），双向建/改/删/中文任务全部收敛一致。
 - **发布**：kxtodo-server 双平台发布——Linux `kxtodo-server`（release.sh 构建）+ Windows `kxtodo-server.exe`（package.ps1 / release.yml windows job 构建）；server 自带 `--update`（按平台从 GitHub latest release 下载对应固定名制品原子替换自身+重启）。CI 的 cargo test 已含 `-p kxtodo-server`（spawn 真实 server 的 e2e 收敛测试）。
 - **server 运维（v0.4.1）**：启动参数持久化在 `server/settings.json`（listen/db/adminUser/密码哈希；显式指定则覆盖，未指定则沿用，首次必须给 `--admin-user/--admin-password`）；日志双写 stdout + `server/log/server-YYYYMMDD.log`（按日轮转留 7 天：`[req]` 每请求 method/path/status/耗时/XFF-IP、`[op]` 注册/登录/上传实体/管理操作、`[info]` 启动与配置）；管理界面 `http://host:port/admin`（账密登录 → 概览/用户/实体/在线 token/删用户，session cookie 12h）；登录 token 有效期固定 30 天（`--token-ttl-days` 已删除）。
-- **自动同步（v0.4.1）**：`sync.intervalSeconds`（默认 30，5-86400）取代旧 intervalMinutes；前端 `syncRunner.ts` 由 App onMount 启动（全平台含 Android，浏览器预览不启动），周期 pull+push，设置变化自动重排定时器。同步面板已去掉 caps.desktop 门控（移动端可用），配对表单默认填 displayName/email；面板/启动日志不再展示任何加密安全口号。
+- **自动同步（v0.4.1，已被 v0.5.0 重写）**：`sync.intervalSeconds`（默认 30，5-86400）取代旧 intervalMinutes；前端 `syncRunner.ts` 由 App onMount 启动（全平台含 Android，浏览器预览不启动），周期 pull+push，设置变化自动重排定时器。同步面板已去掉 caps.desktop 门控（移动端可用），配对表单默认填 displayName/email；面板/启动日志不再展示任何加密安全口号。
+- **局域网自动发现（v0.5.0）**：客户端 `core/src/sync/discovery.rs` + 服务端 `server/src/discovery.rs`。客户端在固定 UDP 52177 上发两轮广播（255.255.255.255）+ 组播（239.255.77.52）查询，收**单播**应答 `{protocol,name,port,version}`，再用 3 秒超时 `/healthz` 复核拿权威 name/version，host 取应答报文的源 IP。服务端单播应答是刻意的：Android 收组播要 MulticastLock（额外权限 + 唤醒 Wi-Fi 芯片），收单播不用。**发现端口与 TCP 端口解耦**（应答里带真实 TCP 端口），改了 `--listen` 端口照样能被发现；前提是非回环监听 + UDP 52177 未被同机其它进程占用（占用则启动日志降级提示，客户端只能手填 ip:port）。入口：设置 → 数据同步 → 未配对表单的「发现」按钮（点结果回填服务器地址）；CLI `sync discover [--timeout-ms]`——该命令**不要求数据目录已存在**（它是配对之前的动作，`command_needs_data` 里显式放行）。
+- **图片同步（v0.5.0）**：`core/src/sync/images.rs` + 服务端 `images` 表（密文存 SQLite BLOB）。三类文件本体一起同步：`img/data/<nodeId>/`（markdown 插图）、`img/background/`（列表背景）、`img/avator/`（头像，历史拼写别改）。图片是**内容寻址的不可变 blob**：ID = `sha256(kind|nodeId|filename)`（跨设备确定性一致且不含路径分隔符，可直接进 URL），无 LWW/OCC，靠明文 sha256 幂等——同名同内容不重传，服务端只存一份；命名冲突由文件名本身（`md-<纳秒>-<进程内计数器>.<ext>`）挡住。传输用裸字节体（不做 base64 膨胀），元数据走 query 参数（自写百分号编码），nonce 走响应头 `x-kxtodo-nonce`。实体流与图片流共用服务端 `users.current_seq` 计数器，但客户端各记水位（`lastPulledSeq` / `lastPulledImageSeq`，都单调安全）。删除**不**传播（孤儿图片留给后续的「清理无引用图片」功能）。落盘一律 `.part` + rename 原子写；服务端给的 nodeId/filename 会参与本地路径拼接，**两侧都做穿越校验**（`..`/分隔符/控制字符/前导点/超长一律拒）。本机清单的内容哈希按 (mtime,size) 缓存，否则 5 秒一轮的自动同步会反复重读所有图片。开关 `sync.syncImages`（默认开），关掉再打开会重置图片水位全量重拉。**滚动升级兼容**：老服务器（< v0.5.0）没有图片路由，客户端识别 `SYNC_HTTP_404/405/501` 后降级成一条 warning，数据同步照常——否则用户一升级客户端整条同步就断了。
+- **自动同步真正生效（v0.5.0，修的是 v0.4.1 的死代码）**：旧 `startAutoSync()` 第一行是 `if (!coreMode || timer !== null) return;`，而 App onMount 调它时 `hydrate()` 还没跑完、`coreMode` 恒为 false，于是**定时器从来没建立过**，间隔设成多少都没用（用户只能两端各自手点「立即同步」）。现在：入口不再用 coreMode 门控，改订阅 `isHydrated`，水合完成后启动并**立即同步一次**（初次连接）；用递归 `setTimeout` 而非 `setInterval`（跑完再排下一轮，同步耗时超过间隔不会堆积并发，也便于在线/掉线两种节奏切换）；间隔低于 5 秒一律按 5 秒生效（前端 normalize + core configure 双层夹取）；自动同步**不发通知**（周期弹通知很烦人，结果只在设置页「最近同步」里体现）；页面从后台回前台且距上次同步超过一个间隔时补一次（Android 会节流后台定时器）；手动「立即同步」撞上 `SYNC_IN_PROGRESS` 会短等待自动重试。
+- **掉线处理与 UI 不阻塞（v0.5.0）**：① `core_dispatch` / `core_snapshot` 从同步命令改成 **async + `tauri::async_runtime::spawn_blocking`**——Tauri 的同步命令跑在主线程上，一次 30 秒超时的同步请求或一次 Argon2id 派生（约 1 秒）就能把整个窗口和 IPC 卡死，这正是「服务器掉线时打开设置界面卡住几秒」的根因；② `sync status` 变成**纯本地读**（settings + `runtime/sync.json` 缓存），网络探测独立成 `sync probe`（3 秒超时 `/healthz` + `/me`），面板打开时后台调用；③ 在线结论缓存在 `runtime/sync.json`（`serverOnline`/`lastSeenAt`/`lastError`），面板据此显示「服务器（🟢已连接 / 🔴已掉线 / 未探测）」，前端 store 是 `syncConnection`；④ 掉线后按 `sync.reconnectSeconds`（默认 300，5-86400）静默重连，恢复即立刻同步，全程不打扰用户；⑤ `derive_keys` 加了进程内缓存（键 = `sha256(salt|secret)`，不落明文），5 秒一轮的自动同步不再每次白烧约 1 秒 Argon2id（移动端发热/耗电的关键）。
+- **server 运维（v0.5.0 追加）**：`--name`（展示名，发现列表里显示；缺省用主机名 COMPUTERNAME/HOSTNAME，再退 `kxtodo-server`）；默认监听改成 `0.0.0.0:52177`（`--listen` 允许只给 ip 或只给端口，省略端口时用 52177；纯数字仍按端口理解，兼容旧写法）；`--data-dir` 指定 settings.json/log/server.pid 的根目录——**e2e 测试必须传**，否则 spawn 的真实 server 会覆盖开发机/生产机 `%LOCALAPPDATA%\kxtodo\server\settings.json` 里的管理员凭据；`--daemon` 后台静默运行（Linux `process_group(0)` + `Stdio::null`，Windows `CREATE_NO_WINDOW|CREATE_NEW_PROCESS_GROUP`；父进程打印 pid 后等 pidfile 就绪才退出，起不来会告警退出码 4）+ `--stop`（先确认 pid 真属于 kxtodo-server 再动手：Windows `tasklist`、Linux `/proc/<pid>/comm`，防过期 pidfile 误杀）；`/healthz` 返回 name；`me` 与 admin 概览含图片计数/体积；请求体上限提到 128MB（图片密文）。
+- **更新下载代理回退（v0.5.0）**：GitHub 直连失败时**只在下载环节**静默回退 `https://ghfast.top/<完整 GitHub URL>`（GUI/CLI/APK 共用 `lib.rs::update_download_file`，server 自升级走 `update.rs::download_to`），两条路都失败就把两个原因一起报出来。**版本检查仍直连 api.github.com**：实测该代理不接受 api 域名（返回 403 `Invalid input.`）、也不发 CORS 头，所以回退只能放在 Rust 侧且只覆盖下载；`releases/latest` 经代理会返回 `302 Location: …/tag/vX.Y.Z`，需要时可作为版本探测的备用路径（当前未使用）。
 
 ### 数据目录解析
 
@@ -57,10 +65,11 @@ kxtodo.exe (GUI)                    kxtodo-cli (CLI)
 - **stores.ts**：Svelte stores 单一事实来源。`appState`/`appSettings` + derived（`selectedNode`/`visibleTasks`/`listCounts`/`accent`…）。桌面与移动端 hydrate 都走 `coreSnapshot`，之后靠 `kxtodo://domain-changed` 事件 + `refreshFromCore` 增量回刷。
 - **actions.ts**：GUI 全部写操作的业务命令层，桌面/移动统一 coreDispatch。**新写操作一律加在这里，不要在组件里直接改 store 或 invoke。**
 - **backend.ts**：Tauri invoke 桥接。桌面专属能力（托盘/自启/全局快捷键/webview 缩放/原生文件对话框/导出落盘）经 capabilities 门控在移动端 no-op 或改走替代路径（file input + dataURL 命令、Kotlin 分享桥）；浏览器 dev 回退 localStorage。
-- **capabilities.ts**：平台能力层（scheduler/trayLifecycle/globalShortcuts/windowZoom/popupNotificationWindow/systemNotifications/nativeFileDialogs/updateChannel/desktop）。`updateChannel`：移动端 `"apk"`，桌面（Windows/Linux）一律 `"desktop"`（下载固定名制品→替换→重启；已无 `"none"` 通道）。Linux 其余取值：`systemNotifications = true` + `popupNotificationWindow = false`（走系统通知，不自绘通知窗）。组件按能力裁剪 UI，不再散落 isMobile 判断；加新平台时只扩这里。
+- **capabilities.ts**：平台能力层（scheduler/trayLifecycle/globalShortcuts/windowZoom/popupNotificationWindow/systemNotifications/nativeFileDialogs/updateChannel/desktop/dataUrlImages）。`updateChannel`：移动端 `"apk"`，桌面（Windows/Linux）一律 `"desktop"`（下载固定名制品→替换→重启；已无 `"none"` 通道）。Linux 其余取值：`systemNotifications = true` + `popupNotificationWindow = false`（走系统通知，不自绘通知窗）。`dataUrlImages`（v0.5.0 起 = Linux **或** 移动端）：这两类环境的 webview 拿不到 asset 协议子资源（WebKitGTK 根本不发请求 / Android WebView 取不到 `http://asset.localhost/`），图像一律走 `image_data_url` 命令转 base64——**该命令必须同时注册进移动端 invoke_handler**，否则前端调用直接失败。组件按能力裁剪 UI，不再散落 isMobile 判断；加新平台时只扩这里。
 - **platform.ts**：hostOs 检测（官方 `@tauri-apps/plugin-os` 的同步 `platform()`，UA 仅作回退）+ 移动端检测 + 三层历史栈路由（list → content → editor/settings，`{mv:...}` history 条目，popstate 回写 store）。**`startMobileRouter()` 只能由 App onMount 调用**——模块顶层挂载会因 platform ↔ stores/backend/capabilities 循环依赖 TDZ 白屏。
 - **longpress.ts**：触摸长按 action（500ms、10px 移动容差、抑制窗去重 Chromium 补发的原生 contextmenu），树行/任务卡/侧栏空白区共用——移动端长按 = 桌面右键。
 - **scheduleAdapter.ts**：v9 ScheduleEntry（spec/state/ui 三段）↔ UI 编辑模型双向适配，patch 时保留 CLI 专属字段。
+- **syncRunner.ts**：全平台自动同步循环（App onMount 调 `startAutoSync()`，浏览器预览不启动）。**入口绝不能用 `coreMode` 门控**——onMount 时水合还没完成、coreMode 恒为 false，v0.4.1 就是这样把整条自动同步写成了死代码；现在订阅 `isHydrated` 等水合完成再启动，并立即同步一次。递归 `setTimeout`（跑完再排）+ 在线/掉线双节奏（`intervalSeconds` / `reconnectSeconds`）+ 回前台补一次。连接状态写进 `stores.syncConnection`，设置面板只订阅它显示 🟢/🔴。
 - **纯逻辑**：`nodes.ts`（树查询）、`styles.ts`（样式计算）、`sort.ts`（7 种排序）、`markdown.ts`（渲染消毒）、`defaults.ts`（默认值 + 旧数据规范化）、`platform.ts`（移动端检测 + 导航）。
 - **组件**：`App.svelte`（协调器）→ `Sidebar`（导航 + 树 + 右键菜单）、`Workspace`（列表头 + TaskCard 列表 + 添加栏；`selectedNode.id === "scheduled"` 时切换为 `ScheduledTasksView`）、`SettingsDrawer`、`TitleBar`、`Toast`。
 - **editor/**：浮窗 Markdown 编辑器（CodeMirror 6，动态 import，挂在 App 层避开 workspace overflow 裁剪）。
@@ -86,7 +95,7 @@ kxtodo.exe (GUI)                    kxtodo-cli (CLI)
 - **我的一天**：标题下显示当天日期；灯泡 = 智能建议；日历 = 月/周视图回看各天完成项；已完成区只显示当天完成。
 - **设置抽屉**：个人资料（头像 dataURL）、外观（缩放/字号/链接打开方式）、生命周期（关闭到托盘/开机自启）、快捷键、云同步占位。
 - **Linux 桌面**：与 Windows 同一套现代 UI（`decorations:false` + 自绘 TitleBar，不换原生窗口装饰）；通知走 tauri-plugin-notification 系统通知（libnotify/D-Bus，`capabilities/linux.json` 授权），不自绘通知窗（客户端绝对定位在 Wayland 下不可行）；关闭按钮默认**退出应用**而非隐藏到托盘（WSLg/GNOME 托盘常不可见，设置里可改回 close-to-tray）；应用内更新与 Windows 同机制（`updateChannel = "desktop"`：下载固定名 `KXToDo.AppImage` + `kxtodo-cli` 到 `~/.local/share/kxtodo/bin/` 替换后尝试自动重启，拉起失败则提示手动重启）；全局快捷键受插件平台能力限制（X11 可用，纯 Wayland 抓不到），不做会话嗅探特判。
-- **移动端（Android）**：三级导航——主界面是分类列表，点分组展开、点条目/系统列表推入内容页（顶部返回键），设置是独立整页（侧栏资料卡进入），硬件返回键沿历史栈逐级回退（编辑器→内容→列表→退出，MainActivity 的 OnBackPressedCallback 驱动 webview.goBack）。长按 = 右键菜单；定时任务整体隐藏（无调度引擎）；通知走 tauri-plugin-notification 系统通知（首次发送请求 POST_NOTIFICATIONS）；更新 = 设置页检查 → 下载固定名 APK → Kotlin 桥（`window.kxtodoAndroid.installApk`）拉起系统安装器覆盖安装。导出走系统分享面板（shareText 桥），图片选择走隐藏 file input + dataURL 命令。桌面体验不受影响（isMobile 只看 userAgent，能力门控保证桌面命令面不变）。
+- **移动端（Android）**：三级导航——主界面是分类列表，点分组展开、点条目/系统列表推入内容页（顶部返回键），设置是独立整页（侧栏资料卡进入），硬件返回键沿历史栈逐级回退（编辑器→内容→列表→退出，MainActivity 的 OnBackPressedCallback 驱动 webview.goBack）。长按 = 右键菜单；定时任务整体隐藏（无调度引擎）；通知走 tauri-plugin-notification 系统通知（首次发送请求 POST_NOTIFICATIONS）；更新 = 设置页检查 → 下载固定名 APK → Kotlin 桥（`window.kxtodoAndroid.installApk`）拉起系统安装器覆盖安装。导出走系统分享面板（shareText 桥），图片选择走隐藏 file input + dataURL 命令。**图像渲染（v0.5.0）走 dataURL 而非 asset 协议**：Android WebView 取不到 `http://asset.localhost/` 子资源，表现是 markdown 里只有 `![](…)` 语法、图不出（`caps.dataUrlImages` 覆盖移动端）。**编辑器全屏要留安全区**：`.app-shell.mobile .editor-overlay` 用 `env(safe-area-inset-*) × var(--safe-inv)` 做内边距，否则顶部编辑/预览切换与保存按钮会钻到系统状态栏底下（index.html 已带 `viewport-fit=cover`）。桌面体验不受影响（isMobile 只看 userAgent，能力门控保证桌面命令面不变）。
 
 ## 如何修改 / 维护 / 拓展
 
@@ -98,8 +107,8 @@ kxtodo.exe (GUI)                    kxtodo-cli (CLI)
 | 加调度触发/动作类型 | `model.rs`（discriminator 分支）+ `ops_schedule.rs` 白名单校验 + `plan.rs`/`scheduler.rs` 执行 + `scheduleAdapter.ts` 适配 + `ScheduledTasksView.svelte` 编辑表单 |
 | 改外观 | 全局 CSS 文件按区域找；配色变量在 base.css；菜单样式统一在 menu.css |
 | 加原生能力 | Tauri 命令/插件，桌面专有逻辑必须 `#[cfg(desktop)]` 隔离并在移动端给空实现（前端 invoke 不能炸） |
-| 改同步协议/加密 | `crates/core/src/sync/`（crypto=密钥派生+加解密、merge=LWW 纯函数、engine=HTTP+编排、state=runtime/sync.json）+ `crates/server/src/`（API/DB 两侧同步改）；改信封结构要同步动 `merge.rs` 的 SyncEnvelope 与测试 |
-| 部署/运维 kxtodo-server | 单二进制 `--listen 0.0.0.0:8765 [--db 路径 --token-ttl-days N]`，数据默认 `~/.local/share/kxtodo/server/`；`--update` 自升级；升级密钥/盐算法前想清楚——改了派生参数所有设备全部失配 |
+| 改同步协议/加密 | `crates/core/src/sync/`（crypto=密钥派生+加解密（含字节级 seal_bytes/open_bytes）、merge=LWW 纯函数、engine=HTTP+编排、images=图片 blob 通道、discovery=局域网发现客户端、state=runtime/sync.json）+ `crates/server/src/`（api/db 两侧同步改，discovery=UDP 应答、daemon=后台运行）；改信封结构要同步动 `merge.rs` 的 SyncEnvelope 与测试，改图片元数据要同步动 `images.rs` 与 `db.rs`/`api.rs` |
+| 部署/运维 kxtodo-server | 单二进制 `kxtodo-server --name 家里的服务器 [--listen 0.0.0.0:52177 --db 路径 --data-dir 目录]`；`--daemon` 后台静默运行 + `--stop` 结束；`--update` 自升级（下载失败自动回退 ghfast.top 代理）；升级密钥/盐算法前想清楚——改了派生参数所有设备全部失配 |
 | Agent 技能文档 | 只编辑 `skills/kxtodo/SKILL.md`（编译期 include_str! 嵌入，发布 exe 自包含） |
 
 **铁律**：写路径永远过 Domain Core 命令层；前端永不直接改 JSON；GUI 桥接默认 `controls.yes = true`（GUI 操作即用户确认，CLI 的确认门不适用于 GUI）。
@@ -146,7 +155,7 @@ git tag vX.Y.Z; git push origin main vX.Y.Z   # 云端发布：触发 GitHub Act
 
 ## 环境坑位（Windows 开发必读）
 
-1. **Git Bash 里 cargo 链接失败**（"link: extra operand"）：uutils-coreutils 的 `link` 遮蔽了 MSVC `link.exe`。**一切 cargo 调用走 `scripts/cargo-msvc.sh`**。
+1. **Git Bash 里 cargo 链接失败**（"link: extra operand"）：uutils-coreutils 的 `link` 遮蔽了 MSVC `link.exe`。**一切 cargo 调用走 `scripts/cargo-msvc.sh`**。**`npm run desktop:dev` 同样中招**（`tauri dev` 内部调裸 cargo，会刷一屏 `link: extra operand` 然后构建失败）：先导出包装脚本里的环境再跑 npm——`eval "$(grep -E '^(MSVC_|SDK_VER|export )' scripts/cargo-msvc.sh)" && npm run desktop:dev`，或直接在 VS 开发者 shell 里跑。另：`tauri dev` 异常退出可能留下孤儿 vite 占着 1420（它的 kill-tree 在本机 PowerShell 5.1 上因缺 CimCmdlets 失效），下次启动报 `Port 1420 is already in use`，`netstat -ano | grep :1420` 找 pid 杀掉即可。
 2. **PowerShell 必须 `-NoProfile` 调脚本**的说法反过来也成立：package.ps1/release.ps1 已内置 MSVC 环境自举（cl.exe 不在 PATH 时从 setup_x64.bat 导入），直接跑即可。
 3. **Git Bash 里 `taskkill /PID` 会被转成 UNC 路径**——杀进程用 `powershell -NoProfile -Command "Stop-Process -Id <pid> -Force"`。
 4. **单实例标识 `com.wddjwk.kxtodo` 全局唯一**：debug、release、旧版本 exe 互相同标识，启动新实例会转发到已运行的旧实例（表现为"改了代码没生效"）。**调试前先把所有 kxtodo/KXToDo 进程杀光（含托盘）**；用户反馈"修复没生效"也优先怀疑旧进程残留。

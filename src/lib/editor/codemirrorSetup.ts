@@ -107,10 +107,17 @@ export function createMarkdownEditor(
     })
   ];
 
-  return new EditorView({
-    state: EditorState.create({ doc, extensions }),
+  // 光标默认落在文末：打开编辑器基本都是为了续写，不是从头改
+  const view = new EditorView({
+    state: EditorState.create({
+      doc,
+      extensions,
+      selection: { anchor: doc.length }
+    }),
     parent: host
   });
+  view.dispatch({ scrollIntoView: true });
+  return view;
 }
 
 /** 在光标处插入文本（无选区）或替换选区，并把光标移到插入内容之后。 */

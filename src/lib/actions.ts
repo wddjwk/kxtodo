@@ -9,7 +9,7 @@ import type { AppNode, AppState, ScheduledTask, SchedulerState, Settings, Tag, T
 import {
   appState, appSettings, commit, commitScheduler, commitSettings,
   coreMode, createTaskId, editBaseUpdatedAt, markEditStart, clearEditBase, rebaseEditBase,
-  refreshFromCore, scheduleEntries, showToast
+  refreshFromCore, scheduleEntries, syncConnection, showToast
 } from "./stores";
 import { coreDispatch, CoreCommandError } from "./backend";
 import {
@@ -949,15 +949,45 @@ export type SyncStatus = {
   serverUrl: string;
   username: string;
   email: string;
-  scopes: { data: boolean; settings: boolean; schedules: boolean };
+  scopes: { data: boolean; settings: boolean; schedules: boolean; images?: boolean };
   intervalSeconds: number;
+  reconnectSeconds?: number;
   deviceId: string;
   lastSyncAt?: string;
-  lastResult?: { pulled: number; applied: number; pushed: number; conflicts: number } | null;
-  account?: { entityCount: number; currentSeq: number; serverVersion?: string };
-  serverError?: string;
+  lastResult?: {
+    pulled: number;
+    applied: number;
+    pushed: number;
+    conflicts: number;
+    imagesPulled?: number;
+    imagesPushed?: number;
+  } | null;
+  /** null = 还没探测过 */
+  online?: boolean | null;
+  lastSeenAt?: string | null;
+  lastError?: string | null;
 };
 
+export type SyncReport = {
+  pulled: number;
+  applied: number;
+  pushed: number;
+  conflicts: number;
+  imagesPulled: number;
+  imagesPushed: number;
+  warnings?: string[];
+};
+
+export type DiscoveredServer = {
+  name: string;
+  host: string;
+  port: number;
+  url: string;
+  verified: boolean;
+  version?: string | null;
+};
+
+/** sync.status 是纯本地读；连接状态由它带出来（后台循环/探测负责刷新缓存）。 */
 export async function syncStatus(): Promise<SyncStatus | null> {
   if (!coreMode) return null;
   try {
@@ -968,25 +998,93 @@ export async function syncStatus(): Promise<SyncStatus | null> {
   }
 }
 
-export async function syncNow(): Promise<boolean> {
-  if (!coreMode) return false;
+/** 把状态里的连接结论同步到 store（面板的 🟢/🔴 只订阅这个 store）。 */
+export async function refreshSyncConnection(): Promise<SyncStatus | null> {
+  const status = await syncStatus();
+  if (status) {
+    syncConnection.set({
+      online: status.online ?? null,
+      lastSeenAt: status.lastSeenAt ?? null,
+      lastError: status.lastError ?? null
+    });
+  }
+  return status;
+}
+
+/** 后台短超时探测（/healthz + /me），刷新连接状态缓存；面板打开时调用，不阻塞 UI。 */
+export async function syncProbe(): Promise<SyncStatus | null> {
+  if (!coreMode) return null;
+  syncConnection.update((state) => ({ ...state, checking: true }));
   try {
-    const envelope = await coreDispatch<{ pulled: number; applied: number; pushed: number; conflicts: number }>(
-      "sync.now",
-      {}
-    );
-    const { pulled, applied, pushed, conflicts } = envelope.data;
-    showToast(
-      conflicts > 0
-        ? `同步完成：拉取 ${pulled}，推送 ${pushed}，冲突 ${conflicts}（下次同步重试）`
-        : `同步完成：拉取 ${pulled}，应用 ${applied}，推送 ${pushed}`
-    );
+    await coreDispatch("sync.probe", {});
+  } catch {
+    // 未配对/网络失败都已在状态缓存里留痕，这里不打扰用户
+  }
+  const status = await refreshSyncConnection();
+  syncConnection.update((state) => ({ ...state, checking: false }));
+  return status;
+}
+
+/** 局域网自动发现：返回可点选的服务器列表（Name + ip:port）；null = 当前环境不支持。 */
+export async function syncDiscover(timeoutMs = 2500): Promise<DiscoveredServer[] | null> {
+  if (!coreMode) {
+    showToast("浏览器预览不支持局域网发现");
+    return null;
+  }
+  try {
+    const envelope = await coreDispatch<{ servers: DiscoveredServer[] }>("sync.discover", {
+      timeoutMs
+    });
+    return envelope.data.servers ?? [];
   } catch (error) {
-    await report(error, "同步失败");
+    await report(error, "局域网发现失败");
+    return [];
+  }
+}
+
+// 自动同步与手动同步共用一条命令；撞上「另一个同步正在进行」时短等待重试。
+async function dispatchSyncNow(): Promise<SyncReport> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const envelope = await coreDispatch<SyncReport>("sync.now", {});
+      return envelope.data;
+    } catch (error) {
+      const busy = error instanceof CoreCommandError && error.code === "SYNC_IN_PROGRESS";
+      if (!busy || attempt >= 2) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    }
+  }
+}
+
+/**
+ * 执行一次同步。`silent` = 自动同步：不发通知（周期性同步一直弹通知很烦人），
+ * 结果只在设置页「最近同步」里体现。
+ */
+export async function syncNow(options: { silent?: boolean } = {}): Promise<boolean> {
+  if (!coreMode) return false;
+  const silent = options.silent === true;
+  let result: SyncReport;
+  try {
+    result = await dispatchSyncNow();
+  } catch (error) {
+    if (!silent) await report(error, "同步失败");
+    await refreshSyncConnection();
     return false;
   }
-  const { refreshFromCore } = await import("./stores");
-  await refreshFromCore();
+  if (!silent) {
+    const { pulled, applied, pushed, conflicts, imagesPulled, imagesPushed } = result;
+    const images = imagesPulled || imagesPushed ? `，图片 ↓${imagesPulled} ↑${imagesPushed}` : "";
+    showToast(
+      conflicts > 0
+        ? `同步完成：拉取 ${pulled}，推送 ${pushed}，冲突 ${conflicts}（下次同步重试）${images}`
+        : `同步完成：拉取 ${pulled}，应用 ${applied}，推送 ${pushed}${images}`
+    );
+  }
+  // 确有变化才回刷快照（Host 也会发 domain-changed 事件，这里兜底）
+  if (result.applied > 0 || result.imagesPulled > 0) {
+    await refreshFromCore();
+  }
+  await refreshSyncConnection();
   return true;
 }
 
@@ -998,8 +1096,8 @@ export async function syncUnpair(): Promise<boolean> {
     await report(error, "解除配对失败");
     return false;
   }
-  const { refreshFromCore } = await import("./stores");
   await refreshFromCore();
+  syncConnection.set({ online: null });
   showToast("已解除本机配对（服务器数据保留）");
   return true;
 }
@@ -1008,16 +1106,17 @@ export async function setSyncScopes(scopes: {
   syncData?: boolean;
   syncSettings?: boolean;
   syncSchedules?: boolean;
+  syncImages?: boolean;
   intervalSeconds?: number;
+  reconnectSeconds?: number;
 }): Promise<boolean> {
   if (!coreMode) return false;
   try {
     await coreDispatch("sync.configure", scopes);
   } catch (error) {
-    await report(error, "同步范围设置失败");
+    await report(error, "同步设置失败");
     return false;
   }
-  const { refreshFromCore } = await import("./stores");
   await refreshFromCore();
   return true;
 }

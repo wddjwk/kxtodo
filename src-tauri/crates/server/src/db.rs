@@ -30,6 +30,23 @@ pub struct EntityRow {
     pub seq: u64,
 }
 
+/// 图片 blob 行；`ciphertext` 为 None 表示只取了元数据（增量清单不带密文）。
+#[derive(Debug, Clone)]
+pub struct ImageRow {
+    pub image_id: String,
+    pub kind: String,
+    pub node_id: String,
+    pub filename: String,
+    pub nonce: String,
+    pub ciphertext: Option<Vec<u8>>,
+    pub content_hash: String,
+    pub size: i64,
+    pub updated_at: String,
+    pub updated_by: String,
+    pub deleted: bool,
+    pub seq: u64,
+}
+
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
@@ -55,6 +72,23 @@ CREATE TABLE IF NOT EXISTS entities (
     PRIMARY KEY (user_id, entity_id)
 );
 CREATE INDEX IF NOT EXISTS idx_entities_user_seq ON entities(user_id, seq);
+CREATE TABLE IF NOT EXISTS images (
+    user_id TEXT NOT NULL,
+    image_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    node_id TEXT NOT NULL DEFAULT '',
+    filename TEXT NOT NULL,
+    nonce TEXT NOT NULL,
+    ciphertext BLOB NOT NULL,
+    content_hash TEXT NOT NULL,
+    size INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    updated_by TEXT NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0,
+    seq INTEGER NOT NULL,
+    PRIMARY KEY (user_id, image_id)
+);
+CREATE INDEX IF NOT EXISTS idx_images_user_seq ON images(user_id, seq);
 ";
 
 impl Db {
@@ -282,6 +316,192 @@ impl Db {
     }
 
     // -----------------------------------------------------------------------
+    // 图片 blob（v0.5.0）：内容寻址、不可变，没有 LWW/OCC
+    // -----------------------------------------------------------------------
+
+    /// 写入图片：内容哈希相同即幂等重放（不推进版本），否则 upsert 并推进 seq。
+    #[allow(clippy::too_many_arguments)]
+    pub fn put_image(
+        &self,
+        user_id: &str,
+        image_id: &str,
+        kind: &str,
+        node_id: &str,
+        filename: &str,
+        nonce: &str,
+        ciphertext: &[u8],
+        content_hash: &str,
+        updated_at: &str,
+        updated_by: &str,
+    ) -> ServerResult<u64> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let existing: Option<(i64, String)> = tx
+            .query_row(
+                "SELECT seq, content_hash FROM images WHERE user_id = ?1 AND image_id = ?2",
+                rusqlite::params![user_id, image_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map(Some)
+            .or_else(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })?;
+        if let Some((seq, hash)) = existing {
+            if hash == content_hash {
+                return Ok(seq as u64);
+            }
+        }
+        let new_seq = bump_seq(&tx, user_id)?;
+        tx.execute(
+            "INSERT INTO images (user_id, image_id, kind, node_id, filename, nonce, ciphertext,
+                                  content_hash, size, updated_at, updated_by, deleted, seq)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12)
+             ON CONFLICT(user_id, image_id) DO UPDATE SET
+                kind = excluded.kind,
+                node_id = excluded.node_id,
+                filename = excluded.filename,
+                nonce = excluded.nonce,
+                ciphertext = excluded.ciphertext,
+                content_hash = excluded.content_hash,
+                size = excluded.size,
+                updated_at = excluded.updated_at,
+                updated_by = excluded.updated_by,
+                deleted = 0,
+                seq = excluded.seq",
+            rusqlite::params![
+                user_id,
+                image_id,
+                kind,
+                node_id,
+                filename,
+                nonce,
+                ciphertext,
+                content_hash,
+                ciphertext.len() as i64,
+                updated_at,
+                updated_by,
+                new_seq as i64,
+            ],
+        )?;
+        tx.commit()?;
+        Ok(new_seq)
+    }
+
+    /// 增量图片元数据（不带密文）+ 当前总版本号。
+    pub fn image_changes_since(
+        &self,
+        user_id: &str,
+        since: u64,
+        limit: u64,
+    ) -> ServerResult<(Vec<ImageRow>, u64)> {
+        let conn = self.conn.lock().unwrap();
+        let current_seq: u64 = conn
+            .query_row(
+                "SELECT current_seq FROM users WHERE id = ?1",
+                [user_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|seq| seq as u64)?;
+        let mut stmt = conn.prepare(
+            "SELECT image_id, kind, node_id, filename, content_hash, size, updated_at, updated_by,
+                    deleted, seq
+             FROM images WHERE user_id = ?1 AND seq > ?2 ORDER BY seq LIMIT ?3",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![user_id, since as i64, limit as i64])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            out.push(ImageRow {
+                image_id: row.get(0)?,
+                kind: row.get(1)?,
+                node_id: row.get(2)?,
+                filename: row.get(3)?,
+                nonce: String::new(),
+                ciphertext: None,
+                content_hash: row.get(4)?,
+                size: row.get(5)?,
+                updated_at: row.get(6)?,
+                updated_by: row.get(7)?,
+                deleted: row.get::<_, i64>(8)? != 0,
+                seq: row.get::<_, i64>(9)? as u64,
+            });
+        }
+        Ok((out, current_seq))
+    }
+
+    /// 取单张图片的密文与 nonce（下载用）。
+    pub fn get_image(&self, user_id: &str, image_id: &str) -> ServerResult<Option<ImageRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT image_id, kind, node_id, filename, nonce, ciphertext, content_hash, size,
+                    updated_at, updated_by, deleted, seq
+             FROM images WHERE user_id = ?1 AND image_id = ?2",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![user_id, image_id])?;
+        Ok(match rows.next()? {
+            Some(row) => Some(ImageRow {
+                image_id: row.get(0)?,
+                kind: row.get(1)?,
+                node_id: row.get(2)?,
+                filename: row.get(3)?,
+                nonce: row.get(4)?,
+                ciphertext: Some(row.get(5)?),
+                content_hash: row.get(6)?,
+                size: row.get(7)?,
+                updated_at: row.get(8)?,
+                updated_by: row.get(9)?,
+                deleted: row.get::<_, i64>(10)? != 0,
+                seq: row.get::<_, i64>(11)? as u64,
+            }),
+            None => None,
+        })
+    }
+
+    /// 客户端上报 (id, 内容哈希) 清单，返回服务端缺失或内容不一致的 id。
+    pub fn images_needed(
+        &self,
+        user_id: &str,
+        items: &[(String, String)],
+    ) -> ServerResult<Vec<String>> {
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT content_hash FROM images WHERE user_id = ?1 AND image_id = ?2 AND deleted = 0",
+        )?;
+        let mut needed = Vec::new();
+        for (id, hash) in items {
+            let existing: Option<String> = stmt
+                .query_row(rusqlite::params![user_id, id], |row| row.get(0))
+                .ok();
+            match existing {
+                Some(existing_hash) if existing_hash == *hash => {}
+                _ => needed.push(id.clone()),
+            }
+        }
+        Ok(needed)
+    }
+
+    pub fn image_count(&self, user_id: &str) -> ServerResult<i64> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row(
+            "SELECT COUNT(*) FROM images WHERE user_id = ?1",
+            [user_id],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub fn image_bytes(&self, user_id: &str) -> ServerResult<i64> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row(
+            "SELECT COALESCE(SUM(LENGTH(ciphertext)), 0) FROM images WHERE user_id = ?1",
+            [user_id],
+            |row| row.get(0),
+        )?)
+    }
+
+    // -----------------------------------------------------------------------
     // 管理界面查询
     // -----------------------------------------------------------------------
 
@@ -290,8 +510,14 @@ impl Db {
         let users: i64 = conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))?;
         let entities: i64 =
             conn.query_row("SELECT COUNT(*) FROM entities", [], |row| row.get(0))?;
-        let storage: i64 = conn.query_row(
+        let images: i64 = conn.query_row("SELECT COUNT(*) FROM images", [], |row| row.get(0))?;
+        let entity_bytes: i64 = conn.query_row(
             "SELECT COALESCE(SUM(LENGTH(ciphertext)), 0) FROM entities",
+            [],
+            |row| row.get(0),
+        )?;
+        let image_bytes: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(LENGTH(ciphertext)), 0) FROM images",
             [],
             |row| row.get(0),
         )?;
@@ -306,7 +532,9 @@ impl Db {
         Ok(serde_json::json!({
             "users": users,
             "entities": entities,
-            "storageBytes": storage,
+            "images": images,
+            "storageBytes": entity_bytes + image_bytes,
+            "imageBytes": image_bytes,
             "tokens": tokens,
         }))
     }
@@ -316,7 +544,9 @@ impl Db {
         let mut stmt = conn.prepare(
             "SELECT u.id, u.username, u.email, u.current_seq, u.created_at,
                     (SELECT COUNT(*) FROM entities e WHERE e.user_id = u.id) AS entity_count,
-                    (SELECT COALESCE(SUM(LENGTH(e.ciphertext)), 0) FROM entities e WHERE e.user_id = u.id) AS storage
+                    (SELECT COALESCE(SUM(LENGTH(e.ciphertext)), 0) FROM entities e WHERE e.user_id = u.id)
+                      + (SELECT COALESCE(SUM(LENGTH(i.ciphertext)), 0) FROM images i WHERE i.user_id = u.id) AS storage,
+                    (SELECT COUNT(*) FROM images i WHERE i.user_id = u.id) AS image_count
              FROM users u ORDER BY u.created_at",
         )?;
         let mut rows = stmt.query([])?;
@@ -330,6 +560,7 @@ impl Db {
                 "createdAt": row.get::<_, String>(4)?,
                 "entityCount": row.get::<_, i64>(5)?,
                 "storageBytes": row.get::<_, i64>(6)?,
+                "imageCount": row.get::<_, i64>(7)?,
             }));
         }
         Ok(out)
@@ -375,11 +606,12 @@ impl Db {
         Ok(out)
     }
 
-    /// 删除用户及其全部数据，返回清除的实体数。
+    /// 删除用户及其全部数据（实体 + 图片 blob），返回清除的实体数。
     pub fn delete_user(&self, user_id: &str) -> ServerResult<usize> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         let removed = tx.execute("DELETE FROM entities WHERE user_id = ?1", [user_id])?;
+        tx.execute("DELETE FROM images WHERE user_id = ?1", [user_id])?;
         tx.execute("DELETE FROM tokens WHERE user_id = ?1", [user_id])?;
         let users = tx.execute("DELETE FROM users WHERE id = ?1", [user_id])?;
         tx.commit()?;
@@ -409,5 +641,21 @@ pub fn entity_to_json(row: &EntityRow) -> serde_json::Value {
         "seq": row.seq,
         "nonce": row.nonce,
         "ciphertext": row.ciphertext,
+    })
+}
+
+/// 图片元数据（不含密文；密文走 `GET /api/v1/images/{id}` 的裸字节响应体）。
+pub fn image_to_json(row: &ImageRow) -> serde_json::Value {
+    json!({
+        "id": row.image_id,
+        "kind": row.kind,
+        "nodeId": row.node_id,
+        "filename": row.filename,
+        "hash": row.content_hash,
+        "size": row.size,
+        "updatedAt": row.updated_at,
+        "updatedBy": row.updated_by,
+        "deleted": row.deleted,
+        "seq": row.seq,
     })
 }

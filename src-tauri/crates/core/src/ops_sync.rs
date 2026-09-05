@@ -70,6 +70,8 @@ pub fn sync_dispatch(
         "register" => sync_register(inv, ctx),
         "login" => sync_login(inv, ctx),
         "status" => sync_status(ctx),
+        "probe" => sync_probe(ctx),
+        "discover" => sync_discover(inv),
         "now" => sync_now(inv, ctx, meta),
         "unpair" => sync_unpair(ctx),
         "configure" => sync_configure(inv, ctx),
@@ -111,11 +113,14 @@ fn sync_login(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
     }))
 }
 
+/// 纯本地读：配对信息 + 最近同步结果 + 缓存的在线状态。
+///
+/// 绝不碰网络——服务器掉线时打开设置界面不能把 UI 卡住（要刷新状态走 `sync probe`）。
 fn sync_status(ctx: &ExecContext) -> CoreResult<Value> {
     let settings = ctx.repo.load_settings()?;
     let sync = &settings.sync;
     let state = load_state(&ctx.repo.layout);
-    let mut out = json!({
+    Ok(json!({
         "paired": sync.enabled && !sync.server_url.is_empty(),
         "enabled": sync.enabled,
         "serverUrl": sync.server_url,
@@ -125,33 +130,48 @@ fn sync_status(ctx: &ExecContext) -> CoreResult<Value> {
             "data": sync.sync_data,
             "settings": sync.sync_settings,
             "schedules": sync.sync_schedules,
+            "images": sync.sync_images,
         },
         "intervalSeconds": sync.interval_seconds,
+        "reconnectSeconds": sync.reconnect_seconds,
         "deviceId": state.device_id,
         "lastPulledSeq": state.last_pulled_seq,
+        "lastPulledImageSeq": state.last_pulled_image_seq,
         "lastSyncAt": state.last_sync_at,
         "lastResult": state.last_result,
-    });
-    if sync.enabled && !sync.server_url.is_empty() {
-        match engine::fetch_me(ctx.repo) {
-            Ok(Some(me)) => {
-                out["account"] = me;
-            }
-            Ok(None) => {}
-            Err(error) => {
-                out["serverError"] = json!(error.message);
-            }
-        }
-        if let Ok(health) = engine::probe_server(&sync.server_url) {
-            out["server"] = health;
-        }
-    }
-    Ok(out)
+        // null = 还没探测过；前端据此显示「未知」而不是误报掉线
+        "online": state.server_online,
+        "lastSeenAt": state.last_seen_at,
+        "lastError": state.last_error,
+    }))
+}
+
+/// 短超时探测服务器，把在线结论写进状态缓存（设置面板打开时后台调用）。
+fn sync_probe(ctx: &ExecContext) -> CoreResult<Value> {
+    engine::probe_connection(ctx.repo)
+}
+
+/// 局域网自动发现 kxtodo-server（UDP 广播/组播查询 + /healthz 复核）。
+fn sync_discover(inv: &Invocation) -> CoreResult<Value> {
+    let timeout_ms = inv
+        .params
+        .get("timeoutMs")
+        .and_then(Value::as_u64)
+        .unwrap_or(2500)
+        .clamp(500, 10_000);
+    let servers = crate::sync::discovery::discover(std::time::Duration::from_millis(timeout_ms))?;
+    Ok(json!({
+        "servers": servers,
+        "count": servers.len(),
+        "discoveryPort": crate::sync::discovery::DISCOVERY_PORT,
+        "timeoutMs": timeout_ms,
+    }))
 }
 
 fn sync_now(_inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
     let report = engine::run_sync(ctx.repo)?;
-    if report.applied > 0 {
+    // 拉到新图片也要回刷：前端图片缓存里解析失败的引用需要重渲染才会重新解析
+    if report.applied > 0 || report.images_pulled > 0 {
         let mut domains = vec![Domain::Data, Domain::Settings, Domain::Schedule];
         domains.dedup();
         emit_sync_domains(ctx, meta, &domains, Vec::new());
@@ -178,17 +198,21 @@ fn sync_configure(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
     let data = params.get("syncData").and_then(Value::as_bool);
     let settings_scope = params.get("syncSettings").and_then(Value::as_bool);
     let schedules = params.get("syncSchedules").and_then(Value::as_bool);
+    let images = params.get("syncImages").and_then(Value::as_bool);
     let enabled = params.get("enabled").and_then(Value::as_bool);
     let interval = params.get("intervalSeconds").and_then(Value::as_u64);
+    let reconnect = params.get("reconnectSeconds").and_then(Value::as_u64);
     if data.is_none()
         && settings_scope.is_none()
         && schedules.is_none()
+        && images.is_none()
         && enabled.is_none()
         && interval.is_none()
+        && reconnect.is_none()
     {
         return Err(CoreError::validation(
             "MISSING_PARAM",
-            "至少提供一个配置项（syncData/syncSettings/syncSchedules/enabled/intervalSeconds）",
+            "至少提供一个配置项（syncData/syncSettings/syncSchedules/syncImages/enabled/intervalSeconds/reconnectSeconds）",
         ));
     }
     let settings_before = ctx.repo.load_settings()?;
@@ -207,14 +231,15 @@ fn sync_configure(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
             if let Some(value) = schedules {
                 file.sync.sync_schedules = value;
             }
+            if let Some(value) = images {
+                file.sync.sync_images = value;
+            }
+            // 低于下限的间隔按下限生效（用户要的是「至少 5 秒」，不是报错）
             if let Some(value) = interval {
-                if !(5..=86400).contains(&value) {
-                    return Err(CoreError::validation(
-                        "INVALID_INTERVAL",
-                        "intervalSeconds 应在 5-86400 之间",
-                    ));
-                }
-                file.sync.interval_seconds = value as u32;
+                file.sync.interval_seconds = value.clamp(5, 86400) as u32;
+            }
+            if let Some(value) = reconnect {
+                file.sync.reconnect_seconds = value.clamp(5, 86400) as u32;
             }
             // 不在此处刷新 syncUpdatedAt：开启设置同步的设备应先收敛到服务端版本，
             // 本地设置只有真的变化后（config.set 触发）才会推送。
@@ -225,10 +250,20 @@ fn sync_configure(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
     let scopes_opened = (data.unwrap_or(false) && !settings_before.sync.sync_data)
         || (settings_scope.unwrap_or(false) && !settings_before.sync.sync_settings)
         || (schedules.unwrap_or(false) && !settings_before.sync.sync_schedules);
-    if scopes_opened {
+    // 打开图片同步同理：历史图片都在图片水位之下，必须从头拉一遍。
+    let images_opened = images.unwrap_or(false) && !settings_before.sync.sync_images;
+    if scopes_opened || images_opened {
         let mut state = load_state(&ctx.repo.layout);
-        state.last_pulled_seq = 0;
+        if scopes_opened {
+            state.last_pulled_seq = 0;
+        }
+        if images_opened {
+            state.last_pulled_image_seq = 0;
+        }
         crate::sync::state::save_state(&ctx.repo.layout, &state)?;
     }
-    Ok(json!({ "configured": true, "fullRepull": scopes_opened }))
+    Ok(json!({
+        "configured": true,
+        "fullRepull": scopes_opened || images_opened,
+    }))
 }

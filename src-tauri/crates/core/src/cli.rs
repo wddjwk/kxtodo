@@ -166,7 +166,7 @@ pub enum Commands {
     },
     /// 数据多端同步（v0.4.0，端到端加密）
     #[command(
-        long_about = "与 kxtodo-server 同步数据：端到端加密（服务器只见密文）+ 逐实体 LWW + 删除墓碑。\n\n动作：\n  register  注册账户并配对（空数据目录也可用，会初始化）\n  login     已有账户配对新设备\n  status    查看配对/范围/最近同步结果\n  now       立即执行一次同步（pull → merge → push）\n  configure 调整同步范围/开关/间隔\n  unpair    解除本机配对（服务器数据保留）\n\n示例：\n  kxtodo-cli sync register --server http://192.168.1.10:8765 --username me --email me@x.com --secret MySecret --sync-settings\n  kxtodo-cli sync now"
+        long_about = "与 kxtodo-server 同步数据：端到端加密（服务器只见密文）+ 逐实体 LWW + 删除墓碑。\n数据与图片（markdown 插图/列表背景/头像的文件本体）一起同步。\n\n动作：\n  register  注册账户并配对（空数据目录也可用，会初始化）\n  login     已有账户配对新设备\n  discover  局域网自动发现服务器（UDP 52177 广播查询，与服务器 TCP 端口无关）\n  status    查看配对/范围/最近同步结果（纯本地读，不碰网络）\n  probe     探测服务器连通性并刷新在线状态缓存\n  now       立即执行一次同步（pull → merge → push → 图片）\n  configure 调整同步范围/开关/间隔\n  unpair    解除本机配对（服务器数据保留）\n\n示例：\n  kxtodo-cli sync discover\n  kxtodo-cli sync register --server http://192.168.1.10:52177 --username me --email me@x.com --secret MySecret --sync-settings\n  kxtodo-cli sync now"
     )]
     Sync {
         #[command(subcommand)]
@@ -836,6 +836,16 @@ pub enum SyncAction {
     Login(SyncPairArgs),
     /// 查看配对与最近同步结果（Risk: read）
     Status,
+    /// 探测服务器连通性并刷新在线状态缓存（Risk: read）
+    #[command(
+        long_about = "Risk: read\n\n短超时 /healthz + /me，把在线结论写进 runtime/sync.json。\nstatus 只读这份缓存（不碰网络），要刷新状态就跑 probe。"
+    )]
+    Probe,
+    /// 局域网自动发现 kxtodo-server（Risk: read）
+    #[command(
+        long_about = "Risk: read\n\n在固定 UDP 端口 52177 上广播/组播一次查询，收集局域网内 kxtodo-server 的单播应答，\n再用 /healthz 复核。发现端口与服务器 TCP 端口无关（应答里带真实 TCP 端口），\n但服务器必须监听在非回环地址上、且 UDP 52177 可用；否则只能手动填 ip:port。\n\n输出 name / host / port / url，url 可直接作为 --server 的值。"
+    )]
+    Discover(SyncDiscoverArgs),
     /// 立即执行一次同步（Risk: write）
     Now,
     /// 调整同步范围/开关/自动同步间隔（Risk: write）
@@ -888,9 +898,23 @@ pub struct SyncConfigureArgs {
     /// 同步定时任务 spec
     #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
     pub sync_schedules: Option<bool>,
+    /// 同步图片文件本体（markdown 插图/背景/头像）
+    #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
+    pub sync_images: Option<bool>,
     /// 自动同步间隔（秒）
     #[arg(long, value_name = "5-86400")]
     pub interval_seconds: Option<u64>,
+    /// 掉线后的静默重连探测间隔（秒）
+    #[arg(long, value_name = "5-86400")]
+    pub reconnect_seconds: Option<u64>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncDiscoverArgs {
+    /// 收集应答的等待时长（毫秒）
+    #[arg(long, value_name = "ms", default_value = "2500")]
+    pub timeout_ms: u64,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1049,6 +1073,10 @@ fn command_needs_data(cli: &Cli) -> bool {
         // 配对是显式的设备初始化动作：允许在空数据目录上执行（内部 ensure_initialized）
         Some(Commands::Sync {
             action: SyncAction::Register(_) | SyncAction::Login(_),
+        }) => false,
+        // 发现是配对**之前**的动作：全新设备上数据目录还不存在也必须能跑
+        Some(Commands::Sync {
+            action: SyncAction::Discover(_),
         }) => false,
         Some(_) => true,
     }
@@ -1352,6 +1380,8 @@ fn build_sync_invocation(action: &SyncAction) -> CoreResult<Invocation> {
             Invocation::new(command, params)
         }
         SyncAction::Status => Invocation::new("sync.status", serde_json::json!({})),
+        SyncAction::Probe => Invocation::new("sync.probe", serde_json::json!({})),
+        SyncAction::Discover(args) => Invocation::new("sync.discover", serialize_args(args)),
         SyncAction::Now => Invocation::new("sync.now", serde_json::json!({})),
         SyncAction::Configure(args) => Invocation::new("sync.configure", serialize_args(args)),
         SyncAction::Unpair => Invocation::new("sync.unpair", serde_json::json!({})),

@@ -92,7 +92,9 @@ export type Settings = {
     syncData: boolean;
     syncSettings: boolean;
     syncSchedules: boolean;
+    syncImages: boolean;
     intervalSeconds: number;
+    reconnectSeconds: number;
   };
   syncUpdatedAt?: string;
   updates: {

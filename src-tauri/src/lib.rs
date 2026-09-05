@@ -1179,7 +1179,45 @@ fn update_agent() -> ureq::Agent {
         .build()
 }
 
+/// GitHub 直连失败时的下载回退代理：把完整 GitHub 链接直接拼在它后面
+/// （`https://ghfast.top/https://github.com/…/KXToDo.exe`）。
+/// 只用于**下载**：版本检查仍直连 api.github.com（实测该代理不接受 api 域名，返回 403）。
+const UPDATE_PROXY_PREFIX: &str = "https://ghfast.top/";
+
+/// 下载一个更新制品：先直连 GitHub，失败则静默换代理重试；
+/// 两条路都失败时把两个原因一起报出来（用户要求「如果也失败了，那就再把失败原因爆出来」）。
 fn update_download_file(
+    app: &AppHandle,
+    agent: &ureq::Agent,
+    stage: &str,
+    url: &str,
+    dest: &std::path::Path,
+) -> Result<(), String> {
+    match stream_update_file(app, agent, stage, url, dest) {
+        Ok(()) => Ok(()),
+        Err(direct_error) => {
+            let proxied = format!("{UPDATE_PROXY_PREFIX}{url}");
+            update_emit(
+                app,
+                "update://progress",
+                serde_json::json!({
+                    "stage": stage,
+                    "received": 0,
+                    "total": 0,
+                    "percent": 0,
+                    "message": "GitHub 直连失败，改用加速代理重试"
+                }),
+            );
+            stream_update_file(app, agent, stage, &proxied, dest).map_err(|proxy_error| {
+                format!(
+                    "下载 {stage} 失败\n  直连：{direct_error}\n  代理（{UPDATE_PROXY_PREFIX}）：{proxy_error}"
+                )
+            })
+        }
+    }
+}
+
+fn stream_update_file(
     app: &AppHandle,
     agent: &ureq::Agent,
     stage: &str,
@@ -1189,7 +1227,7 @@ fn update_download_file(
     let response = agent
         .get(url)
         .call()
-        .map_err(|error| format!("下载 {stage} 失败：{error}"))?;
+        .map_err(|error| error.to_string())?;
     let total = response
         .header("content-length")
         .and_then(|value| value.parse::<u64>().ok())
@@ -1235,7 +1273,7 @@ fn update_download_file(
     })();
     if let Err(error) = write_result {
         let _ = fs::remove_file(&part);
-        return Err(format!("下载 {stage} 失败：{error}"));
+        return Err(format!("写入临时文件失败：{error}"));
     }
     if dest.exists() {
         fs::remove_file(dest).map_err(|error| format!("替换旧 {stage} 安装包失败：{error}"))?;
@@ -1921,27 +1959,37 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
 }
 
 /// Generic GUI → Domain Core bridge (§4.3): frontend submits business commands.
+///
+/// **必须是 async 命令**：Tauri 的同步命令跑在主线程上，而业务命令里可能有
+/// 30 秒超时的 HTTP 同步请求、约 1 秒的 Argon2id 密钥派生——服务器掉线时
+/// 打开设置界面就会把整个窗口卡住几秒。这里把执行丢进阻塞线程池，
+/// 主线程只负责收发 IPC。
 #[tauri::command]
-fn core_dispatch(
+async fn core_dispatch(
     core: State<'_, Arc<domain::host::HostCore>>,
     command: String,
     params: Value,
 ) -> Result<Value, String> {
-    let mut invocation = domain::core::Invocation::new(command, params);
-    // GUI 操作本身就是用户在界面上的确认行为，跳过 CLI 的 --yes 确认门。
-    invocation.controls.yes = true;
-    let ctx = domain::core::ExecContext {
-        repo: &core.repo,
-        cwd: core.data_dir.clone(),
-        host: Some(core.as_ref()),
-        custom_data_dir: core.custom_data_dir,
-    };
-    let outcome = domain::core::execute(&invocation, &ctx);
-    if outcome.code == 0 {
-        Ok(outcome.envelope)
-    } else {
-        Err(serde_json::to_string(&outcome.envelope).unwrap_or_default())
-    }
+    let host = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut invocation = domain::core::Invocation::new(command, params);
+        // GUI 操作本身就是用户在界面上的确认行为，跳过 CLI 的 --yes 确认门。
+        invocation.controls.yes = true;
+        let ctx = domain::core::ExecContext {
+            repo: &host.repo,
+            cwd: host.data_dir.clone(),
+            host: Some(host.as_ref()),
+            custom_data_dir: host.custom_data_dir,
+        };
+        let outcome = domain::core::execute(&invocation, &ctx);
+        if outcome.code == 0 {
+            Ok(outcome.envelope)
+        } else {
+            Err(serde_json::to_string(&outcome.envelope).unwrap_or_default())
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// Capability probe that never reads business data. Desktop answers true even
@@ -1953,27 +2001,33 @@ fn core_ping() -> Value {
 }
 
 /// Snapshot read for GUI hydration (replaces full-file load_* paths).
+/// 异步 + 阻塞线程池：每次领域变化都会调一次，读三个 JSON 也是磁盘 IO，别占主线程。
 #[tauri::command]
-fn core_snapshot(core: State<'_, Arc<domain::host::HostCore>>) -> Result<Value, String> {
-    let data = core.repo.load_data().map_err(|error| error.to_string())?;
-    let settings = core
-        .repo
-        .load_settings()
-        .map_err(|error| error.to_string())?;
-    let schedule = core
-        .repo
-        .load_schedule()
-        .map_err(|error| error.to_string())?;
-    Ok(serde_json::json!({
-        "data": data,
-        "settings": settings,
-        "schedule": schedule,
-        "revisions": {
-            "data": data.meta.revision,
-            "settings": settings.meta.revision,
-            "schedule": schedule.meta.revision,
-        }
-    }))
+async fn core_snapshot(core: State<'_, Arc<domain::host::HostCore>>) -> Result<Value, String> {
+    let host = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let data = host.repo.load_data().map_err(|error| error.to_string())?;
+        let settings = host
+            .repo
+            .load_settings()
+            .map_err(|error| error.to_string())?;
+        let schedule = host
+            .repo
+            .load_schedule()
+            .map_err(|error| error.to_string())?;
+        Ok(serde_json::json!({
+            "data": data,
+            "settings": settings,
+            "schedule": schedule,
+            "revisions": {
+                "data": data.meta.revision,
+                "settings": settings.meta.revision,
+                "schedule": schedule.meta.revision,
+            }
+        }))
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// 内部启动参数：`--kxtodo-host [--data-dir <path>]` → 隐藏 Host 模式。
@@ -2125,6 +2179,7 @@ pub fn run() {
                 delete_node_images,
                 md_image_path,
                 save_md_image_data,
+                image_data_url,
                 update_download_apk
             ])
             .setup(move |app| {

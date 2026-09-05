@@ -183,6 +183,15 @@
 }
 
 /* 移动端：编辑器全屏 */
+.app-shell.mobile .editor-overlay {
+  /* 全屏后顶栏会钻到系统状态栏底下：用安全区内边距把整块内容推开
+     （--safe-inv 补偿 app-shell 的 transform 缩放，与 mobile.css 同一套写法） */
+  padding-top: calc(env(safe-area-inset-top, 0px) * var(--safe-inv, 1));
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
+  padding-left: calc(env(safe-area-inset-left, 0px) * var(--safe-inv, 1));
+  padding-right: calc(env(safe-area-inset-right, 0px) * var(--safe-inv, 1));
+}
+
 .app-shell.mobile .editor-dialog {
   width: 100%;
   height: 100%;

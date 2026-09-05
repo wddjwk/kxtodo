@@ -31,10 +31,22 @@ pub struct SyncStateFile {
     pub token: String,
     pub token_expires_at: Option<String>,
     pub last_pulled_seq: u64,
+    /// 图片 blob 流的拉取水位（与实体流共用服务端计数器，各自独立推进）
+    #[serde(default)]
+    pub last_pulled_image_seq: u64,
     #[serde(default)]
     pub pushed: Map<String, Value>,
     pub last_sync_at: Option<String>,
     pub last_result: Option<Value>,
+    /// 最近一次与服务端通信的结果缓存：设置面板据此显示 🟢/🔴，不做阻塞探测
+    #[serde(default)]
+    pub server_online: Option<bool>,
+    /// 最近一次成功通信时间
+    #[serde(default)]
+    pub last_seen_at: Option<String>,
+    /// 最近一次失败原因（掉线时展示）
+    #[serde(default)]
+    pub last_error: Option<String>,
 }
 
 impl SyncStateFile {
@@ -45,9 +57,13 @@ impl SyncStateFile {
             token: String::new(),
             token_expires_at: None,
             last_pulled_seq: 0,
+            last_pulled_image_seq: 0,
             pushed: Map::new(),
             last_sync_at: None,
             last_result: None,
+            server_online: None,
+            last_seen_at: None,
+            last_error: None,
         }
     }
 

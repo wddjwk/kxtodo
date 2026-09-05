@@ -4,6 +4,7 @@
 //! 每次同步幂等可中断：拉取水位只在完整走完后推进。
 
 use std::fs::{File, OpenOptions};
+use std::io::Read;
 use std::time::Duration;
 
 use fs2::FileExt;
@@ -13,6 +14,7 @@ use serde_json::{json, Value};
 use crate::error::{CoreError, CoreResult};
 use crate::repo::Repository;
 use crate::sync::crypto::{derive_keys, hmac_sha256, open_entity, seal_entity, sha256_hex, SyncKeys};
+use crate::sync::images::{ImageChangesPage, LocalImage};
 use crate::sync::merge::{
     apply_data_record, apply_record_settings, apply_schedule_record, data_entity_stamp,
     normalize_data_orders, normalize_schedule_orders, remote_wins, schedule_entity_stamp,
@@ -22,6 +24,8 @@ use crate::sync::state::{load_state, save_state, PushedEntry, SyncStateFile};
 use crate::time::now_iso;
 
 const PAGE_LIMIT: usize = 500;
+/// 图片元数据分页大小（只传元数据，密文按需逐张下载）
+pub const IMAGE_PAGE_LIMIT: usize = 200;
 const HTTP_TIMEOUT_SECS: u64 = 30;
 
 // ---------------------------------------------------------------------------
@@ -101,7 +105,7 @@ fn api_error(status: u16, body: String) -> CoreError {
     CoreError::new(error.kind, &code, error.message)
 }
 
-fn network_error(error: ureq::Error) -> CoreError {
+pub fn network_error(error: ureq::Error) -> CoreError {
     match error {
         ureq::Error::Status(code, response) => {
             let body = response.into_string().unwrap_or_default();
@@ -294,6 +298,119 @@ impl SyncClient {
             .map_err(|e| PutError::Api(CoreError::io(format!("put 响应无效：{e}"))))?;
         Ok(parsed.seq)
     }
+
+    // -- 图片 blob 通道（v0.5.0）-------------------------------------------
+    // 图片是内容寻址的不可变 blob，没有 LWW/OCC：同名同内容只存一份，
+    // 上传前先用 image_check 问一次「服务端缺哪些」，避免每轮重传。
+
+    pub fn image_changes(&self, token: &str, since: u64) -> CoreResult<ImageChangesPage> {
+        let response = self
+            .authed_get(
+                &format!("images/changes?since={since}&limit={IMAGE_PAGE_LIMIT}"),
+                token,
+            )
+            .call()
+            .map_err(network_error)?;
+        response
+            .into_json::<ImageChangesPage>()
+            .map_err(|e| CoreError::io(format!("images/changes 响应无效：{e}")))
+    }
+
+    /// 提交本地 (id, 内容哈希) 清单，拿回服务端缺失或内容不一致的 id 列表。
+    pub fn image_check(&self, token: &str, items: &[(String, String)]) -> CoreResult<Vec<String>> {
+        let body = json!({
+            "images": items
+                .iter()
+                .map(|(id, hash)| json!({ "id": id, "hash": hash }))
+                .collect::<Vec<_>>(),
+        });
+        let response = self
+            .agent
+            .post(&format!("{}/api/v1/images/check", self.base))
+            .set("Authorization", &format!("Bearer {token}"))
+            .send_json(body)
+            .map_err(network_error)?;
+        #[derive(Deserialize)]
+        struct CheckResponse {
+            #[serde(default)]
+            needed: Vec<String>,
+        }
+        let parsed: CheckResponse = response
+            .into_json()
+            .map_err(|e| CoreError::io(format!("images/check 响应无效：{e}")))?;
+        Ok(parsed.needed)
+    }
+
+    /// 下载单张图片密文；nonce 在响应头（hex），密文是裸字节体。
+    pub fn image_get(&self, token: &str, id: &str) -> CoreResult<Option<(String, Vec<u8>)>> {
+        let response = match self.authed_get(&format!("images/{id}"), token).call() {
+            Ok(response) => response,
+            Err(ureq::Error::Status(404, _)) => return Ok(None),
+            Err(error) => return Err(network_error(error)),
+        };
+        let nonce = response
+            .header("x-kxtodo-nonce")
+            .unwrap_or_default()
+            .to_string();
+        let mut bytes = Vec::new();
+        response
+            .into_reader()
+            .read_to_end(&mut bytes)
+            .map_err(|e| CoreError::io(format!("图片下载中断：{e}")))?;
+        Ok(Some((nonce, bytes)))
+    }
+
+    /// 上传单张图片：元数据走 query（百分号编码），密文走裸字节体。
+    pub fn image_put(
+        &self,
+        token: &str,
+        image: &LocalImage,
+        nonce_hex: &str,
+        ciphertext: Vec<u8>,
+        device_id: &str,
+    ) -> CoreResult<u64> {
+        let url = format!(
+            "{}/api/v1/images/{}?kind={}&nodeId={}&filename={}&nonce={}&hash={}&updatedAt={}&updatedBy={}",
+            self.base,
+            image.id,
+            encode_query(&image.kind),
+            encode_query(&image.node_id),
+            encode_query(&image.filename),
+            encode_query(nonce_hex),
+            encode_query(&image.hash),
+            encode_query(&image.updated_at),
+            encode_query(device_id),
+        );
+        let response = self
+            .agent
+            .put(&url)
+            .set("Authorization", &format!("Bearer {token}"))
+            .set("Content-Type", "application/octet-stream")
+            .send_bytes(&ciphertext)
+            .map_err(network_error)?;
+        #[derive(Deserialize)]
+        struct PutResponse {
+            seq: u64,
+        }
+        let parsed: PutResponse = response
+            .into_json()
+            .map_err(|e| CoreError::io(format!("图片上传响应无效：{e}")))?;
+        Ok(parsed.seq)
+    }
+}
+
+/// query 值百分号编码：只保留 unreserved 字符，其余一律转义（文件名可能含空格/中文）。
+fn encode_query(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for byte in raw.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -330,6 +447,10 @@ pub struct SyncReport {
     pub applied: usize,
     pub pushed: usize,
     pub conflicts: usize,
+    /// 本轮真正落盘的图片数（本地已有同内容的跳过不计）
+    pub images_pulled: usize,
+    /// 本轮上传的图片数
+    pub images_pushed: usize,
     pub warnings: Vec<String>,
 }
 
@@ -438,8 +559,39 @@ fn merge_data_records(
     applied
 }
 
-/// 完整同步：login（如需）→ pull → merge → push → 推进水位。
+/// 完整同步：login（如需）→ pull → merge → push → 图片 → 推进水位。
+///
+/// 外层负责把「与服务端能不能通」的结论缓存进 runtime/sync.json：
+/// 设置面板的 🟢/🔴 只读这份缓存，绝不为了显示状态而阻塞在网络上。
 pub fn run_sync(repo: &Repository) -> CoreResult<SyncReport> {
+    match run_sync_inner(repo) {
+        Ok(report) => Ok(report),
+        Err(error) => {
+            if error.kind == crate::error::ErrorKind::Io {
+                record_offline(repo, &error.message);
+            }
+            Err(error)
+        }
+    }
+}
+
+/// 把掉线结论写进状态文件（写失败静默：不能因为记录状态又抛一个新错误盖掉原因）。
+fn record_offline(repo: &Repository, message: &str) {
+    let mut state = load_state(&repo.layout);
+    state.server_online = Some(false);
+    state.last_error = Some(message.to_string());
+    let _ = save_state(&repo.layout, &state);
+}
+
+/// 服务端没有图片 blob 路由（kxtodo-server < v0.5.0）：404/405/501 都按「不支持」处理。
+fn server_lacks_image_api(error: &CoreError) -> bool {
+    matches!(
+        error.code.as_str(),
+        "SYNC_HTTP_404" | "SYNC_HTTP_405" | "SYNC_HTTP_501"
+    )
+}
+
+fn run_sync_inner(repo: &Repository) -> CoreResult<SyncReport> {
     let _guard = SyncRunLock::acquire(&repo.layout)?;
     let mut report = SyncReport {
         started_at: now_iso(),
@@ -726,9 +878,42 @@ pub fn run_sync(repo: &Repository) -> CoreResult<SyncReport> {
         }
     }
 
+    // 4.5 图片 blob：markdown 插图 / 列表背景 / 头像的文件本体
+    if settings.sync.sync_images {
+        let device_id = state.device_id.clone();
+        let scope = format!("{}|{}", sync.server_url, sync.username);
+        match crate::sync::images::sync_images(
+            &client,
+            &token,
+            &keys.enc_key,
+            &device_id,
+            &scope,
+            &repo.layout,
+            &mut state,
+        ) {
+            Ok(tally) => {
+                report.images_pulled = tally.pulled;
+                report.images_pushed = tally.pushed;
+                report.warnings.extend(tally.warnings);
+            }
+            // 滚动升级：老服务器（< v0.5.0）没有图片路由。数据同步必须照常，
+            // 否则用户一升级客户端就整条同步断掉。
+            Err(error) if server_lacks_image_api(&error) => {
+                report.warnings.push(
+                    "服务器不支持图片同步（需升级 kxtodo-server 到 v0.5.0+），本轮只同步了数据"
+                        .to_string(),
+                );
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
     // 5. 保存水位与报告
     state.last_pulled_seq = current_seq;
     state.last_sync_at = Some(now_iso());
+    state.server_online = Some(true);
+    state.last_seen_at = state.last_sync_at.clone();
+    state.last_error = None;
     report.finished_at = now_iso();
     state.last_result = Some(serde_json::to_value(&report)?);
     save_state(&repo.layout, &state)?;
@@ -882,6 +1067,8 @@ pub fn pair_device(
     let client = SyncClient::new(server_url)?;
     let (token, expires_at, _) = client.login(username, email, &keys.auth_key)?;
     let device_id = crate::ids::gen_device_id();
+    // 重新配对：进程内「图片已齐全」的旧结论作废（服务端数据可能被删过）
+    crate::sync::images::invalidate_manifest_cache();
     // 已有本地设置才推送设置实体；全新设备不把默认设置推上去覆盖服务端。
     let settings_existed = repo.layout.settings_file().exists();
 
@@ -915,12 +1102,6 @@ pub fn pair_device(
     Ok((device_id, report))
 }
 
-/// 探测服务器可达性与版本（status 用）。
-pub fn probe_server(base: &str) -> CoreResult<Value> {
-    let client = SyncClient::new(base)?;
-    client.health()
-}
-
 /// 用当前 token（必要时重新登录）查询账户信息。
 pub fn fetch_me(repo: &Repository) -> CoreResult<Option<Value>> {
     let settings = repo.load_settings()?;
@@ -938,4 +1119,51 @@ pub fn fetch_me(repo: &Repository) -> CoreResult<Option<Value>> {
         save_state(&repo.layout, &state)?;
     }
     Ok(Some(client.me(&state.token)?))
+}
+
+/// 轻量连通性探测（设置面板用）：短超时 /healthz，通过后再取一次 /me。
+///
+/// 结论写进 `runtime/sync.json`（serverOnline / lastSeenAt / lastError），
+/// 于是 `sync status` 可以完全不碰网络——打开设置界面不再被卡住。
+pub fn probe_connection(repo: &Repository) -> CoreResult<Value> {
+    let settings = repo.load_settings()?;
+    let sync = &settings.sync;
+    if !sync.enabled || sync.server_url.is_empty() {
+        return Err(CoreError::conflict(
+            "SYNC_NOT_CONFIGURED",
+            "本机未配置同步（先 kxtodo-cli sync register / login）".to_string(),
+        ));
+    }
+    let mut state = load_state(&repo.layout);
+    let mut out = json!({ "serverUrl": sync.server_url });
+    let health = crate::sync::discovery::probe_health(&sync.server_url);
+    let online = health.is_ok();
+    match health {
+        Ok(value) => {
+            state.server_online = Some(true);
+            state.last_seen_at = Some(now_iso());
+            state.last_error = None;
+            out["server"] = value;
+        }
+        Err(error) => {
+            state.server_online = Some(false);
+            state.last_error = Some(error.message.clone());
+            out["serverError"] = json!(error.message);
+        }
+    }
+    let _ = save_state(&repo.layout, &state);
+    if online {
+        // 账户信息失败（token 过期/密钥不符）不代表服务器掉线，单独报
+        match fetch_me(repo) {
+            Ok(Some(me)) => {
+                out["account"] = me;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                out["accountError"] = json!(error.message);
+            }
+        }
+    }
+    out["online"] = json!(online);
+    Ok(out)
 }

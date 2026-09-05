@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
@@ -13,7 +14,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::db::{entity_to_json, Db, UserRow};
+use crate::db::{entity_to_json, image_to_json, Db, UserRow};
 use crate::error::{ServerError, ServerResult};
 use crate::logging::Logger;
 use crate::settings::ServerSettings;
@@ -22,6 +23,8 @@ use crate::util;
 pub const APP_VERSION: &str = env!("KXTODO_VERSION");
 /// 登录 token 有效期固定 30 天（个人同步服务，无需可调）
 pub const TOKEN_TTL_DAYS: i64 = 30;
+/// 单张图片密文上限（客户端侧有一份同样的限制）
+const MAX_IMAGE_BYTES: usize = 96 * 1024 * 1024;
 
 pub struct AppState {
     pub db: Db,
@@ -53,11 +56,14 @@ pub fn router(state: SharedState) -> Router {
         .route("/api/v1/me", get(me))
         .route("/api/v1/changes", get(changes))
         .route("/api/v1/entities/{id}", get(get_entity).put(put_entity))
+        .route("/api/v1/images/changes", get(image_changes))
+        .route("/api/v1/images/check", post(image_check))
+        .route("/api/v1/images/{id}", get(get_image).put(put_image))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             request_log,
         ))
-        .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
+        .layer(DefaultBodyLimit::max(128 * 1024 * 1024))
         .with_state(state.clone());
     let admin = crate::admin::router(state.clone()).layer(
         middleware::from_fn_with_state(state, request_log),
@@ -140,9 +146,10 @@ impl IntoResponse for ServerError {
 // handlers
 // ---------------------------------------------------------------------------
 
-async fn healthz() -> Json<serde_json::Value> {
+async fn healthz(State(state): State<SharedState>) -> Json<serde_json::Value> {
     Json(json!({
         "ok": true,
+        "name": state.settings.name,
         "version": APP_VERSION,
         "serverTime": util::now_iso(),
     }))
@@ -294,14 +301,18 @@ async fn me(
 ) -> ApiResult<Json<serde_json::Value>> {
     let user = auth_user(&state, &headers)?;
     let entities = state.db.entity_count(&user.id)?;
-    let bytes = state.db.storage_bytes(&user.id)?;
+    let entity_bytes = state.db.storage_bytes(&user.id)?;
+    let images = state.db.image_count(&user.id)?;
+    let image_bytes = state.db.image_bytes(&user.id)?;
     Ok(Json(json!({
         "userId": user.id,
         "username": user.username,
         "email": user.email,
         "currentSeq": user.current_seq,
         "entityCount": entities,
-        "storageBytes": bytes,
+        "imageCount": images,
+        "imageBytes": image_bytes,
+        "storageBytes": entity_bytes + image_bytes,
         "serverTime": util::now_iso(),
         "serverVersion": APP_VERSION,
     })))
@@ -381,4 +392,202 @@ async fn put_entity(
         }
         Err(error) => Err(error),
     }
+}
+
+// ---------------------------------------------------------------------------
+// 图片 blob 通道（v0.5.0）
+//
+// 图片是内容寻址的不可变 blob：没有 OCC/base，靠 content_hash 幂等。
+// 密文走裸字节体（不做 base64 膨胀），元数据走 query 参数与响应头。
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct ImageChangesQuery {
+    since: Option<u64>,
+    limit: Option<u64>,
+}
+
+async fn image_changes(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Query(query): Query<ImageChangesQuery>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let user = auth_user(&state, &headers)?;
+    let since = query.since.unwrap_or(0);
+    let limit = query.limit.unwrap_or(200).clamp(1, 1000);
+    let (rows, current_seq) = state.db.image_changes_since(&user.id, since, limit)?;
+    Ok(Json(json!({
+        "images": rows.iter().map(image_to_json).collect::<Vec<_>>(),
+        "currentSeq": current_seq,
+    })))
+}
+
+#[derive(Deserialize)]
+struct ImageCheckBody {
+    #[serde(default)]
+    images: Vec<ImageCheckItem>,
+}
+
+#[derive(Deserialize)]
+struct ImageCheckItem {
+    id: String,
+    #[serde(default)]
+    hash: String,
+}
+
+/// 客户端上报本地 (id, 内容哈希) 清单，服务端回「我缺哪些」。
+async fn image_check(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(body): Json<ImageCheckBody>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let user = auth_user(&state, &headers)?;
+    if body.images.len() > 20_000 {
+        return Err(ServerError::bad_request("单次对账清单过大"));
+    }
+    let mut items = Vec::with_capacity(body.images.len());
+    for item in body.images {
+        validate_image_id(&item.id)?;
+        items.push((item.id, item.hash));
+    }
+    let needed = state.db.images_needed(&user.id, &items)?;
+    Ok(Json(json!({ "needed": needed })))
+}
+
+async fn get_image(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<Response> {
+    let user = auth_user(&state, &headers)?;
+    validate_image_id(&id)?;
+    let row = state
+        .db
+        .get_image(&user.id, &id)?
+        .ok_or_else(ServerError::not_found)?;
+    let ciphertext = row.ciphertext.unwrap_or_default();
+    let mut response_headers = HeaderMap::new();
+    let nonce = axum::http::HeaderValue::from_str(&row.nonce)
+        .map_err(|_| ServerError::internal("nonce 存储损坏"))?;
+    response_headers.insert("x-kxtodo-nonce", nonce);
+    if let Ok(hash) = axum::http::HeaderValue::from_str(&row.content_hash) {
+        response_headers.insert("x-kxtodo-hash", hash);
+    }
+    response_headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/octet-stream"),
+    );
+    Ok((response_headers, ciphertext).into_response())
+}
+
+#[derive(Deserialize)]
+struct ImagePutQuery {
+    kind: String,
+    #[serde(rename = "nodeId", default)]
+    node_id: String,
+    filename: String,
+    nonce: String,
+    hash: String,
+    #[serde(rename = "updatedAt", default)]
+    updated_at: Option<String>,
+    #[serde(rename = "updatedBy", default)]
+    updated_by: Option<String>,
+}
+
+async fn put_image(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<ImagePutQuery>,
+    body: Bytes,
+) -> ApiResult<Response> {
+    let user = auth_user(&state, &headers)?;
+    validate_image_id(&id)?;
+    validate_image_kind(&query.kind)?;
+    validate_path_component(&query.filename, "filename", false)?;
+    // 只有 markdown 插图带条目 ID，其余类别必须为空
+    let node_id = if query.kind == "entry" {
+        validate_path_component(&query.node_id, "nodeId", false)?;
+        query.node_id.clone()
+    } else {
+        String::new()
+    };
+    if !is_hex(&query.nonce) || query.nonce.len() != 48 {
+        return Err(ServerError::bad_request("nonce 应为 48 位 hex（24 字节）"));
+    }
+    if !is_hex(&query.hash) || query.hash.len() != 64 {
+        return Err(ServerError::bad_request("hash 应为 64 位 hex"));
+    }
+    if body.is_empty() || body.len() > MAX_IMAGE_BYTES {
+        return Err(ServerError::bad_request("图片密文为空或超出上限"));
+    }
+    let updated_at = query.updated_at.unwrap_or_else(util::now_iso);
+    let updated_by = query.updated_by.unwrap_or_else(|| user.id.clone());
+    let seq = state.db.put_image(
+        &user.id,
+        &id,
+        &query.kind,
+        &node_id,
+        &query.filename,
+        &query.nonce,
+        &body,
+        &query.hash,
+        &updated_at,
+        &updated_by,
+    )?;
+    state.log(
+        "op",
+        &format!(
+            "上传图片：{}（{}，{}字节密文 → seq={seq}）by {}/{}",
+            query.filename,
+            query.kind,
+            body.len(),
+            user.username,
+            user.email
+        ),
+    );
+    Ok(Json(json!({ "seq": seq, "changed": true })).into_response())
+}
+
+fn is_hex(raw: &str) -> bool {
+    !raw.is_empty() && raw.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn validate_image_id(id: &str) -> ServerResult<()> {
+    if id.len() != 64 || !is_hex(id) {
+        return Err(ServerError::bad_request(
+            "图片 ID 应为 64 位 hex（sha256(kind|nodeId|filename)）",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_image_kind(kind: &str) -> ServerResult<()> {
+    match kind {
+        "entry" | "background" | "avatar" => Ok(()),
+        _ => Err(ServerError::bad_request(
+            "图片类别只允许 entry/background/avatar",
+        )),
+    }
+}
+
+/// 客户端会拿这些字段拼本地路径，必须挡掉穿越与分隔符。
+fn validate_path_component(raw: &str, what: &str, allow_empty: bool) -> ServerResult<()> {
+    if raw.is_empty() {
+        return if allow_empty {
+            Ok(())
+        } else {
+            Err(ServerError::bad_request(format!("{what} 不能为空")))
+        };
+    }
+    if raw.len() > 160
+        || raw.contains('/')
+        || raw.contains('\\')
+        || raw.contains("..")
+        || raw.starts_with('.')
+        || raw.chars().any(|c| c.is_control())
+    {
+        return Err(ServerError::bad_request(format!("{what} 含非法字符")));
+    }
+    Ok(())
 }

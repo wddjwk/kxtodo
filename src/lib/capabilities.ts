@@ -18,9 +18,11 @@ export const caps = {
   nativeFileDialogs: !mobile,
   toolbox: mobile,
   desktop: !mobile,
-  // 部分 Linux 环境的 WebKitGTK 对 asset 协议子资源根本不发请求（strace 实测
-  // 零次文件打开），图像改走 dataURL（与移动端同一路径）；其他平台保持 asset 协议。
-  dataUrlImages: hostOs === "linux"
+  // 图像走 dataURL 的两类环境（asset 协议取不到子资源）：
+  // - 部分 Linux 的 WebKitGTK 对 asset 协议子资源根本不发请求（strace 实测零次文件打开）；
+  // - Android WebView 拿不到 http://asset.localhost/ 子资源（markdown 只见语法不出图）。
+  // dataURL 路径由 Rust 直接读文件转 base64，不依赖任何 webview 协议实现。
+  dataUrlImages: hostOs === "linux" || mobile
 };
 
 // 平台差异收敛在本层：示例路径按宿主 OS 给（Linux 无 .exe 语义）

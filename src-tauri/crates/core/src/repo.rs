@@ -161,6 +161,17 @@ impl Layout {
     pub fn entry_img_dir(&self, entry_id: &str) -> PathBuf {
         self.img_dir().join("data").join(entry_id)
     }
+    /// markdown 插图根目录（每个条目一个子目录）。
+    pub fn entry_img_root(&self) -> PathBuf {
+        self.img_dir().join("data")
+    }
+    /// 头像目录（"avator" 是历史拼写，GUI 侧同名，不要改）。
+    pub fn avatar_img_dir(&self) -> PathBuf {
+        self.img_dir().join("avator")
+    }
+    pub fn background_img_dir(&self) -> PathBuf {
+        self.img_dir().join("background")
+    }
 
     pub fn ensure(&self) -> CoreResult<()> {
         fs::create_dir_all(&self.root)?;

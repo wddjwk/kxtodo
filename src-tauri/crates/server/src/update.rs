@@ -43,11 +43,38 @@ fn latest_version() -> Result<String, String> {
         .ok_or_else(|| "latest release 缺少 tag_name".to_string())
 }
 
+/// GitHub 直连失败时回退的下载代理：把完整 GitHub 链接拼在它后面即可。
+/// （实测该代理只接受 github.com 的下载链接，api.github.com 会 403，
+///  所以版本检查仍然直连 API，只有**下载**走回退。）
+const GITHUB_PROXY: &str = "https://ghfast.top/";
+
 fn download_to(path: &std::path::Path) -> Result<(), String> {
+    let bytes = match fetch_bytes(GITHUB_LATEST_ASSET) {
+        Ok(bytes) => bytes,
+        Err(direct_error) => {
+            let proxied = format!("{GITHUB_PROXY}{GITHUB_LATEST_ASSET}");
+            println!("GitHub 直连失败（{direct_error}），改用代理重试：{proxied}");
+            fetch_bytes(&proxied).map_err(|proxy_error| {
+                format!(
+                    "下载 kxtodo-server 失败\n  直连：{direct_error}\n  代理（{GITHUB_PROXY}）：{proxy_error}"
+                )
+            })?
+        }
+    };
+    std::fs::write(path, bytes).map_err(|error| format!("写入失败：{error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755));
+    }
+    Ok(())
+}
+
+fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     let response = agent()
-        .get(GITHUB_LATEST_ASSET)
+        .get(url)
         .call()
-        .map_err(|error| format!("下载 kxtodo-server 失败：{error}"))?;
+        .map_err(|error| format!("请求失败：{error}"))?;
     let total: u64 = response
         .header("Content-Length")
         .and_then(|value| value.parse().ok())
@@ -68,13 +95,7 @@ fn download_to(path: &std::path::Path) -> Result<(), String> {
             bytes.len()
         ));
     }
-    std::fs::write(path, bytes).map_err(|error| format!("写入失败：{error}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755));
-    }
-    Ok(())
+    Ok(bytes)
 }
 
 fn version_gt(candidate: &str, current: &str) -> bool {
