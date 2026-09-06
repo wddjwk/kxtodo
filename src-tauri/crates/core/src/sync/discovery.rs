@@ -39,6 +39,10 @@ pub struct DiscoveredServer {
     /// /healthz 探测通过（地址确实可用）
     pub verified: bool,
     pub version: Option<String>,
+    /// 对方数据库的身份（建库时生成、重启不变）。客户端据此判断
+    /// 「我连的还是不是同一台主机 / 它的库是不是被重建过」，变了要重置同步水位。
+    #[serde(rename = "instanceId")]
+    pub instance_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -109,7 +113,7 @@ pub fn discover(timeout: Duration) -> CoreResult<Vec<DiscoveredServer>> {
     for ((host, port), reply) in replies {
         let url = format!("http://{host}:{port}");
         let health = probe_health(&url);
-        let (verified, version, health_name) = match health {
+        let (verified, version, health_name, instance_id) = match health {
             Ok(value) => (
                 true,
                 value
@@ -122,8 +126,13 @@ pub fn discover(timeout: Duration) -> CoreResult<Vec<DiscoveredServer>> {
                     .and_then(Value::as_str)
                     .filter(|name| !name.is_empty())
                     .map(str::to_string),
+                value
+                    .get("instanceId")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_string),
             ),
-            Err(_) => (false, reply.version.clone(), None),
+            Err(_) => (false, reply.version.clone(), None, None),
         };
         out.push(DiscoveredServer {
             name: health_name.unwrap_or(reply.name).trim().to_string(),
@@ -132,6 +141,7 @@ pub fn discover(timeout: Duration) -> CoreResult<Vec<DiscoveredServer>> {
             url,
             verified,
             version,
+            instance_id,
         });
     }
     // 可用优先，其次按名字/地址排序
@@ -158,16 +168,20 @@ fn multicast_group_octets() -> [u8; 4] {
     octets
 }
 
-/// 短超时 /healthz：发现列表复核与「服务器是否在线」探测共用。
+/// 短超时 /healthz（3 秒）：发现列表复核与「服务器是否在线」探测共用。
 pub fn probe_health(url: &str) -> CoreResult<Value> {
+    probe_health_with_timeout(url, Duration::from_secs(3))
+}
+
+/// 同上，超时可选：自建服务可能在公网另一端（放宽到 10 秒），局域网主机就在同一个
+/// 网段（3 秒探不通就是真不通，别让用户等）。
+pub fn probe_health_with_timeout(url: &str, timeout: Duration) -> CoreResult<Value> {
     let base = url.trim().trim_end_matches('/');
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(3))
-        .build();
+    let agent = ureq::AgentBuilder::new().timeout(timeout).build();
     let response = agent
         .get(&format!("{base}/healthz"))
         .call()
-        .map_err(|error| crate::sync::engine::network_error(error))?;
+        .map_err(|error| crate::sync::transport::network_error(error))?;
     response
         .into_json::<Value>()
         .map_err(|error| crate::error::CoreError::io(format!("healthz 响应无效：{error}")))

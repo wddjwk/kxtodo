@@ -1525,6 +1525,101 @@ enum AppMode {
     HiddenHost,
 }
 
+// ---------------------------------------------------------------------------
+// 内置同步服务器（设置里的「本机作为服务器」，v0.6.0）
+// ---------------------------------------------------------------------------
+//
+// core 决定「该不该跑」（`HostCore::reconcile_sync_host` 读设置，挂在 Settings 域事件上），
+// 这里只负责「怎么跑」：在**本进程**内起 lib 化的 kxtodo-server，跑在 tauri 的
+// async_runtime（tokio）上。in-process 是唯一能同时满足三端的做法——Android 不能 exec
+// 外部二进制（targetSdk≥29 的 W^X 限制），P2P 会话期的临时主机也不该每次拉一个子进程。
+//
+// 桌面与移动端后端都只是转发到下面这两个函数：机制完全相同，不写两份。
+
+/// 进程内只有一个内置主机（与 IPC server 一样是进程级单例），所以用全局槽位。
+///
+/// 不放在 backend 结构里：`TauriBackend` 会被临时构造（单实例转发时），
+/// 句柄跟着临时对象走容易搞错生命周期。
+static SYNC_HOST: std::sync::OnceLock<std::sync::Mutex<Option<kxtodo_server::ServerHandle>>> =
+    std::sync::OnceLock::new();
+
+fn sync_host_slot() -> &'static std::sync::Mutex<Option<kxtodo_server::ServerHandle>> {
+    SYNC_HOST.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// 非阻塞启动内置主机：绑定与 serve 循环丢进 tauri 的运行时，句柄落进全局槽位，
+/// 实际端口 / 库身份 / 管理台凭据写进 `runtime/sync-host.json`
+/// （core 与另开的 CLI 进程都读那个文件来解析「本机就是主机时连哪儿」）。
+fn start_embedded_sync_host(
+    request: &domain::host::SyncHostRequest,
+) -> Result<(), domain::CoreError> {
+    let layout = domain::repo::Layout::new(request.data_dir.clone());
+    // 管理台密码只在**首次生成**时拿得到明文（之后 server/settings.json 里只有哈希），
+    // 所以重启（改名字/改端口）时要从旧描述符里带过去，否则用户再也看不到自己的密码。
+    let previous = domain::sync::state::load_host_state(&layout);
+    stop_embedded_sync_host(&request.data_dir);
+
+    let config = kxtodo_server::ServerConfig {
+        // 监听所有网卡：局域网内的其它设备要能连进来（回环监听不应答发现查询）
+        listen: format!("0.0.0.0:{}", request.port),
+        data_dir: domain::repo::embedded_server_dir(&request.data_dir),
+        db: None,
+        name: Some(request.name.clone()),
+        admin: None,
+        // 管理台凭据自动生成：用户勾一个框就该能用，不该先被逼着想一个密码
+        admin_provision: kxtodo_server::AdminProvision::GenerateIfMissing,
+        discovery: true,
+        // 同机可能还跑着独立的 kxtodo-server，撞上端口就自动向上找
+        // （发现应答带的是真实端口，客户端不受影响）
+        port_fallback: kxtodo_server::host::DEFAULT_PORT_FALLBACK,
+        retry_bind: false,
+    };
+    let host_name = request.name.clone();
+    let configured_port = request.port;
+    tauri::async_runtime::spawn(async move {
+        let mut state = domain::sync::state::EmbeddedHostState {
+            name: host_name,
+            configured_port,
+            pid: std::process::id(),
+            ..Default::default()
+        };
+        match kxtodo_server::host::start(config).await {
+            Ok(handle) => {
+                state.running = true;
+                state.port = handle.port();
+                state.name = handle.name().to_string();
+                state.instance_id = handle.instance_id.clone();
+                state.admin_url = handle.admin_url();
+                state.admin_user = handle.admin_user().to_string();
+                state.admin_password = handle
+                    .generated_admin_password
+                    .clone()
+                    .filter(|password| !password.is_empty())
+                    .unwrap_or(previous.admin_password);
+                state.started_at = Some(domain::time::now_iso());
+                if let Ok(mut slot) = sync_host_slot().lock() {
+                    *slot = Some(handle);
+                }
+            }
+            Err(error) => state.last_error = Some(error.to_string()),
+        }
+        let _ = domain::sync::state::save_host_state(&layout, &state);
+    });
+    Ok(())
+}
+
+/// 停掉内置主机并清掉描述符（幂等）。
+///
+/// 只请求停机、不 await 服务循环结束：这个方法会在应用退出路径上被调用，
+/// 等一个正在收尾的 axum 循环有可能把退出卡住。
+fn stop_embedded_sync_host(data_dir: &std::path::Path) {
+    if let Some(handle) = sync_host_slot().lock().ok().and_then(|mut slot| slot.take()) {
+        handle.request_shutdown();
+    }
+    let layout = domain::repo::Layout::new(data_dir.to_path_buf());
+    let _ = domain::sync::state::clear_host_state(&layout);
+}
+
 #[cfg(desktop)]
 struct TauriBackend {
     app: AppHandle,
@@ -1709,6 +1804,17 @@ impl domain::host::HostBackend for TauriBackend {
             .is_enabled()
             .map_err(|error| domain::CoreError::internal(format!("读取开机启动状态失败：{error}")))
     }
+
+    fn sync_host_start(
+        &self,
+        request: &domain::host::SyncHostRequest,
+    ) -> Result<(), domain::CoreError> {
+        start_embedded_sync_host(request)
+    }
+
+    fn sync_host_stop(&self, data_dir: &std::path::Path) {
+        stop_embedded_sync_host(data_dir)
+    }
 }
 
 #[cfg(desktop)]
@@ -1765,6 +1871,9 @@ fn init_host_core(
     }
     domain::host::retry_pending_recovery(&core);
     core.start_scheduler();
+    // 「本机作为服务器」随应用启动恢复（隐藏 Host 模式也一样：那正是开机自启后常驻的进程）。
+    // 之后设置一变就由 emit_domain_event(Domain::Settings) → reconcile_sync_host 跟进。
+    core.reconcile_sync_host();
     Ok(core)
 }
 
@@ -2100,6 +2209,17 @@ impl domain::host::HostBackend for MobileBackend {
     fn autostart_enabled(&self) -> Result<bool, domain::CoreError> {
         Ok(false)
     }
+
+    fn sync_host_start(
+        &self,
+        request: &domain::host::SyncHostRequest,
+    ) -> Result<(), domain::CoreError> {
+        start_embedded_sync_host(request)
+    }
+
+    fn sync_host_stop(&self, data_dir: &std::path::Path) {
+        stop_embedded_sync_host(data_dir)
+    }
 }
 
 #[cfg(not(desktop))]
@@ -2120,6 +2240,9 @@ fn init_mobile_core(app: &AppHandle) -> Result<(), String> {
     let core = domain::host::HostCore::new(repo, dir, "gui", false);
     core.set_backend(Box::new(MobileBackend { app: app.clone() }));
     domain::host::retry_pending_recovery(&core);
+    // 「本机作为服务器」在 Android 上同样是 in-process 起（不能 exec 外部二进制）。
+    // 只在应用前台可靠：Doze 会掐掉后台监听，本期不做前台服务保活（设置页有说明）。
+    core.reconcile_sync_host();
     app.manage(core);
     Ok(())
 }

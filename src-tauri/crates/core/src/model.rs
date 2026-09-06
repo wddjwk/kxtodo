@@ -546,13 +546,77 @@ impl Default for ShortcutSettings {
     }
 }
 
+/// 通信方式（v0.6.0）：三种方式共用同一套同步内核（密钥派生、LWW 合并、墓碑、
+/// 水位、图片通道、范围、排程），差别只在「base url 从哪来」——见 `sync/endpoint.rs`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SyncMode {
+    /// P2P：没有公网 IP 也能跨网络直连（iroh 隧道；v0.6.1 提供）
+    P2p,
+    /// 局域网：本机作为主机，或从「发现」列表里选定一台主机
+    Lan,
+    /// 自建服务：手填 ip:port 连一台常开的 kxtodo-server
+    Server,
+}
+
+impl Default for SyncMode {
+    fn default() -> Self {
+        SyncMode::Lan
+    }
+}
+
+impl SyncMode {
+    /// 序列化/CLI 用的小写标识
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SyncMode::P2p => "p2p",
+            SyncMode::Lan => "lan",
+            SyncMode::Server => "server",
+        }
+    }
+
+    /// 用户可见名称（设置面板下拉框、状态与日志）
+    pub fn label(&self) -> &'static str {
+        match self {
+            SyncMode::P2p => "P2P",
+            SyncMode::Lan => "局域网",
+            SyncMode::Server => "自建服务",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_lowercase().as_str() {
+            "p2p" => Some(SyncMode::P2p),
+            "lan" => Some(SyncMode::Lan),
+            "server" => Some(SyncMode::Server),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SyncSettings {
     /// 已配对并启用同步
     #[serde(default)]
     pub enabled: bool,
+    /// 通信方式；None = 用户还没显式选过，按已有配置推断（见 [`SyncSettings::effective_mode`]）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<SyncMode>,
     #[serde(rename = "serverUrl", default)]
     pub server_url: String,
+    /// 局域网：本机作为主机（内置 server 随应用启停，取消勾选不影响自己当客户端）
+    #[serde(rename = "lanHost", default)]
+    pub lan_host: bool,
+    /// 局域网：本机作为主机时的监听端口。被占用会自动向上找，
+    /// **实际端口以 `runtime/sync-host.json` 为准**（自动发现回包带的也是实际端口）
+    #[serde(rename = "lanPort", default = "default_lan_port")]
+    pub lan_port: u16,
+    /// 局域网：本机作为主机时的展示名，也就是它在局域网里的**身份**（要求唯一）
+    #[serde(rename = "lanName", default)]
+    pub lan_name: String,
+    /// 局域网：选定的远端主机名（从「发现」列表里点选，持久化，不必每次重选）
+    #[serde(rename = "lanPeer", default)]
+    pub lan_peer: String,
     #[serde(default)]
     pub username: String,
     /// 同步密码（派生 auth/enc 密钥；只存本机，不随设置同步）
@@ -578,6 +642,10 @@ pub struct SyncSettings {
     pub extra: Map<String, Value>,
 }
 
+fn default_lan_port() -> u16 {
+    crate::sync::discovery::DEFAULT_SERVER_PORT
+}
+
 fn default_sync_interval_seconds() -> u32 {
     30
 }
@@ -587,14 +655,68 @@ fn default_sync_reconnect_seconds() -> u32 {
 }
 
 impl SyncSettings {
-    /// 是否已配对：有服务器地址 + 用户名 + 密码。
+    /// 生效的通信方式：用户没显式选过时按已有配置推断——填过服务器地址就是
+    /// 「自建服务」（升级上来的旧配置直接可用），否则「局域网」。
+    ///
+    /// 这不是兼容层：用户在下拉框里选过一次之后 `mode` 就落盘了，推断只发生在那之前。
+    pub fn effective_mode(&self) -> SyncMode {
+        self.mode.unwrap_or_else(|| {
+            if self.server_url.trim().is_empty() {
+                SyncMode::Lan
+            } else {
+                SyncMode::Server
+            }
+        })
+    }
+
+    /// 是否已配对：有用户名 + 密码，且当前通信方式有一个明确的对端。
     ///
     /// 与 `enabled` 是两件事——`enabled = false` 表示用户「暂停同步」，配置全部保留；
     /// 只有 `sync unpair` 才会清掉密码（于是这里变成 false）。
     pub fn is_paired(&self) -> bool {
-        !self.server_url.trim().is_empty()
-            && !self.username.trim().is_empty()
-            && !self.secret.trim().is_empty()
+        if self.username.trim().is_empty() || self.secret.trim().is_empty() {
+            return false;
+        }
+        match self.effective_mode() {
+            SyncMode::Server => !self.server_url.trim().is_empty(),
+            // 局域网：要么本机是主机（连自己的 localhost），要么已经选定了一台主机
+            SyncMode::Lan => self.lan_host || !self.lan_peer.trim().is_empty(),
+            // P2P：对端地址由账户凭据派生的目录解析出来，不需要额外配置
+            SyncMode::P2p => true,
+        }
+    }
+
+    /// 应用局域网角色的不变式。`sync configure` 与 `config set` 共用这一条口径，
+    /// 免得两条写路径各写一半、界面上同时显示两种身份。
+    ///
+    /// - **主机与客户端二选一**：勾选本机作为主机就清掉选定的远端主机；
+    ///   选定了一台远端主机就不再是主机（同一次调用里两者都给时，主机开关优先）
+    /// - 勾选主机就等于选了局域网模式（在别的模式下这个开关没有意义）
+    /// - 主机必须有名字——名字是它在局域网里的**身份**，缺省用机器名
+    pub fn apply_lan_role(&mut self, host: Option<bool>, name: Option<&str>, peer: Option<&str>) {
+        if let Some(value) = name {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                self.lan_name = trimmed.to_string();
+            }
+        }
+        if let Some(value) = peer {
+            self.lan_peer = value.trim().to_string();
+        }
+        if let Some(value) = host {
+            self.lan_host = value;
+        }
+        if host == Some(true) {
+            self.lan_peer = String::new();
+        } else if !self.lan_peer.trim().is_empty() {
+            self.lan_host = false;
+        }
+        if self.lan_host {
+            self.mode = Some(SyncMode::Lan);
+            if self.lan_name.trim().is_empty() {
+                self.lan_name = crate::sync::endpoint::default_host_name();
+            }
+        }
     }
 }
 
@@ -602,7 +724,12 @@ impl Default for SyncSettings {
     fn default() -> Self {
         Self {
             enabled: false,
+            mode: None,
             server_url: String::new(),
+            lan_host: false,
+            lan_port: default_lan_port(),
+            lan_name: String::new(),
+            lan_peer: String::new(),
             username: String::new(),
             secret: String::new(),
             sync_data: default_true(),

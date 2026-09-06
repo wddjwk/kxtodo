@@ -11,6 +11,12 @@ publish = false
 name = "kxtodo-server"
 path = "src/main.rs"
 
+# 库目标（v0.6.0）：GUI/APK 的「本机作为服务器」与 P2P 临时主机 in-process 复用同一套实现。
+# 二进制入口只是薄壳：CLI 参数、pidfile、--daemon/--stop、信号、退出码、--update 留在 main.rs。
+[lib]
+name = "kxtodo_server"
+path = "src/lib.rs"
+
 [dependencies]
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }

@@ -1,37 +1,34 @@
-//! 同步引擎：HTTP 客户端（ureq）+ pull → LWW merge → push 编排。
+//! 同步引擎：pull → LWW merge → push 的编排。
 //!
-//! 所有合并都在客户端完成；服务器只是「最新密文保管员」。
+//! HTTP 传输在 [`crate::sync::transport`]，「连哪儿」在 [`crate::sync::endpoint`]，
+//! 合并规则在 [`crate::sync::merge`]。所有合并都在客户端完成，服务器只是
+//! 「最新密文保管员」——正因为如此，同一套编排能跑在自建服务、局域网内置主机
+//! 与 P2P 隧道上，换通信方式不用动这里。
 //! 每次同步幂等可中断：拉取水位只在完整走完后推进。
 
 use std::fs::{File, OpenOptions};
-use std::io::Read;
-use std::time::Duration;
 
 use fs2::FileExt;
-use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::error::{CoreError, CoreResult};
 use crate::repo::Repository;
-use crate::sync::crypto::{derive_keys, hmac_sha256, open_entity, seal_entity, sha256_hex, SyncKeys};
-use crate::sync::images::{ImageChangesPage, LocalImage};
+use crate::sync::crypto::{derive_keys, open_entity, seal_entity, sha256_hex, SyncKeys};
+use crate::sync::endpoint;
 use crate::sync::merge::{
     apply_data_record, apply_record_settings, apply_schedule_record, data_entity_stamp,
     normalize_data_orders, normalize_schedule_orders, remote_wins, schedule_entity_stamp,
     EntityRecord, Scopes, SETTINGS_ENTITY_ID, SyncEnvelope,
 };
 use crate::sync::state::{load_state, save_state, PushedEntry, SyncStateFile};
+use crate::sync::transport::{ChangeItem, PutError, SyncClient, PAGE_LIMIT};
 use crate::time::now_iso;
-
-const PAGE_LIMIT: usize = 500;
-/// 图片元数据分页大小（只传元数据，密文按需逐张下载）
-pub const IMAGE_PAGE_LIMIT: usize = 200;
-const HTTP_TIMEOUT_SECS: u64 = 30;
 
 // ---------------------------------------------------------------------------
 // 同步互斥锁：同一数据目录同时只允许一个同步（CLI standalone / Host / GUI 并发）
 // ---------------------------------------------------------------------------
 
+#[derive(Debug)]
 pub struct SyncRunLock {
     file: File,
 }
@@ -63,375 +60,6 @@ impl Drop for SyncRunLock {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP 客户端
-// ---------------------------------------------------------------------------
-
-pub struct SyncClient {
-    agent: ureq::Agent,
-    base: String,
-}
-
-fn normalize_base_url(raw: &str) -> CoreResult<String> {
-    let trimmed = raw.trim().trim_end_matches('/');
-    if trimmed.is_empty() {
-        return Err(CoreError::validation(
-            "SYNC_SERVER_REQUIRED",
-            "同步服务器地址不能为空",
-        ));
-    }
-    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
-        return Err(CoreError::validation(
-            "SYNC_SERVER_URL_INVALID",
-            format!("服务器地址应以 http:// 或 https:// 开头：{raw}"),
-        ));
-    }
-    Ok(trimmed.to_string())
-}
-
-fn api_error(status: u16, body: String) -> CoreError {
-    let mut code = format!("SYNC_HTTP_{status}");
-    let mut message = body.clone();
-    if let Ok(parsed) = serde_json::from_str::<Value>(&body) {
-        if let Some(error) = parsed.get("error").and_then(|e| e.as_object()) {
-            if let Some(c) = error.get("code").and_then(Value::as_str) {
-                code = c.to_string();
-            }
-            if let Some(m) = error.get("message").and_then(Value::as_str) {
-                message = m.to_string();
-            }
-        }
-    }
-    let error = CoreError::io(format!("同步服务错误（{status}）：{message}"));
-    CoreError::new(error.kind, &code, error.message)
-}
-
-pub fn network_error(error: ureq::Error) -> CoreError {
-    match error {
-        ureq::Error::Status(code, response) => {
-            let body = response.into_string().unwrap_or_default();
-            api_error(code, body)
-        }
-        _ => CoreError::io(format!("无法连接同步服务器：{error}")),
-    }
-}
-
-impl SyncClient {
-    pub fn new(base: &str) -> CoreResult<Self> {
-        Ok(Self {
-            agent: ureq::AgentBuilder::new()
-                .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
-                .build(),
-            base: normalize_base_url(base)?,
-        })
-    }
-
-    pub fn health(&self) -> CoreResult<Value> {
-        let response = self
-            .agent
-            .get(&format!("{}/healthz", self.base))
-            .call()
-            .map_err(network_error)?;
-        response
-            .into_json::<Value>()
-            .map_err(|e| CoreError::io(format!("healthz 响应无效：{e}")))
-    }
-
-    pub fn register(&self, username: &str, auth_key: &[u8; 32]) -> CoreResult<String> {
-        let body = json!({
-            "username": username,
-            "authKey": crate::sync::crypto::to_hex(auth_key),
-        });
-        let response = self
-            .agent
-            .post(&format!("{}/api/v1/register", self.base))
-            .send_json(body)
-            .map_err(|error| match error {
-                ureq::Error::Status(409, _) => CoreError::conflict(
-                    "ACCOUNT_EXISTS",
-                    format!("账户 {username} 已注册，请改用 login 配对"),
-                ),
-                _ => network_error(error),
-            })?;
-        #[derive(Deserialize)]
-        struct RegisterResponse {
-            #[serde(rename = "userId")]
-            user_id: String,
-        }
-        let parsed: RegisterResponse = response
-            .into_json()
-            .map_err(|e| CoreError::io(format!("register 响应无效：{e}")))?;
-        Ok(parsed.user_id)
-    }
-
-    pub fn login_challenge(&self, username: &str) -> CoreResult<String> {
-        let body = json!({ "username": username });
-        let response = self
-            .agent
-            .post(&format!("{}/api/v1/login-challenge", self.base))
-            .send_json(body)
-            .map_err(network_error)?;
-        #[derive(Deserialize)]
-        struct ChallengeResponse {
-            nonce: String,
-        }
-        let parsed: ChallengeResponse = response
-            .into_json()
-            .map_err(|e| CoreError::io(format!("login-challenge 响应无效：{e}")))?;
-        Ok(parsed.nonce)
-    }
-
-    pub fn login(
-        &self,
-        username: &str,
-        auth_key: &[u8; 32],
-    ) -> CoreResult<(String, Option<String>, u64)> {
-        let nonce = self.login_challenge(username)?;
-        let proof = crate::sync::crypto::to_hex(&hmac_sha256(auth_key, nonce.as_bytes()));
-        let body = json!({
-            "username": username,
-            "nonce": nonce,
-            "proof": proof,
-        });
-        let response = self
-            .agent
-            .post(&format!("{}/api/v1/login", self.base))
-            .send_json(body)
-            .map_err(|error| match error {
-                ureq::Error::Status(401, _) => CoreError::conflict(
-                    "AUTH_FAILED",
-                    "登录失败：用户名不存在或密码不正确".to_string(),
-                ),
-                _ => network_error(error),
-            })?;
-        #[derive(Deserialize)]
-        struct LoginResponse {
-            token: String,
-            #[serde(rename = "expiresAt")]
-            expires_at: Option<String>,
-            #[serde(rename = "currentSeq", default)]
-            current_seq: u64,
-        }
-        let parsed: LoginResponse = response
-            .into_json()
-            .map_err(|e| CoreError::io(format!("login 响应无效：{e}")))?;
-        Ok((parsed.token, parsed.expires_at, parsed.current_seq))
-    }
-
-    fn authed_get(&self, path: &str, token: &str) -> ureq::Request {
-        self.agent
-            .get(&format!("{}/api/v1/{path}", self.base))
-            .set("Authorization", &format!("Bearer {token}"))
-    }
-
-    pub fn me(&self, token: &str) -> CoreResult<Value> {
-        let response = self.authed_get("me", token).call().map_err(network_error)?;
-        response
-            .into_json::<Value>()
-            .map_err(|e| CoreError::io(format!("me 响应无效：{e}")))
-    }
-
-    pub fn changes(&self, token: &str, since: u64) -> CoreResult<ChangesPage> {
-        let response = self
-            .authed_get(&format!("changes?since={since}&limit={PAGE_LIMIT}"), token)
-            .call()
-            .map_err(network_error)?;
-        response
-            .into_json::<ChangesPage>()
-            .map_err(|e| CoreError::io(format!("changes 响应无效：{e}")))
-    }
-
-    pub fn get_entity(&self, token: &str, id: &str) -> CoreResult<Option<ChangeItem>> {
-        let response = match self
-            .authed_get(&format!("entities/{id}"), token)
-            .call()
-        {
-            Ok(response) => response,
-            Err(ureq::Error::Status(404, _)) => return Ok(None),
-            Err(error) => return Err(network_error(error)),
-        };
-        response
-            .into_json::<ChangeItem>()
-            .map(Some)
-            .map_err(|e| CoreError::io(format!("entities 响应无效：{e}")))
-    }
-
-    pub fn put_entity(
-        &self,
-        token: &str,
-        id: &str,
-        base: u64,
-        nonce: &str,
-        ciphertext: &str,
-        hash: &str,
-    ) -> Result<u64, PutError> {
-        let body = json!({
-            "base": base,
-            "nonce": nonce,
-            "ciphertext": ciphertext,
-            "hash": hash,
-        });
-        let response = self
-            .agent
-            .put(&format!("{}/api/v1/entities/{id}", self.base))
-            .set("Authorization", &format!("Bearer {token}"))
-            .send_json(body)
-            .map_err(|error| match error {
-                ureq::Error::Status(409, response) => {
-                    let current = response
-                        .into_json::<Value>()
-                        .ok()
-                        .and_then(|value| value.get("currentSeq").and_then(Value::as_u64))
-                        .unwrap_or(0);
-                    PutError::Conflict(current)
-                }
-                _ => PutError::Api(network_error(error)),
-            })?;
-        #[derive(Deserialize)]
-        struct PutResponse {
-            seq: u64,
-        }
-        let parsed: PutResponse = response
-            .into_json()
-            .map_err(|e| PutError::Api(CoreError::io(format!("put 响应无效：{e}"))))?;
-        Ok(parsed.seq)
-    }
-
-    // -- 图片 blob 通道（v0.5.0）-------------------------------------------
-    // 图片是内容寻址的不可变 blob，没有 LWW/OCC：同名同内容只存一份，
-    // 上传前先用 image_check 问一次「服务端缺哪些」，避免每轮重传。
-
-    pub fn image_changes(&self, token: &str, since: u64) -> CoreResult<ImageChangesPage> {
-        let response = self
-            .authed_get(
-                &format!("images/changes?since={since}&limit={IMAGE_PAGE_LIMIT}"),
-                token,
-            )
-            .call()
-            .map_err(network_error)?;
-        response
-            .into_json::<ImageChangesPage>()
-            .map_err(|e| CoreError::io(format!("images/changes 响应无效：{e}")))
-    }
-
-    /// 提交本地 (id, 内容哈希) 清单，拿回服务端缺失或内容不一致的 id 列表。
-    pub fn image_check(&self, token: &str, items: &[(String, String)]) -> CoreResult<Vec<String>> {
-        let body = json!({
-            "images": items
-                .iter()
-                .map(|(id, hash)| json!({ "id": id, "hash": hash }))
-                .collect::<Vec<_>>(),
-        });
-        let response = self
-            .agent
-            .post(&format!("{}/api/v1/images/check", self.base))
-            .set("Authorization", &format!("Bearer {token}"))
-            .send_json(body)
-            .map_err(network_error)?;
-        #[derive(Deserialize)]
-        struct CheckResponse {
-            #[serde(default)]
-            needed: Vec<String>,
-        }
-        let parsed: CheckResponse = response
-            .into_json()
-            .map_err(|e| CoreError::io(format!("images/check 响应无效：{e}")))?;
-        Ok(parsed.needed)
-    }
-
-    /// 下载单张图片密文；nonce 在响应头（hex），密文是裸字节体。
-    pub fn image_get(&self, token: &str, id: &str) -> CoreResult<Option<(String, Vec<u8>)>> {
-        let response = match self.authed_get(&format!("images/{id}"), token).call() {
-            Ok(response) => response,
-            Err(ureq::Error::Status(404, _)) => return Ok(None),
-            Err(error) => return Err(network_error(error)),
-        };
-        let nonce = response
-            .header("x-kxtodo-nonce")
-            .unwrap_or_default()
-            .to_string();
-        let mut bytes = Vec::new();
-        response
-            .into_reader()
-            .read_to_end(&mut bytes)
-            .map_err(|e| CoreError::io(format!("图片下载中断：{e}")))?;
-        Ok(Some((nonce, bytes)))
-    }
-
-    /// 上传单张图片：元数据走 query（百分号编码），密文走裸字节体。
-    pub fn image_put(
-        &self,
-        token: &str,
-        image: &LocalImage,
-        nonce_hex: &str,
-        ciphertext: Vec<u8>,
-        device_id: &str,
-    ) -> CoreResult<u64> {
-        let url = format!(
-            "{}/api/v1/images/{}?kind={}&nodeId={}&filename={}&nonce={}&hash={}&updatedAt={}&updatedBy={}",
-            self.base,
-            image.id,
-            encode_query(&image.kind),
-            encode_query(&image.node_id),
-            encode_query(&image.filename),
-            encode_query(nonce_hex),
-            encode_query(&image.hash),
-            encode_query(&image.updated_at),
-            encode_query(device_id),
-        );
-        let response = self
-            .agent
-            .put(&url)
-            .set("Authorization", &format!("Bearer {token}"))
-            .set("Content-Type", "application/octet-stream")
-            .send_bytes(&ciphertext)
-            .map_err(network_error)?;
-        #[derive(Deserialize)]
-        struct PutResponse {
-            seq: u64,
-        }
-        let parsed: PutResponse = response
-            .into_json()
-            .map_err(|e| CoreError::io(format!("图片上传响应无效：{e}")))?;
-        Ok(parsed.seq)
-    }
-}
-
-/// query 值百分号编码：只保留 unreserved 字符，其余一律转义（文件名可能含空格/中文）。
-fn encode_query(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    for byte in raw.as_bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(*byte as char)
-            }
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ChangeItem {
-    pub id: String,
-    pub seq: u64,
-    pub nonce: String,
-    pub ciphertext: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ChangesPage {
-    pub entities: Vec<ChangeItem>,
-    #[serde(rename = "currentSeq")]
-    pub current_seq: u64,
-}
-
-#[derive(Debug)]
-pub enum PutError {
-    Conflict(u64),
-    Api(CoreError),
-}
-
-// ---------------------------------------------------------------------------
 // 同步报告
 // ---------------------------------------------------------------------------
 
@@ -458,6 +86,33 @@ fn token_expired(expires_at: &Option<String>) -> bool {
     {
         Some(expiry) => expiry <= chrono::Utc::now(),
         None => true,
+    }
+}
+
+/// 登录；账户在这台主机上不存在就当场注册（并发撞车则退回登录）。
+///
+/// 「账户不存在」在配对之后仍然是正常情况：主机的库被重建、或用户改连了另一台主机，
+/// 新库里根本没有这个账户。此时拒绝同步会把设备晾在一边——而本机持有全量副本，
+/// 注册后紧接着的推送就能把新主机喂满（水位已由 instance epoch 归零）。
+/// 返回 `(token, 过期时间, 是否新建了账户)`。
+fn ensure_login(
+    client: &SyncClient,
+    username: &str,
+    auth_key: &[u8; 32],
+) -> CoreResult<(String, Option<String>, bool)> {
+    match client.login(username, auth_key) {
+        Ok((token, expires_at, _)) => Ok((token, expires_at, false)),
+        Err(error) if error.code == "ACCOUNT_NOT_FOUND" => {
+            match client.register(username, auth_key) {
+                Ok(_user_id) => {}
+                // 别的设备抢先注册了同一个账户：直接登录就行
+                Err(race) if race.code == "ACCOUNT_EXISTS" => {}
+                Err(race) => return Err(race),
+            }
+            let (token, expires_at, _) = client.login(username, auth_key)?;
+            Ok((token, expires_at, true))
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -556,6 +211,35 @@ fn merge_data_records(
     applied
 }
 
+/// 主机身份变了（换主机 / 主机的库被重建）→ 把对账状态整个清零，让本机全量副本重新播种。
+///
+/// 必须一起清的东西：
+/// - 两条拉取水位：新库的 `current_seq` 从 1 开始，旧水位会让增量流**静默地**什么都不返回
+/// - 推送台账 `pushed`：不清就会以为「服务端已经有这些实体了」，新库永远喂不满
+/// - token：旧库签发的 token 在新库里不存在
+/// - 图片清单缓存：「服务端已有哪些图片」这个结论是按库成立的
+///
+/// 重新播种不会让已删条目复活：墓碑存在 settings 实体的 `_meta.tombstones` 里，
+/// 跟着实体一起同步，所以全量副本自带删除记录。
+///
+/// 返回 true 表示这是一次**换主机**（此前已有身份），调用方据此给用户一条 warning；
+/// 首次对账（此前身份为空）同样清零，但不必大惊小怪。
+/// 主机没报身份（老服务器）时什么都不做。
+fn reseed_for_new_host(state: &mut SyncStateFile, instance_id: &str) -> bool {
+    if instance_id.is_empty() || state.server_instance_id == instance_id {
+        return false;
+    }
+    let switched_host = !state.server_instance_id.is_empty();
+    state.last_pulled_seq = 0;
+    state.last_pulled_image_seq = 0;
+    state.pushed.clear();
+    state.token.clear();
+    state.token_expires_at = None;
+    state.server_instance_id = instance_id.to_string();
+    crate::sync::images::invalidate_manifest_cache();
+    switched_host
+}
+
 /// 完整同步：login（如需）→ pull → merge → push → 图片 → 推进水位。
 ///
 /// 外层负责把「与服务端能不能通」的结论缓存进 runtime/sync.json：
@@ -611,7 +295,6 @@ fn run_sync_inner(repo: &Repository) -> CoreResult<SyncReport> {
         ));
     }
     let keys: SyncKeys = derive_keys(&sync.username, &sync.secret)?;
-    let client = SyncClient::new(&sync.server_url)?;
     let mut state = load_state(&repo.layout);
     let scopes = Scopes::from_settings(&settings);
 
@@ -628,9 +311,36 @@ fn run_sync_inner(repo: &Repository) -> CoreResult<SyncReport> {
         state.scope_signature = scope_signature;
     }
 
-    // 1. 确保 token
+    // 「连哪儿」由通信方式决定（自建服务 / 局域网内置主机或选定主机 / P2P）。
+    // 从这一行往下，三种方式走的是完全相同的代码——这是 v0.6.0 分层的意义。
+    let resolved = endpoint::resolve(&repo.layout, sync, &state)?;
+    debug_log(format!(
+        "endpoint {} via {} instance={}",
+        resolved.base_url,
+        resolved.source.as_str(),
+        resolved.instance_id
+    ));
+    let client = SyncClient::new(&resolved.base_url)?;
+    if let Some(lan_endpoint) = resolved.lan_endpoint.clone() {
+        state.lan_endpoint = Some(lan_endpoint);
+    }
+
+    // 主机身份自愈：换了主机、或主机的库被重建过。新库的 current_seq 从 1 开始而本地
+    // 水位停在几百，不清零的表现是**静默地**什么都拉不到、推的时候一路 OCC 409。
+    if reseed_for_new_host(&mut state, &resolved.instance_id) {
+        report.warnings.push(format!(
+            "同步主机已更换（现在是{}），本机已全量重新对账",
+            if resolved.name.is_empty() {
+                resolved.base_url.clone()
+            } else {
+                format!("「{}」", resolved.name)
+            }
+        ));
+    }
+
+    // 1. 确保 token（账户不在这台主机上就当场注册：主机是可替换的）
     if state.token.is_empty() || token_expired(&state.token_expires_at) {
-        let (token, expires_at, _) = client.login(&sync.username, &keys.auth_key)?;
+        let (token, expires_at, _) = ensure_login(&client, &sync.username, &keys.auth_key)?;
         state.token = token;
         state.token_expires_at = expires_at;
     }
@@ -897,7 +607,7 @@ fn run_sync_inner(repo: &Repository) -> CoreResult<SyncReport> {
     // 4.5 图片 blob：markdown 插图跟「同步数据」，列表背景与头像跟「同步设置」
     if scopes.data || scopes.settings {
         let device_id = state.device_id.clone();
-        let scope = format!("{}|{}", sync.server_url, sync.username);
+        let scope = format!("{}|{}", resolved.scope_key(), sync.username);
         match crate::sync::images::sync_images(
             &client,
             &token,
@@ -1050,36 +760,50 @@ fn resolve_conflict(
     Ok(())
 }
 
-/// 注册新账户并配对（register = 创建账户 + login + 首次同步）。
-/// 全新设备注册新账户时先播种默认数据（收集箱等），作为账户的初始内容。
-pub fn register_device(
-    repo: &Repository,
-    server_url: &str,
-    username: &str,
-    secret: &str,
-    scopes: Option<Scopes>,
-) -> CoreResult<(String, SyncReport)> {
-    let keys = derive_keys(username, secret)?;
-    let client = SyncClient::new(server_url)?;
-    client.register(username, &keys.auth_key)?;
-    if !repo.layout.data_file().exists() {
-        repo.ensure_initialized()?;
-    }
-    let (device_id, report) = pair_device(repo, server_url, username, secret, scopes)?;
-    Ok((device_id, report))
-}
-
-/// 登录既有账户并配对（login = challenge-response + 首次同步）。
+/// 统一「开始同步」：先按既有账户登录，账户不存在就当场注册，然后配对 + 首次同步。
+///
+/// 用户不需要区分注册与登录——三种通信方式都是「填账户密码，点开始同步」。
+/// 区别由服务端回答：账户不存在 → 自动注册；账户存在但密码不符 → `AUTH_FAILED`；
+/// 用户名撞车只在并发注册时发生，那时返回 `ACCOUNT_EXISTS`。
+///
+/// `request` 描述「往哪儿配」（通信方式 + 地址或局域网主机名 + 账户），
+/// 主机开关（本机是否作为服务器、端口、名字）不在这里，那是 `sync configure` 的事。
+///
+/// 返回 `(deviceId, 本轮同步报告, 是否新建了账户)`。
 pub fn pair_device(
     repo: &Repository,
-    server_url: &str,
-    username: &str,
-    secret: &str,
+    request: &endpoint::PairRequest,
     scopes: Option<Scopes>,
-) -> CoreResult<(String, SyncReport)> {
-    let keys = derive_keys(username, secret)?;
-    let client = SyncClient::new(server_url)?;
-    let (token, expires_at, _) = client.login(username, &keys.auth_key)?;
+) -> CoreResult<(String, SyncReport, bool)> {
+    let request = request.normalized();
+    if request.username.is_empty() {
+        return Err(CoreError::validation(
+            "SYNC_USERNAME_REQUIRED",
+            "用户名不能为空".to_string(),
+        ));
+    }
+    if request.secret.is_empty() {
+        return Err(CoreError::validation(
+            "SYNC_SECRET_REQUIRED",
+            "密码不能为空".to_string(),
+        ));
+    }
+    // 全新设备还没有 settings.json：load_settings 会给默认值，这里再兜一层
+    let current = repo.load_settings().unwrap_or_default();
+    let state = load_state(&repo.layout);
+    let resolved = endpoint::resolve_pairing(&repo.layout, &current.sync, &request, &state)?;
+    let keys = derive_keys(&request.username, &request.secret)?;
+    let client = SyncClient::new(&resolved.base_url)?;
+
+    // 统一「开始同步」：账户不存在就当场注册，存在就登录（与每轮同步同一条路径）
+    let (token, expires_at, registered) = ensure_login(&client, &request.username, &keys.auth_key)?;
+
+    // 新账户 + 全新设备：先播种默认数据（收集箱等），作为这个账户的初始内容。
+    // 登录既有账户时**绝不**播种——全新设备首拉要直接落服务端内容，不与本地默认数据并集。
+    if registered && !repo.layout.data_file().exists() {
+        repo.ensure_initialized()?;
+    }
+
     let device_id = crate::ids::gen_device_id();
     // 重新配对：进程内「图片已齐全」的旧结论作废（服务端数据可能被删过）
     crate::sync::images::invalidate_manifest_cache();
@@ -1088,9 +812,23 @@ pub fn pair_device(
 
     let (_file, _outcome) = repo.write_settings(None, None, "sync.pair", |file| {
         file.sync.enabled = true;
-        file.sync.server_url = server_url.trim().trim_end_matches('/').to_string();
-        file.sync.username = username.trim().to_lowercase();
-        file.sync.secret = secret.to_string();
+        file.sync.mode = Some(request.mode);
+        // 只写本次模式对应的地址字段：局域网配对不该抹掉用户存过的自建服务地址，
+        // 反之亦然——配置是持久化的，切换方式不该逼用户重填另一种。
+        match request.mode {
+            crate::model::SyncMode::Server => file.sync.server_url = request.server_url.clone(),
+            crate::model::SyncMode::Lan => {
+                file.sync.lan_peer = request.lan_peer.clone();
+                // 选定了一台远端主机 = 本机是客户端（角色二选一，与 sync configure 同一条不变式）
+                if !request.lan_peer.is_empty() {
+                    file.sync.lan_host = false;
+                }
+            }
+            // P2P 的对端由账户凭据派生的目录解析，没有地址可写
+            crate::model::SyncMode::P2p => {}
+        }
+        file.sync.username = request.username.clone();
+        file.sync.secret = request.secret.clone();
         if let Some(scopes) = scopes {
             file.sync.sync_data = scopes.data;
             file.sync.sync_settings = scopes.settings;
@@ -1099,14 +837,17 @@ pub fn pair_device(
         if file.sync.sync_settings && file.sync_updated_at.is_none() && settings_existed {
             file.sync_updated_at = Some(now_iso());
         }
-        Ok(json!({ "paired": true }))
+        Ok(json!({ "paired": true, "registered": registered }))
     })?;
-    // 登录成功才记历史：设置页「历史」按钮据此一键回填地址/用户名/密码
-    crate::sync::history::remember(&repo.layout, server_url, username, secret)?;
+    // 登录成功才记历史：设置页「历史」按钮据此一键回填方式/地址或主机名/用户名/密码
+    crate::sync::history::remember(&repo.layout, &request)?;
 
     let mut state = SyncStateFile::fresh(device_id.clone());
     state.token = token;
     state.token_expires_at = expires_at;
+    // 记下刚解析到的主机身份与地址缓存：紧接着的 run_sync 才不会把它误判成「换了主机」
+    state.server_instance_id = resolved.instance_id.clone();
+    state.lan_endpoint = resolved.lan_endpoint.clone();
     save_state(&repo.layout, &state)?;
 
     let report = run_sync(repo)?;
@@ -1114,7 +855,26 @@ pub fn pair_device(
     if !repo.layout.data_file().exists() {
         repo.ensure_initialized()?;
     }
-    Ok((device_id, report))
+    Ok((device_id, report, registered))
+}
+
+/// 取账户信息（复用已解析的端点，免得为了显示一次账户又广播一轮发现）。
+fn fetch_account(
+    repo: &Repository,
+    resolved: &endpoint::Resolved,
+    state: &mut SyncStateFile,
+) -> CoreResult<Value> {
+    let settings = repo.load_settings()?;
+    let sync = &settings.sync;
+    let keys = derive_keys(&sync.username, &sync.secret)?;
+    let client = SyncClient::new(&resolved.base_url)?;
+    if state.token.is_empty() || token_expired(&state.token_expires_at) {
+        let (token, expires_at, _) = ensure_login(&client, &sync.username, &keys.auth_key)?;
+        state.token = token;
+        state.token_expires_at = expires_at;
+        save_state(&repo.layout, state)?;
+    }
+    client.me(&state.token)
 }
 
 /// 用当前 token（必要时重新登录）查询账户信息。
@@ -1124,19 +884,12 @@ pub fn fetch_me(repo: &Repository) -> CoreResult<Option<Value>> {
     if !sync.is_paired() {
         return Ok(None);
     }
-    let keys = derive_keys(&sync.username, &sync.secret)?;
-    let client = SyncClient::new(&sync.server_url)?;
     let mut state = load_state(&repo.layout);
-    if state.token.is_empty() || token_expired(&state.token_expires_at) {
-        let (token, expires_at, _) = client.login(&sync.username, &keys.auth_key)?;
-        state.token = token;
-        state.token_expires_at = expires_at;
-        save_state(&repo.layout, &state)?;
-    }
-    Ok(Some(client.me(&state.token)?))
+    let resolved = endpoint::resolve(&repo.layout, sync, &state)?;
+    Ok(Some(fetch_account(repo, &resolved, &mut state)?))
 }
 
-/// 轻量连通性探测（设置面板用）：短超时 /healthz，通过后再取一次 /me。
+/// 轻量连通性探测（设置面板用）：解析端点（自带短超时 /healthz），通过后再取一次 /me。
 ///
 /// 结论写进 `runtime/sync.json`（serverOnline / lastSeenAt / lastError），
 /// 于是 `sync status` 可以完全不碰网络——打开设置界面不再被卡住。
@@ -1146,34 +899,49 @@ pub fn probe_connection(repo: &Repository) -> CoreResult<Value> {
     if !sync.is_paired() {
         return Err(CoreError::conflict(
             "SYNC_NOT_CONFIGURED",
-            "本机未配置同步（先 kxtodo-cli sync register / login）".to_string(),
+            "本机未配置同步（先在设置 → 数据同步里点「开始同步」）".to_string(),
         ));
     }
     let mut state = load_state(&repo.layout);
-    let mut out = json!({ "serverUrl": sync.server_url });
-    let health = crate::sync::discovery::probe_health(&sync.server_url);
-    let online = health.is_ok();
-    match health {
-        Ok(value) => {
+    let mode = sync.effective_mode();
+    let mut out = json!({ "mode": mode.as_str(), "modeLabel": mode.label() });
+    let resolved = match endpoint::resolve(&repo.layout, sync, &state) {
+        Ok(resolved) => {
+            out["serverUrl"] = json!(resolved.base_url);
+            out["server"] = resolved.health.clone();
+            out["endpoint"] = json!({
+                "name": resolved.name,
+                "instanceId": resolved.instance_id,
+                "version": resolved.version,
+                "source": resolved.source.as_str(),
+            });
             state.server_online = Some(true);
             state.last_seen_at = Some(now_iso());
             state.last_error = None;
-            out["server"] = value;
+            if let Some(lan_endpoint) = resolved.lan_endpoint.clone() {
+                state.lan_endpoint = Some(lan_endpoint);
+            }
+            Some(resolved)
         }
         Err(error) => {
-            state.server_online = Some(false);
-            state.last_error = Some(error.message.clone());
+            // 局域网模式还没选定主机时给的是配置类错误，不是掉线
+            if error.kind == crate::error::ErrorKind::Io {
+                state.server_online = Some(false);
+                state.last_error = Some(error.message.clone());
+            }
             out["serverError"] = json!(error.message);
+            out["serverErrorCode"] = json!(error.code);
+            None
         }
-    }
+    };
     let _ = save_state(&repo.layout, &state);
-    if online {
+    let online = resolved.is_some();
+    if let Some(resolved) = resolved {
         // 账户信息失败（token 过期/密钥不符）不代表服务器掉线，单独报
-        match fetch_me(repo) {
-            Ok(Some(me)) => {
+        match fetch_account(repo, &resolved, &mut state) {
+            Ok(me) => {
                 out["account"] = me;
             }
-            Ok(None) => {}
             Err(error) => {
                 out["accountError"] = json!(error.message);
             }
@@ -1181,4 +949,75 @@ pub fn probe_connection(repo: &Repository) -> CoreResult<Value> {
     }
     out["online"] = json!(online);
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sync::state::PushedEntry;
+
+    /// 同一数据目录同时只允许一个同步：CLI 与 GUI Host 并发时必须有一个被拒。
+    /// 局域网方式下同机可能跑两个实例，这条最容易踩，此前却没有测试覆盖。
+    #[test]
+    fn sync_run_lock_is_exclusive_per_data_dir() {
+        let dir = std::env::temp_dir().join(format!("kxtodo-sync-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let layout = crate::repo::Layout::new(dir.clone());
+        let first = SyncRunLock::acquire(&layout).expect("第一个同步应拿到锁");
+        let error = SyncRunLock::acquire(&layout).expect_err("第二个同步必须被拒");
+        assert_eq!(error.code, "SYNC_IN_PROGRESS");
+        drop(first);
+        // 释放后立刻能再拿：前端「立即同步」撞上自动同步时靠短等待重试
+        let _second = SyncRunLock::acquire(&layout).expect("释放后应能重新拿到锁");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 换主机 / 主机的库被重建 → 水位、推送台账、token 必须一起清零。
+    /// 端到端验证在 crates/server/tests/sync_e2e.rs 的 recreated_host_store_reseeds_clients。
+    #[test]
+    fn host_identity_change_clears_all_reconciliation_state() {
+        let mut state = SyncStateFile::fresh("dev-1".to_string());
+        state.last_pulled_seq = 42;
+        state.last_pulled_image_seq = 7;
+        state.token = "tok".to_string();
+        state.token_expires_at = Some("2030-01-01T00:00:00Z".to_string());
+        state.set_entry(
+            "task-1",
+            PushedEntry {
+                seq: 9,
+                u: "2026-01-01T00:00:00Z".to_string(),
+                by: "dev-1".to_string(),
+            },
+        );
+        state.server_instance_id = "srv-old".to_string();
+
+        // 同一台主机：什么都不动，否则每轮都全量重推
+        assert!(!reseed_for_new_host(&mut state, "srv-old"));
+        assert_eq!(state.last_pulled_seq, 42);
+        assert!(state.entry("task-1").is_some());
+
+        // 换了主机：全部清零，并报告「这是一次换主机」（调用方据此给 warning）
+        assert!(reseed_for_new_host(&mut state, "srv-new"));
+        assert_eq!(state.last_pulled_seq, 0);
+        assert_eq!(state.last_pulled_image_seq, 0);
+        assert!(state.pushed.is_empty(), "台账不清新库就永远喂不满");
+        assert!(state.token.is_empty(), "旧库签发的 token 在新库里不存在");
+        assert!(state.token_expires_at.is_none());
+        assert_eq!(state.server_instance_id, "srv-new");
+
+        // 首次对账（此前没有身份）：同样清零，但不算「换主机」，不该吓用户
+        let mut blank = SyncStateFile::fresh("dev-2".to_string());
+        blank.last_pulled_seq = 5;
+        assert!(!reseed_for_new_host(&mut blank, "srv-first"));
+        assert_eq!(blank.last_pulled_seq, 0);
+        assert_eq!(blank.server_instance_id, "srv-first");
+
+        // 主机没报身份（v0.5.x 的老服务器）→ 不要瞎重置
+        let mut legacy = SyncStateFile::fresh("dev-3".to_string());
+        legacy.last_pulled_seq = 11;
+        legacy.server_instance_id = "srv-x".to_string();
+        assert!(!reseed_for_new_host(&mut legacy, ""));
+        assert_eq!(legacy.last_pulled_seq, 11);
+        assert_eq!(legacy.server_instance_id, "srv-x");
+    }
 }

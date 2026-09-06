@@ -6,8 +6,7 @@
   } from "./stores";
   import { setConfig as setConfigAction } from "./actions";
   import {
-    syncRegister as syncRegisterAction,
-    syncLogin as syncLoginAction,
+    syncPair as syncPairAction,
     syncStatus as syncStatusAction,
     syncNow as syncNowAction,
     syncUnpair as syncUnpairAction,
@@ -15,25 +14,30 @@
     syncDiscover as syncDiscoverAction,
     syncHistory as syncHistoryAction,
     syncHistoryRemove as syncHistoryRemoveAction,
+    syncHistoryLabel,
     setSyncScopes,
     setSyncEnabled,
+    setSyncMode as setSyncModeAction,
+    setSyncLanHost as setSyncLanHostAction,
+    setSyncLanName as setSyncLanNameAction,
+    setSyncLanPeer as setSyncLanPeerAction,
     type DiscoveredServer,
     type SyncHistoryEntry
   } from "./actions";
   import { checkForUpdate, startUpdate, updateProgress, type UpdateInfo } from "./updater";
   import { isMobile } from "./platform";
   import { caps } from "./capabilities";
-  import { ArrowLeft, Eye, EyeOff, History, LoaderCircle, Search, X } from "@lucide/svelte";
+  import { ArrowLeft, Eye, EyeOff, History, X } from "@lucide/svelte";
   import {
     scalePercentValue, buildSettingsDrawerStyle, avatarStyle, avatarInitial
   } from "./styles";
   import {
-    isTauriRuntime, pickImageFile, saveAvatarImage, avatarImageUrl
+    isTauriRuntime, pickImageFile, saveAvatarImage, avatarImageUrl, openExternalUrl
   } from "./backend";
   import { avatarCache, resolveAvatarSrc } from "./images";
   import Dropdown from "./Dropdown.svelte";
   import NumberField from "./NumberField.svelte";
-  import type { Settings } from "./types";
+  import type { Settings, SyncMode } from "./types";
 
   let avatarFileInput: HTMLInputElement;
 
@@ -91,9 +95,20 @@
   let historyOpen = false;
   let history: SyncHistoryEntry[] = [];
   let historySecretsVisible = false;
+  /** 主机名字输入框的草稿：提交（失焦/回车）才落盘——改名字会重启内置服务器，不能每敲一个字重启一次 */
+  let lanNameDraft = "";
+  let lanNameFocused = false;
+  /** 内置主机管理台密码的显隐（自动生成的，用户要能抄下来登录自己的管理台） */
+  let adminSecretVisible = false;
   /** 秒级 ticker：只用于「下次同步」倒计时显示 */
   let clock = Date.now();
   let clockTimer: number | undefined;
+
+  // v0.6.0 只提供局域网与自建服务两项：P2P 要等 iroh 那条链路验证完（不给点了没反应的选项）
+  const syncModeOptions: Array<{ value: SyncMode; label: string }> = [
+    { value: "lan", label: "局域网" },
+    { value: "server", label: "自建服务" }
+  ];
 
   onMount(() => {
     clockTimer = window.setInterval(() => {
@@ -104,9 +119,58 @@
     if (clockTimer !== undefined) window.clearInterval(clockTimer);
   });
 
-  // 配对 = 有服务器地址 + 有密码；enabled=false 只是「暂停」，配置全部保留
-  $: syncPaired = Boolean($appSettings.sync?.serverUrl && $appSettings.sync?.secret);
+  $: syncMode = $appSettings.sync?.mode ?? "lan";
+  $: lanHost = Boolean($appSettings.sync?.lanHost);
+  $: lanName = ($appSettings.sync?.lanName ?? "").trim();
+  $: lanPeer = ($appSettings.sync?.lanPeer ?? "").trim();
+  $: lanPort = $appSettings.sync?.lanPort ?? 52177;
+  $: hostStatus = syncStatus?.host ?? null;
+  // 名字从别处变了（CLI、另一台设备的设置同步）就跟上，别把用户的草稿冲掉
+  $: if (!lanNameFocused && lanNameDraft.trim() !== lanName) lanNameDraft = lanName;
+
+  /**
+   * 配对 = 有账户密码 + 当前通信方式有一个明确对端（与 core 的 is_paired 同口径）。
+   * enabled=false 只是「暂停」，配置全部保留。
+   */
+  $: syncPaired = Boolean(
+    ($appSettings.sync?.username ?? "").trim() &&
+      ($appSettings.sync?.secret ?? "").trim() &&
+      (syncMode === "server"
+        ? Boolean(($appSettings.sync?.serverUrl ?? "").trim())
+        : syncMode === "lan"
+          ? lanHost || Boolean(lanPeer)
+          : true)
+  );
   $: syncPaused = syncPaired && !$appSettings.sync?.enabled;
+  /** 当前对端在用户眼里叫什么（局域网认名字，自建服务认地址） */
+  $: peerLabel =
+    syncMode === "lan"
+      ? lanHost
+        ? "本机作为服务器"
+        : lanPeer
+          ? `局域网主机「${lanPeer}」`
+          : "还没选定局域网主机"
+      : ($appSettings.sync?.serverUrl ?? "").trim() || "还没填服务器地址";
+  /** 真正连到的地址（局域网方式才有意义：身份是名字，地址只是缓存/本机回环） */
+  $: endpointSuffix =
+    syncMode !== "lan"
+      ? ""
+      : lanHost
+        ? hostStatus?.running
+          ? ` · 127.0.0.1:${hostStatus.port}`
+          : ""
+        : syncStatus?.lanEndpoint
+          ? ` · ${syncStatus.lanEndpoint.host}:${syncStatus.lanEndpoint.port}`
+          : "";
+  /** 「开始同步」可点条件：账户密码齐了，且当前方式有明确对端 */
+  $: canStartSync =
+    Boolean(syncForm.username.trim()) &&
+    Boolean(syncForm.secret) &&
+    (syncMode === "server"
+      ? Boolean(syncForm.serverUrl.trim())
+      : syncMode === "lan"
+        ? lanHost || Boolean(lanPeer)
+        : true);
   $: connection = $syncConnection;
   $: connectionState = connection.online === null
     ? "unknown"
@@ -128,11 +192,12 @@
       : `下次同步 ${Math.max(0, Math.round(($nextSyncAt - clock) / 1000))}s`;
 
   let syncStatusLoaded = false;
-  $: if ($showSettings && syncPaired && !syncStatusLoaded) {
+  // 未配对也要读状态：「本机作为服务器」是配对**之前**就要勾的，得看得到主机起没起来
+  $: if ($showSettings && !syncStatusLoaded) {
     syncStatusLoaded = true;
     void refreshSyncStatus();
   }
-  $: if (!syncPaired) syncStatusLoaded = false;
+  $: if (!$showSettings) syncStatusLoaded = false;
   // 未配对时预填：解除配对后地址与用户名仍在设置里，直接带出来省得重敲
   $: if (!syncFormPrefilled && !syncPaired) {
     syncFormPrefilled = true;
@@ -149,7 +214,7 @@
     });
   }
 
-  /** 放大镜：UDP 广播/组播查询局域网内的 kxtodo-server，结果以下拉浮层展示。 */
+  /** 放大镜：UDP 广播/组播查询局域网内的主机，结果以下拉浮层展示（点选即选定）。 */
   async function runDiscovery(): Promise<void> {
     if (discovering) return;
     discovering = true;
@@ -163,18 +228,91 @@
       }
       discovered = result;
       if (result.length === 0) {
-        showToast("局域网内没发现服务器（需在跑、同一局域网、监听 0.0.0.0）");
+        showToast("局域网内没发现主机：对方要开着 KXToDo 并勾选「本机作为服务器」");
       }
     } finally {
       discovering = false;
     }
   }
 
-  function pickDiscovered(server: DiscoveredServer): void {
-    syncForm.serverUrl = server.url;
+  /**
+   * 点选发现结果：选定的是**名字**，不是 ip:port。
+   * 名字是主机在局域网里的身份，路由器给它换了 IP、端口因占用上移了都照样连得上。
+   */
+  async function pickDiscovered(server: DiscoveredServer): Promise<void> {
     discoveryOpen = false;
     discovered = [];
-    showToast(`已填入 ${server.name || server.host}`);
+    const name = (server.name ?? "").trim();
+    if (!name) {
+      showToast("这台主机没报名字，没法选定（把它的 KXToDo 升级到 v0.6.0 以上）");
+      return;
+    }
+    if (await setSyncLanPeerAction(name)) {
+      await refreshSyncStatus({ probe: false });
+    }
+  }
+
+  /**
+   * 内置服务器是在宿主的异步运行时里起的，描述符（实际端口/库身份）晚一点点才落盘。
+   * 轮询到就绪为止，否则用户勾完就看到「未运行」，以为没生效。
+   */
+  async function waitForHost(wantRunning: boolean): Promise<void> {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const status = await syncStatusAction();
+      if (status) syncStatus = status;
+      if (Boolean(status?.host?.running) === wantRunning) return;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
+
+  async function changeMode(mode: SyncMode): Promise<void> {
+    if (mode === syncMode) return;
+    await setSyncModeAction(mode);
+    await refreshSyncStatus({ probe: false });
+  }
+
+  /** 勾选/取消「本机作为服务器」：取消只停内置服务器，不影响自己继续当客户端。 */
+  async function toggleLanHost(): Promise<void> {
+    if (syncBusy) return;
+    syncBusy = true;
+    try {
+      const next = !lanHost;
+      // 名字先一起提交：core 要在局域网里查这个名字有没有被别的主机占用
+      const ok = await setSyncLanHostAction(next, next ? lanNameDraft.trim() || lanName : undefined);
+      if (ok) {
+        await waitForHost(next);
+        await refreshSyncStatus({ probe: false });
+      }
+    } finally {
+      syncBusy = false;
+    }
+  }
+
+  /** 提交主机名字（失焦/回车）。改名会重启内置服务器——名字就是它在局域网里的身份。 */
+  async function commitLanName(): Promise<void> {
+    lanNameFocused = false;
+    const name = lanNameDraft.trim();
+    if (!name || name === lanName) {
+      lanNameDraft = lanName;
+      return;
+    }
+    if (await setSyncLanNameAction(name)) {
+      if (lanHost) await waitForHost(true);
+      await refreshSyncStatus({ probe: false });
+    } else {
+      lanNameDraft = lanName;
+    }
+  }
+
+  /** 打开本机内置主机的管理台（系统浏览器；地址是本机回环，手机上也一样能开）。 */
+  async function openAdminConsole(): Promise<void> {
+    const url = hostStatus?.adminUrl;
+    if (!url) return;
+    try {
+      await openExternalUrl(url);
+    } catch (error) {
+      showToast(`打开管理台失败：${String(error)}`);
+    }
   }
 
   async function toggleHistory(): Promise<void> {
@@ -186,39 +324,46 @@
     history = (await syncHistoryAction()) ?? [];
   }
 
-  function applyHistory(entry: SyncHistoryEntry): void {
+  /** 一键回填历史：通信方式与主机名/地址也一起恢复，不只是账户密码。 */
+  async function applyHistory(entry: SyncHistoryEntry): Promise<void> {
     historyOpen = false;
     if (syncPaired) {
-      showToast("当前已配对：先解除配对，再用历史账户登录");
+      showToast("当前已配对：先解除配对，再用历史账户回填");
       return;
     }
-    syncForm.serverUrl = entry.serverUrl;
+    const mode: SyncMode = entry.mode === "lan" ? "lan" : "server";
+    syncForm.serverUrl = entry.serverUrl ?? "";
     syncForm.username = entry.username;
     syncForm.secret = entry.secret;
-    showToast("已回填历史账户");
+    if (mode !== syncMode) await setSyncModeAction(mode);
+    const peer = (entry.lanPeer ?? "").trim();
+    if (mode === "lan" && peer && peer !== lanPeer) await setSyncLanPeerAction(peer);
+    await refreshSyncStatus({ probe: false });
+    showToast("已回填历史配对信息");
   }
 
   async function removeHistory(index: number): Promise<void> {
     history = (await syncHistoryRemoveAction(index)) ?? [];
   }
 
-  async function registerSync(): Promise<void> {
+  /**
+   * 统一「开始同步」：账户不存在就当场注册，存在就登录。
+   * 用户不需要知道这台设备上有没有注册过——由服务端回答。
+   */
+  async function startSync(): Promise<void> {
     if (syncBusy) return;
     syncBusy = true;
     try {
-      if (await syncRegisterAction(syncForm)) {
-        await refreshSyncStatus();
-      }
-    } finally {
-      syncBusy = false;
-    }
-  }
-
-  async function loginSync(): Promise<void> {
-    if (syncBusy) return;
-    syncBusy = true;
-    try {
-      if (await syncLoginAction(syncForm)) {
+      const ok = await syncPairAction({
+        mode: syncMode,
+        serverUrl: syncMode === "server" ? syncForm.serverUrl.trim() : undefined,
+        username: syncForm.username,
+        secret: syncForm.secret,
+        syncSettings: syncForm.syncSettings,
+        syncSchedules: syncForm.syncSchedules
+      });
+      if (ok) {
+        syncFormPrefilled = false;
         await refreshSyncStatus();
       }
     } finally {
@@ -639,11 +784,11 @@
           <p class="muted">还没有历史记录：成功配对一次后会自动记住（最多 8 条，只存本机）。</p>
         {:else}
           <div class="sync-popover-list">
-            {#each history as entry, index (entry.serverUrl + "|" + entry.username)}
+            {#each history as entry, index ((entry.mode ?? "") + "|" + entry.serverUrl + "|" + (entry.lanPeer ?? "") + "|" + entry.username)}
               <div class="sync-popover-row">
                 <button class="menu-action-button discovery-item" type="button" on:click={() => applyHistory(entry)}>
                   <span class="discovery-name">{entry.username || "（无用户名）"}</span>
-                  <span class="muted">{entry.serverUrl}</span>
+                  <span class="muted">{syncHistoryLabel(entry)}</span>
                   <span class="muted secret">{historySecretsVisible ? entry.secret : "••••••"}</span>
                 </button>
                 <button
@@ -660,11 +805,129 @@
       </div>
     {/if}
 
-    {#if syncPaired}
-      <div class="sync-card">
+    <div class="sync-card">
+      <!-- 通信方式：三种方式共用同一套同步内核，差别只在「连哪儿」 -->
+      <div class="settings-row">
+        <span>通信方式</span>
+        <Dropdown
+          ariaLabel="同步通信方式"
+          value={syncMode}
+          options={syncModeOptions}
+          on:change={(event) => changeMode(event.detail as SyncMode)}
+        />
+      </div>
+
+      {#if syncMode === "lan"}
+        <!-- 角色二选一：本机作为服务器，或选定局域网里的一台主机 -->
+        <div class="settings-row">
+          <span>本机作为服务器</span>
+          <input type="checkbox" checked={lanHost} disabled={syncBusy} on:change={toggleLanHost} />
+        </div>
+        {#if lanHost}
+          <label class="settings-row">
+            主机名字
+            <input
+              bind:value={lanNameDraft}
+              placeholder="局域网内唯一，例如 客厅的电脑"
+              disabled={syncBusy}
+              on:focus={() => (lanNameFocused = true)}
+              on:blur={commitLanName}
+              on:keydown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void commitLanName();
+                }
+              }}
+            />
+          </label>
+          <div class="sync-host">
+            <span
+              class="conn-state"
+              data-state={hostStatus?.running ? "online" : hostStatus?.lastError ? "offline" : "unknown"}
+            >
+              <i class="conn-dot"></i>
+              <span class="conn-text">
+                {hostStatus?.running ? "主机运行中" : hostStatus?.lastError ? "启动失败" : "启动中"}
+              </span>
+            </span>
+            {#if hostStatus?.running}
+              <span class="muted">
+                端口 {hostStatus?.port ?? lanPort}
+                {#if (hostStatus?.port ?? 0) !== lanPort}（{lanPort} 被占用，已自动上移）{/if}
+              </span>
+            {:else if hostStatus?.lastError}
+              <span class="muted">{hostStatus.lastError}</span>
+            {/if}
+          </div>
+          {#if hostStatus?.running}
+            <div class="settings-row">
+              <span>管理台</span>
+              <span class="sync-side admin-cell">
+                <span class="muted">{hostStatus?.adminUrl}</span>
+                <button class="settings-button" type="button" on:click={openAdminConsole}>打开</button>
+              </span>
+            </div>
+            <div class="settings-row">
+              <span>管理台账号</span>
+              <span class="sync-side admin-cell">
+                <span class="muted">
+                  {hostStatus?.adminUser}
+                  {#if adminSecretVisible && hostStatus?.adminPassword} / {hostStatus.adminPassword}{/if}
+                </span>
+                <button
+                  class="icon-button"
+                  type="button"
+                  title={adminSecretVisible ? "隐藏密码" : "显示密码"}
+                  aria-label={adminSecretVisible ? "隐藏密码" : "显示密码"}
+                  on:click={() => (adminSecretVisible = !adminSecretVisible)}
+                >{#if adminSecretVisible}<EyeOff size={13} />{:else}<Eye size={13} />{/if}</button>
+              </span>
+            </div>
+          {/if}
+          <p class="muted">
+            内置服务器随应用启停，同一局域网里的其它设备用「发现」就能连上它。
+            {#if isMobile}手机退到后台后系统会掐掉监听，作为主机时需保持应用在前台。{/if}
+          </p>
+        {:else}
+          <div class="settings-row sync-peer-row">
+            <span>局域网主机</span>
+            <span class="muted sync-side">{lanPeer ? `「${lanPeer}」` : "未选定"}</span>
+            <button class="settings-button" type="button" disabled={discovering} on:click={runDiscovery}>
+              {discovering ? "搜索中…" : "发现"}
+            </button>
+          </div>
+          {#if discoveryOpen}
+            <div class="sync-popover">
+              <div class="sync-popover-head">
+                <span>{discovering ? "正在搜索…" : `发现 ${discovered.length} 台主机`}</span>
+                <span class="spacer"></span>
+                <button class="icon-button" type="button" title="关闭" aria-label="关闭" on:click={() => (discoveryOpen = false)}><X size={14} /></button>
+              </div>
+              {#if discovering}
+                <p class="muted">在 UDP 52177 上广播查询，收集局域网内主机的应答…</p>
+              {:else if discovered.length === 0}
+                <p class="muted">没发现主机：对方要开着 KXToDo、勾选「本机作为服务器」，并与本机在同一个局域网。</p>
+              {:else}
+                <div class="sync-popover-list">
+                  {#each discovered as server (server.url)}
+                    <button class="menu-action-button discovery-item" type="button" on:click={() => pickDiscovered(server)}>
+                      <span class="discovery-name">{server.name || "未命名主机"}</span>
+                      <span class="muted">{server.host}:{server.port}</span>
+                      {#if !server.verified}<span class="muted">（未复核）</span>{/if}
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/if}
+          <p class="muted">选定的是主机名字：它换了 IP、换了端口都照样连得上。</p>
+        {/if}
+      {/if}
+
+      {#if syncPaired}
         <div class="settings-row">
           <span class="sync-label">
-            服务器
+            对端
             <span class="conn-state" data-state={connectionState}>
               <i class="conn-dot"></i>
               <span class="conn-text">{connectionText}</span>
@@ -672,10 +935,10 @@
           </span>
           <span class="muted sync-side">{nextSyncText}</span>
         </div>
-        <div class="sync-url">{$appSettings.sync.serverUrl}</div>
+        <div class="sync-url">{peerLabel}{endpointSuffix}</div>
         <div class="settings-row"><span>账户</span><span class="muted sync-side">{$appSettings.sync.username}</span></div>
         {#if syncPaused}
-          <p class="sync-note">同步已暂停：不会自动同步，服务器与账户配置都还在。</p>
+          <p class="sync-note">同步已暂停：不会自动同步，通信方式与账户配置都还在。</p>
         {/if}
         {#if syncStatus?.lastSyncAt}
           <div class="settings-row">
@@ -693,7 +956,7 @@
           </div>
         {/if}
         {#if connection.online === false && connection.lastError}
-          <p class="update-error">服务器不可达：{connection.lastError}（每 {$appSettings.sync.reconnectSeconds || 300} 秒静默重连）</p>
+          <p class="update-error">连不上对端：{connection.lastError}（每 {$appSettings.sync.reconnectSeconds || 300} 秒静默重连）</p>
         {/if}
         <div class="settings-row"><span>同步数据（节点/任务/插图）</span>
           <input type="checkbox" checked={$appSettings.sync.syncData} on:change={(event) => updateSyncScope("syncData", event.currentTarget.checked)} />
@@ -735,50 +998,12 @@
             {syncBusy ? "同步中…" : "立即同步"}
           </button>
         </div>
-      </div>
-    {:else}
-      <div class="sync-card">
-        <label class="settings-row">
-          服务器地址
-          <span class="sync-input-wrap">
-            <input
-              bind:value={syncForm.serverUrl}
-              placeholder="http://192.168.1.10:52177"
-              on:input={() => (discoveryOpen = false)}
-            />
-            <button
-              class="icon-button inline"
-              type="button"
-              disabled={discovering}
-              title="搜索局域网内的服务器"
-              aria-label="搜索局域网内的服务器"
-              on:click={runDiscovery}
-            >{#if discovering}<span class="spin"><LoaderCircle size={15} /></span>{:else}<Search size={15} />{/if}</button>
-          </span>
-        </label>
-        {#if discoveryOpen}
-          <div class="sync-popover">
-            <div class="sync-popover-head">
-              <span>{discovering ? "正在搜索…" : `发现 ${discovered.length} 台服务器`}</span>
-              <span class="spacer"></span>
-              <button class="icon-button" type="button" title="关闭" aria-label="关闭" on:click={() => (discoveryOpen = false)}><X size={14} /></button>
-            </div>
-            {#if discovering}
-              <p class="muted">在 UDP 52177 上广播查询，收集局域网内 kxtodo-server 的应答…</p>
-            {:else if discovered.length === 0}
-              <p class="muted">没发现服务器：确认它在跑、与本机同一局域网、监听在非回环地址（0.0.0.0）。</p>
-            {:else}
-              <div class="sync-popover-list">
-                {#each discovered as server (server.url)}
-                  <button class="menu-action-button discovery-item" type="button" on:click={() => pickDiscovered(server)}>
-                    <span class="discovery-name">{server.name || "未命名服务器"}</span>
-                    <span class="muted">{server.host}:{server.port}</span>
-                    {#if !server.verified}<span class="muted">（未复核）</span>{/if}
-                  </button>
-                {/each}
-              </div>
-            {/if}
-          </div>
+      {:else}
+        {#if syncMode === "server"}
+          <label class="settings-row">
+            服务器地址
+            <input bind:value={syncForm.serverUrl} placeholder="http://192.168.1.10:52177" />
+          </label>
         {/if}
         <label class="settings-row">
           用户名
@@ -794,15 +1019,14 @@
           <input id="sync-scope-schedules" type="checkbox" bind:checked={syncForm.syncSchedules} />
           <label for="sync-scope-schedules" class="inline-label">同步任务</label>
         </div>
-        <div class="settings-row sync-actions">
-          <button class="settings-button primary" type="button" disabled={syncBusy} on:click={registerSync}>
-            {syncBusy ? "处理中…" : "注册新账户"}
+        <div class="settings-row sync-actions single">
+          <button class="settings-button primary" type="button" disabled={syncBusy || !canStartSync} on:click={startSync}>
+            {syncBusy ? "处理中…" : "开始同步"}
           </button>
-          <button class="settings-button" type="button" disabled={syncBusy} on:click={loginSync}>登录已有账户</button>
         </div>
-        <p class="muted">注册 = 创建账户并配对本机；已有账户在其它设备上用「登录」。数据（节点/任务/插图）默认同步。</p>
-      </div>
-    {/if}
+        <p class="muted">账户不存在就当场创建，已存在就直接登录——不用自己区分注册与登录。数据（节点/任务/插图）默认同步。</p>
+      {/if}
+    </div>
   </section>
 
   <section>

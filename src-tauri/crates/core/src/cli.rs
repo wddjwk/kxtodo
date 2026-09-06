@@ -166,7 +166,7 @@ pub enum Commands {
     },
     /// 数据多端同步（v0.4.0，端到端加密）
     #[command(
-        long_about = "与 kxtodo-server 同步数据：端到端加密（服务器只见密文）+ 逐实体 LWW + 删除墓碑。\n账户 = 用户名 + 密码（密码派生认证/加密密钥，服务器只存认证密钥的同值证明）。\n图片文件本体一并同步：markdown 插图跟随「同步数据」，列表背景与头像跟随「同步设置」。\n\n动作：\n  register  注册账户并配对（空数据目录也可用，会初始化）\n  login     已有账户配对新设备\n  discover  局域网自动发现服务器（UDP 52177 广播查询，与服务器 TCP 端口无关）\n  status    查看配对/范围/最近同步结果（纯本地读，不碰网络）\n  probe     探测服务器连通性并刷新在线状态缓存\n  now       立即执行一次同步（pull → merge → push → 图片）\n  configure 调整同步范围/开关/间隔（--enabled false = 暂停同步，配置保留）\n  unpair    解除本机配对（服务器数据保留）\n  history   列出/删除本机用过的服务器地址+用户名+密码\n\n示例：\n  kxtodo-cli sync discover\n  kxtodo-cli sync register --server http://192.168.1.10:52177 --username me --secret MySecret\n  kxtodo-cli sync now"
+        long_about = "与 kxtodo-server 同步数据：端到端加密（服务器只见密文）+ 逐实体 LWW + 删除墓碑。\n账户 = 用户名 + 密码（密码派生认证/加密密钥，服务器只存认证密钥的同值证明）。\n图片文件本体一并同步：markdown 插图跟随「同步数据」，列表背景与头像跟随「同步设置」。\n\n通信方式（sync configure --mode，三种方式共用同一套同步内核，区别只在「连哪儿」）：\n  lan     局域网——本机作为服务器（--lan-host，内置 server 随应用启停），\n          或选定发现到的一台主机（--lan-peer，主机的身份是名字，局域网内要求唯一）\n  server  自建服务——手填常开服务器的 ip:port（--server）\n  p2p     没有公网 IP 也能跨网络直连（后续版本提供）\n\n动作：\n  pair      配对本机并开始同步（账户不存在就当场注册；空数据目录也可用，会初始化）\n  discover  局域网自动发现主机（UDP 52177 广播查询，与主机 TCP 端口无关）\n  status    查看配对/通信方式/主机状态/范围/最近同步结果（纯本地读，不碰网络）\n  probe     探测连通性并刷新在线状态缓存\n  now       立即执行一次同步（pull → merge → push → 图片）\n  configure 调整通信方式/主机角色/同步范围/开关/间隔（--enabled false = 暂停同步，配置保留）\n  unpair    解除本机配对（服务器数据保留）\n  history   列出/删除本机用过的配对信息（方式 + 地址或主机名 + 用户名 + 密码）\n\n示例：\n  kxtodo-cli sync discover\n  kxtodo-cli sync configure --lan-host true --lan-name 我的电脑\n  kxtodo-cli sync pair --username me --secret MySecret\n  kxtodo-cli sync pair --mode lan --lan-peer 客厅的电脑 --username me --secret MySecret\n  kxtodo-cli sync pair --mode server --server http://192.168.1.10:52177 --username me --secret MySecret\n  kxtodo-cli sync now"
     )]
     Sync {
         #[command(subcommand)]
@@ -824,43 +824,38 @@ pub struct RuntimeSetArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum SyncAction {
-    /// 注册新账户并配对本机（Risk: write）
+    /// 配对本机并开始同步，账户不存在就当场注册（Risk: write）
     #[command(
-        long_about = "Risk: write\n\n在服务器上创建账户（用户名唯一确定账户，密码派生认证/加密密钥）并配对本机，随后立即执行首次同步。\n账户已存在时报 ACCOUNT_EXISTS，改用 sync login。\n\n同步范围：数据（节点/任务/插图）与设置（配置/配色/背景与头像）默认开；--sync-schedules 按需开启（定时任务 spec 含各机器绝对路径，跨平台通常不可执行）。"
+        long_about = "Risk: write\n\n统一的「开始同步」：先按既有账户登录，账户不存在就当场注册（用户名唯一确定账户，\n密码派生认证/加密密钥），然后配对本机并立即执行首次同步。不必自己区分注册与登录。\n密码不符返回 AUTH_FAILED；用户名撞车只在并发注册时发生，那时返回 ACCOUNT_EXISTS。\n\n连到哪儿由通信方式决定（--mode，缺省沿用本机已配置的方式）：\n  lan     本机是主机就连自己的内置服务器，否则连 --lan-peer 指定名字的那台主机\n  server  连 --server 指定地址的常开服务器\n\n同步范围：数据（节点/任务/插图）与设置（配置/配色/背景与头像）默认开；--sync-schedules 按需开启（定时任务 spec 含各机器绝对路径，跨平台通常不可执行）。"
     )]
-    Register(SyncPairArgs),
-    /// 已有账户配对本机（Risk: write）
-    #[command(
-        long_about = "Risk: write\n\n用既有账户（用户名 + 密码）配对本机并执行首次同步；凭据错误返回 AUTH_FAILED。"
-    )]
-    Login(SyncPairArgs),
+    Pair(SyncPairArgs),
     /// 查看配对与最近同步结果（Risk: read）
-    Status,
-    /// 探测服务器连通性并刷新在线状态缓存（Risk: read）
+    Status(SyncStatusArgs),
+    /// 探测连通性并刷新在线状态缓存（Risk: read）
     #[command(
-        long_about = "Risk: read\n\n短超时 /healthz + /me，把在线结论写进 runtime/sync.json。\nstatus 只读这份缓存（不碰网络），要刷新状态就跑 probe。"
+        long_about = "Risk: read\n\n按当前通信方式解析端点（局域网方式会必要时广播发现一次）+ 短超时 /healthz + /me，\n把在线结论写进 runtime/sync.json。\nstatus 只读这份缓存（不碰网络），要刷新状态就跑 probe。"
     )]
     Probe,
-    /// 局域网自动发现 kxtodo-server（Risk: read）
+    /// 局域网自动发现主机（Risk: read）
     #[command(
-        long_about = "Risk: read\n\n在固定 UDP 端口 52177 上广播/组播一次查询，收集局域网内 kxtodo-server 的单播应答，\n再用 /healthz 复核。发现端口与服务器 TCP 端口无关（应答里带真实 TCP 端口），\n但服务器必须监听在非回环地址上、且 UDP 52177 可用；否则只能手动填 ip:port。\n\n输出 name / host / port / url，url 可直接作为 --server 的值。"
+        long_about = "Risk: read\n\n在固定 UDP 端口 52177 上广播/组播一次查询，收集局域网内主机（内置服务器或独立 kxtodo-server）\n的单播应答，再用 /healthz 复核。发现端口与主机 TCP 端口无关（应答里带真实 TCP 端口），\n但主机必须监听在非回环地址上、且 UDP 52177 可用；否则只能手填 ip:port 走自建服务方式。\n\n输出 name / host / port / url / instanceId：局域网方式用 name 选定主机\n（sync configure --lan-peer <name> 或 sync pair --lan-peer <name>），\n自建服务方式用 url 作为 --server 的值。"
     )]
     Discover(SyncDiscoverArgs),
     /// 立即执行一次同步（Risk: write）
     Now,
-    /// 调整同步范围/开关/自动同步间隔（Risk: write）
+    /// 调整通信方式/主机角色/同步范围/开关/间隔（Risk: write）
     #[command(
-        long_about = "Risk: write\n\n--enabled false 即「暂停同步」：停止自动与手动同步，但服务器地址/用户名/密码全部保留，\n--enabled true 恢复；要彻底清掉本机配对用 sync unpair。"
+        long_about = "Risk: write\n\n--enabled false 即「暂停同步」：停止自动与手动同步，但方式/地址/主机名/用户名/密码全部保留，\n--enabled true 恢复；要彻底清掉本机配对用 sync unpair。\n\n局域网角色二选一：--lan-host true 让本机成为主机（内置服务器随应用启停，名字用 --lan-name，\n局域网内要求唯一，重名会被拒绝），--lan-peer <name> 则让本机作为客户端连那台主机。\n内置服务器的启停由常驻的 GUI/APK 负责——只有 CLI 在跑时改了开关，要等应用启动才生效。"
     )]
     Configure(SyncConfigureArgs),
     /// 解除本机配对（Risk: write）
     #[command(
-        long_about = "Risk: write\n\n清除本机 token 与同步状态，关闭同步开关并清掉密码；服务器数据与其它设备不受影响。\nserverUrl/用户名保留，便于重新配对。只想停一会儿请用 sync configure --enabled false。"
+        long_about = "Risk: write\n\n清除本机 token 与同步状态，关闭同步开关并清掉密码；服务器数据与其它设备不受影响。\n通信方式/地址/主机名/用户名保留，便于重新配对。只想停一会儿请用 sync configure --enabled false。"
     )]
     Unpair,
     /// 查看/删除本机配对历史（Risk: read）
     #[command(
-        long_about = "Risk: read\n\n列出本机用过的「服务器地址 + 用户名 + 密码」（runtime/sync-history.json，0600，最多 8 条，最近使用在前），\n便于换设备/重装后一键回填。--remove <下标> 删除其中一条（Risk: write）。"
+        long_about = "Risk: read\n\n列出本机用过的配对信息（通信方式 + 服务器地址或局域网主机名 + 用户名 + 密码，\nruntime/sync-history.json，0600，最多 8 条，最近使用在前），便于换设备/重装后一键回填。\n--remove <下标> 删除其中一条（Risk: write）。"
     )]
     History(SyncHistoryArgs),
 }
@@ -868,9 +863,15 @@ pub enum SyncAction {
 #[derive(Debug, Args, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncPairArgs {
-    /// 同步服务器地址
+    /// 通信方式（缺省沿用本机已配置的方式）
+    #[arg(long, value_name = "lan|server|p2p")]
+    pub mode: Option<String>,
+    /// 自建服务的服务器地址（--mode server 必填）
     #[arg(long, value_name = "http://host:port")]
-    pub server: String,
+    pub server: Option<String>,
+    /// 局域网主机名（--mode lan 且本机不是主机时必填；取自 sync discover 的 name）
+    #[arg(long, value_name = "text")]
+    pub lan_peer: Option<String>,
     /// 用户名（唯一确定账户）
     #[arg(long, value_name = "text")]
     pub username: String,
@@ -890,10 +891,33 @@ pub struct SyncPairArgs {
 
 #[derive(Debug, Args, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SyncStatusArgs {
+    /// 连凭据一起输出（同步密码与内置主机的管理台密码）；默认不打印任何凭据
+    #[arg(long)]
+    pub show_secrets: bool,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncConfigureArgs {
     /// 启用/暂停同步（暂停保留全部配对配置）
     #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
     pub enabled: Option<bool>,
+    /// 通信方式
+    #[arg(long, value_name = "lan|server|p2p")]
+    pub mode: Option<String>,
+    /// 本机作为局域网服务器（内置 server 随应用启停；与 --lan-peer 二选一）
+    #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
+    pub lan_host: Option<bool>,
+    /// 本机作为服务器时的展示名 = 它在局域网内的身份（要求唯一，缺省用机器名）
+    #[arg(long, value_name = "text")]
+    pub lan_name: Option<String>,
+    /// 本机作为服务器时的监听端口（被占用会自动向上找，实际端口看 sync status）
+    #[arg(long, value_name = "1-65535")]
+    pub lan_port: Option<u64>,
+    /// 选定的局域网主机名（取自 sync discover 的 name；设了本机就是客户端）
+    #[arg(long, value_name = "text")]
+    pub lan_peer: Option<String>,
     /// 同步数据（节点/任务/插图）
     #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
     pub sync_data: Option<bool>,
@@ -1082,7 +1106,7 @@ fn command_needs_data(cli: &Cli) -> bool {
         | Some(Commands::Doctor(_)) => false,
         // 配对是显式的设备初始化动作：允许在空数据目录上执行（内部 ensure_initialized）
         Some(Commands::Sync {
-            action: SyncAction::Register(_) | SyncAction::Login(_),
+            action: SyncAction::Pair(_),
         }) => false,
         // 发现是配对**之前**的动作：全新设备上数据目录还不存在也必须能跑
         Some(Commands::Sync {
@@ -1376,20 +1400,16 @@ fn build_invocation(cli: &Cli, cwd: &Path) -> CoreResult<Option<(Invocation, Opt
 
 fn build_sync_invocation(action: &SyncAction) -> CoreResult<Invocation> {
     Ok(match action {
-        SyncAction::Register(args) | SyncAction::Login(args) => {
-            let command = match action {
-                SyncAction::Register(_) => "sync.register",
-                _ => "sync.login",
-            };
+        SyncAction::Pair(args) => {
             let mut params = serialize_args(args);
             if let Some(map) = params.as_object_mut() {
                 if let Some(server) = map.remove("server") {
                     map.insert("serverUrl".to_string(), server);
                 }
             }
-            Invocation::new(command, params)
+            Invocation::new("sync.pair", params)
         }
-        SyncAction::Status => Invocation::new("sync.status", serde_json::json!({})),
+        SyncAction::Status(args) => Invocation::new("sync.status", serialize_args(args)),
         SyncAction::Probe => Invocation::new("sync.probe", serde_json::json!({})),
         SyncAction::Discover(args) => Invocation::new("sync.discover", serialize_args(args)),
         SyncAction::Now => Invocation::new("sync.now", serde_json::json!({})),

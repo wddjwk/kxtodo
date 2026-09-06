@@ -31,11 +31,18 @@ const DEFAULT_RECONNECT_SECONDS = 300;
 const BUSY_RETRY_MS = 1500;
 
 type SyncConfig = {
-  /** 配对 = 有服务器地址 + 有密码（解除配对才会清密码） */
+  /**
+   * 配对 = 有账户密码 + 当前通信方式有一个明确对端（与 core 的 `SyncSettings::is_paired`
+   * 同口径）。解除配对才会清密码；`enabled = false` 是暂停，不是未配对。
+   */
   paired: boolean;
   /** false = 用户暂停同步（配置保留） */
   enabled: boolean;
-  serverUrl: string;
+  /**
+   * 对端标识：自建服务是地址，局域网是主机名（本机作为主机时是 `@self`）。
+   * 只用于「配置变了要不要立刻重排/补一轮」的签名比较。
+   */
+  target: string;
   intervalSeconds: number;
   reconnectSeconds: number;
 };
@@ -56,11 +63,20 @@ function clamp(value: unknown, fallback: number): number {
 
 function currentConfig(): SyncConfig {
   const sync = get(appSettings)?.sync;
+  const mode = sync?.mode ?? "lan";
+  const username = (sync?.username ?? "").trim();
+  const secret = (sync?.secret ?? "").trim();
   const serverUrl = (sync?.serverUrl ?? "").trim();
+  const lanPeer = (sync?.lanPeer ?? "").trim();
+  const lanHost = Boolean(sync?.lanHost);
+  // 局域网：本机是主机就连自己，否则必须已经选定了一台主机（角色二选一）
+  const hasPeer =
+    mode === "server" ? serverUrl.length > 0 : mode === "lan" ? lanHost || lanPeer.length > 0 : true;
+  const target = mode === "server" ? serverUrl : mode === "lan" ? (lanHost ? "@self" : lanPeer) : "@p2p";
   return {
-    paired: serverUrl.length > 0 && (sync?.secret ?? "").length > 0,
+    paired: username.length > 0 && secret.length > 0 && hasPeer,
     enabled: Boolean(sync?.enabled),
-    serverUrl,
+    target,
     intervalSeconds: clamp(sync?.intervalSeconds, DEFAULT_INTERVAL_SECONDS),
     reconnectSeconds: clamp(sync?.reconnectSeconds, DEFAULT_RECONNECT_SECONDS)
   };
@@ -71,7 +87,7 @@ function shouldRun(config: SyncConfig): boolean {
 }
 
 function signatureOf(config: SyncConfig): string {
-  return [config.paired, config.enabled, config.serverUrl, config.intervalSeconds, config.reconnectSeconds].join("|");
+  return [config.paired, config.enabled, config.target, config.intervalSeconds, config.reconnectSeconds].join("|");
 }
 
 function clearTimer(): void {

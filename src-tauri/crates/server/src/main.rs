@@ -6,36 +6,22 @@
 //! 后台静默运行：`--daemon`（分离/无窗口）+ `--stop`（结束）。
 //! 管理界面：http://<host>:<port>/admin（账密登录，查看/管理 SQLite 数据）。
 //! 升级：`kxtodo-server --update`。
-
-use std::net::SocketAddr;
-use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+//!
+//! 这里只是**薄壳**：CLI 参数、pidfile、`--daemon`/`--stop`、信号处理、退出码、自升级。
+//! 真正的服务器内核在 `kxtodo_server::host::start`——GUI/APK 的「本机作为服务器」
+//! （v0.6.0 内置主机）用的是同一个函数，因此行为与这个二进制完全一致。
 
 use clap::Parser;
 
-mod admin;
-mod api;
-mod daemon;
-mod db;
-mod discovery;
-mod error;
-mod logging;
-mod metrics;
-mod settings;
-mod update;
-mod util;
-
-use api::AppState;
-use kxtodo_core::sync::discovery::{DEFAULT_SERVER_PORT, DISCOVERY_PORT};
-use logging::Logger;
-use settings::ServerSettings;
+use kxtodo_server::host::{self, AdminProvision, ServerConfig};
+use kxtodo_server::{daemon, update};
 
 #[derive(Debug, Parser)]
 #[command(
     name = "kxtodo-server",
     version = env!("KXTODO_VERSION"),
     about = "KXToDo 数据同步服务端：账户 + 端到端加密实体/图片存储（SQLite）+ Web 管理界面",
-    long_about = "KXToDo 数据同步服务端。\n\n服务器只保管密文与版本号，不理解业务数据；\n客户端（kxtodo-cli / GUI）通过 sync register / login 配对。\n数据与图片（markdown 插图/列表背景/头像）都以密文存进 SQLite。\n管理界面在 /admin（管理员账密登录）。\n\n【局域网自动发现】客户端「发现」按钮在固定 UDP 端口 52177 上广播/组播查询，\n本服务器单播应答 --name 与真实 TCP 端口。发现端口与 TCP 端口无关：\n改了 --listen 的端口照样能被发现（回包里带的是真实端口）。\n前提有两个：监听在非回环地址上（默认 0.0.0.0；127.0.0.1 不应答局域网查询），\n且 UDP 52177 没被同机其它进程占用（占用时启动日志会提示发现不可用，\n此时客户端只能手动填 ip:port）。\n\n【后台静默运行】--daemon 以分离/无窗口方式重新拉起自己（Linux 新进程组、\nWindows CREATE_NO_WINDOW），关掉终端也继续跑；--stop 结束它。\n日志始终双写 stdout 与 server/log/，后台运行时看日志文件。\n\n启动参数会持久化到 ~/.local/share/kxtodo/server/settings.json：\n下次启动未指定的项自动沿用，显式指定则覆盖。\n首次启动必须提供 --admin-user 与 --admin-password（之后可省略，从配置读取）。\n\n数据默认存放在 ~/.local/share/kxtodo/server/（XDG_DATA_HOME 优先，\nWindows 为 %LOCALAPPDATA%\\kxtodo\\server），可用 --data-dir 指定；\n日志在 server/log/ 下按日轮转。\n\n示例：\n  kxtodo-server --name 家里的服务器 --admin-user admin --admin-password Secret\n  kxtodo-server --listen 0.0.0.0:52177 --daemon\n  kxtodo-server --stop\n  kxtodo-server --update"
+    long_about = "KXToDo 数据同步服务端。\n\n服务器只保管密文与版本号，不理解业务数据；\n客户端（kxtodo-cli / GUI）通过 sync pair 配对。\n数据与图片（markdown 插图/列表背景/头像）都以密文存进 SQLite。\n管理界面在 /admin（管理员账密登录）。\n\n【局域网自动发现】客户端「发现」按钮在固定 UDP 端口 52177 上广播/组播查询，\n本服务器单播应答 --name 与真实 TCP 端口。发现端口与 TCP 端口无关：\n改了 --listen 的端口照样能被发现（回包里带的是真实端口）。\n前提有两个：监听在非回环地址上（默认 0.0.0.0；127.0.0.1 不应答局域网查询），\n且 UDP 52177 没被同机其它进程占用（占用时启动日志会提示发现不可用，\n此时客户端只能手动填 ip:port）。\n\n【后台静默运行】--daemon 以分离/无窗口方式重新拉起自己（Linux 新进程组、\nWindows CREATE_NO_WINDOW），关掉终端也继续跑；--stop 结束它。\n日志始终双写 stdout 与 server/log/，后台运行时看日志文件。\n\n启动参数会持久化到 ~/.local/share/kxtodo/server/settings.json：\n下次启动未指定的项自动沿用，显式指定则覆盖。\n首次启动必须提供 --admin-user 与 --admin-password（之后可省略，从配置读取）。\n\n数据默认存放在 ~/.local/share/kxtodo/server/（XDG_DATA_HOME 优先，\nWindows 为 %LOCALAPPDATA%\\kxtodo\\server），可用 --data-dir 指定；\n日志在 server/log/ 下按日轮转。\n\n示例：\n  kxtodo-server --name 家里的服务器 --admin-user admin --admin-password Secret\n  kxtodo-server --listen 0.0.0.0:52177 --daemon\n  kxtodo-server --stop\n  kxtodo-server --update"
 )]
 struct Args {
     /// 监听地址（持久化；只给 ip 或只给端口时用默认端口 52177）
@@ -81,141 +67,6 @@ struct Args {
     /// 内部标志：--update 拉起的新进程，端口被占用时重试绑定
     #[arg(long, hide = true)]
     update_restarted: bool,
-}
-
-/// 合并规则：CLI 显式指定 > settings.json > 默认值；显式指定后写回 settings.json。
-fn resolve_settings(
-    args: &Args,
-    data_dir: &std::path::Path,
-    logger: &mut Logger,
-) -> Result<ServerSettings, String> {
-    let existing: ServerSettings = settings::load(data_dir)
-        .map_err(|e| format!("读取配置失败：{e}"))?
-        .unwrap_or_default();
-    let had_settings = settings::load(data_dir)
-        .map(|v| v.is_some())
-        .unwrap_or(false);
-
-    // 默认监听所有网卡的固定端口：局域网自动发现要求端口可预期
-    let listen = args
-        .listen
-        .clone()
-        .or_else(|| {
-            if existing.listen.is_empty() {
-                None
-            } else {
-                Some(existing.listen.clone())
-            }
-        })
-        .unwrap_or_else(|| format!("0.0.0.0:{DEFAULT_SERVER_PORT}"));
-    let name = args
-        .name
-        .clone()
-        .map(|name| name.trim().to_string())
-        .filter(|name| !name.is_empty())
-        .or_else(|| {
-            if existing.name.is_empty() {
-                None
-            } else {
-                Some(existing.name.clone())
-            }
-        })
-        .unwrap_or_else(default_server_name);
-    let db = args
-        .db
-        .clone()
-        .map(|p| p.display().to_string())
-        .filter(|p| !p.is_empty())
-        .or_else(|| {
-            if existing.db.is_empty() {
-                None
-            } else {
-                Some(existing.db.clone())
-            }
-        })
-        .unwrap_or_else(|| data_dir.join("data.db").display().to_string());
-
-    // 管理员：显式给出（账密成对）→ 哈希后写入；未给出 → 沿用既有；
-    // 既无显式也无既有 → 拒绝启动（管理界面必须有门禁）。
-    let (admin_user, admin_password_hash, admin_password_salt) =
-        match (&args.admin_user, &args.admin_password) {
-            (Some(user), Some(password)) => {
-                let user = user.trim().to_string();
-                if user.is_empty() || password.is_empty() {
-                    return Err("管理员用户名/密码不能为空".to_string());
-                }
-                let (hash, salt) = settings::hash_password(password);
-                (user, hash, Some(salt))
-            }
-            _ => {
-                if existing.admin_user.is_empty() {
-                    return Err(
-                        "首次启动必须提供 --admin-user 与 --admin-password（管理界面登录凭据）"
-                            .to_string(),
-                    );
-                }
-                (
-                    existing.admin_user.clone(),
-                    existing.admin_password_hash.clone(),
-                    existing.admin_password_salt.clone(),
-                )
-            }
-        };
-
-    let merged = ServerSettings {
-        listen,
-        db,
-        name,
-        admin_user,
-        admin_password_hash,
-        admin_password_salt,
-        version: 1,
-    };
-    if !had_settings || merged != existing {
-        settings::save(data_dir, &merged)
-            .map_err(|e| format!("写入配置失败：{e}"))?;
-        logger.log(
-            "info",
-            &format!(
-                "配置已保存：listen={} name={} db={} adminUser={}",
-                merged.listen, merged.name, merged.db, merged.admin_user
-            ),
-        );
-    }
-    Ok(merged)
-}
-
-/// 缺省展示名：主机名（Windows 的 COMPUTERNAME / unix 的 HOSTNAME），拿不到就用二进制名。
-fn default_server_name() -> String {
-    std::env::var("COMPUTERNAME")
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .ok()
-        .map(|name| name.trim().to_string())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| "kxtodo-server".to_string())
-}
-
-/// `--listen` 允许三种写法：`ip:port`、`:port`、`ip`（省略端口时用默认发现端口）；
-/// 纯数字仍按端口理解（兼容旧写法）。
-fn parse_listen(raw: &str) -> Result<SocketAddr, String> {
-    let trimmed = raw.trim();
-    if let Ok(addr) = trimmed.parse::<SocketAddr>() {
-        return Ok(addr);
-    }
-    let normalized = if trimmed.starts_with(':') {
-        format!("0.0.0.0{trimmed}")
-    } else if !trimmed.contains(':') {
-        if trimmed.parse::<u16>().is_ok() {
-            format!("0.0.0.0:{trimmed}")
-        } else {
-            format!("{trimmed}:{DEFAULT_SERVER_PORT}")
-        }
-    } else {
-        trimmed.to_string()
-    };
-    normalized
-        .parse::<SocketAddr>()
-        .map_err(|error| format!("无效 --listen `{raw}`：{error}"))
 }
 
 #[tokio::main]
@@ -276,162 +127,42 @@ async fn main() {
         return;
     }
 
-    let mut logger = Logger::new(data_dir.join("log"));
-
-    let merged = match resolve_settings(&args, &data_dir, &mut logger) {
-        Ok(merged) => merged,
-        Err(message) => {
-            eprintln!("{message}");
-            std::process::exit(2);
-        }
+    let config = ServerConfig {
+        listen: args.listen.clone().unwrap_or_default(),
+        data_dir: data_dir.clone(),
+        db: args.db.clone(),
+        name: args.name.clone(),
+        admin: match (args.admin_user.clone(), args.admin_password.clone()) {
+            (Some(user), Some(password)) => Some((user, password)),
+            _ => None,
+        },
+        // 独立二进制的管理台必须显式给凭据（沿用 settings.json 里的既有值也行）；
+        // 自动生成只给 GUI/APK 的内置主机用。
+        admin_provision: AdminProvision::RequireExplicit,
+        discovery: true,
+        // 独立服务器不换端口：端口被占说明有别的东西在跑，静默换端口只会让用户困惑
+        port_fallback: 0,
+        retry_bind: args.update_restarted,
     };
 
-    let listen = match parse_listen(&merged.listen) {
-        Ok(listen) => listen,
-        Err(message) => {
-            eprintln!("{message}");
-            std::process::exit(2);
-        }
-    };
-    let db_path = std::path::PathBuf::from(&merged.db);
-    let database = match db::Db::open(&db_path) {
-        Ok(database) => database,
+    let handle = match host::start(config).await {
+        Ok(handle) => handle,
         Err(error) => {
-            eprintln!("数据库打开失败（{}）：{}", db_path.display(), error);
-            std::process::exit(3);
-        }
-    };
-    // v0.5.1 账户模型改为「用户名 + 密码」：旧库里的账户（用户名+邮箱）整体归档，
-    // 否则同名注册会被 ACCOUNT_EXISTS 拒掉且永远登录不上。
-    match database.migrate_legacy_accounts() {
-        Ok(0) => {}
-        Ok(count) => logger.log(
-            "info",
-            &format!(
-                "检测到 v0.5.0 及以前的账户表：{count} 个旧账户已归档到 users_legacy。\
-                 旧账户的密钥由「用户名+邮箱」派生，新客户端只填用户名+密码，无法再登录；\
-                 其数据仍保留在库中，可在管理界面查看或删除。"
-            ),
-        ),
-        Err(error) => {
-            eprintln!("旧账户归档失败：{error}");
-            std::process::exit(3);
-        }
-    }
-
-    let state = Arc::new(AppState {
-        db: database,
-        logger: Mutex::new(logger),
-        settings: merged.clone(),
-        metrics: metrics::Metrics::new(util::now_iso()),
-        challenges: Mutex::new(std::collections::HashMap::new()),
-        admin_sessions: Mutex::new(std::collections::HashMap::new()),
-    });
-    let app = api::router(state.clone());
-
-    let bind = bind_with_retry(listen, args.update_restarted).await;
-    let listener = match bind {
-        Ok(listener) => listener,
-        Err(error) => {
-            eprintln!("监听 {listen} 失败：{error}");
-            std::process::exit(4);
+            eprintln!("{error}");
+            std::process::exit(error.exit_code());
         }
     };
 
+    // pidfile 只属于独立进程：--daemon 的父进程靠它确认子进程起来了，--stop 靠它找目标。
+    // 内置主机绝不能写（`--stop` 按 pid 动手会误杀宿主 GUI）。
     if let Err(message) = daemon::write_pid(&data_dir) {
-        state.log("info", &format!("pidfile 写入失败：{message}"));
+        handle.state().log("info", &format!("pidfile 写入失败：{message}"));
     }
 
-    // 局域网发现应答：只在监听非回环地址时开启（回环服务器对局域网客户端没意义）
-    let discovery_running = Arc::new(AtomicBool::new(true));
-    if !listen.ip().is_loopback() {
-        match discovery::spawn(state.clone(), listen.port(), discovery_running.clone()) {
-            Ok(_) => state.log(
-                "info",
-                &format!(
-                    "局域网发现已开启：UDP {DISCOVERY_PORT}（组播 239.255.77.52 + 广播），展示名「{}」",
-                    merged.name
-                ),
-            ),
-            Err(message) => state.log(
-                "info",
-                &format!("{message}；自动发现不可用，客户端需手动填 ip:port"),
-            ),
-        }
-    } else {
-        state.log(
-            "info",
-            &format!("监听在回环地址（{listen}），不开启局域网发现"),
-        );
-    }
-
-    state.log(
-        "info",
-        &format!(
-            "kxtodo-server v{}「{}」已启动：http://{listen}（数据库：{}）",
-            update::APP_VERSION,
-            merged.name,
-            db_path.display()
-        ),
-    );
-    state.log(
-        "info",
-        &format!("管理界面：http://{listen}/admin（管理员：{}）", merged.admin_user),
-    );
-    if listen.port() != DEFAULT_SERVER_PORT {
-        state.log(
-            "info",
-            &format!(
-                "TCP 端口是 {port}（非默认 {DEFAULT_SERVER_PORT}）：\
-                 自动发现走固定 UDP {DISCOVERY_PORT}，与 TCP 端口无关，\
-                 回包里会带上真实端口 {port}，客户端可直接点选",
-                port = listen.port()
-            ),
-        );
-    }
-    if listen.ip().is_unspecified() {
-        state.log(
-            "info",
-            "监听 0.0.0.0（所有网卡）：局域网内可发现、可连接；只在本机用请 --listen 127.0.0.1",
-        );
-    }
-
-    let shutdown_flag = discovery_running.clone();
-    // with_connect_info：handler 用 ConnectInfo 取真实对端地址（管理台要展示来源 IP，
-    // 局域网直连场景没有 X-Forwarded-For）
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-        .with_graceful_shutdown(async move {
-            shutdown_signal().await;
-            shutdown_flag.store(false, std::sync::atomic::Ordering::SeqCst);
-        })
-        .await
-        .expect("server loop");
+    shutdown_signal().await;
+    handle.shutdown().await;
     daemon::remove_pid(&data_dir);
     println!("kxtodo-server 已停止");
-}
-
-async fn bind_with_retry(
-    addr: SocketAddr,
-    retry: bool,
-) -> std::io::Result<tokio::net::TcpListener> {
-    if !retry {
-        return tokio::net::TcpListener::bind(addr).await;
-    }
-    // --update 拉起的子进程：父进程退出释放端口需要一点时间
-    for attempt in 0..30 {
-        match tokio::net::TcpListener::bind(addr).await {
-            Ok(listener) => return Ok(listener),
-            Err(error) if attempt < 29 => {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                let _ = error;
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    unreachable!()
 }
 
 async fn shutdown_signal() {

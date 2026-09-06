@@ -28,6 +28,10 @@ tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 kxtodo-core = { path = "crates/core" }
+# 内置同步服务器（v0.6.0「本机作为服务器」）：in-process 复用 kxtodo-server 的库目标。
+# 代价是 GUI/APK 二进制里多了 axum 与 bundled SQLite——但 in-process 是 Android 唯一可行的
+# 路径（不能 exec 外部二进制），也是 P2P 会话期临时主机的路径，所以躲不掉。
+kxtodo-server = { path = "crates/server" }
 ureq = { version = "2", default-features = false, features = ["tls"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]

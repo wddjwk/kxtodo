@@ -5,7 +5,7 @@
 // ---------------------------------------------------------------------------
 
 import { get } from "svelte/store";
-import type { AppNode, AppState, ScheduledTask, SchedulerState, Settings, Tag, TagColor, Task } from "./types";
+import type { AppNode, AppState, ScheduledTask, SchedulerState, Settings, SyncMode, Tag, TagColor, Task } from "./types";
 import {
   appState, appSettings, commit, commitScheduler, commitSettings,
   coreMode, createTaskId, editBaseUpdatedAt, markEditStart, clearEditBase, rebaseEditBase,
@@ -887,65 +887,87 @@ export async function importState(
 // ---------------------------------------------------------------------------
 
 export type SyncPairInput = {
-  serverUrl: string;
+  /** 通信方式；不传就沿用本机已配置的方式 */
+  mode?: SyncMode;
+  /** 自建服务：服务器地址 */
+  serverUrl?: string;
+  /** 局域网：选定的主机名（本机作为主机时留空） */
+  lanPeer?: string;
   username: string;
   secret: string;
+  syncData?: boolean;
   syncSettings?: boolean;
   syncSchedules?: boolean;
 };
 
-export async function syncRegister(input: SyncPairInput): Promise<boolean> {
+/**
+ * 统一「开始同步」：账户不存在就当场注册，存在就登录——用户不必自己区分。
+ * 三种通信方式共用这一个入口，差别只在 mode 与地址字段。
+ * 密码不符 → AUTH_FAILED；用户名撞车只在并发注册时出现 → ACCOUNT_EXISTS。
+ */
+export async function syncPair(input: SyncPairInput): Promise<boolean> {
   if (!coreMode) {
     showToast("浏览器预览不支持同步");
     return false;
   }
+  let registered = false;
   try {
-    await coreDispatch("sync.register", {
+    const envelope = await coreDispatch<{ registered?: boolean }>("sync.pair", {
+      mode: input.mode,
       serverUrl: input.serverUrl,
+      lanPeer: input.lanPeer,
       username: input.username,
       secret: input.secret,
+      syncData: input.syncData,
       syncSettings: input.syncSettings,
       syncSchedules: input.syncSchedules
     });
+    registered = envelope.data?.registered === true;
   } catch (error) {
-    await report(error, "注册失败");
+    await report(error, "开始同步失败");
     return false;
   }
   const { refreshFromCore } = await import("./stores");
   await refreshFromCore();
-  showToast("已注册并完成首次同步");
+  showToast(registered ? "已创建账户并完成首次同步" : "已配对并完成首次同步");
   return true;
 }
 
-export async function syncLogin(input: SyncPairInput): Promise<boolean> {
-  if (!coreMode) {
-    showToast("浏览器预览不支持同步");
-    return false;
-  }
-  try {
-    await coreDispatch("sync.login", {
-      serverUrl: input.serverUrl,
-      username: input.username,
-      secret: input.secret,
-      syncSettings: input.syncSettings,
-      syncSchedules: input.syncSchedules
-    });
-  } catch (error) {
-    await report(error, "配对失败");
-    return false;
-  }
-  const { refreshFromCore } = await import("./stores");
-  await refreshFromCore();
-  showToast("已配对并完成首次同步");
-  return true;
-}
+/** 本机内置服务器（「本机作为服务器」）的运行状况，来自 runtime/sync-host.json。 */
+export type SyncHostStatus = {
+  /** 设置里勾了「本机作为服务器」 */
+  wanted: boolean;
+  running: boolean;
+  /** 实际端口（配置端口被占用时会自动上移，所以可能不等于 lanPort） */
+  port: number;
+  name: string;
+  instanceId?: string;
+  adminUrl?: string;
+  adminUser?: string;
+  /** 只有 --show-secrets / showSecrets 才带出来 */
+  adminPassword?: string;
+  startedAt?: string | null;
+  lastError?: string | null;
+};
 
 export type SyncStatus = {
   paired: boolean;
   enabled: boolean;
   /** 已配对但被用户暂停（配置保留） */
   paused?: boolean;
+  mode: SyncMode;
+  modeLabel?: string;
   serverUrl: string;
+  lanHost: boolean;
+  lanPort: number;
+  lanName: string;
+  lanPeer: string;
+  /** 本机内置服务器状态 */
+  host?: SyncHostStatus;
+  /** 上一轮真正连到的主机库身份 */
+  serverInstanceId?: string;
+  /** 局域网主机的地址缓存（身份是名字，ip:port 只是缓存） */
+  lanEndpoint?: { name: string; host: string; port: number; instanceId?: string } | null;
   username: string;
   scopes: { data: boolean; settings: boolean; schedules: boolean };
   intervalSeconds: number;
@@ -977,19 +999,28 @@ export type SyncReport = {
 };
 
 export type DiscoveredServer = {
+  /** 展示名 = 这台主机在局域网里的身份（选定主机认的是它，不是 ip） */
   name: string;
   host: string;
   port: number;
   url: string;
   verified: boolean;
   version?: string | null;
+  /** 对方数据库身份：换了它就意味着要重新对账（core 自动处理） */
+  instanceId?: string | null;
 };
 
-/** sync.status 是纯本地读；连接状态由它带出来（后台循环/探测负责刷新缓存）。 */
-export async function syncStatus(): Promise<SyncStatus | null> {
+/**
+ * sync.status 是纯本地读；连接状态由它带出来（后台循环/探测负责刷新缓存）。
+ * `showSecrets` 才会带出内置主机的管理台密码（默认不打印任何凭据）。
+ */
+export async function syncStatus(showSecrets = false): Promise<SyncStatus | null> {
   if (!coreMode) return null;
   try {
-    const envelope = await coreDispatch<SyncStatus>("sync.status", {});
+    const envelope = await coreDispatch<SyncStatus>(
+      "sync.status",
+      showSecrets ? { showSecrets: true } : {}
+    );
     return envelope.data;
   } catch {
     return null;
@@ -1112,6 +1143,11 @@ export async function setSyncScopes(scopes: {
   enabled?: boolean;
   intervalSeconds?: number;
   reconnectSeconds?: number;
+  mode?: SyncMode;
+  lanHost?: boolean;
+  lanName?: string;
+  lanPort?: number;
+  lanPeer?: string;
 }): Promise<boolean> {
   if (!coreMode) return false;
   try {
@@ -1124,6 +1160,55 @@ export async function setSyncScopes(scopes: {
   return true;
 }
 
+/** 切换通信方式（局域网 / 自建服务 / P2P）。已配好的地址与主机名都保留。 */
+export async function setSyncMode(mode: SyncMode): Promise<boolean> {
+  const ok = await setSyncScopes({ mode });
+  if (ok && mode === "p2p") {
+    showToast("P2P 同步会在后续版本提供，当前先用局域网或自建服务");
+  }
+  return ok;
+}
+
+/**
+ * 勾选/取消「本机作为服务器」。
+ *
+ * 这里只写设置：真正的启停由常驻进程做（core 的 reconcile 看到 lanHost 变了，
+ * 就让宿主在自己进程内起/停 lib 化的 kxtodo-server）。名字是这台主机在局域网里的
+ * 身份，重名会被 core 拒绝并给出错误。
+ */
+export async function setSyncLanHost(enabled: boolean, name?: string): Promise<boolean> {
+  if (!coreMode) return false;
+  const trimmed = name?.trim();
+  const ok = await setSyncScopes({
+    lanHost: enabled,
+    ...(trimmed ? { lanName: trimmed } : {})
+  });
+  if (!ok) return false;
+  showToast(
+    enabled
+      ? "已启用「本机作为服务器」：局域网内其它设备现在可以发现它"
+      : "已停止本机服务器（自己仍可作为客户端连别的主机）"
+  );
+  return true;
+}
+
+/** 改本机作为服务器时的展示名（= 局域网身份，要求唯一）。 */
+export async function setSyncLanName(name: string): Promise<boolean> {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    showToast("主机名字不能为空");
+    return false;
+  }
+  return setSyncScopes({ lanName: trimmed });
+}
+
+/** 选定一台发现到的主机（认名字，不认 ip:port——路由器换了 IP 也照样连得上）。 */
+export async function setSyncLanPeer(name: string): Promise<boolean> {
+  const ok = await setSyncScopes({ lanPeer: name.trim() });
+  if (ok) showToast(`已选定主机「${name.trim()}」`);
+  return ok;
+}
+
 /** 暂停/恢复同步：只切开关，服务器地址与账户凭据全部保留。 */
 export async function setSyncEnabled(enabled: boolean): Promise<boolean> {
   const ok = await setSyncScopes({ enabled });
@@ -1132,11 +1217,24 @@ export async function setSyncEnabled(enabled: boolean): Promise<boolean> {
 }
 
 export type SyncHistoryEntry = {
+  /** 通信方式；空 = v0.5.1 写下的旧记录，那会儿只有自建服务 */
+  mode?: string;
   serverUrl: string;
+  /** 局域网模式下选定的主机名 */
+  lanPeer?: string;
   username: string;
   secret: string;
   usedAt?: string;
 };
+
+/** 这条历史指向哪儿（浮层里的主标题）：自建服务显示地址，局域网显示主机名。 */
+export function syncHistoryLabel(entry: SyncHistoryEntry): string {
+  if (entry.mode === "lan") {
+    return entry.lanPeer?.trim() ? `局域网主机「${entry.lanPeer.trim()}」` : "本机（局域网主机）";
+  }
+  if (entry.mode === "p2p") return "P2P";
+  return entry.serverUrl || "自建服务";
+}
 
 /** 本机配对历史（服务器地址 + 用户名 + 密码），设置页「历史」一键回填。 */
 export async function syncHistory(): Promise<SyncHistoryEntry[] | null> {

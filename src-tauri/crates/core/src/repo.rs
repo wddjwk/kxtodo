@@ -73,6 +73,15 @@ pub fn default_server_dir() -> PathBuf {
     }
 }
 
+/// 内置同步服务器（GUI/APK 的「本机作为服务器」）的数据目录：todo 数据目录下的 `server/`。
+///
+/// 刻意**不**用 [`default_server_dir`]：那样同机跑两个实例（以及用自定义数据目录的
+/// e2e 测试）会共用一份服务器配置与数据库——测试就会覆盖开发机真实的 admin 凭据。
+/// 放在数据目录里面，实例之间天然隔离，并且跟着 `--data-dir` 一起走。
+pub fn embedded_server_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("server")
+}
+
 pub const IDEMPOTENCY_MAX_RECORDS: usize = 1000;
 pub const IDEMPOTENCY_MAX_AGE_DAYS: i64 = 30;
 pub const BACKUP_KEEP: usize = 5;

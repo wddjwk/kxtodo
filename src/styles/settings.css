@@ -247,35 +247,46 @@
   white-space: nowrap;
 }
 
-/* 输入框内嵌图标按钮（服务器地址右侧的放大镜） */
-.sync-input-wrap {
-  position: relative;
-  display: block;
+/* 未配对时只有一个「开始同步」按钮：占满整行，不要挤在三等分的第一格里 */
+.sync-card .settings-row.sync-actions.single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* 「局域网主机 + 已选定 + 发现」三个元素一行排开：默认两列 grid 会把按钮挤到下一行 */
+.sync-card .settings-row.sync-peer-row {
+  grid-template-columns: 7em minmax(0, 1fr) auto;
+}
+
+/* 内置主机（本机作为服务器）的运行状态行：圆点状态 + 端口/错误说明 */
+.sync-host {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 2px 0 4px;
+  font-size: 12px;
+}
+
+/* 管理台地址 + 打开按钮 / 账号 + 显隐按钮：一行两元素靠右，地址长了省略号 */
+.admin-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.admin-cell .muted {
+  /* flex 子项默认 min-width:auto，不放开就撑破整行（管理台地址很长，移动端尤其） */
   min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.sync-input-wrap > input {
-  width: 100%;
-  padding-right: 32px;
-}
-
-.sync-input-wrap > .icon-button.inline {
-  position: absolute;
-  top: 50%;
-  right: 3px;
-  transform: translateY(-50%);
-}
-
-.spin {
-  display: inline-grid;
-  place-items: center;
-  animation: sync-spin 1s linear infinite;
-}
-
-@keyframes sync-spin {
-  to {
-    transform: rotate(360deg);
-  }
+.admin-cell > .settings-button {
+  flex: none;
+  padding: 4px 10px;
 }
 
 /* 下拉浮层：局域网发现结果与配对历史共用 */

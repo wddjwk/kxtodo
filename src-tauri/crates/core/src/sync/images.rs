@@ -19,7 +19,7 @@ use serde::Deserialize;
 use crate::error::{CoreError, CoreResult};
 use crate::repo::Layout;
 use crate::sync::crypto::{open_bytes, seal_bytes, sha256_hex, to_hex};
-use crate::sync::engine::SyncClient;
+use crate::sync::transport::SyncClient;
 use crate::sync::merge::Scopes;
 use crate::sync::state::SyncStateFile;
 
@@ -284,7 +284,7 @@ pub fn sync_images(
             }
             max_seq = max_seq.max(meta.seq);
         }
-        let last_page = count == 0 || count < crate::sync::engine::IMAGE_PAGE_LIMIT;
+        let last_page = count == 0 || count < crate::sync::transport::IMAGE_PAGE_LIMIT;
         cursor = if last_page { page.current_seq } else { max_seq };
         state.last_pulled_image_seq = cursor;
         if last_page {

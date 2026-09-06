@@ -1,33 +1,76 @@
-//! sync 命令域：register / login / status / probe / discover / now / configure /
-//! unpair / history。
+//! sync 命令域：pair / status / probe / discover / now / configure / unpair / history。
+//!
+//! v0.6.0 起注册与登录合并成一个 `pair`（用户视角就是「填账户密码，点开始同步」），
+//! 通信方式（局域网 / 自建服务 / P2P）由 `sync.mode` 决定，见 `sync/endpoint.rs`。
 
 use serde_json::{json, Value};
 
 use crate::core::{ExecContext, Invocation};
 use crate::envelope::Meta;
 use crate::error::{CoreError, CoreResult};
+use crate::model::{SyncMode, SyncSettings};
 use crate::repo::Domain;
 use crate::sync::engine;
+use crate::sync::endpoint;
 use crate::sync::merge::Scopes;
-use crate::sync::state::{clear_state, load_state};
+use crate::sync::state::{clear_state, load_host_state, load_state};
 use crate::time::now_iso;
 
 fn param_str(params: &Value, key: &str) -> Option<String> {
     params.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
-/// 配对三要素：服务器地址 + 用户名 + 密码（v0.5.1 起不再有邮箱）。
-fn required_pairing_params(params: &Value) -> CoreResult<(String, String, String)> {
-    let server_url = param_str(params, "serverUrl")
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| CoreError::validation("MISSING_PARAM", "缺少 --server（同步服务器地址）"))?;
+/// 「开始同步」表单 → 配对目标。三种通信方式共用一个按钮，所以按模式取对应的字段。
+fn pair_request(params: &Value, current: &SyncSettings) -> CoreResult<endpoint::PairRequest> {
+    let mode = match param_str(params, "mode") {
+        Some(raw) => SyncMode::parse(&raw).ok_or_else(|| {
+            CoreError::validation(
+                "SYNC_MODE_INVALID",
+                format!("未知的通信方式 `{raw}`（可选 lan / server / p2p）"),
+            )
+        })?,
+        // 没显式给就沿用本机配置（设置面板总会带上，CLI 可以省略）
+        None => current.effective_mode(),
+    };
     let username = param_str(params, "username")
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| CoreError::validation("MISSING_PARAM", "缺少 --username"))?;
     let secret = param_str(params, "secret")
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| CoreError::validation("MISSING_PARAM", "缺少 --secret（同步密码）"))?;
-    Ok((server_url, username.trim().to_lowercase(), secret))
+    let server_url = param_str(params, "serverUrl").unwrap_or_else(|| current.server_url.clone());
+    let lan_peer = param_str(params, "lanPeer").unwrap_or_else(|| current.lan_peer.clone());
+    match mode {
+        SyncMode::Server => {
+            if server_url.trim().is_empty() {
+                return Err(CoreError::validation(
+                    "MISSING_PARAM",
+                    "缺少 --server（同步服务器地址）",
+                ));
+            }
+        }
+        SyncMode::Lan => {
+            // 本机不是主机时，必须已经选定了一台主机（身份是名字，不是 ip:port）
+            if lan_peer.trim().is_empty() && !current.lan_host {
+                return Err(CoreError::validation(
+                    "MISSING_PARAM",
+                    "缺少 --lan-peer（局域网主机名）：先 `sync discover` 看看有哪些主机，\
+                     或者勾选「本机作为服务器」"
+                        .to_string(),
+                ));
+            }
+        }
+        // P2P 的对端由账户凭据派生的目录解析出来，不需要地址
+        SyncMode::P2p => {}
+    }
+    Ok(endpoint::PairRequest {
+        mode,
+        server_url,
+        lan_peer,
+        username,
+        secret,
+    }
+    .normalized())
 }
 
 fn scopes_from_params(params: &Value) -> Option<Scopes> {
@@ -71,9 +114,8 @@ pub fn sync_dispatch(
     meta: &mut Meta,
 ) -> CoreResult<Value> {
     match action {
-        "register" => sync_register(inv, ctx),
-        "login" => sync_login(inv, ctx),
-        "status" => sync_status(ctx),
+        "pair" => sync_pair(inv, ctx),
+        "status" => sync_status(inv, ctx),
         "probe" => sync_probe(ctx),
         "discover" => sync_discover(inv),
         "now" => sync_now(inv, ctx, meta),
@@ -88,51 +130,73 @@ pub fn sync_dispatch(
     }
 }
 
-fn sync_register(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
-    // 新设备不预置默认数据：首次拉取直接落服务端内容，避免与服务端数据并集出重复实体。
-    let (server_url, username, secret) = required_pairing_params(&inv.params)?;
+/// 统一「开始同步」：登录既有账户，账户不存在就当场注册（由服务端回答区别）。
+fn sync_pair(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
+    let current = ctx.repo.load_settings()?;
+    let request = pair_request(&inv.params, &current.sync)?;
     let scopes = scopes_from_params(&inv.params);
-    let (device_id, report) =
-        engine::register_device(ctx.repo, &server_url, &username, &secret, scopes)?;
-    notify_settings_changed(ctx);
-    Ok(json!({
-        "registered": true,
-        "deviceId": device_id,
-        "serverUrl": server_url.trim().trim_end_matches('/'),
-        "username": username,
-        "sync": report,
-    }))
-}
-
-fn sync_login(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
-    let (server_url, username, secret) = required_pairing_params(&inv.params)?;
-    let scopes = scopes_from_params(&inv.params);
-    let (device_id, report) =
-        engine::pair_device(ctx.repo, &server_url, &username, &secret, scopes)?;
+    // 新设备不预置默认数据：首次拉取直接落服务端内容，避免与服务端数据并集出重复实体
+    // （只有新建账户时 engine 才播种默认数据，作为该账户的初始内容）。
+    let (device_id, report, registered) = engine::pair_device(ctx.repo, &request, scopes)?;
     notify_settings_changed(ctx);
     Ok(json!({
         "paired": true,
+        "registered": registered,
         "deviceId": device_id,
-        "serverUrl": server_url.trim().trim_end_matches('/'),
-        "username": username,
+        "mode": request.mode.as_str(),
+        "modeLabel": request.mode.label(),
+        "target": request.label(),
+        "serverUrl": request.server_url,
+        "lanPeer": request.lan_peer,
+        "username": request.username,
         "sync": report,
     }))
 }
 
-/// 纯本地读：配对信息 + 最近同步结果 + 缓存的在线状态。
+/// 纯本地读：配对信息 + 通信方式 + 主机状态 + 最近同步结果 + 缓存的在线状态。
 ///
 /// 绝不碰网络——服务器掉线时打开设置界面不能把 UI 卡住（要刷新状态走 `sync probe`）。
-fn sync_status(ctx: &ExecContext) -> CoreResult<Value> {
+/// 凭据（同步密码、内置主机自动生成的管理台密码）默认不输出，`showSecrets` 才给。
+fn sync_status(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
+    let show_secrets = inv
+        .params
+        .get("showSecrets")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let settings = ctx.repo.load_settings()?;
     let sync = &settings.sync;
     let state = load_state(&ctx.repo.layout);
+    let host = load_host_state(&ctx.repo.layout);
     let paired = sync.is_paired();
-    Ok(json!({
+    let mode = sync.effective_mode();
+    let mut out = json!({
         "paired": paired,
         "enabled": sync.enabled,
         // 已配对但被用户暂停（配置保留，恢复即继续）
         "paused": paired && !sync.enabled,
+        "mode": mode.as_str(),
+        "modeLabel": mode.label(),
         "serverUrl": sync.server_url,
+        // 局域网：本机作为主机 / 主机名（身份）/ 选定的远端主机名
+        "lanHost": sync.lan_host,
+        "lanPort": sync.lan_port,
+        "lanName": sync.lan_name,
+        "lanPeer": sync.lan_peer,
+        // 本机内置主机的运行状况（管理台密码要 --show-secrets 才给）
+        "host": {
+            "wanted": sync.lan_host,
+            "running": host.running,
+            "port": host.port,
+            "name": host.name,
+            "instanceId": host.instance_id,
+            "adminUrl": host.admin_url,
+            "adminUser": host.admin_user,
+            "startedAt": host.started_at,
+            "lastError": host.last_error,
+        },
+        // 上一轮真正连到的主机身份与地址缓存
+        "serverInstanceId": state.server_instance_id,
+        "lanEndpoint": state.lan_endpoint,
         "username": sync.username,
         "scopes": {
             "data": sync.sync_data,
@@ -150,7 +214,12 @@ fn sync_status(ctx: &ExecContext) -> CoreResult<Value> {
         "online": state.server_online,
         "lastSeenAt": state.last_seen_at,
         "lastError": state.last_error,
-    }))
+    });
+    if show_secrets {
+        out["secret"] = json!(sync.secret);
+        out["host"]["adminPassword"] = json!(host.admin_password);
+    }
+    Ok(out)
 }
 
 /// 短超时探测服务器，把在线结论写进状态缓存（设置面板打开时后台调用）。
@@ -209,18 +278,57 @@ fn sync_configure(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
     let enabled = params.get("enabled").and_then(Value::as_bool);
     let interval = params.get("intervalSeconds").and_then(Value::as_u64);
     let reconnect = params.get("reconnectSeconds").and_then(Value::as_u64);
+    let mode = match param_str(params, "mode") {
+        Some(raw) => Some(SyncMode::parse(&raw).ok_or_else(|| {
+            CoreError::validation(
+                "SYNC_MODE_INVALID",
+                format!("未知的通信方式 `{raw}`（可选 lan / server / p2p）"),
+            )
+        })?),
+        None => None,
+    };
+    let lan_host = params.get("lanHost").and_then(Value::as_bool);
+    let lan_port = params.get("lanPort").and_then(Value::as_u64);
+    let lan_name = param_str(params, "lanName");
+    let lan_peer = param_str(params, "lanPeer");
     if data.is_none()
         && settings_scope.is_none()
         && schedules.is_none()
         && enabled.is_none()
         && interval.is_none()
         && reconnect.is_none()
+        && mode.is_none()
+        && lan_host.is_none()
+        && lan_port.is_none()
+        && lan_name.is_none()
+        && lan_peer.is_none()
     {
         return Err(CoreError::validation(
             "MISSING_PARAM",
-            "至少提供一个配置项（syncData/syncSettings/syncSchedules/enabled/intervalSeconds/reconnectSeconds）",
+            "至少提供一个配置项（mode/lanHost/lanName/lanPort/lanPeer/syncData/syncSettings/\
+             syncSchedules/enabled/intervalSeconds/reconnectSeconds）",
         ));
     }
+    if let Some(value) = &lan_name {
+        if value.trim().is_empty() {
+            return Err(CoreError::validation(
+                "SYNC_HOST_NAME_REQUIRED",
+                "主机名字不能为空（局域网内靠它认出这台主机）",
+            ));
+        }
+    }
+
+    let current = ctx.repo.load_settings()?;
+    // 勾选「本机作为服务器」之前先在局域网里查一次重名：名字就是主机的**身份**，
+    // 客户端按名字选定主机，重名会让「连的是哪台」变成抛硬币。
+    // 只在「不当主机 → 当主机」的转换时查——此时本机内置服务器还没起，不会应答自己的广播。
+    if lan_host == Some(true) && !current.sync.lan_host {
+        let wanted = lan_name
+            .clone()
+            .unwrap_or_else(|| current.sync.lan_name.clone());
+        endpoint::ensure_host_name_available(&endpoint::desired_host_name(&wanted))?;
+    }
+
     let (_file, _outcome) = ctx
         .repo
         .write_settings(None, None, "sync.configure", |file| {
@@ -243,12 +351,24 @@ fn sync_configure(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
             if let Some(value) = reconnect {
                 file.sync.reconnect_seconds = value.clamp(5, 86400) as u32;
             }
+            // 勾选主机开关就等于选了局域网模式；主机与客户端二选一；主机必有名字。
+            // 这些不变式收在 SyncSettings::apply_lan_role 里，与 config set 共用一条口径。
+            file.sync.apply_lan_role(lan_host, lan_name.as_deref(), lan_peer.as_deref());
+            if let Some(value) = lan_port {
+                file.sync.lan_port = value.clamp(1, 65535) as u16;
+            }
+            // 显式给的通信方式最后写：它比 apply_lan_role 推断出来的更有权威
+            if let Some(value) = mode {
+                file.sync.mode = Some(value);
+            }
             // 不在此处刷新 syncUpdatedAt：开启设置同步的设备应先收敛到服务端版本，
             // 本地设置只有真的变化后（config.set 触发）才会推送。
             Ok(json!({ "configured": true }))
         })?;
     // 范围变化后需要全量重拉的水位由同步引擎自己对账（runtime/sync.json 里记范围签名），
     // 这里不再逐条重置——否则 config set 改范围就会漏掉重置。
+    // 主机开关的变化同样靠这个事件生效：GUI 侧订阅 Settings 域，看到 lanHost 变了
+    // 就启动/停掉内置服务器（core 自己起不了 axum，也不该起）。
     notify_settings_changed(ctx);
     Ok(json!({ "configured": true }))
 }

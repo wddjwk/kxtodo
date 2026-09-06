@@ -31,6 +31,9 @@ pub struct AppState {
     pub db: Db,
     pub logger: Mutex<Logger>,
     pub settings: ServerSettings,
+    /// 本库身份（建库时生成、重启不变）。客户端据此判断主机是否换过/库是否被重建，
+    /// 变了就要重置同步水位。放在 state 上是为了 `/healthz` 不必每次查库（探测很频繁）。
+    pub instance_id: String,
     /// 进程内运行指标（本次运行的请求/写入/每用户活动），供管理台展示
     pub metrics: crate::metrics::Metrics,
     /// 登录挑战 nonce → (user_id, 过期时间)
@@ -187,6 +190,7 @@ async fn healthz(State(state): State<SharedState>) -> Json<serde_json::Value> {
         "ok": true,
         "name": state.settings.name,
         "version": APP_VERSION,
+        "instanceId": state.instance_id,
         "serverTime": util::now_iso(),
     }))
 }
@@ -353,6 +357,7 @@ async fn me(
         "storageBytes": entity_bytes + image_bytes,
         "serverTime": util::now_iso(),
         "serverVersion": APP_VERSION,
+        "instanceId": state.instance_id,
     })))
 }
 

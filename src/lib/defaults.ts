@@ -14,6 +14,7 @@ import type {
   SchedulerRuntimePaths,
   SchedulerState,
   Settings,
+  SyncMode,
   Tag,
   TagColor,
   Task,
@@ -104,7 +105,12 @@ export const defaultSettings: Settings = {
   },
   sync: {
     enabled: false,
+    mode: "lan",
     serverUrl: "",
+    lanHost: false,
+    lanPort: 52177,
+    lanName: "",
+    lanPeer: "",
     username: "",
     secret: "",
     syncData: true,
@@ -425,6 +431,17 @@ function normalizeNonNegativeInteger(value: unknown, fallback: number, max: numb
     : fallback;
 }
 
+/**
+ * 通信方式：显式选过就用它，没选过按已有配置推断（填过服务器地址 = 自建服务）。
+ * 与 core 的 `SyncSettings::effective_mode` 保持同一口径。
+ */
+function normalizeSyncMode(raw: unknown, serverUrl: unknown): SyncMode {
+  if (raw === "lan" || raw === "server" || raw === "p2p") {
+    return raw;
+  }
+  return typeof serverUrl === "string" && serverUrl.trim() ? "server" : "lan";
+}
+
 function normalizeScheduledTrigger(raw: unknown): ScheduledTaskTrigger {
   const source = raw as Partial<ScheduledTaskTrigger> | undefined;
   const type =
@@ -656,7 +673,15 @@ export function normalizeSettings(raw: unknown): Settings {
     },
     sync: {
       enabled: Boolean(source?.sync?.enabled),
+      // 用户还没显式选过通信方式时按已有配置推断：填过服务器地址就是「自建服务」，
+      // 否则「局域网」。与 core 的 SyncSettings::effective_mode 同一口径，
+      // 于是从 v0.5.1 升上来的配置直接可用，不会掉进「还没选主机」的空状态。
+      mode: normalizeSyncMode(source?.sync?.mode, source?.sync?.serverUrl),
       serverUrl: typeof source?.sync?.serverUrl === "string" ? source.sync.serverUrl : "",
+      lanHost: Boolean(source?.sync?.lanHost),
+      lanPort: normalizePositiveInteger(source?.sync?.lanPort, 52177, 1, 65535),
+      lanName: typeof source?.sync?.lanName === "string" ? source.sync.lanName : "",
+      lanPeer: typeof source?.sync?.lanPeer === "string" ? source.sync.lanPeer : "",
       username: typeof source?.sync?.username === "string" ? source.sync.username : "",
       secret: typeof source?.sync?.secret === "string" ? source.sync.secret : "",
       syncData: typeof source?.sync?.syncData === "boolean" ? source.sync.syncData : true,

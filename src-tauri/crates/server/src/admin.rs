@@ -157,6 +157,7 @@ async fn dashboard(
     let wal_path = db_path.with_extension("db-wal");
     Ok(Json(json!({
         "version": crate::api::APP_VERSION,
+        "instanceId": state.instance_id,
         "serverTime": util::now_iso(),
         "settings": state.settings.to_json(),
         "stats": state.db.overview()?,

@@ -53,6 +53,8 @@ export type ThemePreset = {
   color: string;
 };
 
+export type SyncMode = "lan" | "server" | "p2p";
+
 export type Settings = {
   profile: ProfileSettings;
   appearance: {
@@ -85,7 +87,18 @@ export type Settings = {
   };
   sync: {
     enabled: boolean;
+    /** 通信方式：局域网 / 自建服务 / P2P（后续版本）。三种方式共用同一套同步内核 */
+    mode: SyncMode;
+    /** 自建服务方式的服务器地址 */
     serverUrl: string;
+    /** 局域网：本机作为服务器（内置 server 随应用启停；与 lanPeer 二选一） */
+    lanHost: boolean;
+    /** 局域网：本机作为服务器时的监听端口（被占用会自动向上找） */
+    lanPort: number;
+    /** 局域网：本机作为服务器时的展示名 = 它在局域网内的身份（要求唯一） */
+    lanName: string;
+    /** 局域网：选定的远端主机名（从发现列表里点选） */
+    lanPeer: string;
     username: string;
     secret: string;
     syncData: boolean;

@@ -2311,6 +2311,7 @@ version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
  "kxtodo-core",
+ "kxtodo-server",
  "serde",
  "serde_json",
  "tauri",

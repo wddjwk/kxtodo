@@ -3,7 +3,7 @@
 use serde_json::{json, Map, Value};
 
 use crate::error::{CoreError, CoreResult};
-use crate::model::{LinkOpenMode, NotificationPosition, SettingsFile, ThemePreset};
+use crate::model::{LinkOpenMode, NotificationPosition, SettingsFile, SyncMode, ThemePreset};
 use crate::time::now_iso;
 
 /// 这些配置项属于跨设备共享子集：值变化时刷新设置实体的 LWW 时间戳。
@@ -180,9 +180,39 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         is_map: false,
     },
     FieldMeta {
+        path: "sync.mode",
+        kind: "string(lan|server|p2p)",
+        description: "通信方式：lan 局域网（本机作为主机或选定一台主机）/ server 自建服务 / p2p（后续版本）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "sync.lanHost",
+        kind: "boolean",
+        description: "局域网：本机作为服务器（内置 server 随应用启停；与选定远端主机二选一）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "sync.lanName",
+        kind: "string",
+        description: "局域网：本机作为服务器时的展示名，即它在局域网内的身份（要求唯一）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "sync.lanPort",
+        kind: "integer(1-65535)",
+        description: "局域网：本机作为服务器时的监听端口（被占用会自动向上找，实际端口见 sync hostStatus）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "sync.lanPeer",
+        kind: "string",
+        description: "局域网：选定的远端主机名（从 sync discover 的结果里挑，身份是名字不是 ip:port）",
+        is_map: false,
+    },
+    FieldMeta {
         path: "sync.serverUrl",
         kind: "string",
-        description: "同步服务器地址（http(s)://host:port）",
+        description: "自建服务方式的服务器地址（http(s)://host:port）",
         is_map: false,
     },
     FieldMeta {
@@ -302,6 +332,12 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "shortcuts.toggleWindow" => json!(settings.shortcuts.toggle_window),
         "shortcuts.openSettings" => json!(settings.shortcuts.open_settings),
         "sync.enabled" => json!(settings.sync.enabled),
+        // 报「生效的」方式：用户还没显式选过时按已有配置推断，不留 null 给调用方猜
+        "sync.mode" => json!(settings.sync.effective_mode().as_str()),
+        "sync.lanHost" => json!(settings.sync.lan_host),
+        "sync.lanName" => json!(settings.sync.lan_name),
+        "sync.lanPort" => json!(settings.sync.lan_port),
+        "sync.lanPeer" => json!(settings.sync.lan_peer),
         "sync.serverUrl" => json!(settings.sync.server_url),
         "sync.username" => json!(settings.sync.username),
         "sync.secret" => json!(settings.sync.secret),
@@ -645,6 +681,44 @@ pub fn set_value(
         "sync.enabled" => {
             settings.sync.enabled = expect_bool(path, &value)?;
         }
+        "sync.mode" => {
+            let raw = expect_string(path, &value)?;
+            settings.sync.mode = Some(
+                SyncMode::parse(&raw)
+                    .ok_or_else(|| invalid_value(path, "可选 lan / server / p2p"))?,
+            );
+        }
+        "sync.lanHost" => {
+            let wanted = expect_bool(path, &value)?;
+            // 名字是主机在局域网里的身份，不能重名：与 `sync configure` 同一条校验。
+            // 只在「不当主机 → 当主机」时查——此时本机内置服务器还没起，不会应答自己的广播。
+            if wanted && !settings.sync.lan_host {
+                let name = crate::sync::endpoint::desired_host_name(&settings.sync.lan_name);
+                crate::sync::endpoint::ensure_host_name_available(&name)?;
+            }
+            settings.sync.apply_lan_role(Some(wanted), None, None);
+        }
+        "sync.lanName" => {
+            let raw = expect_string(path, &value)?;
+            if raw.trim().is_empty() {
+                return Err(invalid_value(path, "不能为空（局域网内靠名字认出这台主机）"));
+            }
+            // 已经是主机时改名 = 换一个局域网身份，同样要查重
+            // （本机内置服务器还在用旧名字应答，所以不会把自己算成重名）
+            if settings.sync.lan_host
+                && !crate::sync::endpoint::names_match(&raw, &settings.sync.lan_name)
+            {
+                crate::sync::endpoint::ensure_host_name_available(&raw)?;
+            }
+            settings.sync.apply_lan_role(None, Some(&raw), None);
+        }
+        "sync.lanPort" => {
+            settings.sync.lan_port = expect_int(path, &value, 1, 65535)? as u16;
+        }
+        "sync.lanPeer" => {
+            let raw = expect_string(path, &value)?;
+            settings.sync.apply_lan_role(None, None, Some(&raw));
+        }
         "sync.serverUrl" => {
             let raw = expect_string(path, &value)?;
             if !raw.is_empty() && !raw.starts_with("http://") && !raw.starts_with("https://") {
@@ -830,6 +904,11 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
             target.shortcuts.open_settings = defaults.shortcuts.open_settings.clone()
         }
         "sync.enabled" => target.sync.enabled = defaults.sync.enabled,
+        "sync.mode" => target.sync.mode = defaults.sync.mode,
+        "sync.lanHost" => target.sync.lan_host = defaults.sync.lan_host,
+        "sync.lanName" => target.sync.lan_name = defaults.sync.lan_name.clone(),
+        "sync.lanPort" => target.sync.lan_port = defaults.sync.lan_port,
+        "sync.lanPeer" => target.sync.lan_peer = defaults.sync.lan_peer.clone(),
         "sync.serverUrl" => target.sync.server_url = defaults.sync.server_url.clone(),
         "sync.username" => target.sync.username = defaults.sync.username.clone(),
         "sync.secret" => target.sync.secret = defaults.sync.secret.clone(),

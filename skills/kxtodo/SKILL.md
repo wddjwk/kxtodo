@@ -58,12 +58,20 @@ KXToDo v9 提供脚本化 CLI。本 SKILL 说明**何时调用、按什么步骤
 
 ## 数据同步
 
-- 找服务器：`sync discover`（局域网 UDP 广播查询，返回 name/host/port/url，`url` 可直接当 `--server`）。该命令**不需要数据目录已存在**，是配对前的第一步。
-- 配对：新账户 `sync register --server <url> --username --secret`；已有账户换设备用 `sync login`（同样三个参数）。账户 = **用户名 + 密码**，密码派生认证/加密密钥，丢失=数据不可恢复，别替用户编密码。
-- 日常：`sync now` 立即同步；`sync status` 是**纯本地读**（配对信息 + 最近同步结果 + 缓存的在线状态，不联网，可随时调用）；`sync probe` 才真的联网探测（短超时 /healthz + /me）并刷新在线状态。判断服务器通不通看 status 的 `online` 字段（`null` = 还没探测过），要最新结论先 probe。
-- 配置：`sync configure --interval-seconds N`（自动同步间隔，低于 5 按 5 生效）、`--reconnect-seconds N`（掉线后静默重连间隔）、范围三选 `--sync-data`（节点/任务/插图图片，默认开）/`--sync-settings`（配置/配色/背景与头像图片，默认开）/`--sync-schedules`（默认关）。图片文件本体没有独立开关：插图跟数据走，背景与头像跟设置走；改范围会自动全量重拉一次。
-- 暂停与恢复：`sync configure --enabled false` 暂停同步（服务器地址/用户名/密码全部保留，此时 `sync now` 报 `SYNC_PAUSED`，status 的 `paused` 为 true），`--enabled true` 恢复。`sync unpair` 才是解除配对（清 token 与密码，服务器数据保留）。
-- 历史：`sync history` 列出本机用过的「服务器地址 + 用户名 + 密码」（`runtime/sync-history.json`，0600，最多 8 条，最近使用在前），`sync history --remove <下标>` 删一条。给用户回填凭据前先问，别把密码写进日志或提交里。
+- **通信方式**（`sync configure --mode`，三种方式共用同一套加密/LWW/墓碑/水位内核，区别只在「连哪儿」）：
+  - `lan` 局域网：本机作为服务器，或选定局域网里的一台主机
+  - `server` 自建服务：手填常开服务器的 ip:port
+  - `p2p` 无公网 IP 的跨网络直连——**尚未提供**，选它会在同步时报 `SYNC_MODE_UNSUPPORTED`
+- **局域网角色二选一**：`--lan-host true` 让本机成为主机（名字用 `--lan-name`，默认机器名，**局域网内必须唯一**，重名报 `SYNC_HOST_NAME_TAKEN`）；或 `--lan-peer <名字>` 选定一台远端主机。设了其中一个，另一个自动清掉。主机的身份是**名字**不是 ip:port——它换了 IP、端口被占用自动上移，都照样连得上。
+- **内置服务器由常驻进程启停**：`--lan-host` 只是写设置，真正把服务器起起来的是 GUI/APK（在它自己进程内跑，端口被占用会自动向上找，实际端口看 `sync status` 的 `host`）。所以只有 CLI 在跑时勾这个开关，服务器不会起来，同步会报 `SYNC_HOST_NOT_RUNNING`——让用户打开应用。
+- 找主机：`sync discover [--timeout-ms N]`（局域网 UDP 广播查询，返回 name/host/port/url/instanceId）。局域网方式把 `name` 当 `--lan-peer` 的值；自建服务方式把 `url` 当 `--server` 的值。该命令**不需要数据目录已存在**，是配对前的第一步。
+- 配对：`sync pair --username --secret`（自建服务加 `--server <url>`，局域网加 `--lan-peer <名字>` 或先 `--lan-host true`）。**不再区分注册与登录**：账户不存在就当场创建，存在就登录；密码不符报 `AUTH_FAILED`，用户名撞车只在并发注册时出现报 `ACCOUNT_EXISTS`。账户 = 用户名 + 密码，密码派生认证/加密密钥，丢失=数据不可恢复，别替用户编密码。该命令不需要数据目录已存在（内部会初始化）。
+- 日常：`sync now` 立即同步；`sync status` 是**纯本地读**（配对信息 + 通信方式 + 主机状态 + 最近同步结果 + 缓存的在线状态，不联网，可随时调用）；`sync probe` 才真的联网（解析端点 + 短超时 /healthz + /me）并刷新在线状态。判断通不通看 status 的 `online`（`null` = 还没探测过），要最新结论先 probe。凭据默认不输出，`sync status --show-secrets` 才带出同步密码与内置主机的管理台密码。
+- 配置：`sync configure --interval-seconds N`（自动同步间隔，低于 5 按 5 生效）、`--reconnect-seconds N`（掉线后静默重连间隔）、`--lan-port N`（内置服务器监听端口）、范围三选 `--sync-data`（节点/任务/插图图片，默认开）/`--sync-settings`（配置/配色/背景与头像图片，默认开）/`--sync-schedules`（默认关）。图片文件本体没有独立开关：插图跟数据走，背景与头像跟设置走；改范围会自动全量重拉一次。
+- 暂停与恢复：`sync configure --enabled false` 暂停同步（方式/地址/主机名/用户名/密码全部保留，此时 `sync now` 报 `SYNC_PAUSED`，status 的 `paused` 为 true），`--enabled true` 恢复。`sync unpair` 才是解除配对（清 token 与密码，对端数据保留）。
+- **主机是可替换的**：换了一台主机、或主机的库被重建（`/healthz` 的 `instanceId` 变了），客户端会自动把拉取水位与推送台账清零、全量重新对账，并在报告里留一条 warning。所以看到某轮 `pushed` 突然等于本机全部实体数，是预期的重新播种，不是故障；此时账户若在新库里不存在也会自动重建。
+- 找不到的错误码：`SYNC_LAN_HOST_NOT_SELECTED`（局域网方式还没选定主机，也没勾本机作为服务器）、`SYNC_LAN_HOST_NOT_FOUND`（选定的名字在局域网里没应答）、`SYNC_HOST_NOT_RUNNING`（本机该当主机但内置服务器没起）、`SYNC_MODE_INVALID`。
+- 历史：`sync history` 列出本机用过的配对信息（通信方式 + 地址或主机名 + 用户名 + 密码，`runtime/sync-history.json`，0600，最多 8 条，最近使用在前），`sync history --remove <下标>` 删一条。给用户回填凭据前先问，别把密码写进日志或提交里。
 
 ## 幂等与并发
 

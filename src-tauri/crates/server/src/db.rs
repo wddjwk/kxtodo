@@ -95,6 +95,10 @@ CREATE TABLE IF NOT EXISTS images (
     PRIMARY KEY (user_id, image_id)
 );
 CREATE INDEX IF NOT EXISTS idx_images_user_seq ON images(user_id, seq);
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 ";
 
 impl Db {
@@ -108,6 +112,30 @@ impl Db {
         Ok(Self {
             conn: Mutex::new(conn),
         })
+    }
+
+    /// 本库的身份：建库时生成一次，重启不变，库文件被重建就会变。
+    ///
+    /// 客户端把它和 `runtime/sync.json` 里缓存的值比对，用来判断「我连的还是不是同一台
+    /// 主机 / 它的库是不是被重建过」。变了就必须把拉取水位归零、推送台账清空重新播种——
+    /// 否则新库的 `current_seq` 从 1 开始而客户端水位停在几百，表现是**静默地**
+    /// 什么都拉不到、推的时候一路 OCC 409。
+    pub fn instance_id(&self) -> ServerResult<String> {
+        let conn = self.conn.lock().unwrap();
+        let existing: Option<String> = conn
+            .query_row("SELECT value FROM meta WHERE key = 'instanceId'", [], |row| {
+                row.get(0)
+            })
+            .ok();
+        if let Some(instance_id) = existing.filter(|value| !value.is_empty()) {
+            return Ok(instance_id);
+        }
+        let instance_id = format!("srv-{}", crate::util::random_hex(8));
+        conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('instanceId', ?1)",
+            [&instance_id],
+        )?;
+        Ok(instance_id)
     }
 
     /// v0.5.0 及以前的 users 表带 email 列（账户 = 用户名 + 邮箱）。

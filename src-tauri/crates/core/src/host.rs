@@ -28,6 +28,17 @@ use crate::time::now_iso;
 // Host backend (window/system capabilities; headless in tests)
 // ---------------------------------------------------------------------------
 
+/// 启动内置同步服务器所需的参数（core 从设置算好，宿主只管起）。
+#[derive(Debug, Clone)]
+pub struct SyncHostRequest {
+    /// todo 数据目录：宿主据此推导 server 数据目录与 `runtime/sync-host.json` 的位置
+    pub data_dir: PathBuf,
+    /// 展示名 = 这台主机在局域网里的身份（客户端按名字选定主机）
+    pub name: String,
+    /// 期望监听端口；被占用时宿主自动向上找，**实际端口写进 `runtime/sync-host.json`**
+    pub port: u16,
+}
+
 pub trait HostBackend: Send + Sync {
     /// Show a notification window; returns its id. `wait_rx` completes on close.
     fn show_notification(
@@ -50,6 +61,26 @@ pub trait HostBackend: Send + Sync {
         Err(CoreError::internal(
             "当前 Host backend 不支持查询开机启动状态",
         ))
+    }
+
+    /// 启动内置同步服务器（设置里的「本机作为服务器」）。
+    ///
+    /// core 不能依赖 kxtodo-server（依赖方向是 server → core），所以机制交给宿主：
+    /// 在自己进程内跑 lib 化的 kxtodo-server，并把实际端口与库身份写进
+    /// `runtime/sync-host.json`——core 只读那个文件来解析「本机就是主机时连哪儿」，
+    /// 于是另开的 CLI 进程也能连上同一个内置主机（与 `runtime/host.json` 同套路）。
+    ///
+    /// 实现必须**非阻塞**（把绑定与 serve 丢进宿主的异步运行时后立即返回）：
+    /// 它可能在一次命令执行途中被调用，同步等待会卡住 IPC 与 UI。
+    /// 绑定失败之类只能事后知道的错误，写进 `runtime/sync-host.json` 的 `lastError`。
+    fn sync_host_start(&self, request: &SyncHostRequest) -> CoreResult<()> {
+        let _ = request;
+        Err(CoreError::internal("当前 Host backend 不支持内置同步服务器"))
+    }
+
+    /// 停掉内置同步服务器并清掉 `runtime/sync-host.json`（幂等）。
+    fn sync_host_stop(&self, data_dir: &Path) {
+        let _ = data_dir;
     }
 }
 
@@ -112,9 +143,65 @@ impl HostCore {
         }
     }
 
+    /// 按当前设置启停内置同步服务器（「本机作为服务器」）。
+    ///
+    /// 挂在 [`HostCore::emit_domain_event`] 的 Settings 分支上，所以设置不管是 GUI 面板改的、
+    /// CLI `sync configure` 改的还是 `config set` 改的，常驻进程都会跟着调整——
+    /// 与调度引擎的 `notify_scheduler_reload` 同一套路，不引入新机制。
+    pub fn reconcile_sync_host(&self) {
+        let Ok(settings) = self.repo.load_settings() else {
+            return;
+        };
+        let sync = &settings.sync;
+        // 只有局域网方式下「本机作为服务器」才有意义
+        let wanted = sync.lan_host && sync.effective_mode() == crate::model::SyncMode::Lan;
+        let name = crate::sync::endpoint::desired_host_name(&sync.lan_name);
+        let host = crate::sync::state::load_host_state(&self.repo.layout);
+        // 名字或端口变了要重启（名字是局域网身份，端口是客户端地址缓存的一部分）；
+        // 上次启动失败也要重试，否则用户改完设置还是起不来。
+        // 比的是 configured_port 而不是实际端口：实际端口可能因占用自动上移过，
+        // 拿它跟配置值比会每轮都判定为「需要重启」。
+        let up_to_date = host.running
+            && host.last_error.is_none()
+            && host.name == name
+            && host.configured_port == sync.lan_port;
+        if wanted && up_to_date {
+            return;
+        }
+        let Ok(slot) = self.backend.read() else {
+            return;
+        };
+        let Some(backend) = slot.as_ref() else {
+            return;
+        };
+        if !wanted {
+            if host.running || host.last_error.is_some() {
+                backend.sync_host_stop(&self.data_dir);
+            }
+            return;
+        }
+        let request = SyncHostRequest {
+            data_dir: self.data_dir.clone(),
+            name,
+            port: sync.lan_port,
+        };
+        if let Err(error) = backend.sync_host_start(&request) {
+            // 起不来的原因必须落进描述符：设置页得说得出「为什么没起来」，
+            // 否则用户只看到一个没反应的勾选框。
+            let mut state = crate::sync::state::EmbeddedHostState::default();
+            state.name = request.name.clone();
+            state.configured_port = request.port;
+            state.last_error = Some(error.message.clone());
+            let _ = crate::sync::state::save_host_state(&self.repo.layout, &state);
+        }
+    }
+
     pub fn emit_domain_event(&self, domain: Domain, revision: u64, ids: Vec<String>) {
-        if matches!(domain, Domain::Schedule) {
-            self.notify_scheduler_reload();
+        match domain {
+            Domain::Schedule => self.notify_scheduler_reload(),
+            // 设置里带着「本机作为服务器」的开关与主机名/端口：变了就要启停内置服务器
+            Domain::Settings => self.reconcile_sync_host(),
+            Domain::Data => {}
         }
         if let Ok(backend) = self.backend.read() {
             if let Some(backend) = backend.as_ref() {
@@ -861,6 +948,13 @@ pub fn shutdown_host(core: &Arc<HostCore>) {
         .and_then(|slot| slot.as_ref().cloned());
     if let Some(handle) = scheduler {
         handle.shutdown();
+    }
+    // 内置同步服务器随宿主一起收：托盘退出、关窗退出、看门狗自动退出三条路都汇聚到这里，
+    // 否则会在进程里留下一个没人管的监听端口与一份说「还在跑」的描述符。
+    if let Ok(slot) = core.backend.read() {
+        if let Some(backend) = slot.as_ref() {
+            backend.sync_host_stop(&core.data_dir);
+        }
     }
     remove_host_descriptor(&core.repo.layout.host_descriptor());
     if let Ok(mut owner) = core.owner_lock.lock() {
