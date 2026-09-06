@@ -140,8 +140,9 @@ async fn main() {
         // 自动生成只给 GUI/APK 的内置主机用。
         admin_provision: AdminProvision::RequireExplicit,
         discovery: true,
-        // 独立服务器不换端口：端口被占说明有别的东西在跑，静默换端口只会让用户困惑
-        port_fallback: 0,
+        // 端口被占用就往后监听（52177 → 52178 …）：发现应答与客户端探测都带**真实**端口，
+        // 所以换端口不影响被连上；比直接拒绝启动有用得多。
+        port_fallback: host::DEFAULT_PORT_FALLBACK,
         retry_bind: args.update_restarted,
     };
 
@@ -152,6 +153,15 @@ async fn main() {
             std::process::exit(error.exit_code());
         }
     };
+    let wanted_port = host::parse_listen(&handle.settings.listen)
+        .map(|addr| addr.port())
+        .unwrap_or_else(|_| handle.port());
+    if handle.port() != wanted_port {
+        println!(
+            "注意：端口 {wanted_port} 已被占用，实际监听在 {}（发现应答与客户端都用真实端口）",
+            handle.port()
+        );
+    }
 
     // pidfile 只属于独立进程：--daemon 的父进程靠它确认子进程起来了，--stop 靠它找目标。
     // 内置主机绝不能写（`--stop` 按 pid 动手会误杀宿主 GUI）。

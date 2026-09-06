@@ -204,7 +204,14 @@ function createId(prefix: string): string {
   return `${prefix}-${random}`;
 }
 
-export function createEntryNode(name = "未命名条目", parentId: string | null = null, icon = "notebook"): AppNode {
+/** 新建条目的默认图标（core 的 node.create 用的是同一个值） */
+export const DEFAULT_ENTRY_ICON = "check-square";
+
+export function createEntryNode(
+  name = "未命名条目",
+  parentId: string | null = null,
+  icon = DEFAULT_ENTRY_ICON
+): AppNode {
   return {
     id: createId("entry"),
     kind: "entry",

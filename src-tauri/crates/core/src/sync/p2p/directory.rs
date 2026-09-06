@@ -234,6 +234,55 @@ pub async fn unpublish(client: &PkarrRelayClient, account_secret: &SecretKey, se
     let _ = client.publish(&packet).await;
 }
 
+/// 设备名字记录的 DNS 名。
+///
+/// 账户目录里只有 EndpointId：不拨号就学不到对方的名字，设备列表只能显示一串
+/// 神秘字符。所以每台设备再用**自己的设备私钥**签一条独立记录（键 = 自己的
+/// EndpointId），别人按 id 直接解析就能拿到名字——一次轻量 HTTP GET，不用打洞。
+pub const NAME_RECORD: &str = "_name";
+
+/// 名字进 DNS TXT 之前的清理：去控制字符与换行、trim、截到 48 字符（整条 TXT ≤255 字节）。
+pub fn sanitize_name(raw: &str) -> String {
+    raw.chars()
+        .filter(|ch| !ch.is_control())
+        .collect::<String>()
+        .trim()
+        .chars()
+        .take(48)
+        .collect()
+}
+
+/// 发布本机设备名（空名字不发）。这条记录只有本机会写，不存在账户目录那种并发覆盖问题。
+pub async fn publish_name(
+    client: &PkarrRelayClient,
+    device_secret: &SecretKey,
+    name: &str,
+) -> CoreResult<()> {
+    let clean = sanitize_name(name);
+    if clean.is_empty() {
+        return Ok(());
+    }
+    let values = vec!["v=1".to_string(), format!("n={clean}")];
+    let packet =
+        SignedPacket::from_txt_strings(device_secret, NAME_RECORD, &values, 3600).map_err(
+            |error| CoreError::internal(format!("P2P 设备名记录签名失败：{error:?}")),
+        )?;
+    client.publish(&packet).await.map_err(|error| {
+        CoreError::io(format!("P2P 设备名发布失败：{error:?}（别的设备只会看到本机 id）"))
+    })
+}
+
+/// 解析一台设备的名字。解析不到（老版本、没发布过、目录不可达）返回 None，调用方退回显示 id。
+pub async fn fetch_name(client: &PkarrRelayClient, device: EndpointId) -> Option<String> {
+    let packet = client.resolve(device).await.ok()?;
+    packet
+        .txt_records(NAME_RECORD)
+        .iter()
+        .find_map(|value| value.strip_prefix("n="))
+        .map(sanitize_name)
+        .filter(|name| !name.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,6 +320,14 @@ mod tests {
         assert_eq!(a.public(), b.public(), "同账户必须派生出同一把目录密钥");
         let other = crate::sync::crypto::derive_keys("user2", "secret").unwrap();
         assert_ne!(a.public(), account_secret(&other).public());
+    }
+
+    #[test]
+    fn device_name_is_cleaned_before_it_goes_into_a_txt_record() {
+        assert_eq!(sanitize_name("  客厅的电脑\r\n "), "客厅的电脑");
+        assert_eq!(sanitize_name("a\u{0}b\u{7}c"), "abc");
+        assert_eq!(sanitize_name("x".repeat(80).as_str()).chars().count(), 48);
+        assert_eq!(sanitize_name("   "), "");
     }
 
     #[test]

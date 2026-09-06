@@ -36,6 +36,9 @@ const COOLDOWN: Duration = Duration::from_secs(300);
 /// 目录解析结果的进程内缓存。5 秒：再长会让「对端刚上线」在本地迟很久才可见
 /// （同步轮 30s 一次、设置面板只读缓存不联网，5s 的代价只是每 5 秒一次轻量 GET）
 const DIRECTORY_CACHE: Duration = Duration::from_secs(5);
+/// 「这台设备没有名字记录」的负缓存时长：够挡住连点「列表」的重复查询，
+/// 又不会把稍后才起名发布的对端永久挡在外面
+const NAME_MISS_TTL: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone)]
 pub struct P2pConfig {
@@ -47,6 +50,9 @@ pub struct P2pConfig {
     pub directory_url: String,
     /// 宿主进程：发布目录 + 接受拨入。CLI 一次性进程为 false（只拨不收）
     pub serve: bool,
+    /// 本机设备名（与局域网主机名共用 `sync.lanName`）：发布成一条独立的名字记录，
+    /// 别的设备不拨号也能在列表里显示名字而不是一串 EndpointId
+    pub name: String,
 }
 
 pub struct P2pRuntime {
@@ -57,12 +63,19 @@ pub struct P2pRuntime {
     handle: Handle,
     dir_client: directory::Client,
     account_secret: SecretKey,
+    /// 本机端点私钥：签「设备名」记录用（键就是自己的 EndpointId）
+    device_secret: SecretKey,
+    /// 本机设备名。改名不重启运行时（重启要重新绑端点、重发目录），发布循环自己会跟上。
+    name: Mutex<String>,
     layout: Layout,
     serve: bool,
     relay: String,
     directory_url: String,
     cooldowns: Mutex<BTreeMap<String, Instant>>,
     dir_cache: Mutex<Option<(Instant, Vec<directory::DirectoryEntry>)>>,
+    /// 查过但没有名字记录的对端（老版本设备/对方还没发布）：短时间内不再重复查。
+    /// 带 TTL 而不是永久拉黑——对端可能稍后才起名发布。
+    name_misses: Mutex<BTreeMap<String, Instant>>,
 }
 
 static SLOT: OnceLock<Mutex<BTreeMap<String, Arc<P2pRuntime>>>> = OnceLock::new();
@@ -90,6 +103,8 @@ pub fn current_for(layout: &Layout) -> Option<Arc<P2pRuntime>> {
 pub fn start(config: P2pConfig) -> CoreResult<Arc<P2pRuntime>> {
     let key = config.layout.runtime_dir().to_string_lossy().to_string();
     if let Some(existing) = current_for(&config.layout) {
+        // 改名走这里就够了：发布循环下一轮会把新名字发出去，不必重启端点
+        existing.set_name(&config.name);
         if existing.matches(&config) {
             return Ok(existing);
         }
@@ -111,12 +126,15 @@ pub fn start(config: P2pConfig) -> CoreResult<Arc<P2pRuntime>> {
         handle,
         dir_client,
         account_secret,
+        device_secret,
+        name: Mutex::new(directory::sanitize_name(&config.name)),
         layout: config.layout.clone(),
         serve: config.serve,
         relay: config.relay.clone().unwrap_or_default(),
         directory_url: config.directory_url.clone(),
         cooldowns: Mutex::new(BTreeMap::new()),
         dir_cache: Mutex::new(None),
+        name_misses: Mutex::new(BTreeMap::new()),
     });
     if config.serve {
         spawn_accept_loop(runtime_handle.clone());
@@ -171,6 +189,81 @@ impl P2pRuntime {
 
     pub fn layout(&self) -> &Layout {
         &self.layout
+    }
+
+    /// 本机设备名（发布进目录的名字记录；空 = 还没起名，别人只能看到 id）
+    pub fn name(&self) -> String {
+        self.name.lock().map(|guard| guard.clone()).unwrap_or_default()
+    }
+
+    /// 改本机设备名。不重启端点：发布循环发现名字变了会重新发一条名字记录。
+    pub fn set_name(&self, name: &str) {
+        let clean = directory::sanitize_name(name);
+        if let Ok(mut guard) = self.name.lock() {
+            if *guard != clean {
+                *guard = clean;
+            }
+        }
+    }
+
+    /// 给一批对端 id 补上名字：`id(z32) → 名字`（查不到就不在结果里，调用方退回显示 id）。
+    ///
+    /// 名字的三个来源，按代价从低到高：
+    /// 1. 本机 `runtime/p2p.json` 的已知记录（拨号成功时从对方 `/healthz` 学到的）
+    /// 2. 对方自己发布的**名字记录**（一次轻量 HTTP GET，不用打洞）
+    /// 3. 都没有 → 记进 `name_misses`，[`NAME_MISS_TTL`] 内不再重复查
+    pub fn resolve_peer_names(&self, ids: &[EndpointId]) -> BTreeMap<String, String> {
+        let mut out: BTreeMap<String, String> = BTreeMap::new();
+        let known = identity::load(&self.layout).known_peers;
+        let mut unknown: Vec<EndpointId> = Vec::new();
+        if let Ok(guard) = self.name_misses.lock() {
+            for id in ids {
+                let key = id.to_z32();
+                if let Some(name) = known
+                    .get(&key)
+                    .map(|peer| peer.name.clone())
+                    .filter(|name| !name.is_empty())
+                {
+                    out.insert(key, name);
+                    continue;
+                }
+                let missed = guard
+                    .get(&key)
+                    .map(|at| at.elapsed() < NAME_MISS_TTL)
+                    .unwrap_or(false);
+                if !missed {
+                    unknown.push(*id);
+                }
+            }
+        }
+        if unknown.is_empty() {
+            return out;
+        }
+        let client = self.dir_client.clone();
+        let fetched = self.handle.block_on(async move {
+            let mut learned: Vec<(EndpointId, Option<String>)> = Vec::new();
+            for id in unknown {
+                learned.push((id, directory::fetch_name(&client, id).await));
+            }
+            learned
+        });
+        if let Ok(mut guard) = self.name_misses.lock() {
+            for (id, name) in &fetched {
+                if name.is_none() {
+                    guard.insert(id.to_z32(), Instant::now());
+                } else {
+                    guard.remove(&id.to_z32());
+                }
+            }
+        }
+        for (id, name) in fetched {
+            let Some(name) = name.filter(|name| !name.is_empty()) else {
+                continue;
+            };
+            identity::note_peer_name(&self.layout, &id.to_z32(), &name);
+            out.insert(id.to_z32(), name);
+        }
+        out
     }
 
     /// 目录（带进程内缓存）。失败按「只有我自己」处理——见 `directory::fetch`。
@@ -362,9 +455,25 @@ fn spawn_publish_loop(runtime: Arc<P2pRuntime>) {
     let account_id = secret.public();
     handle.spawn(async move {
         let mut published_addrs: Option<Vec<std::net::SocketAddr>> = None;
+        let mut published_name: Option<String> = None;
         let mut verify_pending = false;
         let mut tick: u32 = 0;
         loop {
+            // 设备名记录：与账户目录是两条独立的 pkarr 记录（键不同，互不覆盖），
+            // 所以不需要读-改-写。首次与改名立刻发，失败每 20 tick（约 60 秒）重试。
+            let name = runtime.name();
+            if !name.is_empty()
+                && published_name.as_deref() != Some(name.as_str())
+                && tick % 20 == 0
+            {
+                match directory::publish_name(&client, &runtime.device_secret, &name).await {
+                    Ok(()) => published_name = Some(name),
+                    Err(error) => crate::sync::engine::debug_log(format!(
+                        "p2p publish name: {}",
+                        error.message
+                    )),
+                }
+            }
             let addrs = runtime.direct_addrs();
             if verify_pending {
                 // pkarr 是整包 last-write-wins：并发发布时后写的一方会把先写的盖掉，

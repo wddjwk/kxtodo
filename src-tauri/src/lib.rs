@@ -1176,6 +1176,9 @@ fn update_agent() -> ureq::Agent {
     // ureq 默认探测 HTTP(S)_PROXY 环境变量，无需手工配置。
     ureq::AgentBuilder::new()
         .timeout_connect(std::time::Duration::from_secs(15))
+        // 刻意不设总超时（几十上百 MB 的产物会超过任何合理的总时限），但**读**必须有：
+        // 连接建好之后对端不再发数据时，缺了它就会永远挂在进度条上。
+        .timeout_read(std::time::Duration::from_secs(60))
         .build()
 }
 
@@ -1184,8 +1187,15 @@ fn update_agent() -> ureq::Agent {
 /// 只用于**下载**：版本检查仍直连 api.github.com（实测该代理不接受 api 域名，返回 403）。
 const UPDATE_PROXY_PREFIX: &str = "https://ghfast.top/";
 
-/// 下载一个更新制品：先直连 GitHub，失败则静默换代理重试；
-/// 两条路都失败时把两个原因一起报出来（用户要求「如果也失败了，那就再把失败原因爆出来」）。
+/// 制品体积下限。真实产物最小的也有 20MB 上下，而错误页/JSON 响应只有几 KB——
+/// 用体积当场拦下明显存坏的下载，好让调用方换代理重试。
+const MIN_ARTIFACT_BYTES: u64 = 1_000_000;
+
+/// 下载一个更新制品：先直连 GitHub，失败（连不上/中断/体积明显不对）就静默换加速代理重试。
+///
+/// 换代理时进度条从 0 重新计，并且每次尝试前先清掉上一次留下的 `.part`——
+/// 半截临时文件会让「已下载体积」和体积自检都失真。
+/// 两条路都失败时把两个原因一起报出来。
 fn update_download_file(
     app: &AppHandle,
     agent: &ureq::Agent,
@@ -1193,9 +1203,10 @@ fn update_download_file(
     url: &str,
     dest: &std::path::Path,
 ) -> Result<(), String> {
-    match stream_update_file(app, agent, stage, url, dest) {
+    match stream_update_file(app, agent, stage, url, dest, "") {
         Ok(()) => Ok(()),
         Err(direct_error) => {
+            remove_part_file(dest);
             let proxied = format!("{UPDATE_PROXY_PREFIX}{url}");
             update_emit(
                 app,
@@ -1205,16 +1216,31 @@ fn update_download_file(
                     "received": 0,
                     "total": 0,
                     "percent": 0,
-                    "message": "GitHub 直连失败，改用加速代理重试"
+                    "note": "GitHub 直连失败，改用加速代理重试"
                 }),
             );
-            stream_update_file(app, agent, stage, &proxied, dest).map_err(|proxy_error| {
-                format!(
-                    "下载 {stage} 失败\n  直连：{direct_error}\n  代理（{UPDATE_PROXY_PREFIX}）：{proxy_error}"
-                )
-            })
+            stream_update_file(app, agent, stage, &proxied, dest, "加速代理").map_err(
+                |proxy_error| {
+                    format!(
+                        "下载 {stage} 失败\n  直连：{direct_error}\n  代理（{UPDATE_PROXY_PREFIX}）：{proxy_error}"
+                    )
+                },
+            )
         }
     }
+}
+
+/// 制品的 `.part` 临时文件路径（与 `stream_update_file` 同一口径）。
+fn part_path(dest: &std::path::Path) -> std::path::PathBuf {
+    let file_name = dest
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("download");
+    dest.with_file_name(format!("{file_name}.part"))
+}
+
+fn remove_part_file(dest: &std::path::Path) {
+    let _ = fs::remove_file(part_path(dest));
 }
 
 fn stream_update_file(
@@ -1223,6 +1249,7 @@ fn stream_update_file(
     stage: &str,
     url: &str,
     dest: &std::path::Path,
+    note: &str,
 ) -> Result<(), String> {
     let response = agent
         .get(url)
@@ -1232,19 +1259,18 @@ fn stream_update_file(
         .header("content-length")
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(0);
+    if total > 0 && total < MIN_ARTIFACT_BYTES {
+        return Err(format!("响应体积异常（{total} 字节）"));
+    }
     let mut reader = response.into_reader();
-    let file_name = dest
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("download")
-        .to_string();
-    let part = dest.with_file_name(format!("{file_name}.part"));
+    let part = part_path(dest);
     use std::io::{Read, Write};
-    let write_result = (|| -> std::io::Result<()> {
+    let write_result = (|| -> std::io::Result<u64> {
         let mut file = fs::File::create(&part)?;
         let mut buffer = [0u8; 64 * 1024];
         let mut received: u64 = 0;
         let mut last_percent: u64 = u64::MAX;
+        let mut last_notified: u64 = 0;
         loop {
             let count = reader.read(&mut buffer)?;
             if count == 0 {
@@ -1252,33 +1278,55 @@ fn stream_update_file(
             }
             file.write_all(&buffer[..count])?;
             received += count as u64;
-            if total > 0 {
-                let percent = received * 100 / total;
-                if percent != last_percent {
-                    last_percent = percent;
-                    update_emit(
-                        app,
-                        "update://progress",
-                        serde_json::json!({
-                            "stage": stage,
-                            "received": received,
-                            "total": total,
-                            "percent": percent
-                        }),
-                    );
-                }
+            // 知道总大小就按百分比发（每个百分点一次）；不知道就按每 1MB 发一次，
+            // 前端据此显示「已下载 X MB」，而不是永远停在 0%。
+            let percent = if total > 0 { received * 100 / total } else { 0 };
+            let due = if total > 0 {
+                percent != last_percent
+            } else {
+                received >= last_notified + 1024 * 1024
+            };
+            if due {
+                last_percent = percent;
+                last_notified = received;
+                update_emit(
+                    app,
+                    "update://progress",
+                    serde_json::json!({
+                        "stage": stage,
+                        "received": received,
+                        "total": total,
+                        "percent": percent,
+                        "note": note
+                    }),
+                );
             }
         }
-        Ok(())
+        file.flush()?;
+        Ok(received)
     })();
-    if let Err(error) = write_result {
+    let received = match write_result {
+        Ok(received) => received,
+        Err(error) => {
+            let _ = fs::remove_file(&part);
+            return Err(format!("写入临时文件失败：{error}"));
+        }
+    };
+    // 截断的下载（代理提前断开、对端只回了一半）必须当失败处理，否则会拿半截产物去替换
+    if received < MIN_ARTIFACT_BYTES || (total > 0 && received != total) {
         let _ = fs::remove_file(&part);
-        return Err(format!("写入临时文件失败：{error}"));
+        return Err(format!("下载不完整（{received}/{total} 字节）"));
     }
     if dest.exists() {
-        fs::remove_file(dest).map_err(|error| format!("替换旧 {stage} 安装包失败：{error}"))?;
+        if let Err(error) = fs::remove_file(dest) {
+            let _ = fs::remove_file(&part);
+            return Err(format!("替换旧 {stage} 安装包失败：{error}"));
+        }
     }
-    fs::rename(&part, dest).map_err(|error| format!("保存 {stage} 安装包失败：{error}"))?;
+    if let Err(error) = fs::rename(&part, dest) {
+        let _ = fs::remove_file(&part);
+        return Err(format!("保存 {stage} 安装包失败：{error}"));
+    }
     Ok(())
 }
 
@@ -1337,13 +1385,6 @@ fn run_update(app: &AppHandle, params: &UpdateApplyParams) -> Result<UpdateOutco
         let cli_dest = dir.join("kxtodo-cli.exe.new");
         update_download_file(app, &agent, "GUI", &params.gui_url, &gui_dest)?;
         update_download_file(app, &agent, "CLI", &params.cli_url, &cli_dest)?;
-        // 自检：错误页/JSON 响应体积远小于真实产物，拦下明显存坏的下载。
-        for (stage, path) in [("GUI", &gui_dest), ("CLI", &cli_dest)] {
-            let size = fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
-            if size < 64 * 1024 {
-                return Err(format!("{stage} 更新包异常（仅 {size} 字节），已中止"));
-            }
-        }
         // CREATE_NO_WINDOW：cmd 拿到一个不可见控制台跑完整个 bat，更新重启全程无黑窗。
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -1369,13 +1410,6 @@ fn run_update(app: &AppHandle, params: &UpdateApplyParams) -> Result<UpdateOutco
         let cli_dest = bin.join("kxtodo-cli");
         update_download_file(app, &agent, "GUI", &params.gui_url, &gui_dest)?;
         update_download_file(app, &agent, "CLI", &params.cli_url, &cli_dest)?;
-        // 自检：错误页/JSON 响应体积远小于真实产物，拦下明显存坏的下载。
-        for (stage, path) in [("GUI", &gui_dest), ("CLI", &cli_dest)] {
-            let size = fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
-            if size < 64 * 1024 {
-                return Err(format!("{stage} 更新包异常（仅 {size} 字节），已中止"));
-            }
-        }
         // AppImage 与 CLI 都要可执行位，否则 spawn / 用户直接跑会 EACCES。
         for path in [&gui_dest, &cli_dest] {
             let mut perms = fs::metadata(path)
@@ -1473,12 +1507,6 @@ fn update_download_apk(app: AppHandle, params: UpdateApkParams) -> Result<(), St
         let result = (|| -> Result<(), String> {
             let agent = update_agent();
             update_download_file(&app, &agent, "APK", &url, &dest)?;
-            // 自检：错误页/JSON 响应体积远小于真实 APK，拦下明显存坏的下载。
-            let size = fs::metadata(&dest).map(|meta| meta.len()).unwrap_or(0);
-            if size < 1_000_000 {
-                let _ = fs::remove_file(&dest);
-                return Err(format!("APK 更新包异常（仅 {size} 字节），已中止"));
-            }
             Ok(())
         })();
         match result {
@@ -1557,7 +1585,15 @@ fn start_embedded_sync_host(
     // 管理台密码只在**首次生成**时拿得到明文（之后 server/settings.json 里只有哈希），
     // 所以重启（改名字/改端口）时要从旧描述符里带过去，否则用户再也看不到自己的密码。
     let previous = domain::sync::state::load_host_state(&layout);
-    stop_embedded_sync_host(&request.data_dir);
+    // 旧主机必须在**新主机绑端口之前真正退出**：优雅停机是异步的，只「请求」停机就
+    // 接着 bind 会撞上自己还没释放的监听 socket（Windows 直接 WSAEADDRINUSE），
+    // 于是端口白白上移一格——用户看到的「52177 被占用」往往就是自己留下的。
+    // 等待放在下面的异步任务里做，这个方法本身仍然非阻塞（可能在命令执行途中被调用）。
+    let retiring = sync_host_slot()
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take());
+    let _ = domain::sync::state::clear_host_state(&layout);
 
     let config = kxtodo_server::ServerConfig {
         // 局域网主机监听所有网卡（回环监听不应答发现查询）；P2P 的内置库只服务本机
@@ -1583,6 +1619,14 @@ fn start_embedded_sync_host(
     let configured_port = request.port;
     let loopback_only = request.loopback_only;
     tauri::async_runtime::spawn(async move {
+        // 等旧服务循环收尾（最多 5 秒）：超时也照常往下走，端口自动上移会兜住
+        if let Some(handle) = retiring {
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                handle.shutdown(),
+            )
+            .await;
+        }
         let mut state = domain::sync::state::EmbeddedHostState {
             name: host_name,
             configured_port,
@@ -1638,6 +1682,7 @@ fn start_p2p_runtime(request: &domain::host::P2pRequest) -> Result<(), domain::C
         keys: request.keys.clone(),
         relay: request.relay.clone(),
         directory_url: request.directory_url.clone(),
+        name: request.name.clone(),
         serve: true,
     })?;
     Ok(())
@@ -1679,6 +1724,7 @@ fn ensure_p2p_services(
             Some(sync.p2p_relay.trim().to_string())
         },
         directory_url: sync.p2p_directory.trim().to_string(),
+        name: domain::sync::endpoint::desired_host_name(&sync.lan_name),
     })
 }
 

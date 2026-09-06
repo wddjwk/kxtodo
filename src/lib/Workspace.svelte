@@ -61,6 +61,9 @@
   let showHeaderMenu = false;
   let gearButtonEl: HTMLButtonElement;
   let linkPreviewUrl = "";
+  /** 内置浏览器顶部标题栏的文字：链接文字 → 同源时读到的网页标题 → 主机名兜底 */
+  let linkPreviewTitle = "";
+  let previewFrame: HTMLIFrameElement;
   // 分钟级 tick：让计划内分组标签（周X/日期区间）在跨天后随下次重算刷新
   let dayTick = 0;
 
@@ -244,6 +247,7 @@
     taskMenu = null;
     listMenuAt = null;
     linkPreviewUrl = "";
+    linkPreviewTitle = "";
     taskEmojiPicker.set(null);
   }
 
@@ -319,12 +323,13 @@
     }
   }
 
-  function toggleTaskExpansion(taskId: string): void {
+  /** 展开/收起一张卡片。`expanded` 由卡片自己量出来（单行但显示不全也算可展开）；
+   * 没给时退回多行规则——「展开全部/收起全部」走这条路。 */
+  function toggleTaskExpansion(taskId: string, expanded?: boolean): void {
     const task = $appState.tasks.find((item) => item.id === taskId);
     if (!task) return;
-    void setItemUiAction(taskId, {
-      expanded: hasMultipleMarkdownLines(task.markdown) ? !task.expanded : false
-    });
+    const next = expanded ?? (hasMultipleMarkdownLines(task.markdown) ? !task.expanded : false);
+    void setItemUiAction(taskId, { expanded: next });
   }
 
   function openTaskEditor(taskId: string): void {
@@ -504,20 +509,41 @@
   }
 
   /** 供 App（编辑器浮窗）与 TaskCard 复用的链接打开入口。 */
-  export function openLinkUrl(url: string): void {
+  export function openLinkUrl(url: string, title?: string): void {
     if ($appSettings.appearance.linkOpenMode === "system") {
       void openExternalUrl(url).catch((error) => showToast(`打开链接失败：${String(error)}`));
     } else {
       linkPreviewUrl = url;
+      linkPreviewTitle = (title ?? "").trim() || hostOf(url);
     }
   }
 
-  function openTaskLink(event: CustomEvent<string>): void {
-    openLinkUrl(event.detail);
+  /** 标题兜底：拿不到链接文字就显示主机名（总比一串 URL 好读）。 */
+  function hostOf(url: string): string {
+    try {
+      return new URL(url).hostname;
+    } catch {
+      return url;
+    }
+  }
+
+  function openTaskLink(event: CustomEvent<{ href: string; title: string }>): void {
+    openLinkUrl(event.detail.href, event.detail.title);
+  }
+
+  /** 同源时能读到网页真正的标题（跨源会抛 SecurityError，忽略，保留链接文字/主机名）。 */
+  function readPreviewTitle(): void {
+    try {
+      const title = previewFrame?.contentDocument?.title?.trim();
+      if (title) linkPreviewTitle = title;
+    } catch {
+      // 跨源：读不到就用已有的标题
+    }
   }
 
   function closeLinkPreview(): void {
     linkPreviewUrl = "";
+    linkPreviewTitle = "";
   }
 
   function openEmojiPickerForTask(taskId: string): void {
@@ -772,7 +798,7 @@
         nodeId={task.nodeId}
         selected={taskMenu?.taskId === task.id}
         on:toggle={(event) => toggleCompletion(event.detail)}
-        on:expand={(event) => toggleTaskExpansion(event.detail)}
+        on:expand={(event) => toggleTaskExpansion(event.detail.id, event.detail.expanded)}
         on:edit={(event) => openTaskEditor(event.detail)}
         on:context={openTaskMenu}
         on:openLink={openTaskLink}
@@ -796,8 +822,8 @@
               {task}
               nodeId={task.nodeId}
               selected={taskMenu?.taskId === task.id}
-                    on:toggle={(event) => toggleCompletion(event.detail)}
-              on:expand={(event) => toggleTaskExpansion(event.detail)}
+              on:toggle={(event) => toggleCompletion(event.detail)}
+              on:expand={(event) => toggleTaskExpansion(event.detail.id, event.detail.expanded)}
               on:edit={(event) => openTaskEditor(event.detail)}
               on:context={openTaskMenu}
               on:openLink={openTaskLink}
@@ -950,12 +976,20 @@
 
   {#if linkPreviewUrl}
     <div class="link-preview-overlay">
-      <div class="link-preview-close-zone">
-        <button class="link-preview-close" type="button" title="关闭预览" on:click={closeLinkPreview}>
-          <X size={22} strokeWidth={2.5} />
+      <div class="link-preview-bar">
+        <span class="link-preview-title" title={linkPreviewTitle}>{linkPreviewTitle}</span>
+        <button class="link-preview-close" type="button" title="关闭预览" aria-label="关闭预览" on:click={closeLinkPreview}>
+          <X size={18} strokeWidth={2.5} />
         </button>
       </div>
-      <iframe class="link-preview-frame" src={linkPreviewUrl} title="链接预览" sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
+      <iframe
+        bind:this={previewFrame}
+        class="link-preview-frame"
+        src={linkPreviewUrl}
+        title="链接预览"
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+        on:load={readPreviewTitle}
+      ></iframe>
     </div>
   {/if}
 

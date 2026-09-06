@@ -477,6 +477,14 @@ fn sync_peers(ctx: &ExecContext) -> CoreResult<Value> {
         .transpose()?
         .unwrap_or_default();
     let known = crate::sync::p2p::identity::load(&ctx.repo.layout).known_peers;
+    // 名字优先取「对方自己发布的名字记录」（不用拨号就能显示），其次才是拨号历史里学到的
+    let names = runtime
+        .as_ref()
+        .map(|runtime| {
+            let ids: Vec<iroh::EndpointId> = entries.iter().map(|entry| entry.id).collect();
+            runtime.resolve_peer_names(&ids)
+        })
+        .unwrap_or_default();
     let self_endpoint = runtime.as_ref().map(|runtime| runtime.device_id());
     let self_id = self_endpoint
         .map(|id| id.to_z32())
@@ -494,9 +502,14 @@ fn sync_peers(ctx: &ExecContext) -> CoreResult<Value> {
         .map(|entry| {
             let id = entry.id.to_z32();
             let record = known.get(&id);
+            let name = names
+                .get(&id)
+                .cloned()
+                .or_else(|| record.map(|peer| peer.name.clone()))
+                .unwrap_or_default();
             json!({
                 "id": id,
-                "name": record.map(|peer| peer.name.clone()).unwrap_or_default(),
+                "name": name,
                 "publishedAt": entry.published_at,
                 "lastOk": record.and_then(|peer| peer.last_ok),
                 "lastSeenAt": record.and_then(|peer| peer.last_seen_at.clone()),

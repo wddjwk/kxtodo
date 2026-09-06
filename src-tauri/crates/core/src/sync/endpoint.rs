@@ -17,7 +17,9 @@ use serde_json::Value;
 use crate::error::{CoreError, CoreResult};
 use crate::model::{SyncMode, SyncSettings};
 use crate::repo::Layout;
-use crate::sync::discovery::{discover, probe_health_with_timeout};
+use crate::sync::discovery::{
+    discover, probe_health_with_timeout, probe_host_ports, sweep_timeout, PORT_SWEEP,
+};
 use crate::sync::state::{load_host_state, LanEndpoint, SyncStateFile};
 use crate::sync::transport::normalize_base_url;
 
@@ -187,6 +189,39 @@ fn resolve_lan(
         ));
     }
 
+    // 0. 字段里填的是地址而不是名字（UDP 发现被防火墙挡住时的手工出路）：
+    //    给了端口就只试那个端口，没给就在 52177-52180 上依次试。
+    if let Some((host, port)) = parse_lan_address(wanted) {
+        if let Some((resolved, health)) = probe_lan_host(&host, port, "") {
+            let name = health_name(&health).to_string();
+            let endpoint = LanEndpoint {
+                name: if name.is_empty() { host.clone() } else { name },
+                host: host.clone(),
+                port: resolved,
+                instance_id: health_string(&health, "instanceId"),
+            };
+            let base_url = format!("http://{host}:{resolved}");
+            return Ok(plain(from_health(
+                base_url,
+                health,
+                EndpointSource::Cache,
+                Some(endpoint),
+            )));
+        }
+        let tried = match port {
+            Some(port) => format!("端口 {port}"),
+            None => format!("端口 {}", port_list_text()),
+        };
+        return Err(CoreError::new(
+            crate::error::ErrorKind::Io,
+            "SYNC_LAN_HOST_NOT_FOUND",
+            format!(
+                "连不上 {host}（已试 {tried}）：那边没有应答的主机。\
+                 它可能没开机、没勾选「本机作为服务器」，或者跟本机不在同一个网段。"
+            ),
+        ));
+    }
+
     // 1. 缓存直连：地址还通、且 /healthz 报的名字仍然是选定的那台，就不必再广播一轮
     if let Some(cached) = state.lan_endpoint.as_ref() {
         if names_match(&cached.name, wanted) && !cached.host.is_empty() && cached.port > 0 {
@@ -200,6 +235,23 @@ fn resolve_lan(
                         Some(cached.clone()),
                     )));
                 }
+            }
+            // 1.5 缓存的 IP 还在、只是端口探不通（对方端口被占用往后挪了）：
+            //     在同一台机器上扫一遍 52177-52180，名字对得上就接着用并刷新缓存。
+            if let Some((port, health)) = probe_lan_host(&cached.host, None, wanted) {
+                let endpoint = LanEndpoint {
+                    name: wanted.to_string(),
+                    host: cached.host.clone(),
+                    port,
+                    instance_id: health_string(&health, "instanceId"),
+                };
+                let base_url = format!("http://{}:{port}", cached.host);
+                return Ok(plain(from_health(
+                    base_url,
+                    health,
+                    EndpointSource::Cache,
+                    Some(endpoint),
+                )));
             }
         }
     }
@@ -235,7 +287,8 @@ fn resolve_lan(
             "SYNC_LAN_HOST_NOT_FOUND",
             format!(
                 "局域网里找不到主机「{wanted}」{detail}。\
-                 它可能没开机、没勾选「本机作为服务器」，或者跟本机不在同一个网段。"
+                 它可能没开机、没勾选「本机作为服务器」，或者跟本机不在同一个网段。\
+                 发现被防火墙挡住时，也可以在这里直接填主机的 IP。"
             ),
         ));
     };
@@ -252,6 +305,52 @@ fn resolve_lan(
         EndpointSource::Discovery,
         Some(endpoint),
     )))
+}
+
+/// 「局域网主机」字段里填的是地址而不是名字：`ip` / `ip:port` / `host:port`。
+///
+/// 只有带端口的写法才认非 IP 的主机名（`nas.local:52177`）；不带端口时必须是 IP 字面量，
+/// 否则就成了「名字还是地址」的抛硬币——名字才是这个字段的正常用法。
+fn parse_lan_address(raw: &str) -> Option<(String, Option<u16>)> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(socket) = trimmed.parse::<std::net::SocketAddr>() {
+        return Some((socket.ip().to_string(), Some(socket.port())));
+    }
+    if let Ok(ip) = trimmed.parse::<std::net::IpAddr>() {
+        return Some((ip.to_string(), None));
+    }
+    let (host, port) = trimmed.rsplit_once(':')?;
+    if host.is_empty() || host.contains(' ') {
+        return None;
+    }
+    Some((host.to_string(), port.trim().parse::<u16>().ok()))
+}
+
+fn port_list_text() -> String {
+    PORT_SWEEP
+        .iter()
+        .map(|port| port.to_string())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// 在一台主机上取 `/healthz`：给了端口就只试那一个，没给就在 [`PORT_SWEEP`] 上依次试。
+/// `wanted` 非空时要求主机自报名字匹配。
+fn probe_lan_host(host: &str, port: Option<u16>, wanted: &str) -> Option<(u16, Value)> {
+    match port {
+        Some(port) => {
+            let health =
+                probe_health_with_timeout(&format!("http://{host}:{port}"), sweep_timeout()).ok()?;
+            if !wanted.trim().is_empty() && !names_match(health_name(&health), wanted) {
+                return None;
+            }
+            Some((port, health))
+        }
+        None => probe_host_ports(host, wanted, sweep_timeout()),
+    }
 }
 
 /// P2P：枢纽规则——目录在线设备（含自己）里 **EndpointId 最小**的那台当枢纽，
@@ -277,6 +376,7 @@ fn resolve_p2p(layout: &Layout, sync: &SyncSettings) -> CoreResult<Resolution> {
                     Some(sync.p2p_relay.trim().to_string())
                 },
                 directory_url: sync.p2p_directory.trim().to_string(),
+                name: desired_host_name(&sync.lan_name),
                 serve: true,
             })?
         }
@@ -311,7 +411,7 @@ fn resolve_p2p(layout: &Layout, sync: &SyncSettings) -> CoreResult<Resolution> {
                     )));
                 }
             }
-            last_error = "本机是枢纽，但内置服务器没在跑".to_string();
+            last_error = "本机是主设备，但内置服务器没在跑".to_string();
             continue;
         }
         match runtime.dial(candidate, &addrs) {

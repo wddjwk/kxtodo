@@ -89,6 +89,21 @@ pub fn record_peer(layout: &Layout, id_z32: &str, name: &str, ok: bool, error: O
     let _ = save(layout, &state);
 }
 
+/// 只补名字，不动拨号结果：名字可能是从对方的**名字记录**里查到的（压根没拨过号），
+/// 写成「刚拨号成功」会让设备列表显示出一次没发生过的连接。
+pub fn note_peer_name(layout: &Layout, id_z32: &str, name: &str) {
+    if name.trim().is_empty() {
+        return;
+    }
+    let mut state = load(layout);
+    let entry = state.known_peers.entry(id_z32.to_string()).or_default();
+    if entry.name == name {
+        return;
+    }
+    entry.name = name.to_string();
+    let _ = save(layout, &state);
+}
+
 pub fn hex(bytes: &[u8; 32]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { onDestroy, tick } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
   import { ChevronRight } from "@lucide/svelte";
+  import { submenuClosed, submenuOpened, submenuBack } from "./submenu";
   import type { Component } from "svelte";
 
   export let icon: Component | null = null;
@@ -15,18 +16,28 @@
   let itemEl: HTMLElement;
   let flipX = false;
   let flipY = false;
+  /** 计数幂等：收起会被 onDestroy、点击别处、移动端「返回」多条路径触发，不能重复减 */
+  let counted = false;
 
   $: hasSubmenu = Boolean($$slots.submenu);
   $: submenuClass = `submenu-panel${flipX ? " flip-x" : ""}${flipY ? " flip-y" : ""}`;
 
   function openSubmenu(): void {
     submenuOpen = true;
+    if (!counted) {
+      counted = true;
+      submenuOpened();
+    }
     window.addEventListener("click", handleDocumentClick, true);
     void adjustSubmenu();
   }
 
   function closeSubmenu(): void {
     submenuOpen = false;
+    if (counted) {
+      counted = false;
+      submenuClosed();
+    }
     window.removeEventListener("click", handleDocumentClick, true);
   }
 
@@ -37,7 +48,8 @@
     closeSubmenu();
   }
 
-  /** 子菜单贴右缘展开；超出视口右/下缘时翻转。 */
+  /** 子菜单贴右缘展开；超出视口右/下缘时翻转。
+   * 移动端不翻转——那里是钻入式（一级隐藏，二级占据菜单位置），见 mobile.css。 */
   async function adjustSubmenu(): Promise<void> {
     await tick();
     if (!submenuEl) return;
@@ -60,6 +72,13 @@
     }
     onSelect();
   }
+
+  onMount(() =>
+    // 移动端二级面板上的「返回」：收起自己，一级菜单随即重新显示
+    submenuBack.subscribe((count) => {
+      if (count > 0 && submenuOpen) closeSubmenu();
+    })
+  );
 
   onDestroy(closeSubmenu);
 </script>

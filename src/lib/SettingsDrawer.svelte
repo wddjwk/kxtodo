@@ -100,6 +100,9 @@
   /** 主机名字输入框的草稿：提交（失焦/回车）才落盘——改名字会重启内置服务器，不能每敲一个字重启一次 */
   let lanNameDraft = "";
   let lanNameFocused = false;
+  /** 局域网主机字段的草稿：可以是主机名字，也可以直接填 ip / ip:port（发现被挡时的手工出路） */
+  let lanPeerDraft = "";
+  let lanPeerFocused = false;
   /** 内置主机管理台密码的显隐（自动生成的，用户要能抄下来登录自己的管理台） */
   let adminSecretVisible = false;
   /** 已配对后点「修改」展开账户输入框：本机做服务器时账户就建在自己的库里，必须能改 */
@@ -138,7 +141,7 @@
   $: lanPort = $appSettings.sync?.lanPort ?? 52177;
   $: hostStatus = syncStatus?.host ?? null;
   $: p2pInfo = syncStatus?.p2p ?? null;
-  /** 枢纽的展示名：目录里学到的名字，没学过就显示 id 前缀 */
+  /** 主设备的展示名：目录里学到的名字，没学过就显示 id 前缀 */
   $: p2pHubLabel = (() => {
     const info = p2pInfo;
     if (!info?.hubId) return "";
@@ -153,18 +156,21 @@
       : p2pInfo.hubIsSelf === null || p2pInfo.hubIsSelf === undefined
         ? "解析目录中…"
         : p2pInfo.hubIsSelf
-          ? `本机是枢纽 · ${p2pInfo.onlinePeers ?? 0} 台在线`
-          : `枢纽「${p2pHubLabel}」 · ${p2pInfo.onlinePeers ?? 0} 台在线`;
-  /** 设备浮层标题：在线数 + 枢纽是谁 */
+          ? `本机做主设备 · ${p2pInfo.onlinePeers ?? 0} 台在线`
+          : `主设备「${p2pHubLabel}」 · ${p2pInfo.onlinePeers ?? 0} 台在线`;
+  /** 设备浮层标题：在线数 + 主设备是谁 */
   $: peersHeadline = !peers
     ? "解析中…"
-    : `在线 ${peers.count} 台 · 枢纽 ${
+    : `在线 ${peers.count} 台 · 主设备 ${
         peers.hubIsSelf
           ? "本机"
           : peers.peers.find((peer) => peer.id === peers?.hubId)?.name || `${(peers.hubId ?? "").slice(0, 8)}…`
       }`;
   // 名字从别处变了（CLI、另一台设备的设置同步）就跟上，别把用户的草稿冲掉
   $: if (!lanNameFocused && lanNameDraft.trim() !== lanName) lanNameDraft = lanName;
+  $: if (!lanPeerFocused && lanPeerDraft.trim() !== lanPeer) lanPeerDraft = lanPeer;
+  /** 掉线时「立即同步」变「立即重连」；连上后 syncNow 会刷新连接结论，标签自动变回来 */
+  $: syncOffline = syncPaired && connection.online === false;
   // 切进 P2P 模式时把自部署覆盖的当前值带进草稿（打字期间不回灌）
   $: if (p2pDraftsMode !== syncMode) {
     p2pDraftsMode = syncMode;
@@ -239,16 +245,22 @@
       ? ""
       : `下次同步 ${Math.max(0, Math.round(($nextSyncAt - clock) / 1000))}s`;
 
-  /** 最近同步压成一行：时间 + 拉/推，图片与冲突只在非零时才出现 */
+  /** 本地时间戳：`2026/09/06 23:18:02`（不用 toLocaleString，各平台/各语言的格式不一致） */
+  function formatStamp(date: Date): string {
+    const pad = (value: number) => String(value).padStart(2, "0");
+    return (
+      `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ` +
+      `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+    );
+  }
+
+  /** 最近同步压成一行：时间 + ↑推送 ↓拉取（实体与图片合并计数，用户不需要分类） */
   function formatLastSync(status: import("./actions").SyncStatus): string {
     if (!status.lastSyncAt) return "";
     const result = status.lastResult;
-    const parts = [`拉 ${result?.pulled ?? 0}`, `推 ${result?.pushed ?? 0}`];
-    if (result?.imagesPulled || result?.imagesPushed) {
-      parts.push(`图 ↓${result.imagesPulled ?? 0} ↑${result.imagesPushed ?? 0}`);
-    }
-    if (result?.conflicts) parts.push(`冲突 ${result.conflicts}`);
-    return `${new Date(status.lastSyncAt).toLocaleString()} · ${parts.join(" ")}`;
+    const up = (result?.pushed ?? 0) + (result?.imagesPushed ?? 0);
+    const down = (result?.pulled ?? 0) + (result?.imagesPulled ?? 0);
+    return `${formatStamp(new Date(status.lastSyncAt))} ↑${up} ↓${down}`;
   }
   $: lastSyncText = syncStatus ? formatLastSync(syncStatus) : "";
 
@@ -259,18 +271,22 @@
     void refreshSyncStatus();
   }
   $: if (!$showSettings) syncStatusLoaded = false;
-  // 未配对时预填：解除配对后地址与用户名仍在设置里，直接带出来省得重敲
+  // 未配对时预填：解除配对后地址与用户名仍在设置里，直接带出来省得重敲。
+  // 密码也带（打码输入框）：勾「本机作为服务器」要求本机有账户密码，别让用户重敲一遍。
+  // 解除配对会清密码，所以那种情况下本来就没有可带的值。
   $: if (!syncFormPrefilled && !syncPaired) {
     syncFormPrefilled = true;
     syncForm.serverUrl = $appSettings.sync?.serverUrl || "";
     syncForm.username = $appSettings.sync?.username || $appSettings.profile.displayName || "";
+    syncForm.secret = $appSettings.sync?.secret || "";
   }
 
-  /** 本地状态立即渲染，网络探测丢到后台（掉线时也不阻塞设置界面）。 */
+  /** 本地状态立即渲染，网络探测丢到后台（掉线时也不阻塞设置界面）。
+   * showSecrets：管理后台密码只在首次生成时存在，不带上就既显示不出来也拼不出自动登录链接。 */
   async function refreshSyncStatus(options: { probe?: boolean } = {}): Promise<void> {
-    syncStatus = await syncStatusAction();
+    syncStatus = await syncStatusAction(true);
     if (options.probe === false) return;
-    void syncProbeAction().then((status) => {
+    void syncProbeAction(true).then((status) => {
       if (status) syncStatus = status;
     });
   }
@@ -343,7 +359,7 @@
    */
   async function waitForHost(wantRunning: boolean): Promise<void> {
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      const status = await syncStatusAction();
+      const status = await syncStatusAction(true);
       if (status) syncStatus = status;
       if (Boolean(status?.host?.running) === wantRunning) return;
       await new Promise((resolve) => setTimeout(resolve, 200));
@@ -356,12 +372,30 @@
     await refreshSyncStatus({ probe: false });
   }
 
+  /** 勾选「本机作为服务器」时缺账户密码的告警（一句话，就在勾选框下面） */
+  let hostAccountWarning = "";
+
   /** 勾选/取消「本机作为服务器」：取消只停内置服务器，不影响自己继续当客户端。 */
-  async function toggleLanHost(): Promise<void> {
+  async function toggleLanHost(event?: Event): Promise<void> {
     if (syncBusy) return;
+    const next = !lanHost;
+    if (next) {
+      // 主机上的账户就建在自己库里：本机没有账户密码，勾了也同步不了任何东西。
+      // 已配对的设置值与表单里刚填的值都认（用户可能正准备点「开始同步」）。
+      const user = ($appSettings.sync?.username ?? "").trim() || syncForm.username.trim();
+      const secret = ($appSettings.sync?.secret ?? "").trim() || syncForm.secret;
+      if (!user || !secret) {
+        hostAccountWarning = "未指定账户/密码：先填好账户与密码，再勾选本机作为服务器";
+        showToast(hostAccountWarning);
+        // 设置没变，Svelte 不会重渲染 checked：手动把勾选框拨回去
+        const box = event?.currentTarget as HTMLInputElement | null;
+        if (box) box.checked = false;
+        return;
+      }
+    }
+    hostAccountWarning = "";
     syncBusy = true;
     try {
-      const next = !lanHost;
       // 名字先一起提交：core 要在局域网里查这个名字有没有被别的主机占用
       const ok = await setSyncLanHostAction(next, next ? lanNameDraft.trim() || lanName : undefined);
       if (ok) {
@@ -373,7 +407,8 @@
     }
   }
 
-  /** 提交主机名字（失焦/回车）。改名会重启内置服务器——名字就是它在局域网里的身份。 */
+  /** 提交主机名字（失焦/回车）。改名会重启内置服务器——名字就是它在局域网里的身份，
+   * P2P 下它同时是发布到目录里的设备名。 */
   async function commitLanName(): Promise<void> {
     lanNameFocused = false;
     const name = lanNameDraft.trim();
@@ -382,21 +417,42 @@
       return;
     }
     if (await setSyncLanNameAction(name)) {
-      if (lanHost) await waitForHost(true);
+      if (lanHost || syncMode === "p2p") await waitForHost(true);
       await refreshSyncStatus({ probe: false });
     } else {
       lanNameDraft = lanName;
     }
   }
 
-  /** 打开本机内置主机的管理台（系统浏览器；地址是本机回环，手机上也一样能开）。 */
+  /** 提交局域网主机（失焦/回车）：主机名字，或发现被挡住时直接填的 ip / ip:port。 */
+  async function commitLanPeer(): Promise<void> {
+    lanPeerFocused = false;
+    const value = lanPeerDraft.trim();
+    if (value === lanPeer) {
+      lanPeerDraft = lanPeer;
+      return;
+    }
+    if (await setSyncLanPeerAction(value)) {
+      await refreshSyncStatus({ probe: false });
+    } else {
+      lanPeerDraft = lanPeer;
+    }
+  }
+
+  /** 打开本机内置主机的管理后台（系统浏览器；地址是本机回环，手机上也一样能开）。
+   * 凭据拼在 URL **片段**里：片段不发往服务器，登录页读完立刻抹掉，不会落进访问日志。 */
   async function openAdminConsole(): Promise<void> {
     const url = hostStatus?.adminUrl;
     if (!url) return;
+    const user = hostStatus?.adminUser ?? "";
+    const password = hostStatus?.adminPassword ?? "";
+    const target = user && password
+      ? `${url}#u=${encodeURIComponent(user)}&p=${encodeURIComponent(password)}`
+      : url;
     try {
-      await openExternalUrl(url);
+      await openExternalUrl(target);
     } catch (error) {
-      showToast(`打开管理台失败：${String(error)}`);
+      showToast(`打开管理后台失败：${String(error)}`);
     }
   }
 
@@ -920,6 +976,9 @@
           <span>本机作为服务器</span>
           <input type="checkbox" checked={lanHost} disabled={syncBusy} on:change={toggleLanHost} />
         </div>
+        {#if hostAccountWarning}
+          <p class="update-error">{hostAccountWarning}</p>
+        {/if}
         {#if lanHost}
           <label class="settings-row">
             主机名字
@@ -939,7 +998,7 @@
           </label>
           {#if hostStatus?.running}
             <div class="settings-row">
-              <span>管理台</span>
+              <span>管理后台</span>
               <span class="sync-side admin-cell">
                 <span class="muted" title={hostStatus?.adminUrl}>
                   {hostStatus?.adminUser}
@@ -952,14 +1011,26 @@
                   aria-label={adminSecretVisible ? "隐藏密码" : "显示密码"}
                   on:click={() => (adminSecretVisible = !adminSecretVisible)}
                 >{#if adminSecretVisible}<EyeOff size={13} />{:else}<Eye size={13} />{/if}</button>
-                <button class="settings-button" type="button" on:click={openAdminConsole}>打开</button>
+                <button class="settings-button" type="button" title="在系统浏览器里打开，并自动登录" on:click={openAdminConsole}>打开</button>
               </span>
             </div>
           {/if}
         {:else}
           <div class="settings-row sync-peer-row">
-            <span title="选定的是主机名字：它换了 IP、换了端口都照样连得上">局域网主机</span>
-            <span class="muted sync-side">{lanPeer ? `「${lanPeer}」` : "未选定"}</span>
+            <span title="选定的是主机名字：它换了 IP、换了端口都照样连得上。发现被防火墙挡住时可以直接填 IP（端口留空会依次试 52177-52180）">局域网主机</span>
+            <input
+              bind:value={lanPeerDraft}
+              placeholder="主机名字或 IP"
+              disabled={discovering}
+              on:focus={() => (lanPeerFocused = true)}
+              on:blur={commitLanPeer}
+              on:keydown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void commitLanPeer();
+                }
+              }}
+            />
             <button class="settings-button" type="button" disabled={discovering} on:click={runDiscovery}>
               {discovering ? "搜索中…" : "发现"}
             </button>
@@ -992,8 +1063,24 @@
       {/if}
 
       {#if syncMode === "p2p"}
+        <label class="settings-row" title="发布到账户目录里，别的设备在列表里看到的就是这个名字">
+          设备名字
+          <input
+            bind:value={lanNameDraft}
+            placeholder="本机设备名"
+            disabled={syncBusy}
+            on:focus={() => (lanNameFocused = true)}
+            on:blur={commitLanName}
+            on:keydown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void commitLanName();
+              }
+            }}
+          />
+        </label>
         <div class="settings-row sync-peer-row">
-          <span title="同账户的设备靠目录互相发现；每轮连「枢纽」（目录里最小的那台），对方不在线就按重连间隔静默重试">设备</span>
+          <span title="同账户的设备互相发现；每轮连「主设备」——在线设备里 id 最小的那台，其它设备连它同步，它不在线会自动换一台。P2P 只在两台设备同时在线时才同步。">设备</span>
           <span class="muted sync-side">{p2pInfo?.running ? `${p2pInfo.onlinePeers ?? 0} 台在线` : "未启动"}</span>
           <button class="settings-button" type="button" disabled={peersLoading} on:click={loadPeers}>
             {peersLoading ? "解析中…" : "列表"}
@@ -1016,7 +1103,7 @@
                   <div class="sync-popover-row">
                     <span class="discovery-item">
                       <span class="discovery-name">{peer.name || `${peer.id.slice(0, 8)}…`}</span>
-                      {#if peer.id === peers?.hubId}<span class="muted">枢纽</span>{/if}
+                      {#if peer.id === peers?.hubId}<span class="muted">主设备</span>{/if}
                       {#if peer.lastOk === false}<span class="muted">上次拨号失败</span>{/if}
                     </span>
                   </div>
@@ -1088,7 +1175,7 @@
         {#if lastSyncText}
           <div class="settings-row">
             <span>最近同步</span>
-            <span class="muted sync-side">{lastSyncText}</span>
+            <span class="muted sync-side sync-stamp">{lastSyncText}</span>
           </div>
         {/if}
       {:else}
@@ -1159,7 +1246,7 @@
             {syncPaused ? "恢复同步" : "暂停同步"}
           </button>
           <button class="settings-button primary" type="button" disabled={syncBusy || syncPaused} on:click={runSyncNow}>
-            {syncBusy ? "同步中…" : "立即同步"}
+            {syncBusy ? "同步中…" : syncOffline ? "立即重连" : "立即同步"}
           </button>
         </div>
       {:else}
@@ -1193,7 +1280,9 @@
       </button>
     </div>
     {#if progress.phase === "downloading"}
-      <p class="update-status">正在下载 {progress.stage || "更新"} {progress.percent}%</p>
+      <p class="update-status">
+        正在下载 {progress.stage || "更新"}{#if progress.knownTotal !== false} {progress.percent}%{/if}{#if progress.note} · {progress.note}{/if}
+      </p>
     {:else if progress.phase === "installing"}
       <p class="update-status">已下载，请在系统安装界面完成更新</p>
     {:else if progress.phase === "restarting"}

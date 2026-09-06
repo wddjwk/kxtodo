@@ -40,6 +40,10 @@ export type UpdateProgress = {
   stage: "GUI" | "CLI" | "APK" | "";
   percent: number;
   message: string;
+  /** 下载阶段的补充说明：回退加速代理的提示，或拿不到 content-length 时的已下载体积 */
+  note?: string;
+  /** 是否知道总大小；不知道就没有百分比可显示（只能显示已下载体积）。缺省按知道处理 */
+  knownTotal?: boolean;
 };
 
 /** 下载/安装/重启全过程状态：SettingsDrawer 直接订阅渲染。 */
@@ -47,17 +51,34 @@ export const updateProgress = writable<UpdateProgress>({
   phase: "idle",
   stage: "",
   percent: 0,
-  message: ""
+  message: "",
+  note: "",
+  knownTotal: true
 });
 
+function megabytes(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 if (isTauriRuntime) {
-  void listen<{ stage: string; percent: number }>("update://progress", (event) => {
+  void listen<{
+    stage: string;
+    percent: number;
+    received?: number;
+    total?: number;
+    note?: string;
+  }>("update://progress", (event) => {
     const stage = event.payload.stage;
+    const total = event.payload.total ?? 0;
+    const received = event.payload.received ?? 0;
     updateProgress.update((state) => ({
       ...state,
       phase: "downloading",
       stage: stage === "CLI" ? "CLI" : stage === "APK" ? "APK" : "GUI",
-      percent: event.payload.percent
+      percent: event.payload.percent,
+      knownTotal: total > 0,
+      // 后端的提示（例如「改用加速代理重试」）优先；没有提示且不知道总大小时报已下载体积
+      note: event.payload.note || (total > 0 ? "" : `已下载 ${megabytes(received)}`)
     }));
   });
   void listen<{ path?: string; manualRestart?: boolean; message?: string }>("update://applied", (event) => {

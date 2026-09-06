@@ -158,7 +158,10 @@ impl ServerHandle {
     /// 请求停机并等服务循环结束（需在 runtime 上 await）。
     pub async fn shutdown(self) {
         self.request_shutdown();
-        if let Some(task) = self.serve_task.lock().unwrap().take() {
+        // 先把 task 取出来再 await：MutexGuard 跨 await 会让这个 future 不是 Send，
+        // 宿主就没法把它 spawn 到 tauri 的运行时上（重启内置主机时要等旧服务循环收尾）
+        let task = self.serve_task.lock().unwrap().take();
+        if let Some(task) = task {
             let _ = task.await;
         }
     }

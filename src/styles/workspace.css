@@ -1959,49 +1959,52 @@ h1 {
   background: white;
 }
 
-.link-preview-close-zone {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 80px;
-  z-index: 9001;
+/* 顶部标题栏：像浏览器标签页那样显示网页标题，关闭按钮在右上角。
+   有这条栏网页内容就不会顶到系统状态栏底下（移动端全屏 WebView 尤其明显），
+   关闭按钮也不再依赖 hover——触屏上根本没有 hover。 */
+.link-preview-bar {
+  flex: none;
   display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  padding-top: 16px;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.2s;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid #e6e6e6;
+  background: #f7f7f8;
 }
 
-.link-preview-overlay:hover .link-preview-close-zone {
-  opacity: 1;
+.link-preview-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #1f2937;
+  font-size: 13.5px;
 }
 
 .link-preview-close {
-  pointer-events: auto;
+  flex: none;
   display: grid;
-  width: 44px;
-  height: 44px;
+  width: 32px;
+  height: 32px;
   place-items: center;
   border: 0;
-  border-radius: 50%;
-  background: rgb(30 30 30 / 75%);
-  color: white;
+  border-radius: 8px;
+  background: transparent;
+  color: #4b5563;
   cursor: pointer;
-  box-shadow: 0 4px 16px rgb(0 0 0 / 25%);
-  transition: background 0.15s, transform 0.15s;
 }
 
 .link-preview-close:hover {
-  background: rgb(200 50 50 / 90%);
-  transform: scale(1.08);
+  background: #eceff3;
+  color: #c0392b;
 }
 
 .link-preview-frame {
+  flex: 1 1 auto;
+  min-height: 0;
   width: 100%;
-  height: 100%;
   border: 0;
 }
 

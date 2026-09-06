@@ -13,7 +13,7 @@ import {
 } from "./stores";
 import { coreDispatch, CoreCommandError } from "./backend";
 import {
-  createCategoryNode, createEntryNode, defaultBackground, createScheduledTask
+  createCategoryNode, createEntryNode, defaultBackground, createScheduledTask, DEFAULT_ENTRY_ICON
 } from "./defaults";
 import { nodeAndDescendantIds } from "./nodes";
 import { uiToPatch, uiToSpec, type ScheduleEntryV9 } from "./scheduleAdapter";
@@ -119,7 +119,7 @@ export async function addNode(kind: "category" | "entry", name: string, parentId
         id: response.data.id,
         kind,
         name,
-        icon: icon ?? (kind === "category" ? "folder" : "notebook"),
+        icon: icon ?? (kind === "category" ? "folder" : DEFAULT_ENTRY_ICON),
         parentId,
         collapsed: false,
         createdAt: new Date().toISOString()
@@ -136,7 +136,7 @@ export async function addNode(kind: "category" | "entry", name: string, parentId
       return report(error, "新建失败");
     }
   }
-  const node = kind === "category" ? createCategoryNode(name, parentId) : createEntryNode(name, parentId, icon ?? "notebook");
+  const node = kind === "category" ? createCategoryNode(name, parentId) : createEntryNode(name, parentId, icon ?? DEFAULT_ENTRY_ICON);
   const next = { ...state(), nodes: [...state().nodes, node] };
   if (kind === "entry") {
     next.backgrounds = { ...next.backgrounds, [node.id]: { ...defaultBackground } };
@@ -1042,8 +1042,8 @@ export async function syncStatus(showSecrets = false): Promise<SyncStatus | null
 }
 
 /** 把状态里的连接结论同步到 store（面板的 🟢/🔴 只订阅这个 store）。 */
-export async function refreshSyncConnection(): Promise<SyncStatus | null> {
-  const status = await syncStatus();
+export async function refreshSyncConnection(showSecrets = false): Promise<SyncStatus | null> {
+  const status = await syncStatus(showSecrets);
   if (status) {
     syncConnection.set({
       online: status.online ?? null,
@@ -1055,7 +1055,7 @@ export async function refreshSyncConnection(): Promise<SyncStatus | null> {
 }
 
 /** 后台短超时探测（/healthz + /me），刷新连接状态缓存；面板打开时调用，不阻塞 UI。 */
-export async function syncProbe(): Promise<SyncStatus | null> {
+export async function syncProbe(showSecrets = false): Promise<SyncStatus | null> {
   if (!coreMode) return null;
   syncConnection.update((state) => ({ ...state, checking: true }));
   try {
@@ -1063,7 +1063,7 @@ export async function syncProbe(): Promise<SyncStatus | null> {
   } catch {
     // 未配对/网络失败都已在状态缓存里留痕，这里不打扰用户
   }
-  const status = await refreshSyncConnection();
+  const status = await refreshSyncConnection(showSecrets);
   syncConnection.update((state) => ({ ...state, checking: false }));
   return status;
 }
@@ -1147,12 +1147,13 @@ export async function syncNow(options: { silent?: boolean } = {}): Promise<boole
     return false;
   }
   if (!silent) {
-    const { pulled, applied, pushed, conflicts, imagesPulled, imagesPushed } = result;
-    const images = imagesPulled || imagesPushed ? `，图片 ↓${imagesPulled} ↑${imagesPushed}` : "";
+    const { pulled, pushed, conflicts, imagesPulled, imagesPushed } = result;
+    const up = pushed + (imagesPushed ?? 0);
+    const down = pulled + (imagesPulled ?? 0);
     showToast(
       conflicts > 0
-        ? `同步完成：拉取 ${pulled}，推送 ${pushed}，冲突 ${conflicts}（下次同步重试）${images}`
-        : `同步完成：拉取 ${pulled}，应用 ${applied}，推送 ${pushed}${images}`
+        ? `同步完成 ↑${up} ↓${down}，冲突 ${conflicts}（下次同步重试）`
+        : `同步完成 ↑${up} ↓${down}`
     );
   }
   // 确有变化才回刷快照（Host 也会发 domain-changed 事件，这里兜底）

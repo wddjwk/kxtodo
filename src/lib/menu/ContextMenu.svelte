@@ -1,7 +1,10 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
+  import { ChevronLeft } from "@lucide/svelte";
   import { appSettings } from "../stores";
+  import { isMobile } from "../platform";
   import { uiScaleValue } from "../styles";
+  import { openSubmenus, requestSubmenuClose } from "./submenu";
 
   /** 触发点坐标（clientX/clientY，屏幕像素）。 */
   export let x = 0;
@@ -17,6 +20,21 @@
   let maxHeight = 0;
   let minWidthPx = minWidth;
   let ready = false;
+  let lastSubOpen = false;
+
+  /** 有子菜单打开着：移动端据此把菜单变成钻入式（一级隐藏，二级占据菜单位置） */
+  $: subOpen = $openSubmenus > 0;
+  // 子菜单开合后菜单的尺寸完全变了（移动端一级被藏起来、二级顶上来），
+  // 原来收敛好的位置可能已经超出屏幕，必须重新量一次。桌面端子菜单是绝对定位的
+  // 浮出面板，不改变根菜单尺寸，不必重排。
+  $: if (subOpen !== lastSubOpen) {
+    lastSubOpen = subOpen;
+    if (isMobile) void layout();
+  }
+
+  function goBack(): void {
+    requestSubmenuClose();
+  }
 
   /** 视口边缘保留的逻辑像素边距。 */
   const MENU_MARGIN_PX = 8;
@@ -35,7 +53,9 @@
     const viewHeight = window.innerHeight / scale;
     const rect = menuEl.getBoundingClientRect();
     const width = rect.width / scale;
-    const height = rect.height / scale;
+    // 内容高度取 rect 与 scrollHeight 的较大者：菜单自己带着 inline max-height 时，
+    // rect 量到的只是被夹住的高度，重新收敛（子菜单开合）时就发现不了溢出。
+    const height = Math.max(rect.height / scale, menuEl.scrollHeight / scale);
     const anchorX = x / scale;
     const anchorY = y / scale;
     // 逻辑视口可能比固定 minWidth 还窄（移动端高缩放），先收敛宽度再定位。
@@ -172,6 +192,7 @@
   bind:this={menuEl}
   class="context-menu"
   class:capped={maxHeight > 0}
+  class:sub-open={subOpen}
   role="menu"
   tabindex="-1"
   style={`left: ${left}px; top: ${top}px; min-width: ${minWidthPx}px;${maxHeight ? ` max-height: ${maxHeight}px; overflow-y: auto;` : ""} visibility: ${ready ? "visible" : "hidden"};`}
@@ -181,5 +202,11 @@
   on:compositionend={markInputActivity}
   on:contextmenu|preventDefault|stopPropagation
 >
+  {#if subOpen && isMobile}
+    <button class="menu-item menu-item-button submenu-back" type="button" data-menu-item on:click={goBack}>
+      <ChevronLeft size={15} />
+      <span class="menu-item-label">返回</span>
+    </button>
+  {/if}
   <slot />
 </div>

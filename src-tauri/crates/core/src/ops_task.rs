@@ -258,7 +258,7 @@ pub fn add_node(data: &mut DataFile, kind: NodeKind, params: AddNodeParams) -> C
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| match kind {
                 NodeKind::Category => "folder".to_string(),
-                _ => "notebook".to_string(),
+                _ => "check-square".to_string(),
             }),
         parent_id: parent_id.clone(),
         order: next_node_order(&data.nodes, parent_id.as_deref()),

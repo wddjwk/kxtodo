@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
+  import { createEventDispatcher, onDestroy } from "svelte";
   import { Check, ChevronUp, PenLine, Plus, X } from "@lucide/svelte";
   import { collapsedMarkdownLine, hasMultipleMarkdownLines, renderInlineMarkdown, renderMarkdown } from "./markdown";
   import { mdImageCache, resolveMarkdownImages } from "./images";
   import { appSettings } from "./stores";
+  import { isMobile as isMobileStore } from "./platform";
   import { uiScaleValue } from "./styles";
   import { longpress, isLongPressSuppressed } from "./longpress";
   import DatePicker from "./DatePicker.svelte";
@@ -15,10 +16,10 @@
 
   const dispatch = createEventDispatcher<{
     toggle: string;
-    expand: string;
+    expand: { id: string; expanded: boolean };
     edit: string;
     context: { id: string; x: number; y: number };
-    openLink: string;
+    openLink: { href: string; title: string };
     setDate: { id: string; date: string };
     removeTag: { id: string; tagId: string };
     editTag: { id: string; tagId: string; text: string };
@@ -26,19 +27,61 @@
     pickEmoji: { id: string; index: number };
   }>();
 
+  /** 两击判定窗口：移动端单击的动作要等到这个窗口过去才执行 */
+  const DOUBLE_TAP_MS = 300;
+
   let showPicker = false;
   let editingTagId = "";
   let editingTagText = "";
   let tagEditEl: HTMLInputElement;
   let dueButtonEl: HTMLButtonElement;
   let datePopoverStyle = "";
+  let tapTimer: number | undefined;
+  let lastTapAt = 0;
+  /** 折叠态标题是否显示不全（单行但很长）——是的话这张卡片也可以展开 */
+  let titleOverflow = false;
+  // isMobile 是 store：当布尔直接用会永远为真，桌面端就会误走移动端手势
+  $: mobile = $isMobileStore;
 
   $: resolvedMd = resolveMarkdownImages(task.markdown, nodeId, $mdImageCache);
   $: collapsedHtml = renderInlineMarkdown(collapsedMarkdownLine(task.markdown));
   $: fullHtml = renderMarkdown(resolvedMd);
   $: formattedDate = task.dueDate ? formatDate(task.dueDate) : "";
-  $: canExpand = hasMultipleMarkdownLines(task.markdown);
+  $: canExpand = hasMultipleMarkdownLines(task.markdown) || titleOverflow;
   $: isExpanded = task.expanded && canExpand;
+
+  onDestroy(() => {
+    if (tapTimer !== undefined) window.clearTimeout(tapTimer);
+  });
+
+  /**
+   * 量折叠态标题有没有被截断：桌面是单行 nowrap（比宽度），移动端折到两行封顶（比高度）。
+   * 截断了就说明「这一行显示不完整」，展开即把它显示完整——单行内容也要能展开。
+   * 参数是渲染后的 HTML，内容一变就重量；窗口尺寸变了也重量。
+   */
+  function measureTitle(
+    node: HTMLElement,
+    html: string
+  ): { update: (next: string) => void; destroy: () => void } {
+    const check = (): void => {
+      titleOverflow =
+        node.scrollWidth > node.clientWidth + 1 || node.scrollHeight > node.clientHeight + 1;
+    };
+    check();
+    window.addEventListener("resize", check);
+    let last = html;
+    return {
+      update(next: string): void {
+        // 参数就是渲染后的 HTML：变了说明内容变了，重新量一次
+        if (next === last) return;
+        last = next;
+        check();
+      },
+      destroy(): void {
+        window.removeEventListener("resize", check);
+      }
+    };
+  }
 
   function formatDate(dateStr: string): string {
     const parts = dateStr.slice(0, 10).split("-").map(Number);
@@ -73,27 +116,58 @@
 
   function toggleExpand(): void {
     if (!canExpand) return;
-    dispatch("expand", task.id);
+    dispatch("expand", { id: task.id, expanded: !isExpanded });
   }
 
   function openEditor(): void {
     dispatch("edit", task.id);
   }
 
+  function isInteractiveTarget(event: MouseEvent): boolean {
+    const target = event.target as HTMLElement | null;
+    return Boolean(target?.closest("button, input, textarea, a"));
+  }
+
   /**
-   * 双击展开/收起。第二次 mousedown（detail >= 2）preventDefault 阻止选词，
+   * 移动端手势：单击展开/折叠，双击进编辑器。
+   * 单击的动作延后到双击窗口结束才执行——立刻执行的话双击会先折叠再打开编辑器。
+   * 两击判定同时看 `event.detail` 与时间间隔：WebView 合成 click 时 detail 不一定可靠。
+   */
+  function handleMobileTap(event: MouseEvent): void {
+    if (isInteractiveTarget(event)) return;
+    const now = Date.now();
+    const doubled = event.detail >= 2 || now - lastTapAt < DOUBLE_TAP_MS;
+    lastTapAt = now;
+    if (tapTimer !== undefined) window.clearTimeout(tapTimer);
+    tapTimer = undefined;
+    // 长按出菜单时不许留下文本选区（菜单是长按的产物，不是选词的产物）
+    event.preventDefault();
+    window.getSelection()?.removeAllRanges();
+    if (doubled) {
+      openEditor();
+      return;
+    }
+    tapTimer = window.setTimeout(() => {
+      tapTimer = undefined;
+      toggleExpand();
+    }, DOUBLE_TAP_MS);
+  }
+
+  /**
+   * 双击展开/收起（桌面）。第二次 mousedown（detail >= 2）preventDefault 阻止选词，
    * 保证双击只触发展开、不留下文本选区；单击不受影响，仍可正常选中复制。
    */
   function handleCardMouseDown(event: MouseEvent): void {
     if (event.detail < 2) return;
-    const target = event.target as HTMLElement | null;
-    if (target?.closest("button, input, textarea, a")) return;
+    if (isInteractiveTarget(event)) return;
     event.preventDefault();
   }
 
   function handleCardDblClick(event: MouseEvent): void {
-    const target = event.target as HTMLElement | null;
-    if (target?.closest("button, input, textarea, a")) return;
+    // 移动端的双击语义在 handleMobileTap（进编辑器），且单击的展开动作已被它取消；
+    // 这里再跑桌面的「双击展开/收起」就会让双击既开编辑器又改变展开状态。
+    if (mobile) return;
+    if (isInteractiveTarget(event)) return;
     if (!canExpand) return;
     event.preventDefault();
     window.getSelection()?.removeAllRanges();
@@ -118,18 +192,27 @@
     if (isLongPressSuppressed()) {
       event.preventDefault();
       event.stopPropagation();
+      return;
     }
+    if (mobile) handleMobileTap(event);
   }
 
   function handleMarkdownClick(event: MouseEvent): void {
+    // 内容区的点击不冒泡到卡片（否则移动端一次点击会被两套逻辑各处理一遍），
+    // 但手势语义要在这里补上：展开态点内容区 = 折叠，双击内容区 = 进编辑器。
     event.stopPropagation();
-    const target = event.target as HTMLElement | null;
-    const link = target?.closest("a[href]");
-    if (!(link instanceof HTMLAnchorElement)) {
+    if (isLongPressSuppressed()) {
+      event.preventDefault();
       return;
     }
-    event.preventDefault();
-    dispatch("openLink", link.href);
+    const target = event.target as HTMLElement | null;
+    const link = target?.closest("a[href]");
+    if (link instanceof HTMLAnchorElement) {
+      event.preventDefault();
+      dispatch("openLink", { href: link.href, title: (link.textContent ?? "").trim() });
+      return;
+    }
+    if (mobile) handleMobileTap(event);
   }
 
   function startTagEdit(tagId: string, currentText: string): void {
@@ -182,7 +265,7 @@
           {@html fullHtml}
         </div>
       {:else}
-        <div class="markdown-body markdown-title-row" on:click={handleMarkdownClick}>
+        <div class="markdown-body markdown-title-row" use:measureTitle={collapsedHtml} on:click={handleMarkdownClick}>
           {@html collapsedHtml}
         </div>
       {/if}

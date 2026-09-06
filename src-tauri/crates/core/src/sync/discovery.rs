@@ -187,6 +187,50 @@ pub fn probe_health_with_timeout(url: &str, timeout: Duration) -> CoreResult<Val
         .map_err(|error| crate::error::CoreError::io(format!("healthz 响应无效：{error}")))
 }
 
+/// 客户端在一台已知 IP 的主机上依次试的 TCP 端口。
+///
+/// 服务端端口被占用时会自动往后监听（内置主机与独立二进制都是），所以「52177 连不上」
+/// 不等于「主机不在」——UDP 发现被防火墙挡住时，这几个端口就是唯一的出路。
+pub const PORT_SWEEP: [u16; 4] = [
+    DEFAULT_SERVER_PORT,
+    DEFAULT_SERVER_PORT + 1,
+    DEFAULT_SERVER_PORT + 2,
+    DEFAULT_SERVER_PORT + 3,
+];
+
+/// 端口扫描的单端口超时：4 个端口最坏 8 秒。连接被拒是立刻返回的，
+/// 只有丢包（主机不在同一网段/被防火墙静默丢弃）才会真的等满。
+const SWEEP_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// 在 `host` 上依次试 [`PORT_SWEEP`] 里的端口，返回第一个 `/healthz` 通过的
+/// `(端口, health)`。`wanted` 非空时还要求主机自报的名字匹配——否则可能连到
+/// 同一台机器上别人的库（比如同机跑着的独立 kxtodo-server）。
+pub fn probe_host_ports(host: &str, wanted: &str, timeout: Duration) -> Option<(u16, Value)> {
+    let host = host.trim();
+    if host.is_empty() {
+        return None;
+    }
+    for port in PORT_SWEEP {
+        let Ok(health) = probe_health_with_timeout(&format!("http://{host}:{port}"), timeout)
+        else {
+            continue;
+        };
+        let name = health
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if wanted.trim().is_empty() || crate::sync::endpoint::names_match(name, wanted) {
+            return Some((port, health));
+        }
+    }
+    None
+}
+
+/// 端口扫描的默认超时（见 [`SWEEP_PROBE_TIMEOUT`]）。
+pub fn sweep_timeout() -> Duration {
+    SWEEP_PROBE_TIMEOUT
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

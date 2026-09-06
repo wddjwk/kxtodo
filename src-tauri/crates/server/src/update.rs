@@ -5,7 +5,6 @@
 //! 替换策略：下载到 `<exe>.new` → 当前二进制改名 `<exe>.old` → `.new` 落位。
 //! 运行中的二进制允许被改名（Windows 也允许 rename，只是不能删除）。
 
-use std::io::Read;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -24,7 +23,9 @@ const MIN_BINARY_BYTES: u64 = 1_000_000;
 
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(120))
+        .timeout_connect(Duration::from_secs(15))
+        // 刻意不设总超时（产物几十 MB），但读必须有：对端连上之后不再发数据时不会永远挂着
+        .timeout_read(Duration::from_secs(60))
         .build()
 }
 
@@ -48,20 +49,28 @@ fn latest_version() -> Result<String, String> {
 ///  所以版本检查仍然直连 API，只有**下载**走回退。）
 const GITHUB_PROXY: &str = "https://ghfast.top/";
 
+/// 下载到 `<path>.part` 再原子改名落位：半截产物绝不会顶上正在跑的二进制。
+/// 直连失败（连不上/截断/体积不对）会清掉残留后换代理重试，两条路都失败则一起报出来。
 fn download_to(path: &std::path::Path) -> Result<(), String> {
-    let bytes = match fetch_bytes(GITHUB_LATEST_ASSET) {
-        Ok(bytes) => bytes,
-        Err(direct_error) => {
-            let proxied = format!("{GITHUB_PROXY}{GITHUB_LATEST_ASSET}");
-            println!("GitHub 直连失败（{direct_error}），改用代理重试：{proxied}");
-            fetch_bytes(&proxied).map_err(|proxy_error| {
-                format!(
-                    "下载 kxtodo-server 失败\n  直连：{direct_error}\n  代理（{GITHUB_PROXY}）：{proxy_error}"
-                )
-            })?
-        }
-    };
-    std::fs::write(path, bytes).map_err(|error| format!("写入失败：{error}"))?;
+    let part = path.with_extension("part");
+    if let Err(direct_error) = stream_to(GITHUB_LATEST_ASSET, &part) {
+        let _ = std::fs::remove_file(&part);
+        let proxied = format!("{GITHUB_PROXY}{GITHUB_LATEST_ASSET}");
+        println!("GitHub 直连失败（{direct_error}），改用代理重试：{proxied}");
+        stream_to(&proxied, &part).map_err(|proxy_error| {
+            let _ = std::fs::remove_file(&part);
+            format!(
+                "下载 kxtodo-server 失败\n  直连：{direct_error}\n  代理（{GITHUB_PROXY}）：{proxy_error}"
+            )
+        })?;
+    }
+    if path.exists() {
+        let _ = std::fs::remove_file(path);
+    }
+    std::fs::rename(&part, path).map_err(|error| {
+        let _ = std::fs::remove_file(&part);
+        format!("新版本落位失败：{error}")
+    })?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -70,7 +79,9 @@ fn download_to(path: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
-fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+/// 流式下载并打进度（每 10% 一行）。体积不对或下载被截断都算失败，`.part` 由调用方清理。
+fn stream_to(url: &str, part: &std::path::Path) -> Result<(), String> {
+    use std::io::{Read, Write};
     let response = agent()
         .get(url)
         .call()
@@ -85,17 +96,38 @@ fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
         ));
     }
     let mut reader = response.into_reader();
-    let mut bytes = Vec::new();
-    reader
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("下载中断：{error}"))?;
-    if (bytes.len() as u64) < MIN_BINARY_BYTES {
+    let mut file = std::fs::File::create(part).map_err(|error| format!("创建临时文件失败：{error}"))?;
+    let mut buffer = [0u8; 64 * 1024];
+    let mut received: u64 = 0;
+    let mut last_step: u64 = 0;
+    loop {
+        let count = reader
+            .read(&mut buffer)
+            .map_err(|error| format!("下载中断：{error}"))?;
+        if count == 0 {
+            break;
+        }
+        file.write_all(&buffer[..count])
+            .map_err(|error| format!("写入临时文件失败：{error}"))?;
+        received += count as u64;
+        if total > 0 {
+            let step = received * 10 / total;
+            if step != last_step {
+                last_step = step;
+                println!("下载中 {}%（{received}/{total} 字节）", step * 10);
+            }
+        }
+    }
+    file.flush().map_err(|error| format!("写入临时文件失败：{error}"))?;
+    if received < MIN_BINARY_BYTES {
         return Err(format!(
-            "下载内容过小（{} 字节），疑似无效资产",
-            bytes.len()
+            "下载内容过小（{received} 字节），疑似无效资产"
         ));
     }
-    Ok(bytes)
+    if total > 0 && received != total {
+        return Err(format!("下载不完整（{received}/{total} 字节）"));
+    }
+    Ok(())
 }
 
 fn version_gt(candidate: &str, current: &str) -> bool {

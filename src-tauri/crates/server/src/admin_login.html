@@ -74,7 +74,7 @@ button:disabled{opacity:.6;cursor:progress}
   <input id="p" type="password" placeholder="••••••••" autocomplete="current-password" required>
   <button id="go" type="submit">登录</button>
   <div class="err" id="err"></div>
-  <div class="hint">管理员凭据由启动参数 --admin-user / --admin-password 设定</div>
+  <div class="hint">应用内置主机的凭据在 KXToDo 设置页；独立服务器由 --admin-user / --admin-password 设定</div>
 </form>
 <script>
 const form = document.getElementById('form');
@@ -104,7 +104,19 @@ form.addEventListener('submit', async (event) => {
     go.textContent = '登录';
   }
 });
-document.getElementById('u').focus();
+// 带凭据自动登录：应用设置页的「打开」按钮拼 `#u=…&p=…`。
+// 用片段而不是查询串——片段不发往服务器，凭据就不会落进访问日志；填完立刻从地址栏抹掉。
+(function autoLogin() {
+  const params = new URLSearchParams(location.hash.replace(/^#/, ''));
+  const user = params.get('u');
+  const password = params.get('p');
+  history.replaceState(null, '', location.pathname);
+  if (!user || !password) { document.getElementById('u').focus(); return; }
+  document.getElementById('u').value = user;
+  document.getElementById('p').value = password;
+  if (form.requestSubmit) form.requestSubmit();
+  else form.dispatchEvent(new Event('submit', { cancelable: true }));
+})();
 </script>
 </body>
 </html>

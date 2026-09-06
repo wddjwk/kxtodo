@@ -951,7 +951,7 @@ fn probe_p2p(layout: &crate::repo::Layout, state: &mut SyncStateFile, mut out: V
     let host = crate::sync::state::load_host_state(layout);
     out["endpoint"] = json!({
         "source": "p2p",
-        "name": if hub_is_self { "本机（枢纽）".to_string() } else { String::new() },
+        "name": if hub_is_self { "本机（主设备）".to_string() } else { String::new() },
         "instanceId": if hub_is_self { host.instance_id.clone() } else { String::new() },
     });
     out["p2p"] = json!({

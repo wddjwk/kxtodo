@@ -158,6 +158,13 @@
   gap: 4px 8px;
 }
 
+/* 「最近同步」是一整串时间戳 + 计数，窄屏缩一号字，长了允许折行而不是挤掉标签 */
+.app-shell.mobile .sync-stamp {
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: normal;
+}
+
 /* Smaller title font on mobile */
 .app-shell.mobile h1 {
   font-size: 24px;
@@ -210,6 +217,77 @@
   padding: 10px 12px;
   font-size: 15px;
   min-height: 44px;
+}
+
+/* 二级菜单钻入式：窄屏上子面板贴右缘展开必然超出屏幕，所以显示二级时隐藏一级，
+   让二级占据菜单原来的位置（ContextMenu 检测到子菜单打开会重新收敛位置与限高）。 */
+.app-shell.mobile .context-menu.sub-open > .menu-item:not(.has-submenu):not(.submenu-back),
+.app-shell.mobile .context-menu.sub-open > .menu-separator,
+.app-shell.mobile .context-menu.sub-open > .menu-section-title {
+  display: none;
+}
+
+.app-shell.mobile .context-menu.sub-open > .menu-item.has-submenu > .menu-item-button {
+  display: none;
+}
+
+.app-shell.mobile .context-menu.sub-open .submenu-panel,
+.app-shell.mobile .context-menu.sub-open .submenu-panel.flip-x,
+.app-shell.mobile .context-menu.sub-open .submenu-panel.flip-y {
+  position: static;
+  left: auto;
+  right: auto;
+  top: auto;
+  bottom: auto;
+  z-index: auto;
+  min-width: 0;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* 卡片：隐藏笔形编辑按钮与它占的那一列，展示区更宽（移动端编辑走双击内容区） */
+.app-shell.mobile .task-card .edit-button {
+  display: none;
+}
+
+.app-shell.mobile .task-card.compact .task-title-grid {
+  grid-template-columns: 34px minmax(0, 1fr) max-content max-content;
+}
+
+/* 折叠态标题：单行太长时折行显示，最多两行，多余的省略号（这仍然是折叠态） */
+.app-shell.mobile .markdown-title-row {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  /* 只写 -webkit- 前缀：无缀 line-clamp 在 Chromium 里会把 display 计算值顶成 flow-root，
+     反而让夹行失效（实测标题没被夹成两行） */
+  -webkit-line-clamp: 2;
+  max-height: none;
+  white-space: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 长按出菜单时不许选中文本：workspace.css 给 markdown 开了 user-select:text，
+   移动端要盖回去（移动端长按 = 菜单；要复制文本进编辑器） */
+.app-shell.mobile .task-card .markdown-title-row,
+.app-shell.mobile .task-card .markdown-content {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 内置浏览器的标题栏避开系统状态栏（网页内容原本会顶到状态栏底下） */
+.app-shell.mobile .link-preview-bar {
+  height: auto;
+  min-height: 44px;
+  padding-top: calc(env(safe-area-inset-top, 0px) * var(--safe-inv, 1));
 }
 
 /* Insert image button on mobile */

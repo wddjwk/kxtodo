@@ -173,13 +173,14 @@ fn start_loopback_host(
     handle
 }
 
-fn start_p2p(repo: &Repository, directory_url: &str) {
+fn start_p2p(repo: &Repository, directory_url: &str, name: &str) {
     let keys = derive_keys(USERNAME, SECRET).unwrap();
     p2p::start(P2pConfig {
         layout: repo.layout.clone(),
         keys,
         relay: Some("disabled".to_string()),
         directory_url: directory_url.to_string(),
+        name: name.to_string(),
         serve: true,
     })
     .expect("start p2p runtime");
@@ -200,6 +201,23 @@ fn wait_directory_ready(repo: &Repository, want: usize) {
     }
     let self_id = runtime.device_id();
     panic!("目录里没有带直连地址的 {want} 台设备；本机 id={}；最后看到：{last}", self_id.to_z32());
+}
+
+/// 等本机把目录里的对端解析出名字（名字记录可能比目录条目晚一拍发布）。
+fn wait_peer_name(repo: &Repository, want: &str) {
+    let runtime = p2p::current_for(&repo.layout).expect("p2p runtime");
+    let mut last: Vec<String> = Vec::new();
+    for _ in 0..60 {
+        let entries = runtime.directory().unwrap_or_default();
+        let ids: Vec<_> = entries.iter().map(|entry| entry.id).collect();
+        let names = runtime.resolve_peer_names(&ids);
+        last = names.values().cloned().collect();
+        if last.iter().any(|name| name == want) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    panic!("没解析到对端名字「{want}」；当前解析到：{last:?}");
 }
 
 fn add_task(repo: &Repository, markdown: &str) {
@@ -274,9 +292,13 @@ fn p2p_two_devices_converge_over_tunnel() {
 
     let handle_a = start_loopback_host(&runtime, &repo_a, &root_a, "p2p-a");
     let handle_b = start_loopback_host(&runtime, &repo_b, &root_b, "p2p-b");
-    start_p2p(&repo_a, &directory_url);
-    start_p2p(&repo_b, &directory_url);
+    start_p2p(&repo_a, &directory_url, "设备甲");
+    start_p2p(&repo_b, &directory_url, "设备乙");
     wait_directory_ready(&repo_a, 2);
+
+    // 拨号之前先验名字：此刻 A 的拨号历史是空的，能显示「设备乙」只可能是
+    // B 用自己设备私钥发布的那条 pkarr 名字记录（否则列表里就是一串 id）。
+    wait_peer_name(&repo_a, "设备乙");
 
     // 配对：账户不存在就当场注册在「本轮枢纽」的库里，另一台登录同一个库
     let (_device_a, _report_a, _registered_a) = pair_device(&repo_a, &p2p_pair(), None).unwrap();

@@ -117,6 +117,9 @@ pub struct P2pRequest {
     pub relay: Option<String>,
     /// 空 = n0 免费公共目录（dns.iroh.link/pkarr）
     pub directory_url: String,
+    /// 本机设备名（与局域网主机名共用 `sync.lanName`）：发布进目录，
+    /// 其它设备的列表里显示的就是它，而不是一串 EndpointId
+    pub name: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -199,15 +202,22 @@ impl HostCore {
         let wanted = lan_wanted || p2p_wanted;
         // P2P 的内置库只给本机隧道用：绑回环、不应答发现（暴露到网卡上纯属风险）
         let loopback_only = p2p_wanted;
-        let name = crate::sync::endpoint::desired_host_name(&sync.lan_name);
-        let host = crate::sync::state::load_host_state(&self.repo.layout);
+        let host_name = crate::sync::endpoint::desired_host_name(&sync.lan_name);
+        let mut host = crate::sync::state::load_host_state(&self.repo.layout);
+        // 残留自愈：描述符说在跑，但写它的那个进程已经没了（宿主崩溃/被杀）。
+        // 端口随进程一起消失了，可残留的描述符会让客户端一直去连一个不存在的地址，
+        // 设置页也永远显示「已在运行」。
+        if host.running && host.pid != 0 && !crate::ipc::host_process_alive(host.pid) {
+            let _ = crate::sync::state::clear_host_state(&self.repo.layout);
+            host = crate::sync::state::EmbeddedHostState::default();
+        }
         // 名字或端口变了要重启（名字是局域网身份，端口是客户端地址缓存的一部分）；
         // 上次启动失败也要重试，否则用户改完设置还是起不来。
         // 比的是 configured_port 而不是实际端口：实际端口可能因占用自动上移过，
         // 拿它跟配置值比会每轮都判定为「需要重启」。loopback 翻转（lan ↔ p2p）同理要重启。
         let up_to_date = host.running
             && host.last_error.is_none()
-            && host.name == name
+            && host.name == host_name
             && host.configured_port == sync.lan_port
             && host.loopback == loopback_only;
         let Ok(slot) = self.backend.read() else {
@@ -219,7 +229,7 @@ impl HostCore {
         if wanted && !up_to_date {
             let request = SyncHostRequest {
                 data_dir: self.data_dir.clone(),
-                name,
+                name: host_name.clone(),
                 port: sync.lan_port,
                 loopback_only,
             };
@@ -251,6 +261,7 @@ impl HostCore {
                     Some(sync.p2p_relay.trim().to_string())
                 },
                 directory_url: sync.p2p_directory.trim().to_string(),
+                name: host_name,
             };
             if let Err(error) = backend.p2p_start(&request) {
                 crate::sync::engine::debug_log(format!("p2p runtime start failed: {}", error.message));
