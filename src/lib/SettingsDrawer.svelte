@@ -12,6 +12,7 @@
     syncUnpair as syncUnpairAction,
     syncProbe as syncProbeAction,
     syncDiscover as syncDiscoverAction,
+    syncPeers as syncPeersAction,
     syncHistory as syncHistoryAction,
     syncHistoryRemove as syncHistoryRemoveAction,
     syncHistoryLabel,
@@ -22,7 +23,8 @@
     setSyncLanName as setSyncLanNameAction,
     setSyncLanPeer as setSyncLanPeerAction,
     type DiscoveredServer,
-    type SyncHistoryEntry
+    type SyncHistoryEntry,
+    type SyncPeers
   } from "./actions";
   import { checkForUpdate, startUpdate, updateProgress, type UpdateInfo } from "./updater";
   import { isMobile } from "./platform";
@@ -85,7 +87,7 @@
   }
 
   // ---- 数据同步 ----
-  let syncForm = { serverUrl: "", username: "", secret: "", syncSettings: true, syncSchedules: false };
+  let syncForm = { serverUrl: "", username: "", secret: "" };
   let syncBusy = false;
   let syncStatus: import("./actions").SyncStatus | null = null;
   let syncFormPrefilled = false;
@@ -100,14 +102,24 @@
   let lanNameFocused = false;
   /** 内置主机管理台密码的显隐（自动生成的，用户要能抄下来登录自己的管理台） */
   let adminSecretVisible = false;
+  /** 已配对后点「修改」展开账户输入框：本机做服务器时账户就建在自己的库里，必须能改 */
+  let accountEditing = false;
   /** 秒级 ticker：只用于「下次同步」倒计时显示 */
   let clock = Date.now();
   let clockTimer: number | undefined;
+  /** P2P 设备列表浮层与高级覆盖（自部署 relay/目录）的展开态 */
+  let peersOpen = false;
+  let peers: SyncPeers | null = null;
+  let peersLoading = false;
+  let p2pAdvancedOpen = false;
+  let p2pRelayDraft = "";
+  let p2pDirectoryDraft = "";
+  let p2pDraftsMode: SyncMode | null = null;
 
-  // v0.6.0 只提供局域网与自建服务两项：P2P 要等 iroh 那条链路验证完（不给点了没反应的选项）
   const syncModeOptions: Array<{ value: SyncMode; label: string }> = [
     { value: "lan", label: "局域网" },
-    { value: "server", label: "自建服务" }
+    { value: "server", label: "自建服务" },
+    { value: "p2p", label: "P2P" }
   ];
 
   onMount(() => {
@@ -125,8 +137,40 @@
   $: lanPeer = ($appSettings.sync?.lanPeer ?? "").trim();
   $: lanPort = $appSettings.sync?.lanPort ?? 52177;
   $: hostStatus = syncStatus?.host ?? null;
+  $: p2pInfo = syncStatus?.p2p ?? null;
+  /** 枢纽的展示名：目录里学到的名字，没学过就显示 id 前缀 */
+  $: p2pHubLabel = (() => {
+    const info = p2pInfo;
+    if (!info?.hubId) return "";
+    if (info.hubIsSelf) return "本机";
+    const hit = (info.peers ?? []).find((peer) => peer.id === info.hubId);
+    return hit?.name || `${info.hubId.slice(0, 8)}…`;
+  })();
+  $: p2pSummary = !p2pInfo
+    ? "运行时未启动"
+    : !p2pInfo.running
+      ? "运行时未启动"
+      : p2pInfo.hubIsSelf === null || p2pInfo.hubIsSelf === undefined
+        ? "解析目录中…"
+        : p2pInfo.hubIsSelf
+          ? `本机是枢纽 · ${p2pInfo.onlinePeers ?? 0} 台在线`
+          : `枢纽「${p2pHubLabel}」 · ${p2pInfo.onlinePeers ?? 0} 台在线`;
+  /** 设备浮层标题：在线数 + 枢纽是谁 */
+  $: peersHeadline = !peers
+    ? "解析中…"
+    : `在线 ${peers.count} 台 · 枢纽 ${
+        peers.hubIsSelf
+          ? "本机"
+          : peers.peers.find((peer) => peer.id === peers?.hubId)?.name || `${(peers.hubId ?? "").slice(0, 8)}…`
+      }`;
   // 名字从别处变了（CLI、另一台设备的设置同步）就跟上，别把用户的草稿冲掉
   $: if (!lanNameFocused && lanNameDraft.trim() !== lanName) lanNameDraft = lanName;
+  // 切进 P2P 模式时把自部署覆盖的当前值带进草稿（打字期间不回灌）
+  $: if (p2pDraftsMode !== syncMode) {
+    p2pDraftsMode = syncMode;
+    p2pRelayDraft = $appSettings.sync?.p2pRelay ?? "";
+    p2pDirectoryDraft = $appSettings.sync?.p2pDirectory ?? "";
+  }
 
   /**
    * 配对 = 有账户密码 + 当前通信方式有一个明确对端（与 core 的 is_paired 同口径）。
@@ -142,26 +186,43 @@
           : true)
   );
   $: syncPaused = syncPaired && !$appSettings.sync?.enabled;
-  /** 当前对端在用户眼里叫什么（局域网认名字，自建服务认地址） */
-  $: peerLabel =
+  $: connection = $syncConnection;
+  /** 内置主机是否把端口上移了（配置端口被占用）——只有这种情况才值得占字符 */
+  $: hostPortBumped = Boolean(hostStatus?.running) && (hostStatus?.port ?? 0) !== lanPort;
+  $: lanEndpointText = syncStatus?.lanEndpoint
+    ? `${syncStatus.lanEndpoint.host}:${syncStatus.lanEndpoint.port}`
+    : "";
+  /**
+   * 整张卡片只有这一条状态指示：本机做主机时不再和「对端已连接」并排出现两个圆点。
+   * 主机与自己仍然要同步（内置库就是别的设备来读的那一份），但用户只需要看到一个状态。
+   */
+  $: statusText =
     syncMode === "lan"
       ? lanHost
-        ? "本机作为服务器"
-        : lanPeer
-          ? `局域网主机「${lanPeer}」`
-          : "还没选定局域网主机"
-      : ($appSettings.sync?.serverUrl ?? "").trim() || "还没填服务器地址";
-  /** 真正连到的地址（局域网方式才有意义：身份是名字，地址只是缓存/本机回环） */
-  $: endpointSuffix =
-    syncMode !== "lan"
-      ? ""
-      : lanHost
         ? hostStatus?.running
-          ? ` · 127.0.0.1:${hostStatus.port}`
-          : ""
-        : syncStatus?.lanEndpoint
-          ? ` · ${syncStatus.lanEndpoint.host}:${syncStatus.lanEndpoint.port}`
-          : "";
+          ? `本机服务器 · 端口 ${hostStatus.port}${hostPortBumped ? `（${lanPort} 被占用）` : ""}${isMobile ? " · 需保持前台" : ""}`
+          : hostStatus?.lastError
+            ? `主机启动失败：${hostStatus.lastError}`
+            : "主机启动中…"
+        : lanPeer
+          ? `主机「${lanPeer}」${lanEndpointText ? ` · ${lanEndpointText}` : ""}`
+          : "未选定局域网主机"
+      : syncMode === "p2p"
+        ? p2pSummary
+        : ($appSettings.sync?.serverUrl ?? "").trim() || "未填服务器地址";
+  $: statusDot = lanHost && syncMode === "lan"
+    ? hostStatus?.running
+      ? connection.online === false
+        ? "offline"
+        : "online"
+      : hostStatus?.lastError
+        ? "offline"
+        : "unknown"
+    : connection.online === null
+      ? "unknown"
+      : connection.online
+        ? "online"
+        : "offline";
   /** 「开始同步」可点条件：账户密码齐了，且当前方式有明确对端 */
   $: canStartSync =
     Boolean(syncForm.username.trim()) &&
@@ -171,25 +232,25 @@
       : syncMode === "lan"
         ? lanHost || Boolean(lanPeer)
         : true);
-  $: connection = $syncConnection;
-  $: connectionState = connection.online === null
-    ? "unknown"
-    : connection.online
-      ? "online"
-      : "offline";
-  $: connectionText = connection.checking
-    ? "探测中"
-    : connection.online === null
-      ? "未探测"
-      : connection.online
-        ? "已连接"
-        : "已掉线";
   // 倒计时：让「自动同步间隔到底有没有生效」一眼可见
   $: nextSyncText = !syncPaired || syncPaused
     ? ""
     : $nextSyncAt === null
       ? ""
       : `下次同步 ${Math.max(0, Math.round(($nextSyncAt - clock) / 1000))}s`;
+
+  /** 最近同步压成一行：时间 + 拉/推，图片与冲突只在非零时才出现 */
+  function formatLastSync(status: import("./actions").SyncStatus): string {
+    if (!status.lastSyncAt) return "";
+    const result = status.lastResult;
+    const parts = [`拉 ${result?.pulled ?? 0}`, `推 ${result?.pushed ?? 0}`];
+    if (result?.imagesPulled || result?.imagesPushed) {
+      parts.push(`图 ↓${result.imagesPulled ?? 0} ↑${result.imagesPushed ?? 0}`);
+    }
+    if (result?.conflicts) parts.push(`冲突 ${result.conflicts}`);
+    return `${new Date(status.lastSyncAt).toLocaleString()} · ${parts.join(" ")}`;
+  }
+  $: lastSyncText = syncStatus ? formatLastSync(syncStatus) : "";
 
   let syncStatusLoaded = false;
   // 未配对也要读状态：「本机作为服务器」是配对**之前**就要勾的，得看得到主机起没起来
@@ -212,6 +273,30 @@
     void syncProbeAction().then((status) => {
       if (status) syncStatus = status;
     });
+  }
+
+  /** 打开 P2P 设备列表：目录解析走 60s 缓存，第一次会打一次目录服务 */
+  async function loadPeers(): Promise<void> {
+    peersOpen = !peersOpen;
+    if (!peersOpen || peersLoading) return;
+    peersLoading = true;
+    try {
+      peers = await syncPeersAction();
+      await refreshSyncStatus({ probe: false });
+    } finally {
+      peersLoading = false;
+    }
+  }
+
+  /** 自部署覆盖提交（空串 = 恢复免费公共服务）；宿主收到设置事件会重启 P2P 运行时 */
+  async function commitP2pOverrides(): Promise<void> {
+    const relay = p2pRelayDraft.trim();
+    const directory = p2pDirectoryDraft.trim();
+    if (relay !== ($appSettings.sync?.p2pRelay ?? "") || directory !== ($appSettings.sync?.p2pDirectory ?? "")) {
+      await setConfigAction("sync.p2pRelay", relay);
+      await setConfigAction("sync.p2pDirectory", directory);
+      await refreshSyncStatus({ probe: false });
+    }
   }
 
   /** 放大镜：UDP 广播/组播查询局域网内的主机，结果以下拉浮层展示（点选即选定）。 */
@@ -346,6 +431,19 @@
     history = (await syncHistoryRemoveAction(index)) ?? [];
   }
 
+  /** 展开账户输入框（已配对时用）：把设置里的账户密码带进表单，保存即重新配对一次 */
+  function beginEditAccount(): void {
+    syncForm.serverUrl = $appSettings.sync?.serverUrl || "";
+    syncForm.username = $appSettings.sync?.username || "";
+    syncForm.secret = $appSettings.sync?.secret || "";
+    accountEditing = true;
+  }
+
+  function cancelEditAccount(): void {
+    accountEditing = false;
+    syncFormPrefilled = false;
+  }
+
   /**
    * 统一「开始同步」：账户不存在就当场注册，存在就登录。
    * 用户不需要知道这台设备上有没有注册过——由服务端回答。
@@ -359,11 +457,12 @@
         serverUrl: syncMode === "server" ? syncForm.serverUrl.trim() : undefined,
         username: syncForm.username,
         secret: syncForm.secret,
-        syncSettings: syncForm.syncSettings,
-        syncSchedules: syncForm.syncSchedules
+        syncSettings: $appSettings.sync?.syncSettings ?? true,
+        syncSchedules: $appSettings.sync?.syncSchedules ?? false
       });
       if (ok) {
         syncFormPrefilled = false;
+        accountEditing = false;
         await refreshSyncStatus();
       }
     } finally {
@@ -806,8 +905,7 @@
     {/if}
 
     <div class="sync-card">
-      <!-- 通信方式：三种方式共用同一套同步内核，差别只在「连哪儿」 -->
-      <div class="settings-row">
+      <div class="settings-row sync-mode-row">
         <span>通信方式</span>
         <Dropdown
           ariaLabel="同步通信方式"
@@ -818,8 +916,7 @@
       </div>
 
       {#if syncMode === "lan"}
-        <!-- 角色二选一：本机作为服务器，或选定局域网里的一台主机 -->
-        <div class="settings-row">
+        <div class="settings-row" title="内置服务器随应用启停，同一局域网里的其它设备用「发现」就能连上它">
           <span>本机作为服务器</span>
           <input type="checkbox" checked={lanHost} disabled={syncBusy} on:change={toggleLanHost} />
         </div>
@@ -828,7 +925,7 @@
             主机名字
             <input
               bind:value={lanNameDraft}
-              placeholder="局域网内唯一，例如 客厅的电脑"
+              placeholder="局域网内唯一"
               disabled={syncBusy}
               on:focus={() => (lanNameFocused = true)}
               on:blur={commitLanName}
@@ -840,37 +937,11 @@
               }}
             />
           </label>
-          <div class="sync-host">
-            <span
-              class="conn-state"
-              data-state={hostStatus?.running ? "online" : hostStatus?.lastError ? "offline" : "unknown"}
-            >
-              <i class="conn-dot"></i>
-              <span class="conn-text">
-                {hostStatus?.running ? "主机运行中" : hostStatus?.lastError ? "启动失败" : "启动中"}
-              </span>
-            </span>
-            {#if hostStatus?.running}
-              <span class="muted">
-                端口 {hostStatus?.port ?? lanPort}
-                {#if (hostStatus?.port ?? 0) !== lanPort}（{lanPort} 被占用，已自动上移）{/if}
-              </span>
-            {:else if hostStatus?.lastError}
-              <span class="muted">{hostStatus.lastError}</span>
-            {/if}
-          </div>
           {#if hostStatus?.running}
             <div class="settings-row">
               <span>管理台</span>
               <span class="sync-side admin-cell">
-                <span class="muted">{hostStatus?.adminUrl}</span>
-                <button class="settings-button" type="button" on:click={openAdminConsole}>打开</button>
-              </span>
-            </div>
-            <div class="settings-row">
-              <span>管理台账号</span>
-              <span class="sync-side admin-cell">
-                <span class="muted">
+                <span class="muted" title={hostStatus?.adminUrl}>
                   {hostStatus?.adminUser}
                   {#if adminSecretVisible && hostStatus?.adminPassword} / {hostStatus.adminPassword}{/if}
                 </span>
@@ -881,16 +952,13 @@
                   aria-label={adminSecretVisible ? "隐藏密码" : "显示密码"}
                   on:click={() => (adminSecretVisible = !adminSecretVisible)}
                 >{#if adminSecretVisible}<EyeOff size={13} />{:else}<Eye size={13} />{/if}</button>
+                <button class="settings-button" type="button" on:click={openAdminConsole}>打开</button>
               </span>
             </div>
           {/if}
-          <p class="muted">
-            内置服务器随应用启停，同一局域网里的其它设备用「发现」就能连上它。
-            {#if isMobile}手机退到后台后系统会掐掉监听，作为主机时需保持应用在前台。{/if}
-          </p>
         {:else}
           <div class="settings-row sync-peer-row">
-            <span>局域网主机</span>
+            <span title="选定的是主机名字：它换了 IP、换了端口都照样连得上">局域网主机</span>
             <span class="muted sync-side">{lanPeer ? `「${lanPeer}」` : "未选定"}</span>
             <button class="settings-button" type="button" disabled={discovering} on:click={runDiscovery}>
               {discovering ? "搜索中…" : "发现"}
@@ -904,9 +972,9 @@
                 <button class="icon-button" type="button" title="关闭" aria-label="关闭" on:click={() => (discoveryOpen = false)}><X size={14} /></button>
               </div>
               {#if discovering}
-                <p class="muted">在 UDP 52177 上广播查询，收集局域网内主机的应答…</p>
+                <p class="muted">正在搜索局域网内的主机…</p>
               {:else if discovered.length === 0}
-                <p class="muted">没发现主机：对方要开着 KXToDo、勾选「本机作为服务器」，并与本机在同一个局域网。</p>
+                <p class="muted">没发现主机（对方需开着应用并勾选「本机作为服务器」）</p>
               {:else}
                 <div class="sync-popover-list">
                   {#each discovered as server (server.url)}
@@ -920,84 +988,109 @@
               {/if}
             </div>
           {/if}
-          <p class="muted">选定的是主机名字：它换了 IP、换了端口都照样连得上。</p>
         {/if}
       {/if}
 
-      {#if syncPaired}
-        <div class="settings-row">
-          <span class="sync-label">
-            对端
-            <span class="conn-state" data-state={connectionState}>
-              <i class="conn-dot"></i>
-              <span class="conn-text">{connectionText}</span>
-            </span>
-          </span>
-          <span class="muted sync-side">{nextSyncText}</span>
+      {#if syncMode === "p2p"}
+        <div class="settings-row sync-peer-row">
+          <span title="同账户的设备靠目录互相发现；每轮连「枢纽」（目录里最小的那台），对方不在线就按重连间隔静默重试">设备</span>
+          <span class="muted sync-side">{p2pInfo?.running ? `${p2pInfo.onlinePeers ?? 0} 台在线` : "未启动"}</span>
+          <button class="settings-button" type="button" disabled={peersLoading} on:click={loadPeers}>
+            {peersLoading ? "解析中…" : "列表"}
+          </button>
         </div>
-        <div class="sync-url">{peerLabel}{endpointSuffix}</div>
-        <div class="settings-row"><span>账户</span><span class="muted sync-side">{$appSettings.sync.username}</span></div>
-        {#if syncPaused}
-          <p class="sync-note">同步已暂停：不会自动同步，通信方式与账户配置都还在。</p>
+        {#if peersOpen}
+          <div class="sync-popover">
+            <div class="sync-popover-head">
+              <span>{peersHeadline}</span>
+              <span class="spacer"></span>
+              <button class="icon-button" type="button" title="关闭" aria-label="关闭" on:click={() => (peersOpen = false)}><X size={14} /></button>
+            </div>
+            {#if !peers}
+              <p class="muted">正在解析账户目录…</p>
+            {:else if peers.peers.length === 0}
+              <p class="muted">目录里只有本机：另一台设备配对同一账户后会出现</p>
+            {:else}
+              <div class="sync-popover-list">
+                {#each peers?.peers ?? [] as peer (peer.id)}
+                  <div class="sync-popover-row">
+                    <span class="discovery-item">
+                      <span class="discovery-name">{peer.name || `${peer.id.slice(0, 8)}…`}</span>
+                      {#if peer.id === peers?.hubId}<span class="muted">枢纽</span>{/if}
+                      {#if peer.lastOk === false}<span class="muted">上次拨号失败</span>{/if}
+                    </span>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
         {/if}
-        {#if syncStatus?.lastSyncAt}
+        {#if p2pAdvancedOpen}
+          <label class="settings-row" title="自部署 iroh relay 地址；留空 = n0 免费公共服务；disabled = 不用 relay">
+            relay
+            <input
+              bind:value={p2pRelayDraft}
+              placeholder="留空 = 免费公共服务"
+              on:blur={commitP2pOverrides}
+              on:keydown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void commitP2pOverrides();
+                }
+              }}
+            />
+          </label>
+          <label class="settings-row" title="自部署 pkarr 目录地址；留空 = n0 免费公共服务">
+            目录
+            <input
+              bind:value={p2pDirectoryDraft}
+              placeholder="留空 = 免费公共服务"
+              on:blur={commitP2pOverrides}
+              on:keydown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void commitP2pOverrides();
+                }
+              }}
+            />
+          </label>
+        {:else}
           <div class="settings-row">
-            <span>最近同步</span>
-            <span class="muted sync-side">
-              {new Date(syncStatus.lastSyncAt).toLocaleString()}
-              {#if syncStatus?.lastResult}
-                （拉 {syncStatus.lastResult.pulled} / 推 {syncStatus.lastResult.pushed}
-                {#if syncStatus.lastResult.imagesPulled || syncStatus.lastResult.imagesPushed}
-                  / 图片 ↓{syncStatus.lastResult.imagesPulled ?? 0} ↑{syncStatus.lastResult.imagesPushed ?? 0}
-                {/if}
-                {#if syncStatus.lastResult.conflicts} / 冲突 {syncStatus.lastResult.conflicts}{/if}）
-              {/if}
+            <span>自部署</span>
+            <span class="sync-side">
+              <button class="settings-button" type="button" on:click={() => (p2pAdvancedOpen = true)}>relay / 目录</button>
             </span>
           </div>
         {/if}
-        {#if connection.online === false && connection.lastError}
-          <p class="update-error">连不上对端：{connection.lastError}（每 {$appSettings.sync.reconnectSeconds || 300} 秒静默重连）</p>
+      {/if}
+
+      <div class="sync-status" data-state={statusDot}>
+        <i class="conn-dot"></i>
+        <span class="sync-status-text" title={statusText}>{statusText}</span>
+        {#if nextSyncText}<span class="sync-status-meta">{nextSyncText}</span>{/if}
+      </div>
+
+      {#if syncPaused}
+        <p class="sync-note">同步已暂停</p>
+      {/if}
+      {#if syncPaired && connection.online === false && connection.lastError}
+        <p class="update-error">{connection.lastError}</p>
+      {/if}
+
+      {#if syncPaired && !accountEditing}
+        <div class="settings-row">
+          <span>账户</span>
+          <span class="sync-side account-cell">
+            <span class="muted">{$appSettings.sync.username}</span>
+            <button class="settings-button" type="button" disabled={syncBusy} on:click={beginEditAccount}>修改</button>
+          </span>
+        </div>
+        {#if lastSyncText}
+          <div class="settings-row">
+            <span>最近同步</span>
+            <span class="muted sync-side">{lastSyncText}</span>
+          </div>
         {/if}
-        <div class="settings-row"><span>同步数据（节点/任务/插图）</span>
-          <input type="checkbox" checked={$appSettings.sync.syncData} on:change={(event) => updateSyncScope("syncData", event.currentTarget.checked)} />
-        </div>
-        <div class="settings-row"><span>同步设置（配置/配色/背景）</span>
-          <input type="checkbox" checked={$appSettings.sync.syncSettings} on:change={(event) => updateSyncScope("syncSettings", event.currentTarget.checked)} />
-        </div>
-        <div class="settings-row"><span>同步任务（跨平台路径通常不可执行）</span>
-          <input type="checkbox" checked={$appSettings.sync.syncSchedules} on:change={(event) => updateSyncScope("syncSchedules", event.currentTarget.checked)} />
-        </div>
-        <div class="settings-row number-row">
-          <span>自动同步间隔（秒）</span>
-          <NumberField
-            ariaLabel="自动同步间隔（秒）"
-            suffix="s"
-            min={5}
-            max={86400}
-            value={$appSettings.sync.intervalSeconds || 30}
-            onCommit={(v) => updateSyncInterval(v)}
-          />
-        </div>
-        <div class="settings-row number-row">
-          <span>掉线重连间隔（秒）</span>
-          <NumberField
-            ariaLabel="掉线重连间隔（秒）"
-            suffix="s"
-            min={5}
-            max={86400}
-            value={$appSettings.sync.reconnectSeconds || 300}
-            onCommit={(v) => updateReconnectSeconds(v)}
-          />
-        </div>
-        <div class="settings-row sync-actions">
-          <button class="settings-button" type="button" disabled={syncBusy} on:click={unpairSync}>解除配对</button>
-          <button class="settings-button" type="button" disabled={syncBusy} on:click={togglePause}>
-            {syncPaused ? "恢复同步" : "暂停同步"}
-          </button>
-          <button class="settings-button primary" type="button" disabled={syncBusy || syncPaused} on:click={runSyncNow}>
-            {syncBusy ? "同步中…" : "立即同步"}
-          </button>
-        </div>
       {:else}
         {#if syncMode === "server"}
           <label class="settings-row">
@@ -1011,20 +1104,70 @@
         </label>
         <label class="settings-row">
           密码
-          <input type="password" bind:value={syncForm.secret} placeholder="用于派生加密密钥，丢失无法找回" />
+          <input type="password" bind:value={syncForm.secret} placeholder="派生加密密钥，丢失无法找回" />
         </label>
-        <div class="settings-row sync-scope-row">
-          <input id="sync-scope-settings" type="checkbox" bind:checked={syncForm.syncSettings} />
-          <label for="sync-scope-settings" class="inline-label">同步设置（配置/配色/背景）</label>
-          <input id="sync-scope-schedules" type="checkbox" bind:checked={syncForm.syncSchedules} />
-          <label for="sync-scope-schedules" class="inline-label">同步任务</label>
+      {/if}
+
+      <div class="settings-row sync-scope-row">
+        <span class="sync-group-label">同步内容</span>
+        <label class="sync-scope" title="节点、任务与插图">
+          <input type="checkbox" checked={$appSettings.sync.syncData} on:change={(event) => updateSyncScope("syncData", event.currentTarget.checked)} />数据
+        </label>
+        <label class="sync-scope" title="配置、配色与背景">
+          <input type="checkbox" checked={$appSettings.sync.syncSettings} on:change={(event) => updateSyncScope("syncSettings", event.currentTarget.checked)} />设置
+        </label>
+        <label class="sync-scope" title="定时任务：跨平台路径通常不可执行">
+          <input type="checkbox" checked={$appSettings.sync.syncSchedules} on:change={(event) => updateSyncScope("syncSchedules", event.currentTarget.checked)} />任务
+        </label>
+      </div>
+      <div class="settings-row sync-rate-row">
+        <label class="sync-rate">
+          同步间隔
+          <NumberField
+            ariaLabel="自动同步间隔（秒）"
+            suffix="s"
+            min={5}
+            max={86400}
+            value={$appSettings.sync.intervalSeconds || 30}
+            onCommit={(v) => updateSyncInterval(v)}
+          />
+        </label>
+        <label class="sync-rate">
+          掉线重连
+          <NumberField
+            ariaLabel="掉线重连间隔（秒）"
+            suffix="s"
+            min={5}
+            max={86400}
+            value={$appSettings.sync.reconnectSeconds || 300}
+            onCommit={(v) => updateReconnectSeconds(v)}
+          />
+        </label>
+      </div>
+
+      {#if accountEditing}
+        <div class="settings-row sync-actions two">
+          <button class="settings-button" type="button" disabled={syncBusy} on:click={cancelEditAccount}>取消</button>
+          <button class="settings-button primary" type="button" disabled={syncBusy || !canStartSync} on:click={startSync}>
+            {syncBusy ? "处理中…" : "保存并同步"}
+          </button>
         </div>
+      {:else if syncPaired}
+        <div class="settings-row sync-actions">
+          <button class="settings-button" type="button" disabled={syncBusy} on:click={unpairSync}>解除配对</button>
+          <button class="settings-button" type="button" disabled={syncBusy} on:click={togglePause}>
+            {syncPaused ? "恢复同步" : "暂停同步"}
+          </button>
+          <button class="settings-button primary" type="button" disabled={syncBusy || syncPaused} on:click={runSyncNow}>
+            {syncBusy ? "同步中…" : "立即同步"}
+          </button>
+        </div>
+      {:else}
         <div class="settings-row sync-actions single">
           <button class="settings-button primary" type="button" disabled={syncBusy || !canStartSync} on:click={startSync}>
             {syncBusy ? "处理中…" : "开始同步"}
           </button>
         </div>
-        <p class="muted">账户不存在就当场创建，已存在就直接登录——不用自己区分注册与登录。数据（节点/任务/插图）默认同步。</p>
       {/if}
     </div>
   </section>

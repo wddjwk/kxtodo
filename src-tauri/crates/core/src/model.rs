@@ -617,6 +617,13 @@ pub struct SyncSettings {
     /// 局域网：选定的远端主机名（从「发现」列表里点选，持久化，不必每次重选）
     #[serde(rename = "lanPeer", default)]
     pub lan_peer: String,
+    /// P2P 高级覆盖：iroh relay 地址。空 = n0 免费公共服务；`disabled` = 不用 relay
+    /// （只有直连/自部署 relay 的场景才填，默认绝不能要求用户自建）
+    #[serde(rename = "p2pRelay", default, skip_serializing_if = "String::is_empty")]
+    pub p2p_relay: String,
+    /// P2P 高级覆盖：pkarr 目录地址。空 = n0 免费公共服务（dns.iroh.link/pkarr）
+    #[serde(rename = "p2pDirectory", default, skip_serializing_if = "String::is_empty")]
+    pub p2p_directory: String,
     #[serde(default)]
     pub username: String,
     /// 同步密码（派生 auth/enc 密钥；只存本机，不随设置同步）
@@ -730,6 +737,8 @@ impl Default for SyncSettings {
             lan_port: default_lan_port(),
             lan_name: String::new(),
             lan_peer: String::new(),
+            p2p_relay: String::new(),
+            p2p_directory: String::new(),
             username: String::new(),
             secret: String::new(),
             sync_data: default_true(),

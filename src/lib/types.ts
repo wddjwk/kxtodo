@@ -99,6 +99,10 @@ export type Settings = {
     lanName: string;
     /** 局域网：选定的远端主机名（从发现列表里点选） */
     lanPeer: string;
+    /** P2P 高级覆盖：自部署 iroh relay 地址（空 = n0 免费公共服务；disabled = 不用 relay） */
+    p2pRelay: string;
+    /** P2P 高级覆盖：自部署 pkarr 目录地址（空 = n0 免费公共服务） */
+    p2pDirectory: string;
     username: string;
     secret: string;
     syncData: boolean;

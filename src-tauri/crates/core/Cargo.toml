@@ -3,7 +3,7 @@ name = "kxtodo-core"
 version = "0.0.0"
 description = "KXToDo domain core: data model, repository, business commands, CLI engine, background host."
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.91"
 license = ""
 publish = false
 
@@ -29,6 +29,13 @@ sha2 = "0.10"
 hmac = "0.12"
 chacha20poly1305 = "0.10"
 base64 = "0.22"
+# P2P 同步（v0.6.1）：iroh = QUIC + 打洞 + n0 公共 relay（免费公共服务，可换地址）；
+# iroh-dns = 内置的 pkarr 客户端（账户派生密钥签一条 TXT 就是「同账户设备目录」）；
+# tokio = iroh 的运行时与隧道的双向泵；url = pkarr relay 地址的类型。
+iroh = "1.1"
+iroh-dns = "1.1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "sync"] }
+url = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading"] }

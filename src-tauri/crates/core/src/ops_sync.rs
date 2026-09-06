@@ -121,6 +121,7 @@ pub fn sync_dispatch(
         "now" => sync_now(inv, ctx, meta),
         "unpair" => sync_unpair(ctx),
         "configure" => sync_configure(inv, ctx),
+        "peers" => sync_peers(ctx),
         "history" => sync_history(ctx),
         "historyRemove" => sync_history_remove(inv, ctx),
         other => Err(CoreError::validation(
@@ -135,6 +136,17 @@ fn sync_pair(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
     let current = ctx.repo.load_settings()?;
     let request = pair_request(&inv.params, &current.sync)?;
     let scopes = scopes_from_params(&inv.params);
+    // P2P 的内置回环库与 iroh 运行时由常驻进程启停，而配对早于设置落盘：
+    // 先按「将要生效」的设置请宿主起好，否则解析端点时自己这个枢纽还没法服务。
+    if request.mode == SyncMode::P2p {
+        if let Some(host) = ctx.host {
+            let mut prospective = current.sync.clone();
+            prospective.mode = Some(SyncMode::P2p);
+            prospective.username = request.username.clone();
+            prospective.secret = request.secret.clone();
+            host.ensure_p2p_services(&ctx.repo.layout.root, &prospective)?;
+        }
+    }
     // 新设备不预置默认数据：首次拉取直接落服务端内容，避免与服务端数据并集出重复实体
     // （只有新建账户时 engine 才播种默认数据，作为该账户的初始内容）。
     let (device_id, report, registered) = engine::pair_device(ctx.repo, &request, scopes)?;
@@ -182,6 +194,11 @@ fn sync_status(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
         "lanPort": sync.lan_port,
         "lanName": sync.lan_name,
         "lanPeer": sync.lan_peer,
+        // P2P 高级覆盖（空 = n0 免费公共服务）
+        "p2pRelay": sync.p2p_relay,
+        "p2pDirectory": sync.p2p_directory,
+        // P2P 概览：纯本地读（目录只取进程内缓存，不碰网络；要刷新走 sync probe / sync peers）
+        "p2p": p2p_status_snapshot(&ctx.repo.layout),
         // 本机内置主机的运行状况（管理台密码要 --show-secrets 才给）
         "host": {
             "wanted": sync.lan_host,
@@ -291,6 +308,8 @@ fn sync_configure(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
     let lan_port = params.get("lanPort").and_then(Value::as_u64);
     let lan_name = param_str(params, "lanName");
     let lan_peer = param_str(params, "lanPeer");
+    let p2p_relay = param_str(params, "p2pRelay");
+    let p2p_directory = param_str(params, "p2pDirectory");
     if data.is_none()
         && settings_scope.is_none()
         && schedules.is_none()
@@ -302,11 +321,13 @@ fn sync_configure(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
         && lan_port.is_none()
         && lan_name.is_none()
         && lan_peer.is_none()
+        && p2p_relay.is_none()
+        && p2p_directory.is_none()
     {
         return Err(CoreError::validation(
             "MISSING_PARAM",
-            "至少提供一个配置项（mode/lanHost/lanName/lanPort/lanPeer/syncData/syncSettings/\
-             syncSchedules/enabled/intervalSeconds/reconnectSeconds）",
+            "至少提供一个配置项（mode/lanHost/lanName/lanPort/lanPeer/p2pRelay/p2pDirectory/\
+             syncData/syncSettings/syncSchedules/enabled/intervalSeconds/reconnectSeconds）",
         ));
     }
     if let Some(value) = &lan_name {
@@ -361,6 +382,21 @@ fn sync_configure(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
             if let Some(value) = mode {
                 file.sync.mode = Some(value);
             }
+            // P2P 高级覆盖：空串 = 撤掉覆盖、回到 n0 免费公共服务
+            if let Some(value) = p2p_relay {
+                let trimmed = value.trim().to_string();
+                if !trimmed.is_empty() && trimmed != "disabled" {
+                    crate::sync::p2p::net::parse_relay_url(&trimmed)?;
+                }
+                file.sync.p2p_relay = trimmed;
+            }
+            if let Some(value) = p2p_directory {
+                let trimmed = value.trim().to_string();
+                if !trimmed.is_empty() {
+                    crate::sync::p2p::directory::parse_directory_url(&trimmed)?;
+                }
+                file.sync.p2p_directory = trimmed;
+            }
             // 不在此处刷新 syncUpdatedAt：开启设置同步的设备应先收敛到服务端版本，
             // 本地设置只有真的变化后（config.set 触发）才会推送。
             Ok(json!({ "configured": true }))
@@ -371,6 +407,111 @@ fn sync_configure(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
     // 就启动/停掉内置服务器（core 自己起不了 axum，也不该起）。
     notify_settings_changed(ctx);
     Ok(json!({ "configured": true }))
+}
+
+/// P2P 概览的纯本地快照：目录只读进程内缓存（`sync status` 绝不碰网络）。
+///
+/// 没缓存（刚启动/缓存过期）时 `hubIsSelf` 为 null——前端显示「未知」，
+/// 而不是拿过期目录瞎报角色。
+fn p2p_status_snapshot(layout: &crate::repo::Layout) -> Value {
+    let Some(runtime) = crate::sync::p2p::current_for(layout) else {
+        return json!({ "running": false, "hubIsSelf": null, "onlinePeers": 0 });
+    };
+    let self_id = runtime.device_id();
+    let cached = runtime.directory_cached();
+    let hub_is_self = cached.as_ref().map(|entries| {
+        entries
+            .iter()
+            .all(|entry| self_id.as_bytes() <= entry.id.as_bytes())
+    });
+    let hub_id = cached
+        .as_ref()
+        .map(|entries| {
+            entries
+                .iter()
+                .map(|entry| entry.id)
+                .chain(std::iter::once(self_id))
+                .min_by_key(|id| *id.as_bytes())
+                .map(|id| id.to_z32())
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+    let known = crate::sync::p2p::identity::load(layout).known_peers;
+    let peers: Vec<Value> = cached
+        .unwrap_or_default()
+        .iter()
+        .map(|entry| {
+            let id = entry.id.to_z32();
+            json!({
+                "id": id,
+                "name": known.get(&id).map(|peer| peer.name.clone()).unwrap_or_default(),
+            })
+        })
+        .collect();
+    json!({
+        "running": true,
+        "selfId": self_id.to_z32(),
+        "serving": runtime.serve(),
+        "hubIsSelf": hub_is_self,
+        "hubId": hub_id,
+        "onlinePeers": peers.len(),
+        "peers": peers,
+    })
+}
+
+/// P2P 设备列表：账户目录里的在线条目 + 本机拨号历史里学到的名字与最近结果。
+///
+/// 枢纽角色也在这里算（目录含自己里 EndpointId 最小者），设置页与 `sync peers` 共用。
+fn sync_peers(ctx: &ExecContext) -> CoreResult<Value> {
+    let settings = ctx.repo.load_settings()?;
+    if settings.sync.effective_mode() != SyncMode::P2p {
+        return Err(CoreError::conflict(
+            "SYNC_MODE_MISMATCH",
+            "当前通信方式不是 P2P（设置 → 数据同步 → 通信方式）".to_string(),
+        ));
+    }
+    let runtime = crate::sync::p2p::current_for(&ctx.repo.layout);
+    let entries = runtime
+        .as_ref()
+        .map(|runtime| runtime.directory())
+        .transpose()?
+        .unwrap_or_default();
+    let known = crate::sync::p2p::identity::load(&ctx.repo.layout).known_peers;
+    let self_endpoint = runtime.as_ref().map(|runtime| runtime.device_id());
+    let self_id = self_endpoint
+        .map(|id| id.to_z32())
+        .unwrap_or_default();
+    // 枢纽口径与 endpoint.rs 完全一致：按 EndpointId **字节序**最小（z32 字符串序不保序）
+    let hub_id = entries
+        .iter()
+        .map(|entry| entry.id)
+        .chain(self_endpoint)
+        .min_by_key(|id| *id.as_bytes())
+        .map(|id| id.to_z32())
+        .unwrap_or_default();
+    let peers: Vec<Value> = entries
+        .iter()
+        .map(|entry| {
+            let id = entry.id.to_z32();
+            let record = known.get(&id);
+            json!({
+                "id": id,
+                "name": record.map(|peer| peer.name.clone()).unwrap_or_default(),
+                "publishedAt": entry.published_at,
+                "lastOk": record.and_then(|peer| peer.last_ok),
+                "lastSeenAt": record.and_then(|peer| peer.last_seen_at.clone()),
+                "lastError": record.and_then(|peer| peer.last_error.clone()),
+            })
+        })
+        .collect();
+    Ok(json!({
+        "selfId": self_id,
+        "hubId": hub_id,
+        "hubIsSelf": hub_id == self_id && !self_id.is_empty(),
+        "serving": runtime.as_ref().map(|runtime| runtime.serve()).unwrap_or(false),
+        "peers": peers,
+        "count": peers.len(),
+    }))
 }
 
 /// 配对历史（本机 `runtime/sync-history.json`）：设置页「历史」一键回填。

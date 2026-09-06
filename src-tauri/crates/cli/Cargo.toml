@@ -3,7 +3,7 @@ name = "kxtodo-cli"
 version = "0.0.0"
 description = "KXToDo command line interface."
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.91"
 license = ""
 publish = false
 

@@ -94,6 +94,7 @@ fn write_host_descriptor(repo: &Repository, handle: &kxtodo_server::ServerHandle
         port: handle.port(),
         configured_port: handle.port(),
         name: handle.name().to_string(),
+        loopback: false,
         instance_id: handle.instance_id.clone(),
         admin_url: handle.admin_url(),
         admin_user: handle.admin_user().to_string(),

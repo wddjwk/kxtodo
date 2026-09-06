@@ -5,7 +5,7 @@ description = "KXToDo：本地优先的待办与 Markdown 笔记桌面应用（G
 authors = ["wddjwk"]
 license = ""
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.91"
 
 # lib 名保持 todo_note_lib：Android 工程（gen/android）按此名加载 .so。
 [lib]

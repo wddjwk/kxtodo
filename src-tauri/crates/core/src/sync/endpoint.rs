@@ -27,6 +27,8 @@ pub const DISCOVERY_TIMEOUT: Duration = Duration::from_millis(2500);
 const CONFIGURED_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// 局域网主机就在同一个网段，探不通就是真不通
 const LAN_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+/// P2P 隧道刚建好，对端内置服务器的 /healthz 多给一点余量
+const P2P_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// 本轮同步实际要连的端点。
 #[derive(Debug, Clone)]
@@ -59,17 +61,39 @@ impl Resolved {
     }
 }
 
+/// 解析结果 + P2P 隧道的生命周期句柄。
+///
+/// P2P 的 base_url 是一条**本地临时隧道**（iroh 双向流 ↔ 对端内置服务器）：
+/// 隧道一关地址就作废，所以调用方必须把 `tunnel` 活到本轮同步结束。
+/// 其它通信方式没有隧道，字段恒为 None。
+pub struct Resolution {
+    pub resolved: Resolved,
+    pub tunnel: Option<crate::sync::p2p::Tunnel>,
+}
+
+impl std::fmt::Debug for Resolution {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Resolution")
+            .field("resolved", &self.resolved)
+            .field("tunnel", &self.tunnel.is_some())
+            .finish()
+    }
+}
+
 /// 端点是怎么解析出来的。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EndpointSource {
     /// 自建服务：用户手填的地址
     Configured,
-    /// 本机就是局域网主机（内置 server 的 localhost）
+    /// 本机就是主机（内置 server 的 localhost；局域网勾选主机或 P2P 自己是枢纽）
     Embedded,
     /// 局域网：命中上次连过的地址缓存
     Cache,
     /// 局域网：这轮广播发现找到的
     Discovery,
+    /// P2P：拨号目录里的枢纽设备，HTTP 走 iroh 隧道
+    P2p,
 }
 
 impl EndpointSource {
@@ -79,6 +103,7 @@ impl EndpointSource {
             EndpointSource::Embedded => "embedded",
             EndpointSource::Cache => "cache",
             EndpointSource::Discovery => "discovery",
+            EndpointSource::P2p => "p2p",
         }
     }
 }
@@ -89,28 +114,37 @@ pub fn resolve(
     layout: &Layout,
     sync: &SyncSettings,
     state: &SyncStateFile,
-) -> CoreResult<Resolved> {
+) -> CoreResult<Resolution> {
     match sync.effective_mode() {
         SyncMode::Server => resolve_configured(sync),
         SyncMode::Lan => resolve_lan(layout, sync, state),
-        SyncMode::P2p => Err(CoreError::conflict(
-            "SYNC_MODE_UNSUPPORTED",
-            "P2P 同步会在后续版本提供；当前请选「局域网」或「自建服务」".to_string(),
-        )),
+        SyncMode::P2p => resolve_p2p(layout, sync),
     }
 }
 
-fn resolve_configured(sync: &SyncSettings) -> CoreResult<Resolved> {
+fn plain(resolved: Resolved) -> Resolution {
+    Resolution {
+        resolved,
+        tunnel: None,
+    }
+}
+
+fn resolve_configured(sync: &SyncSettings) -> CoreResult<Resolution> {
     let base_url = normalize_base_url(&sync.server_url)?;
     let health = probe_health_with_timeout(&base_url, CONFIGURED_PROBE_TIMEOUT)?;
-    Ok(from_health(base_url, health, EndpointSource::Configured, None))
+    Ok(plain(from_health(
+        base_url,
+        health,
+        EndpointSource::Configured,
+        None,
+    )))
 }
 
 fn resolve_lan(
     layout: &Layout,
     sync: &SyncSettings,
     state: &SyncStateFile,
-) -> CoreResult<Resolved> {
+) -> CoreResult<Resolution> {
     // 本机就是主机：连自己的内置服务器（每轮只连一个 endpoint，自己是主机时就是 localhost）
     if sync.lan_host {
         let host = load_host_state(layout);
@@ -136,7 +170,12 @@ fn resolve_lan(
                  可能是上次异常退出留下的 runtime/sync-host.json"
             ))
         })?;
-        return Ok(from_health(base_url, health, EndpointSource::Embedded, None));
+        return Ok(plain(from_health(
+            base_url,
+            health,
+            EndpointSource::Embedded,
+            None,
+        )));
     }
 
     let wanted = sync.lan_peer.trim();
@@ -154,12 +193,12 @@ fn resolve_lan(
             let base_url = format!("http://{}:{}", cached.host, cached.port);
             if let Ok(health) = probe_health_with_timeout(&base_url, LAN_PROBE_TIMEOUT) {
                 if names_match(health_name(&health), wanted) {
-                    return Ok(from_health(
+                    return Ok(plain(from_health(
                         base_url,
                         health,
                         EndpointSource::Cache,
                         Some(cached.clone()),
-                    ));
+                    )));
                 }
             }
         }
@@ -207,11 +246,125 @@ fn resolve_lan(
         port: hit.port,
         instance_id: hit.instance_id.clone().unwrap_or_default(),
     };
-    Ok(from_health(
+    Ok(plain(from_health(
         hit.url.clone(),
         health,
         EndpointSource::Discovery,
         Some(endpoint),
+    )))
+}
+
+/// P2P：枢纽规则——目录在线设备（含自己）里 **EndpointId 最小**的那台当枢纽，
+/// 每轮只连一个端点。自己是枢纽就连自己的内置库（回环）；否则拨号枢纽，
+/// 在 iroh 隧道里对它做一次完整的普通 HTTP 同步（被叫方把隧道接进自己的内置服务器）。
+///
+/// 枢纽下线时：拨号失败进 5 分钟冷却，本轮立刻试下一台；目录条目 15 分钟过期兜底。
+/// 换枢纽 = 换主机库 = engine 的换档逻辑把水位/台账清零重新播种。
+fn resolve_p2p(layout: &Layout, sync: &SyncSettings) -> CoreResult<Resolution> {
+    let runtime = match crate::sync::p2p::current_for(layout) {
+        Some(runtime) => runtime,
+        // 配对发生在设置落盘**之前**（凭据还在请求里），等 Settings 域事件再启运行时
+        // 就鸡生蛋了；所以这里按「将要生效」的设置就地起一个。常驻进程里 reconcile
+        // 随后的 start 是幂等复用，CLI 单进程也因此能用 P2P。
+        None => {
+            let keys = crate::sync::crypto::derive_keys(&sync.username, &sync.secret)?;
+            crate::sync::p2p::start(crate::sync::p2p::P2pConfig {
+                layout: layout.clone(),
+                keys,
+                relay: if sync.p2p_relay.trim().is_empty() {
+                    None
+                } else {
+                    Some(sync.p2p_relay.trim().to_string())
+                },
+                directory_url: sync.p2p_directory.trim().to_string(),
+                serve: true,
+            })?
+        }
+    };
+    let entries = runtime.directory()?;
+    let entry_count = entries.len();
+    let self_id = runtime.device_id();
+    let mut candidates: Vec<(iroh::EndpointId, Vec<std::net::SocketAddr>)> = entries
+        .iter()
+        .map(|entry| (entry.id, entry.addrs.clone()))
+        .collect();
+    candidates.push((self_id, Vec::new()));
+    candidates.sort_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+    candidates.dedup_by(|left, right| left.0 == right.0);
+
+    let mut last_error = "目录里没有任何设备记录".to_string();
+    for (candidate, addrs) in candidates {
+        if candidate != self_id && runtime.in_cooldown(candidate) {
+            continue;
+        }
+        if candidate == self_id {
+            // 本机是枢纽：连自己的内置库（P2P 模式下它只绑回环）
+            let host = load_host_state(layout);
+            if host.running && host.port > 0 {
+                let base_url = format!("http://127.0.0.1:{}", host.port);
+                if let Ok(health) = probe_health_with_timeout(&base_url, LAN_PROBE_TIMEOUT) {
+                    return Ok(plain(from_health(
+                        base_url,
+                        health,
+                        EndpointSource::Embedded,
+                        None,
+                    )));
+                }
+            }
+            last_error = "本机是枢纽，但内置服务器没在跑".to_string();
+            continue;
+        }
+        match runtime.dial(candidate, &addrs) {
+            Ok(tunnel) => {
+                let base_url = tunnel.base_url.clone();
+                match probe_health_with_timeout(&base_url, P2P_PROBE_TIMEOUT) {
+                    Ok(health) => {
+                        let name = health_string(&health, "name");
+                        crate::sync::p2p::identity::record_peer(
+                            layout,
+                            &candidate.to_z32(),
+                            &name,
+                            true,
+                            None,
+                        );
+                        return Ok(Resolution {
+                            resolved: from_health(base_url, health, EndpointSource::P2p, None),
+                            tunnel: Some(tunnel),
+                        });
+                    }
+                    Err(error) => {
+                        runtime.note_cooldown(candidate);
+                        crate::sync::p2p::identity::record_peer(
+                            layout,
+                            &candidate.to_z32(),
+                            "",
+                            false,
+                            Some(error.message.clone()),
+                        );
+                        last_error = error.message;
+                    }
+                }
+            }
+            Err(error) => {
+                runtime.note_cooldown(candidate);
+                crate::sync::p2p::identity::record_peer(
+                    layout,
+                    &candidate.to_z32(),
+                    "",
+                    false,
+                    Some(error.message.clone()),
+                );
+                last_error = error.message;
+            }
+        }
+    }
+    Err(CoreError::new(
+        crate::error::ErrorKind::Io,
+        "SYNC_P2P_NO_PEER",
+        format!(
+            "P2P 这轮找不到可用对端：{last_error}（目录 {entry_count} 条在线记录）。\
+             对方不在线是正常情况——P2P 只在两台设备同时在线时同步，会按重连间隔静默重试"
+        ),
     ))
 }
 
@@ -359,7 +512,7 @@ pub fn resolve_pairing(
     current: &SyncSettings,
     request: &PairRequest,
     state: &SyncStateFile,
-) -> CoreResult<Resolved> {
+) -> CoreResult<Resolution> {
     let request = request.normalized();
     let mut prospective = current.clone();
     prospective.mode = Some(request.mode);
@@ -416,18 +569,6 @@ mod tests {
         assert_eq!(anonymous.scope_key(), "http://host:1");
         anonymous.instance_id = "srv-x".to_string();
         assert_eq!(anonymous.scope_key(), "srv-x");
-    }
-
-    #[test]
-    fn p2p_mode_reports_unsupported_until_v0_6_1() {
-        let layout = Layout::new(std::path::PathBuf::from("."));
-        let mut sync = SyncSettings::default();
-        sync.mode = Some(SyncMode::P2p);
-        sync.username = "me".to_string();
-        sync.secret = "pw".to_string();
-        let state = SyncStateFile::fresh("dev".to_string());
-        let error = resolve(&layout, &sync, &state).unwrap_err();
-        assert_eq!(error.code, "SYNC_MODE_UNSUPPORTED");
     }
 
     #[test]

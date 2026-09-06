@@ -37,6 +37,9 @@ pub struct SyncHostRequest {
     pub name: String,
     /// 期望监听端口；被占用时宿主自动向上找，**实际端口写进 `runtime/sync-host.json`**
     pub port: u16,
+    /// 只绑回环（P2P 模式：内置库只服务本机隧道拨入，不该暴露到网卡上）；
+    /// 局域网模式为 false（0.0.0.0 + UDP 发现应答）
+    pub loopback_only: bool,
 }
 
 pub trait HostBackend: Send + Sync {
@@ -82,6 +85,38 @@ pub trait HostBackend: Send + Sync {
     fn sync_host_stop(&self, data_dir: &Path) {
         let _ = data_dir;
     }
+
+    /// 启动 P2P 运行时（iroh 端点 + 目录发布 + 接受拨入）。
+    ///
+    /// 与 `sync_host_start` 同一条规矩：**必须非阻塞**（可能在一次命令执行途中被调用）。
+    /// P2P 的内置服务器必须先于它起好（被叫方要把隧道接进去）。
+    fn p2p_start(&self, request: &P2pRequest) -> CoreResult<()> {
+        let _ = request;
+        Err(CoreError::internal("当前 Host backend 不支持 P2P"))
+    }
+
+    /// 停掉 P2P 运行时（尽力从目录撤掉自己；幂等）。
+    fn p2p_stop(&self, data_dir: &Path) {
+        let _ = data_dir;
+    }
+
+    /// 按「将要生效」的设置把 P2P 需要的两样宿主能力起好：只绑回环的内置库 + iroh 运行时。
+    /// 配对早于设置落盘，等 Settings 域事件再启就鸡生蛋了（见 `HostServices::ensure_p2p_services`）。
+    fn ensure_p2p_services(&self, data_dir: &Path, sync: &crate::model::SyncSettings) -> CoreResult<()> {
+        let _ = (data_dir, sync);
+        Ok(())
+    }
+}
+
+/// 启动 P2P 运行时需要的东西：账户密钥派生目录签名密钥，其余是可选的自部署覆盖。
+#[derive(Clone)]
+pub struct P2pRequest {
+    pub data_dir: PathBuf,
+    pub keys: crate::sync::crypto::SyncKeys,
+    /// None/空 = n0 免费公共 relay；`disabled` = 不用 relay；其它 = 自部署地址
+    pub relay: Option<String>,
+    /// 空 = n0 免费公共目录（dns.iroh.link/pkarr）
+    pub directory_url: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -143,56 +178,85 @@ impl HostCore {
         }
     }
 
-    /// 按当前设置启停内置同步服务器（「本机作为服务器」）。
+    /// 按当前设置启停内置同步服务器与 P2P 运行时。
     ///
     /// 挂在 [`HostCore::emit_domain_event`] 的 Settings 分支上，所以设置不管是 GUI 面板改的、
     /// CLI `sync configure` 改的还是 `config set` 改的，常驻进程都会跟着调整——
     /// 与调度引擎的 `notify_scheduler_reload` 同一套路，不引入新机制。
+    ///
+    /// 两种「本机当服务器」的角色：
+    /// - 局域网主机：内置服务器监听 0.0.0.0 并应答 UDP 发现
+    /// - P2P：内置服务器**只绑回环**（只服务 iroh 隧道拨入）+ iroh 端点常驻发布目录
     pub fn reconcile_sync_host(&self) {
         let Ok(settings) = self.repo.load_settings() else {
             return;
         };
         let sync = &settings.sync;
+        let mode = sync.effective_mode();
+        let p2p_wanted = mode == crate::model::SyncMode::P2p && sync.is_paired();
         // 只有局域网方式下「本机作为服务器」才有意义
-        let wanted = sync.lan_host && sync.effective_mode() == crate::model::SyncMode::Lan;
+        let lan_wanted = sync.lan_host && mode == crate::model::SyncMode::Lan;
+        let wanted = lan_wanted || p2p_wanted;
+        // P2P 的内置库只给本机隧道用：绑回环、不应答发现（暴露到网卡上纯属风险）
+        let loopback_only = p2p_wanted;
         let name = crate::sync::endpoint::desired_host_name(&sync.lan_name);
         let host = crate::sync::state::load_host_state(&self.repo.layout);
         // 名字或端口变了要重启（名字是局域网身份，端口是客户端地址缓存的一部分）；
         // 上次启动失败也要重试，否则用户改完设置还是起不来。
         // 比的是 configured_port 而不是实际端口：实际端口可能因占用自动上移过，
-        // 拿它跟配置值比会每轮都判定为「需要重启」。
+        // 拿它跟配置值比会每轮都判定为「需要重启」。loopback 翻转（lan ↔ p2p）同理要重启。
         let up_to_date = host.running
             && host.last_error.is_none()
             && host.name == name
-            && host.configured_port == sync.lan_port;
-        if wanted && up_to_date {
-            return;
-        }
+            && host.configured_port == sync.lan_port
+            && host.loopback == loopback_only;
         let Ok(slot) = self.backend.read() else {
             return;
         };
         let Some(backend) = slot.as_ref() else {
             return;
         };
-        if !wanted {
-            if host.running || host.last_error.is_some() {
-                backend.sync_host_stop(&self.data_dir);
+        if wanted && !up_to_date {
+            let request = SyncHostRequest {
+                data_dir: self.data_dir.clone(),
+                name,
+                port: sync.lan_port,
+                loopback_only,
+            };
+            if let Err(error) = backend.sync_host_start(&request) {
+                // 起不来的原因必须落进描述符：设置页得说得出「为什么没起来」，
+                // 否则用户只看到一个没反应的勾选框。
+                let mut state = crate::sync::state::EmbeddedHostState::default();
+                state.name = request.name.clone();
+                state.configured_port = request.port;
+                state.loopback = loopback_only;
+                state.last_error = Some(error.message.clone());
+                let _ = crate::sync::state::save_host_state(&self.repo.layout, &state);
             }
-            return;
+        } else if !wanted && (host.running || host.last_error.is_some()) {
+            backend.sync_host_stop(&self.data_dir);
         }
-        let request = SyncHostRequest {
-            data_dir: self.data_dir.clone(),
-            name,
-            port: sync.lan_port,
-        };
-        if let Err(error) = backend.sync_host_start(&request) {
-            // 起不来的原因必须落进描述符：设置页得说得出「为什么没起来」，
-            // 否则用户只看到一个没反应的勾选框。
-            let mut state = crate::sync::state::EmbeddedHostState::default();
-            state.name = request.name.clone();
-            state.configured_port = request.port;
-            state.last_error = Some(error.message.clone());
-            let _ = crate::sync::state::save_host_state(&self.repo.layout, &state);
+
+        // P2P 运行时在内置服务器之后起：被叫方要把隧道接进内置服务器
+        if p2p_wanted {
+            let Ok(keys) = crate::sync::crypto::derive_keys(&sync.username, &sync.secret) else {
+                return;
+            };
+            let request = P2pRequest {
+                data_dir: self.data_dir.clone(),
+                keys,
+                relay: if sync.p2p_relay.trim().is_empty() {
+                    None
+                } else {
+                    Some(sync.p2p_relay.trim().to_string())
+                },
+                directory_url: sync.p2p_directory.trim().to_string(),
+            };
+            if let Err(error) = backend.p2p_start(&request) {
+                crate::sync::engine::debug_log(format!("p2p runtime start failed: {}", error.message));
+            }
+        } else {
+            backend.p2p_stop(&self.data_dir);
         }
     }
 
@@ -352,6 +416,17 @@ impl HostCore {
 }
 
 impl HostServices for HostCore {
+    fn ensure_p2p_services(&self, data_dir: &Path, sync: &crate::model::SyncSettings) -> CoreResult<()> {
+        let backend = self
+            .backend
+            .read()
+            .map_err(|error| CoreError::internal(format!("backend lock：{error}")))?;
+        let Some(backend) = backend.as_ref() else {
+            return Ok(());
+        };
+        backend.ensure_p2p_services(data_dir, sync)
+    }
+
     fn show_notification(&self, payload: Value) -> CoreResult<Value> {
         let merged = self.resolve_notification_payload(
             payload.get("title").and_then(Value::as_str),
@@ -954,6 +1029,7 @@ pub fn shutdown_host(core: &Arc<HostCore>) {
     if let Ok(slot) = core.backend.read() {
         if let Some(backend) = slot.as_ref() {
             backend.sync_host_stop(&core.data_dir);
+            backend.p2p_stop(&core.data_dir);
         }
     }
     remove_host_descriptor(&core.repo.layout.host_descriptor());

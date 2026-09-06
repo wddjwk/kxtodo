@@ -166,7 +166,7 @@ pub enum Commands {
     },
     /// 数据多端同步（v0.4.0，端到端加密）
     #[command(
-        long_about = "与 kxtodo-server 同步数据：端到端加密（服务器只见密文）+ 逐实体 LWW + 删除墓碑。\n账户 = 用户名 + 密码（密码派生认证/加密密钥，服务器只存认证密钥的同值证明）。\n图片文件本体一并同步：markdown 插图跟随「同步数据」，列表背景与头像跟随「同步设置」。\n\n通信方式（sync configure --mode，三种方式共用同一套同步内核，区别只在「连哪儿」）：\n  lan     局域网——本机作为服务器（--lan-host，内置 server 随应用启停），\n          或选定发现到的一台主机（--lan-peer，主机的身份是名字，局域网内要求唯一）\n  server  自建服务——手填常开服务器的 ip:port（--server）\n  p2p     没有公网 IP 也能跨网络直连（后续版本提供）\n\n动作：\n  pair      配对本机并开始同步（账户不存在就当场注册；空数据目录也可用，会初始化）\n  discover  局域网自动发现主机（UDP 52177 广播查询，与主机 TCP 端口无关）\n  status    查看配对/通信方式/主机状态/范围/最近同步结果（纯本地读，不碰网络）\n  probe     探测连通性并刷新在线状态缓存\n  now       立即执行一次同步（pull → merge → push → 图片）\n  configure 调整通信方式/主机角色/同步范围/开关/间隔（--enabled false = 暂停同步，配置保留）\n  unpair    解除本机配对（服务器数据保留）\n  history   列出/删除本机用过的配对信息（方式 + 地址或主机名 + 用户名 + 密码）\n\n示例：\n  kxtodo-cli sync discover\n  kxtodo-cli sync configure --lan-host true --lan-name 我的电脑\n  kxtodo-cli sync pair --username me --secret MySecret\n  kxtodo-cli sync pair --mode lan --lan-peer 客厅的电脑 --username me --secret MySecret\n  kxtodo-cli sync pair --mode server --server http://192.168.1.10:52177 --username me --secret MySecret\n  kxtodo-cli sync now"
+        long_about = "与 kxtodo-server 同步数据：端到端加密（服务器只见密文）+ 逐实体 LWW + 删除墓碑。\n账户 = 用户名 + 密码（密码派生认证/加密密钥，服务器只存认证密钥的同值证明）。\n图片文件本体一并同步：markdown 插图跟随「同步数据」，列表背景与头像跟随「同步设置」。\n\n通信方式（sync configure --mode，三种方式共用同一套同步内核，区别只在「连哪儿」）：\n  lan     局域网——本机作为服务器（--lan-host，内置 server 随应用启停），\n          或选定发现到的一台主机（--lan-peer，主机的身份是名字，局域网内要求唯一）\n  server  自建服务——手填常开服务器的 ip:port（--server）\n  p2p     没有公网 IP 也能跨网络直连——iroh（QUIC + 打洞 + n0 免费公共 relay）承载，\n          同账户设备靠账户派生密钥签名的目录互相发现；每轮连「枢纽」（目录里 EndpointId\n          最小者，自己是枢纽就连自己的内置库）。**只有两台设备同时在线时才同步**，\n          对方不在线是正常情况，按重连间隔静默重试\n\n动作：\n  pair      配对本机并开始同步（账户不存在就当场注册；空数据目录也可用，会初始化）\n  discover  局域网自动发现主机（UDP 52177 广播查询，与主机 TCP 端口无关）\n  status    查看配对/通信方式/主机状态/范围/最近同步结果（纯本地读，不碰网络）\n  probe     探测连通性并刷新在线状态缓存\n  peers     P2P：列出账户目录里的在线设备与本轮枢纽（sync status 的 p2p 块只读缓存）\n  now       立即执行一次同步（pull → merge → push → 图片）\n  configure 调整通信方式/主机角色/同步范围/开关/间隔（--enabled false = 暂停同步，配置保留）\n  unpair    解除本机配对（服务器数据保留）\n  history   列出/删除本机用过的配对信息（方式 + 地址或主机名 + 用户名 + 密码）\n\n示例：\n  kxtodo-cli sync discover\n  kxtodo-cli sync configure --lan-host true --lan-name 我的电脑\n  kxtodo-cli sync pair --username me --secret MySecret\n  kxtodo-cli sync pair --mode lan --lan-peer 客厅的电脑 --username me --secret MySecret\n  kxtodo-cli sync pair --mode server --server http://192.168.1.10:52177 --username me --secret MySecret\n  kxtodo-cli sync pair --mode p2p --username me --secret MySecret\n  kxtodo-cli sync peers\n  kxtodo-cli sync now"
     )]
     Sync {
         #[command(subcommand)]
@@ -848,6 +848,11 @@ pub enum SyncAction {
         long_about = "Risk: write\n\n--enabled false 即「暂停同步」：停止自动与手动同步，但方式/地址/主机名/用户名/密码全部保留，\n--enabled true 恢复；要彻底清掉本机配对用 sync unpair。\n\n局域网角色二选一：--lan-host true 让本机成为主机（内置服务器随应用启停，名字用 --lan-name，\n局域网内要求唯一，重名会被拒绝），--lan-peer <name> 则让本机作为客户端连那台主机。\n内置服务器的启停由常驻的 GUI/APK 负责——只有 CLI 在跑时改了开关，要等应用启动才生效。"
     )]
     Configure(SyncConfigureArgs),
+    /// 列出 P2P 账户目录里的设备与枢纽角色（Risk: read）
+    #[command(
+        long_about = "Risk: read\n\n解析本账户的 P2P 设备目录（账户派生密钥签名的 pkarr 记录），列出在线设备与本机学到的名字、\n最近一次拨号结果，以及本轮的枢纽是谁（目录含自己里 EndpointId 最小者）。\n枢纽 = 本轮大家连过去同步的那台：它是自己时就连自己的内置库，否则拨号过去走 iroh 隧道。"
+    )]
+    Peers,
     /// 解除本机配对（Risk: write）
     #[command(
         long_about = "Risk: write\n\n清除本机 token 与同步状态，关闭同步开关并清掉密码；服务器数据与其它设备不受影响。\n通信方式/地址/主机名/用户名保留，便于重新配对。只想停一会儿请用 sync configure --enabled false。"
@@ -918,6 +923,12 @@ pub struct SyncConfigureArgs {
     /// 选定的局域网主机名（取自 sync discover 的 name；设了本机就是客户端）
     #[arg(long, value_name = "text")]
     pub lan_peer: Option<String>,
+    /// P2P 高级覆盖：自部署 iroh relay 地址（空串 = 恢复 n0 免费公共服务；disabled = 不用 relay）
+    #[arg(long, value_name = "url|disabled|空串")]
+    pub p2p_relay: Option<String>,
+    /// P2P 高级覆盖：自部署 pkarr 目录地址（空串 = 恢复 n0 免费公共服务）
+    #[arg(long, value_name = "url|空串")]
+    pub p2p_directory: Option<String>,
     /// 同步数据（节点/任务/插图）
     #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
     pub sync_data: Option<bool>,
@@ -1414,6 +1425,7 @@ fn build_sync_invocation(action: &SyncAction) -> CoreResult<Invocation> {
         SyncAction::Discover(args) => Invocation::new("sync.discover", serialize_args(args)),
         SyncAction::Now => Invocation::new("sync.now", serde_json::json!({})),
         SyncAction::Configure(args) => Invocation::new("sync.configure", serialize_args(args)),
+        SyncAction::Peers => Invocation::new("sync.peers", serde_json::json!({})),
         SyncAction::Unpair => Invocation::new("sync.unpair", serde_json::json!({})),
         SyncAction::History(args) => match args.remove {
             Some(index) => {

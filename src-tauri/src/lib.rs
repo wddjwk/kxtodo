@@ -1560,15 +1560,20 @@ fn start_embedded_sync_host(
     stop_embedded_sync_host(&request.data_dir);
 
     let config = kxtodo_server::ServerConfig {
-        // 监听所有网卡：局域网内的其它设备要能连进来（回环监听不应答发现查询）
-        listen: format!("0.0.0.0:{}", request.port),
+        // 局域网主机监听所有网卡（回环监听不应答发现查询）；P2P 的内置库只服务本机
+        // iroh 隧道拨入，绑回环就够了——暴露到网卡上纯属风险
+        listen: format!(
+            "{}:{}",
+            if request.loopback_only { "127.0.0.1" } else { "0.0.0.0" },
+            request.port
+        ),
         data_dir: domain::repo::embedded_server_dir(&request.data_dir),
         db: None,
         name: Some(request.name.clone()),
         admin: None,
         // 管理台凭据自动生成：用户勾一个框就该能用，不该先被逼着想一个密码
         admin_provision: kxtodo_server::AdminProvision::GenerateIfMissing,
-        discovery: true,
+        discovery: !request.loopback_only,
         // 同机可能还跑着独立的 kxtodo-server，撞上端口就自动向上找
         // （发现应答带的是真实端口，客户端不受影响）
         port_fallback: kxtodo_server::host::DEFAULT_PORT_FALLBACK,
@@ -1576,10 +1581,12 @@ fn start_embedded_sync_host(
     };
     let host_name = request.name.clone();
     let configured_port = request.port;
+    let loopback_only = request.loopback_only;
     tauri::async_runtime::spawn(async move {
         let mut state = domain::sync::state::EmbeddedHostState {
             name: host_name,
             configured_port,
+            loopback: loopback_only,
             pid: std::process::id(),
             ..Default::default()
         };
@@ -1618,6 +1625,61 @@ fn stop_embedded_sync_host(data_dir: &std::path::Path) {
     }
     let layout = domain::repo::Layout::new(data_dir.to_path_buf());
     let _ = domain::sync::state::clear_host_state(&layout);
+}
+
+/// 启动 P2P 运行时：iroh 端点常驻 + 发布账户目录 + 接受拨入（把隧道接进内置服务器）。
+///
+/// core 的 p2p::start 自带一个两线程运行时并幂等复用，这里同步调用即可
+/// （bind 实测几十毫秒；目录发布与接收循环都在它自己的运行时里跑）。
+fn start_p2p_runtime(request: &domain::host::P2pRequest) -> Result<(), domain::CoreError> {
+    let layout = domain::repo::Layout::new(request.data_dir.clone());
+    domain::sync::p2p::start(domain::sync::p2p::P2pConfig {
+        layout,
+        keys: request.keys.clone(),
+        relay: request.relay.clone(),
+        directory_url: request.directory_url.clone(),
+        serve: true,
+    })?;
+    Ok(())
+}
+
+fn stop_p2p_runtime(data_dir: &std::path::Path) {
+    let layout = domain::repo::Layout::new(data_dir.to_path_buf());
+    domain::sync::p2p::stop_for_layout(&layout);
+}
+
+/// 配对早于设置落盘，而 P2P 的两样宿主能力（只绑回环的内置库 + iroh 运行时）由常驻进程
+/// 启停：这里按「将要生效」的设置把它们先起好。描述符已是目标形态就跳过内置库的重启
+/// （否则一次配对会把正在服务的局域网主机重启掉）。
+fn ensure_p2p_services(
+    data_dir: &std::path::Path,
+    sync: &domain::model::SyncSettings,
+) -> Result<(), domain::CoreError> {
+    let layout = domain::repo::Layout::new(data_dir.to_path_buf());
+    let host = domain::sync::state::load_host_state(&layout);
+    let up_to_date = host.running
+        && host.loopback
+        && host.configured_port == sync.lan_port
+        && host.last_error.is_none();
+    if !up_to_date {
+        start_embedded_sync_host(&domain::host::SyncHostRequest {
+            data_dir: data_dir.to_path_buf(),
+            name: domain::sync::endpoint::desired_host_name(&sync.lan_name),
+            port: sync.lan_port,
+            loopback_only: true,
+        })?;
+    }
+    let keys = domain::sync::crypto::derive_keys(&sync.username, &sync.secret)?;
+    start_p2p_runtime(&domain::host::P2pRequest {
+        data_dir: data_dir.to_path_buf(),
+        keys,
+        relay: if sync.p2p_relay.trim().is_empty() {
+            None
+        } else {
+            Some(sync.p2p_relay.trim().to_string())
+        },
+        directory_url: sync.p2p_directory.trim().to_string(),
+    })
 }
 
 #[cfg(desktop)]
@@ -1814,6 +1876,22 @@ impl domain::host::HostBackend for TauriBackend {
 
     fn sync_host_stop(&self, data_dir: &std::path::Path) {
         stop_embedded_sync_host(data_dir)
+    }
+
+    fn p2p_start(&self, request: &domain::host::P2pRequest) -> Result<(), domain::CoreError> {
+        start_p2p_runtime(request)
+    }
+
+    fn p2p_stop(&self, data_dir: &std::path::Path) {
+        stop_p2p_runtime(data_dir)
+    }
+
+    fn ensure_p2p_services(
+        &self,
+        data_dir: &std::path::Path,
+        sync: &domain::model::SyncSettings,
+    ) -> Result<(), domain::CoreError> {
+        ensure_p2p_services(data_dir, sync)
     }
 }
 
@@ -2219,6 +2297,22 @@ impl domain::host::HostBackend for MobileBackend {
 
     fn sync_host_stop(&self, data_dir: &std::path::Path) {
         stop_embedded_sync_host(data_dir)
+    }
+
+    fn p2p_start(&self, request: &domain::host::P2pRequest) -> Result<(), domain::CoreError> {
+        start_p2p_runtime(request)
+    }
+
+    fn p2p_stop(&self, data_dir: &std::path::Path) {
+        stop_p2p_runtime(data_dir)
+    }
+
+    fn ensure_p2p_services(
+        &self,
+        data_dir: &std::path::Path,
+        sync: &domain::model::SyncSettings,
+    ) -> Result<(), domain::CoreError> {
+        ensure_p2p_services(data_dir, sync)
     }
 }
 

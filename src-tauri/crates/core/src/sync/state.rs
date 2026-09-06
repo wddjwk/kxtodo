@@ -41,6 +41,31 @@ pub struct LanEndpoint {
     pub instance_id: String,
 }
 
+/// 一台主机库的对账状态。
+///
+/// 水位、推送台账、token 全都是**按主机库**成立的：换一台库（或 P2P 里换一个枢纽对端）
+/// 就必须用另一份，否则新库的 `current_seq` 从 1 开始而本地水位停在几百，表现是
+/// **静默地**什么都拉不到、推的时候一路 OCC 409。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerState {
+    #[serde(default)]
+    pub token: String,
+    #[serde(default)]
+    pub token_expires_at: Option<String>,
+    #[serde(default)]
+    pub last_pulled_seq: u64,
+    /// 图片 blob 流的拉取水位（与实体流共用服务端计数器，各自独立推进）
+    #[serde(default)]
+    pub last_pulled_image_seq: u64,
+    /// 上一次同步的范围签名（`data|settings|schedules`）：范围一变就把两条水位归零重拉，
+    /// 因为增量流是按范围过滤的，水位之下的记录不会再出现一次。
+    #[serde(default)]
+    pub scope_signature: String,
+    #[serde(default)]
+    pub pushed: Map<String, Value>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncStateFile {
@@ -63,6 +88,10 @@ pub struct SyncStateFile {
     /// 停在几百，否则表现是**静默地**什么都拉不到、推的时候一路 OCC 409。
     #[serde(default)]
     pub server_instance_id: String,
+    /// 逐主机库的对账状态（键 = instanceId）。平铺的那几个字段就是
+    /// `peers[server_instance_id]` 的当前载入副本（见 [`SyncStateFile::switch_peer`]）。
+    #[serde(default)]
+    pub peers: std::collections::BTreeMap<String, PeerState>,
     /// 局域网端点缓存：上次连上的主机地址。身份是**名字**，ip:port 只是缓存
     /// （名字对得上就直连，省去每轮广播；对不上再重新发现）。
     #[serde(default)]
@@ -71,7 +100,7 @@ pub struct SyncStateFile {
     pub pushed: Map<String, Value>,
     pub last_sync_at: Option<String>,
     pub last_result: Option<Value>,
-    /// 最近一次与服务端通信的结果缓存：设置面板据此显示 🟢/🔴，不做阻塞探测
+    /// 最近一次与服务端通信的结果缓存：设置面板据此显示 🟢/，不做阻塞探测
     #[serde(default)]
     pub server_online: Option<bool>,
     /// 最近一次成功通信时间
@@ -93,6 +122,7 @@ impl SyncStateFile {
             last_pulled_image_seq: 0,
             scope_signature: String::new(),
             server_instance_id: String::new(),
+            peers: std::collections::BTreeMap::new(),
             lan_endpoint: None,
             pushed: Map::new(),
             last_sync_at: None,
@@ -101,6 +131,46 @@ impl SyncStateFile {
             last_seen_at: None,
             last_error: None,
         }
+    }
+
+    /// 换到另一台主机库的对账状态。
+    ///
+    /// 载入 `peers[new_id]`；没有记录就是一整份零值 = 全量重新播种（这正是换主机 /
+    /// 库被重建时需要的行为，v0.6.0 的 epoch 清零逻辑被这次换档天然取代）。
+    /// 返回 true 表示这是一次**换档**（此前已有身份），调用方据此给用户一条提示。
+    /// 主机没报身份（老服务器）时什么都不做。
+    pub fn switch_peer(&mut self, instance_id: &str) -> bool {
+        if instance_id.is_empty() || self.server_instance_id == instance_id {
+            return false;
+        }
+        let switched = !self.server_instance_id.is_empty();
+        // 先把当前这份归档回旧身份：一轮内连续换两次（或换回旧库）都不能丢水位
+        self.store_current_peer();
+        let loaded = self.peers.get(instance_id).cloned().unwrap_or_default();
+        self.token = loaded.token;
+        self.token_expires_at = loaded.token_expires_at;
+        self.last_pulled_seq = loaded.last_pulled_seq;
+        self.last_pulled_image_seq = loaded.last_pulled_image_seq;
+        self.scope_signature = loaded.scope_signature;
+        self.pushed = loaded.pushed;
+        self.server_instance_id = instance_id.to_string();
+        switched
+    }
+
+    /// 把当前平铺字段收进 `peers`（落盘前调用，保证文件里两份永远一致）。
+    pub(crate) fn store_current_peer(&mut self) {
+        if self.server_instance_id.is_empty() {
+            return;
+        }
+        let snapshot = PeerState {
+            token: self.token.clone(),
+            token_expires_at: self.token_expires_at.clone(),
+            last_pulled_seq: self.last_pulled_seq,
+            last_pulled_image_seq: self.last_pulled_image_seq,
+            scope_signature: self.scope_signature.clone(),
+            pushed: self.pushed.clone(),
+        };
+        self.peers.insert(self.server_instance_id.clone(), snapshot);
     }
 
     pub fn entry(&self, id: &str) -> Option<PushedEntry> {
@@ -139,7 +209,9 @@ pub fn load_state(layout: &Layout) -> SyncStateFile {
 pub fn save_state(layout: &Layout, state: &SyncStateFile) -> CoreResult<()> {
     fs::create_dir_all(layout.runtime_dir())?;
     let path = state_path(layout);
-    let raw = serde_json::to_string_pretty(state)?;
+    let mut snapshot = state.clone();
+    snapshot.store_current_peer();
+    let raw = serde_json::to_string_pretty(&snapshot)?;
     atomic_write(&path, &raw)?;
     restrict_permissions(&path);
     Ok(())
@@ -177,6 +249,9 @@ pub struct EmbeddedHostState {
     pub configured_port: u16,
     /// 展示名 = 这台主机在局域网里的身份
     pub name: String,
+    /// 只绑了回环（P2P 模式的内置库）；局域网主机为 false
+    #[serde(default)]
+    pub loopback: bool,
     /// 数据库身份：客户端据此判断「还是那台主机，但库被重建了」
     pub instance_id: String,
     /// 管理台地址（本机访问）

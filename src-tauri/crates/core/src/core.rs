@@ -35,6 +35,19 @@ pub trait HostServices: Send + Sync {
     fn autostart_status(&self) -> Option<bool>;
     /// Emit a domain-changed event to GUI clients.
     fn emit_domain_event(&self, domain: Domain, revision: u64, ids: Vec<String>);
+    /// 按「将要生效」的设置把 P2P 需要的宿主能力先起好（只绑回环的内置库 + iroh 运行时）。
+    ///
+    /// 配对发生在设置落盘**之前**（凭据还在请求里），而这两样由常驻进程启停，
+    /// 等 Settings 域事件再启就鸡生蛋了；所以 `sync pair` 在解析端点前请宿主先起。
+    /// 默认空实现：没有宿主的进程（CLI 单跑）解析时会报「打开应用」。
+    fn ensure_p2p_services(
+        &self,
+        data_dir: &std::path::Path,
+        sync: &crate::model::SyncSettings,
+    ) -> CoreResult<()> {
+        let _ = (data_dir, sync);
+        Ok(())
+    }
 }
 
 pub struct ExecContext<'a> {

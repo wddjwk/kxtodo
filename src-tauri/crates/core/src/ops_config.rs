@@ -210,6 +210,18 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         is_map: false,
     },
     FieldMeta {
+        path: "sync.p2pRelay",
+        kind: "string",
+        description: "P2P 高级覆盖：自部署 iroh relay 地址（空 = n0 免费公共服务；disabled = 不用 relay）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "sync.p2pDirectory",
+        kind: "string",
+        description: "P2P 高级覆盖：自部署 pkarr 目录地址（空 = n0 免费公共服务）",
+        is_map: false,
+    },
+    FieldMeta {
         path: "sync.serverUrl",
         kind: "string",
         description: "自建服务方式的服务器地址（http(s)://host:port）",
@@ -338,6 +350,8 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "sync.lanName" => json!(settings.sync.lan_name),
         "sync.lanPort" => json!(settings.sync.lan_port),
         "sync.lanPeer" => json!(settings.sync.lan_peer),
+        "sync.p2pRelay" => json!(settings.sync.p2p_relay),
+        "sync.p2pDirectory" => json!(settings.sync.p2p_directory),
         "sync.serverUrl" => json!(settings.sync.server_url),
         "sync.username" => json!(settings.sync.username),
         "sync.secret" => json!(settings.sync.secret),
@@ -719,6 +733,20 @@ pub fn set_value(
             let raw = expect_string(path, &value)?;
             settings.sync.apply_lan_role(None, None, Some(&raw));
         }
+        "sync.p2pRelay" => {
+            let raw = expect_string(path, &value)?.trim().to_string();
+            if !raw.is_empty() && raw != "disabled" {
+                crate::sync::p2p::net::parse_relay_url(&raw)?;
+            }
+            settings.sync.p2p_relay = raw;
+        }
+        "sync.p2pDirectory" => {
+            let raw = expect_string(path, &value)?.trim().to_string();
+            if !raw.is_empty() {
+                crate::sync::p2p::directory::parse_directory_url(&raw)?;
+            }
+            settings.sync.p2p_directory = raw;
+        }
         "sync.serverUrl" => {
             let raw = expect_string(path, &value)?;
             if !raw.is_empty() && !raw.starts_with("http://") && !raw.starts_with("https://") {
@@ -909,6 +937,8 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "sync.lanName" => target.sync.lan_name = defaults.sync.lan_name.clone(),
         "sync.lanPort" => target.sync.lan_port = defaults.sync.lan_port,
         "sync.lanPeer" => target.sync.lan_peer = defaults.sync.lan_peer.clone(),
+        "sync.p2pRelay" => target.sync.p2p_relay = defaults.sync.p2p_relay.clone(),
+        "sync.p2pDirectory" => target.sync.p2p_directory = defaults.sync.p2p_directory.clone(),
         "sync.serverUrl" => target.sync.server_url = defaults.sync.server_url.clone(),
         "sync.username" => target.sync.username = defaults.sync.username.clone(),
         "sync.secret" => target.sync.secret = defaults.sync.secret.clone(),

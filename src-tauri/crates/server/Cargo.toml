@@ -3,7 +3,7 @@ name = "kxtodo-server"
 version = "0.0.0"
 description = "KXToDo 数据同步服务端：账户 + 端到端加密实体存储（SQLite）。"
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.91"
 license = ""
 publish = false
 

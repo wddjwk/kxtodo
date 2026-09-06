@@ -174,7 +174,7 @@ fn debug_enabled() -> bool {
     })
 }
 
-fn debug_log(message: String) {
+pub(crate) fn debug_log(message: String) {
     if debug_enabled() {
         eprintln!("[sync-debug] {message}");
     }
@@ -209,35 +209,6 @@ fn merge_data_records(
         normalize_data_orders(file);
     }
     applied
-}
-
-/// 主机身份变了（换主机 / 主机的库被重建）→ 把对账状态整个清零，让本机全量副本重新播种。
-///
-/// 必须一起清的东西：
-/// - 两条拉取水位：新库的 `current_seq` 从 1 开始，旧水位会让增量流**静默地**什么都不返回
-/// - 推送台账 `pushed`：不清就会以为「服务端已经有这些实体了」，新库永远喂不满
-/// - token：旧库签发的 token 在新库里不存在
-/// - 图片清单缓存：「服务端已有哪些图片」这个结论是按库成立的
-///
-/// 重新播种不会让已删条目复活：墓碑存在 settings 实体的 `_meta.tombstones` 里，
-/// 跟着实体一起同步，所以全量副本自带删除记录。
-///
-/// 返回 true 表示这是一次**换主机**（此前已有身份），调用方据此给用户一条 warning；
-/// 首次对账（此前身份为空）同样清零，但不必大惊小怪。
-/// 主机没报身份（老服务器）时什么都不做。
-fn reseed_for_new_host(state: &mut SyncStateFile, instance_id: &str) -> bool {
-    if instance_id.is_empty() || state.server_instance_id == instance_id {
-        return false;
-    }
-    let switched_host = !state.server_instance_id.is_empty();
-    state.last_pulled_seq = 0;
-    state.last_pulled_image_seq = 0;
-    state.pushed.clear();
-    state.token.clear();
-    state.token_expires_at = None;
-    state.server_instance_id = instance_id.to_string();
-    crate::sync::images::invalidate_manifest_cache();
-    switched_host
 }
 
 /// 完整同步：login（如需）→ pull → merge → push → 图片 → 推进水位。
@@ -298,6 +269,32 @@ fn run_sync_inner(repo: &Repository) -> CoreResult<SyncReport> {
     let mut state = load_state(&repo.layout);
     let scopes = Scopes::from_settings(&settings);
 
+    // 「连哪儿」由通信方式决定（自建服务 / 局域网内置主机或选定主机 / P2P 枢纽）。
+    // 从这一行往下，三种方式走的是完全相同的代码——这是 v0.6.0 分层的意义。
+    // P2P 的 base_url 是一条本地临时隧道，句柄必须活到本轮结束，所以 resolution 一直持有。
+    let resolution = endpoint::resolve(&repo.layout, sync, &state)?;
+    let resolved = &resolution.resolved;
+    debug_log(format!(
+        "endpoint {} via {} instance={}",
+        resolved.base_url,
+        resolved.source.as_str(),
+        resolved.instance_id
+    ));
+
+    // 换档：水位/推送台账/token 都是**按主机库**成立的（P2P 换枢纽 = 换库，局域网换主机
+    // 或主机库被重建同理）。载入目标库的那一份；没有记录就是零值 = 全量重新播种。
+    if state.switch_peer(&resolved.instance_id) {
+        crate::sync::images::invalidate_manifest_cache();
+        report.warnings.push(format!(
+            "同步主机已更换（现在是{}），本机已全量重新对账",
+            if resolved.name.is_empty() {
+                resolved.base_url.clone()
+            } else {
+                format!("「{}」", resolved.name)
+            }
+        ));
+    }
+
     // 范围签名自愈：增量流是按范围过滤的，改范围后水位之下的记录永远不会再来一次，
     // 所以签名一变就把实体与图片水位归零全量重拉（LWW 合并，重拉是安全的）。
     // 放在这里而不是 sync configure 里，是为了让 config set 改范围也同样生效。
@@ -311,31 +308,9 @@ fn run_sync_inner(repo: &Repository) -> CoreResult<SyncReport> {
         state.scope_signature = scope_signature;
     }
 
-    // 「连哪儿」由通信方式决定（自建服务 / 局域网内置主机或选定主机 / P2P）。
-    // 从这一行往下，三种方式走的是完全相同的代码——这是 v0.6.0 分层的意义。
-    let resolved = endpoint::resolve(&repo.layout, sync, &state)?;
-    debug_log(format!(
-        "endpoint {} via {} instance={}",
-        resolved.base_url,
-        resolved.source.as_str(),
-        resolved.instance_id
-    ));
     let client = SyncClient::new(&resolved.base_url)?;
     if let Some(lan_endpoint) = resolved.lan_endpoint.clone() {
         state.lan_endpoint = Some(lan_endpoint);
-    }
-
-    // 主机身份自愈：换了主机、或主机的库被重建过。新库的 current_seq 从 1 开始而本地
-    // 水位停在几百，不清零的表现是**静默地**什么都拉不到、推的时候一路 OCC 409。
-    if reseed_for_new_host(&mut state, &resolved.instance_id) {
-        report.warnings.push(format!(
-            "同步主机已更换（现在是{}），本机已全量重新对账",
-            if resolved.name.is_empty() {
-                resolved.base_url.clone()
-            } else {
-                format!("「{}」", resolved.name)
-            }
-        ));
     }
 
     // 1. 确保 token（账户不在这台主机上就当场注册：主机是可替换的）
@@ -791,7 +766,8 @@ pub fn pair_device(
     // 全新设备还没有 settings.json：load_settings 会给默认值，这里再兜一层
     let current = repo.load_settings().unwrap_or_default();
     let state = load_state(&repo.layout);
-    let resolved = endpoint::resolve_pairing(&repo.layout, &current.sync, &request, &state)?;
+    let resolution = endpoint::resolve_pairing(&repo.layout, &current.sync, &request, &state)?;
+    let resolved = &resolution.resolved;
     let keys = derive_keys(&request.username, &request.secret)?;
     let client = SyncClient::new(&resolved.base_url)?;
 
@@ -885,8 +861,8 @@ pub fn fetch_me(repo: &Repository) -> CoreResult<Option<Value>> {
         return Ok(None);
     }
     let mut state = load_state(&repo.layout);
-    let resolved = endpoint::resolve(&repo.layout, sync, &state)?;
-    Ok(Some(fetch_account(repo, &resolved, &mut state)?))
+    let resolution = endpoint::resolve(&repo.layout, sync, &state)?;
+    Ok(Some(fetch_account(repo, &resolution.resolved, &mut state)?))
 }
 
 /// 轻量连通性探测（设置面板用）：解析端点（自带短超时 /healthz），通过后再取一次 /me。
@@ -905,8 +881,12 @@ pub fn probe_connection(repo: &Repository) -> CoreResult<Value> {
     let mut state = load_state(&repo.layout);
     let mode = sync.effective_mode();
     let mut out = json!({ "mode": mode.as_str(), "modeLabel": mode.label() });
-    let resolved = match endpoint::resolve(&repo.layout, sync, &state) {
-        Ok(resolved) => {
+    if mode == crate::model::SyncMode::P2p {
+        return probe_p2p(&repo.layout, &mut state, out);
+    }
+    let resolution = match endpoint::resolve(&repo.layout, sync, &state) {
+        Ok(resolution) => {
+            let resolved = &resolution.resolved;
             out["serverUrl"] = json!(resolved.base_url);
             out["server"] = resolved.health.clone();
             out["endpoint"] = json!({
@@ -921,7 +901,7 @@ pub fn probe_connection(repo: &Repository) -> CoreResult<Value> {
             if let Some(lan_endpoint) = resolved.lan_endpoint.clone() {
                 state.lan_endpoint = Some(lan_endpoint);
             }
-            Some(resolved)
+            Some(resolution)
         }
         Err(error) => {
             // 局域网模式还没选定主机时给的是配置类错误，不是掉线
@@ -935,10 +915,10 @@ pub fn probe_connection(repo: &Repository) -> CoreResult<Value> {
         }
     };
     let _ = save_state(&repo.layout, &state);
-    let online = resolved.is_some();
-    if let Some(resolved) = resolved {
+    let online = resolution.is_some();
+    if let Some(resolution) = resolution {
         // 账户信息失败（token 过期/密钥不符）不代表服务器掉线，单独报
-        match fetch_account(repo, &resolved, &mut state) {
+        match fetch_account(repo, &resolution.resolved, &mut state) {
             Ok(me) => {
                 out["account"] = me;
             }
@@ -948,6 +928,46 @@ pub fn probe_connection(repo: &Repository) -> CoreResult<Value> {
         }
     }
     out["online"] = json!(online);
+    Ok(out)
+}
+
+/// P2P 的连通性探测：只读缓存与目录（60s TTL），**不拨号**。
+///
+/// 对端不在线是 P2P 的常态，为了一次面板显示拨号最坏要等 25s；
+/// 真正的在线结论由每轮同步写进 runtime/sync.json，这里直接复用。
+fn probe_p2p(layout: &crate::repo::Layout, state: &mut SyncStateFile, mut out: Value) -> CoreResult<Value> {
+    let runtime = crate::sync::p2p::current();
+    let peers = runtime
+        .as_ref()
+        .map(|runtime| runtime.directory().unwrap_or_default())
+        .unwrap_or_default();
+    let self_id = runtime
+        .as_ref()
+        .map(|runtime| runtime.device_id())
+        .unwrap_or_else(|| iroh::SecretKey::generate().public());
+    let hub_is_self = peers
+        .iter()
+        .all(|entry| self_id.as_bytes() <= entry.id.as_bytes());
+    let host = crate::sync::state::load_host_state(layout);
+    out["endpoint"] = json!({
+        "source": "p2p",
+        "name": if hub_is_self { "本机（枢纽）".to_string() } else { String::new() },
+        "instanceId": if hub_is_self { host.instance_id.clone() } else { String::new() },
+    });
+    out["p2p"] = json!({
+        "selfId": self_id.to_z32(),
+        "hubIsSelf": hub_is_self,
+        "onlinePeers": peers.len(),
+        "serving": runtime.as_ref().map(|runtime| runtime.serve()).unwrap_or(false),
+    });
+    let online = state.server_online.unwrap_or(false);
+    out["online"] = json!(online);
+    if !online {
+        if let Some(error) = state.last_error.clone() {
+            out["serverError"] = json!(error);
+        }
+    }
+    let _ = save_state(layout, state);
     Ok(out)
 }
 
@@ -972,7 +992,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 换主机 / 主机的库被重建 → 水位、推送台账、token 必须一起清零。
+    /// 换主机 / 主机的库被重建 / P2P 换枢纽 → 水位、推送台账、token 必须换成目标库的那一份。
     /// 端到端验证在 crates/server/tests/sync_e2e.rs 的 recreated_host_store_reseeds_clients。
     #[test]
     fn host_identity_change_clears_all_reconciliation_state() {
@@ -992,12 +1012,12 @@ mod tests {
         state.server_instance_id = "srv-old".to_string();
 
         // 同一台主机：什么都不动，否则每轮都全量重推
-        assert!(!reseed_for_new_host(&mut state, "srv-old"));
+        assert!(!state.switch_peer("srv-old"));
         assert_eq!(state.last_pulled_seq, 42);
         assert!(state.entry("task-1").is_some());
 
-        // 换了主机：全部清零，并报告「这是一次换主机」（调用方据此给 warning）
-        assert!(reseed_for_new_host(&mut state, "srv-new"));
+        // 换了主机：载入一份空白状态 = 全部清零，并报告「这是一次换主机」
+        assert!(state.switch_peer("srv-new"));
         assert_eq!(state.last_pulled_seq, 0);
         assert_eq!(state.last_pulled_image_seq, 0);
         assert!(state.pushed.is_empty(), "台账不清新库就永远喂不满");
@@ -1005,10 +1025,17 @@ mod tests {
         assert!(state.token_expires_at.is_none());
         assert_eq!(state.server_instance_id, "srv-new");
 
-        // 首次对账（此前没有身份）：同样清零，但不算「换主机」，不该吓用户
+        // 换回旧主机：旧水位原样回来（逐主机库存状态，不必重新全量对账）
+        state.store_current_peer();
+        assert!(state.switch_peer("srv-old"));
+        assert_eq!(state.last_pulled_seq, 42);
+        assert_eq!(state.token, "tok");
+        assert!(state.entry("task-1").is_some());
+
+        // 首次对账（此前没有身份）：载入空白但不算「换主机」，不该吓用户
         let mut blank = SyncStateFile::fresh("dev-2".to_string());
         blank.last_pulled_seq = 5;
-        assert!(!reseed_for_new_host(&mut blank, "srv-first"));
+        assert!(!blank.switch_peer("srv-first"));
         assert_eq!(blank.last_pulled_seq, 0);
         assert_eq!(blank.server_instance_id, "srv-first");
 
@@ -1016,7 +1043,7 @@ mod tests {
         let mut legacy = SyncStateFile::fresh("dev-3".to_string());
         legacy.last_pulled_seq = 11;
         legacy.server_instance_id = "srv-x".to_string();
-        assert!(!reseed_for_new_host(&mut legacy, ""));
+        assert!(!legacy.switch_peer(""));
         assert_eq!(legacy.last_pulled_seq, 11);
         assert_eq!(legacy.server_instance_id, "srv-x");
     }

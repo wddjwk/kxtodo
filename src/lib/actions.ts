@@ -962,6 +962,20 @@ export type SyncStatus = {
   lanPort: number;
   lanName: string;
   lanPeer: string;
+  /** P2P 高级覆盖（空 = n0 免费公共服务） */
+  p2pRelay?: string;
+  p2pDirectory?: string;
+  /** P2P 概览（纯本地读：目录只取进程内缓存） */
+  p2p?: {
+    running: boolean;
+    selfId?: string;
+    serving?: boolean;
+    /** null = 目录缓存还没有，角色未知 */
+    hubIsSelf?: boolean | null;
+    hubId?: string;
+    onlinePeers?: number;
+    peers?: Array<{ id: string; name: string }>;
+  };
   /** 本机内置服务器状态 */
   host?: SyncHostStatus;
   /** 上一轮真正连到的主机库身份 */
@@ -1068,6 +1082,33 @@ export async function syncDiscover(timeoutMs = 2500): Promise<DiscoveredServer[]
   } catch (error) {
     await report(error, "局域网发现失败");
     return [];
+  }
+}
+
+/** P2P 设备列表与枢纽角色（目录解析，60s 缓存；非 P2P 模式 core 会报 SYNC_MODE_MISMATCH）。 */
+export type SyncPeers = {
+  selfId: string;
+  hubId: string;
+  hubIsSelf: boolean;
+  serving: boolean;
+  peers: Array<{
+    id: string;
+    name: string;
+    publishedAt?: number;
+    lastOk?: boolean | null;
+    lastSeenAt?: string | null;
+    lastError?: string | null;
+  }>;
+  count: number;
+};
+
+export async function syncPeers(): Promise<SyncPeers | null> {
+  if (!coreMode) return null;
+  try {
+    const envelope = await coreDispatch<SyncPeers>("sync.peers", {});
+    return envelope.data;
+  } catch {
+    return null;
   }
 }
 

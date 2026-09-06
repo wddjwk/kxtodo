@@ -22,6 +22,10 @@ pub const NONCE_BYTES: usize = 24;
 pub struct SyncKeys {
     pub auth_key: [u8; 32],
     pub enc_key: [u8; 32],
+    /// P2P 设备目录的签名密钥（v0.6.1）：同一账户的所有设备派生出同一把，
+    /// 于是任何设备只凭用户名密码就能发布/解析「这个账户有哪些设备」。
+    /// 独立 info 分支：与认证、加密密钥互不相关，公钥也反推不出用户名。
+    pub dir_key: [u8; 32],
 }
 
 /// 确定性盐：同一 (username, secret) 在任意设备派生出相同密钥。
@@ -68,6 +72,7 @@ pub fn derive_keys(username: &str, secret: &str) -> CoreResult<SyncKeys> {
     let keys = SyncKeys {
         auth_key: hkdf_sha256(&master, b"kxtodo-auth-v1"),
         enc_key: hkdf_sha256(&master, b"kxtodo-enc-v1"),
+        dir_key: hkdf_sha256(&master, b"kxtodo-p2p-dir-v1"),
     };
     master.iter_mut().for_each(|byte| *byte = 0);
     if let Ok(mut cache) = key_cache().lock() {
