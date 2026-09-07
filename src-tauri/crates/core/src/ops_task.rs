@@ -266,6 +266,7 @@ pub fn add_node(data: &mut DataFile, kind: NodeKind, params: AddNodeParams) -> C
             NodeKind::Category => Some(params.collapsed.unwrap_or(false)),
             _ => params.collapsed,
         },
+        card_style: None,
         created_at: now.clone(),
         updated_at: Some(now),
         extra: Map::new(),
@@ -380,6 +381,9 @@ pub fn node_view(data: &DataFile, node: &Node, with_counts: bool) -> Value {
     });
     if let Some(collapsed) = node.collapsed {
         view["collapsed"] = json!(collapsed);
+    }
+    if let Some(card_style) = &node.card_style {
+        view["cardStyle"] = json!(card_style);
     }
     if let Some(updated) = &node.updated_at {
         view["updatedAt"] = json!(updated);
@@ -864,6 +868,8 @@ pub struct NodeChanges {
     /// Some(None) → move to root.
     pub parent_id: Option<Option<String>>,
     pub collapsed: Option<bool>,
+    /// 条目渲染类型："todo"（默认）/ "card"（一般卡片）
+    pub card_style: Option<String>,
 }
 
 pub fn modify_node(
@@ -928,6 +934,24 @@ pub fn modify_node(
         } else {
             node.collapsed = Some(collapsed);
         }
+        touched = true;
+    }
+    if let Some(card_style) = changes.card_style {
+        let normalized = card_style.trim().to_lowercase();
+        if normalized != "todo" && normalized != "card" {
+            return Err(CoreError::validation(
+                "CARD_STYLE_INVALID",
+                format!("未知的分组类型 `{card_style}`（可选 todo / card）"),
+            ));
+        }
+        if kind != NodeKind::Entry {
+            return Err(CoreError::validation(
+                "CARD_STYLE_ENTRY_ONLY",
+                "分组类型只对条目有效（分类下没有卡片）".to_string(),
+            ));
+        }
+        // todo 是默认值：写成 None，不往数据文件里塞冗余字段
+        node.card_style = (normalized == "card").then(|| "card".to_string());
         touched = true;
     }
     if touched {

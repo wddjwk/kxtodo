@@ -19,7 +19,7 @@
 // ---------------------------------------------------------------------------
 
 import { get } from "svelte/store";
-import { appSettings, coreMode, isHydrated, nextSyncAt, syncConnection } from "./stores";
+import { appSettings, coreMode, isHydrated, manualSyncAt, nextSyncAt, syncConnection } from "./stores";
 import { syncNow } from "./actions";
 
 /** 与 core 侧一致的下限：低于 5 秒按 5 秒生效。 */
@@ -197,6 +197,24 @@ function handleVisibility(): void {
 }
 
 /**
+ * 手动同步后重排计时周期：下一轮从手动那一轮的时刻起算一个完整间隔。
+ * 不这么做的话，手动同步完旧排程可能几秒后就又跑一轮，用户看到的节奏是乱的。
+ */
+let lastManualAt = 0;
+
+function handleManualSync(at: number): void {
+  if (at === 0 || at === lastManualAt) {
+    lastManualAt = at;
+    return;
+  }
+  lastManualAt = at;
+  if (!booted || running) return;
+  roundStartedAt = at;
+  lastFinishedAt = at;
+  scheduleNext(get(syncConnection).online !== false);
+}
+
+/**
  * App onMount 调用。注意：**不能**在这里用 coreMode 门控——onMount 时水合还没完成，
  * coreMode 恒为 false，那正是旧实现整条自动同步形同虚设的原因。
  */
@@ -208,6 +226,7 @@ export function startAutoSync(): void {
     if (ready) boot();
   });
   appSettings.subscribe(handleSettingsChange);
+  manualSyncAt.subscribe(handleManualSync);
   if (typeof document !== "undefined") {
     document.addEventListener("visibilitychange", handleVisibility);
   }

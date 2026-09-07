@@ -5,11 +5,11 @@
 // ---------------------------------------------------------------------------
 
 import { get } from "svelte/store";
-import type { AppNode, AppState, ScheduledTask, SchedulerState, Settings, SyncMode, Tag, TagColor, Task } from "./types";
+import type { AppNode, AppState, CardStyle, ScheduledTask, SchedulerState, Settings, SyncMode, Tag, TagColor, Task } from "./types";
 import {
   appState, appSettings, commit, commitScheduler, commitSettings,
   coreMode, createTaskId, editBaseUpdatedAt, markEditStart, clearEditBase, rebaseEditBase,
-  refreshFromCore, scheduleEntries, syncConnection, showToast
+  manualSyncAt, refreshFromCore, scheduleEntries, syncConnection, showToast
 } from "./stores";
 import { coreDispatch, CoreCommandError } from "./backend";
 import {
@@ -99,6 +99,33 @@ export async function setNodeIcon(nodeId: string, icon: string): Promise<void> {
   commit({
     ...state(),
     nodes: state().nodes.map((node) => (node.id === nodeId ? { ...node, icon } : node))
+  });
+}
+
+/** 分组类型：todo = 待办卡片（默认），card = 一般卡片（隐藏勾选框的展示型条目）。 */
+export async function setNodeCardStyle(nodeId: string, cardStyle: CardStyle): Promise<void> {
+  const node = findNode(nodeId);
+  if (!node || node.kind !== "entry") return;
+  const next = cardStyle === "card" ? "card" : "todo";
+  if (coreMode) {
+    appState.update((s) => ({
+      ...s,
+      nodes: s.nodes.map((item) =>
+        item.id === nodeId ? { ...item, cardStyle: next === "card" ? "card" : undefined } : item
+      )
+    }));
+    try {
+      await coreDispatch("task.modify", { type: node.kind, id: nodeId, cardStyle: next });
+    } catch (error) {
+      await report(error, "分组类型保存失败");
+    }
+    return;
+  }
+  commit({
+    ...state(),
+    nodes: state().nodes.map((item) =>
+      item.id === nodeId ? { ...item, cardStyle: next === "card" ? "card" : undefined } : item
+    )
   });
 }
 
@@ -1009,6 +1036,8 @@ export type SyncReport = {
   conflicts: number;
   imagesPulled: number;
   imagesPushed: number;
+  /** 本轮真正对账过的主机/设备名（P2P 一轮会连多台） */
+  peers?: string[];
   warnings?: string[];
 };
 
@@ -1094,6 +1123,8 @@ export type SyncPeers = {
   peers: Array<{
     id: string;
     name: string;
+    /** 这条是不是本机（本机名字直接取运行时发布的设备名） */
+    self?: boolean;
     publishedAt?: number;
     lastOk?: boolean | null;
     lastSeenAt?: string | null;
@@ -1137,6 +1168,8 @@ export async function syncNow(options: { silent?: boolean } = {}): Promise<boole
   try {
     result = await dispatchSyncNow();
   } catch (error) {
+    // 手动跑过一轮就重排自动循环的下一轮（成败都算）；自动循环自己跑的不打这个标记
+    if (!silent) manualSyncAt.set(Date.now());
     // 暂停不是故障：不动连接状态缓存（🟢/🔴 保持上次探测结论）
     if (error instanceof CoreCommandError && error.code === "SYNC_PAUSED") {
       if (!silent) showToast("同步已暂停，点「恢复同步」继续");
@@ -1146,14 +1179,17 @@ export async function syncNow(options: { silent?: boolean } = {}): Promise<boole
     await refreshSyncConnection();
     return false;
   }
+  if (!silent) manualSyncAt.set(Date.now());
   if (!silent) {
-    const { pulled, pushed, conflicts, imagesPulled, imagesPushed } = result;
+    const { pulled, pushed, conflicts, imagesPulled, imagesPushed, peers } = result;
     const up = pushed + (imagesPushed ?? 0);
     const down = pulled + (imagesPulled ?? 0);
+    // P2P 一轮会跟多台设备各对账一次：把名单亮出来，「同步成功但没同步」就藏不住了
+    const withPeers = peers && peers.length > 1 ? `（${peers.join("、")}）` : "";
     showToast(
       conflicts > 0
-        ? `同步完成 ↑${up} ↓${down}，冲突 ${conflicts}（下次同步重试）`
-        : `同步完成 ↑${up} ↓${down}`
+        ? `同步完成 ↑${up} ↓${down}${withPeers}，冲突 ${conflicts}（下次同步重试）`
+        : `同步完成 ↑${up} ↓${down}${withPeers}`
     );
   }
   // 确有变化才回刷快照（Host 也会发 domain-changed 事件，这里兜底）

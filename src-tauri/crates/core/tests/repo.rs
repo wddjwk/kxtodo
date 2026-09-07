@@ -74,6 +74,7 @@ fn concurrent_writers_do_not_lose_updates() {
                         parent_id: None,
                         order: 0.0,
                         collapsed: None,
+                        card_style: None,
                         created_at: kxtodo_core::time::now_iso(),
                         updated_at: None,
                         extra: Default::default(),

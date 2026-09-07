@@ -76,6 +76,10 @@ pub struct SyncReport {
     pub images_pulled: usize,
     /// 本轮上传的图片数
     pub images_pushed: usize,
+    /// 本轮真正对账过的主机/设备展示名。P2P 一轮会跟所有在线设备各对账一次，
+    /// 所以这里可能有多条——用户看「同步成功」却感觉没同步时，这一栏就是答案。
+    #[serde(default)]
+    pub peers: Vec<String>,
     pub warnings: Vec<String>,
 }
 
@@ -215,8 +219,13 @@ fn merge_data_records(
 ///
 /// 外层负责把「与服务端能不能通」的结论缓存进 runtime/sync.json：
 /// 设置面板的 🟢/🔴 只读这份缓存，绝不为了显示状态而阻塞在网络上。
+///
+/// P2P 一轮会跟**所有**在线设备各对账一次（见 [`plan_p2p_round`]），
+/// 其它通信方式一轮只连一个端点。
 pub fn run_sync(repo: &Repository) -> CoreResult<SyncReport> {
-    match run_sync_inner(repo) {
+    // 锁上提到这一层：P2P 一轮里连续跑多次 run_sync_inner，不能每次都重新抢锁
+    let guard = SyncRunLock::acquire(&repo.layout)?;
+    match run_sync_round(repo, &guard) {
         Ok(report) => Ok(report),
         Err(error) => {
             if error.kind == crate::error::ErrorKind::Io {
@@ -225,6 +234,96 @@ pub fn run_sync(repo: &Repository) -> CoreResult<SyncReport> {
             Err(error)
         }
     }
+}
+
+/// 执行一轮同步：P2P 逐台对账并聚合报告，其它通信方式只连一个端点。
+fn run_sync_round(repo: &Repository, _guard: &SyncRunLock) -> CoreResult<SyncReport> {
+    let Some(plan) = plan_p2p_round(repo)? else {
+        return run_sync_inner(repo, None, false);
+    };
+    let wanted = plan.directory_entries;
+    let mut merged = SyncReport {
+        started_at: now_iso(),
+        ..Default::default()
+    };
+    let mut last_error: Option<CoreError> = None;
+    let mut failures = 0usize;
+    for target in plan.targets {
+        let label = peer_label(&target.resolved);
+        match run_sync_inner(repo, Some(target), true) {
+            Ok(report) => {
+                merged.peers.push(label);
+                merged.pulled += report.pulled;
+                merged.applied += report.applied;
+                merged.pushed += report.pushed;
+                merged.conflicts += report.conflicts;
+                merged.images_pulled += report.images_pulled;
+                merged.images_pushed += report.images_pushed;
+                merged.warnings.extend(report.warnings);
+            }
+            Err(error) => {
+                failures += 1;
+                merged
+                    .warnings
+                    .push(format!("与「{label}」同步失败：{}", error.message));
+                last_error = Some(error);
+            }
+        }
+    }
+    if merged.peers.is_empty() {
+        return Err(last_error.unwrap_or_else(|| {
+            CoreError::io("P2P 这轮没有任何可对账的设备（目录里没有在线记录）")
+        }));
+    }
+    if wanted <= 1 {
+        // 用户最容易困惑的一种「同步成功」：目录里只有自己，本轮只跟本机内置库对账，
+        // 数据当然不会动。说出来，别让人以为是同步坏了。
+        merged.warnings.push(
+            "P2P 目录里只有本机：其它设备不在线（或目录服务不可达），本轮只与本机内置库对账"
+                .to_string(),
+        );
+    } else if failures > 0 {
+        merged.warnings.push(format!(
+            "本轮对账 {} 台，其中 {failures} 台没连上（详情见上）",
+            merged.peers.len()
+        ));
+    }
+    merged.finished_at = now_iso();
+    record_round(repo, &merged)?;
+    Ok(merged)
+}
+
+/// P2P 模式下规划「这一轮要跟谁对账」；其它通信方式返回 None（走单端点老路径）。
+///
+/// 未配对/已暂停也返回 None，让 run_sync_inner 给出它一贯的错误码。
+fn plan_p2p_round(repo: &Repository) -> CoreResult<Option<endpoint::P2pRound>> {
+    let settings = repo.load_settings()?;
+    let sync = &settings.sync;
+    if !sync.is_paired() || !sync.enabled || sync.effective_mode() != crate::model::SyncMode::P2p {
+        return Ok(None);
+    }
+    Ok(Some(endpoint::resolve_p2p_round(&repo.layout, sync)?))
+}
+
+/// 端点在用户眼里的名字（报告与警告里用）。
+fn peer_label(resolved: &endpoint::Resolved) -> String {
+    if !resolved.name.trim().is_empty() {
+        resolved.name.trim().to_string()
+    } else {
+        resolved.base_url.clone()
+    }
+}
+
+/// 用聚合结果覆盖「最近同步」与在线结论（多台对账时，最后一次 run_sync_inner 写下的
+/// 只是其中一台的报告，设置面板要看到的是整轮的合计）。
+fn record_round(repo: &Repository, report: &SyncReport) -> CoreResult<()> {
+    let mut state = load_state(&repo.layout);
+    state.last_sync_at = Some(report.finished_at.clone());
+    state.server_online = Some(true);
+    state.last_seen_at = state.last_sync_at.clone();
+    state.last_error = None;
+    state.last_result = Some(serde_json::to_value(report)?);
+    save_state(&repo.layout, &state)
 }
 
 /// 把掉线结论写进状态文件（写失败静默：不能因为记录状态又抛一个新错误盖掉原因）。
@@ -243,8 +342,14 @@ fn server_lacks_image_api(error: &CoreError) -> bool {
     )
 }
 
-fn run_sync_inner(repo: &Repository) -> CoreResult<SyncReport> {
-    let _guard = SyncRunLock::acquire(&repo.layout)?;
+/// 与**一个**端点做完整对账。`target` 由调用方给定（P2P 一轮里逐台传入，隧道句柄
+/// 随之活到本次结束）；为 None 时自己解析（自建服务 / 局域网）。
+/// `multi_peer` = 本轮还要跟别的库对账：换档提示就不必每次都喊一遍。
+fn run_sync_inner(
+    repo: &Repository,
+    target: Option<endpoint::Resolution>,
+    multi_peer: bool,
+) -> CoreResult<SyncReport> {
     let mut report = SyncReport {
         started_at: now_iso(),
         ..Default::default()
@@ -269,11 +374,15 @@ fn run_sync_inner(repo: &Repository) -> CoreResult<SyncReport> {
     let mut state = load_state(&repo.layout);
     let scopes = Scopes::from_settings(&settings);
 
-    // 「连哪儿」由通信方式决定（自建服务 / 局域网内置主机或选定主机 / P2P 枢纽）。
+    // 「连哪儿」由通信方式决定（自建服务 / 局域网内置主机或选定主机 / P2P 逐台对账）。
     // 从这一行往下，三种方式走的是完全相同的代码——这是 v0.6.0 分层的意义。
     // P2P 的 base_url 是一条本地临时隧道，句柄必须活到本轮结束，所以 resolution 一直持有。
-    let resolution = endpoint::resolve(&repo.layout, sync, &state)?;
+    let resolution = match target {
+        Some(resolution) => resolution,
+        None => endpoint::resolve(&repo.layout, sync, &state)?,
+    };
     let resolved = &resolution.resolved;
+    report.peers.push(peer_label(resolved));
     debug_log(format!(
         "endpoint {} via {} instance={}",
         resolved.base_url,
@@ -281,18 +390,19 @@ fn run_sync_inner(repo: &Repository) -> CoreResult<SyncReport> {
         resolved.instance_id
     ));
 
-    // 换档：水位/推送台账/token 都是**按主机库**成立的（P2P 换枢纽 = 换库，局域网换主机
+    // 换档：水位/推送台账/token 都是**按主机库**成立的（P2P 换对端 = 换库，局域网换主机
     // 或主机库被重建同理）。载入目标库的那一份；没有记录就是零值 = 全量重新播种。
     if state.switch_peer(&resolved.instance_id) {
-        crate::sync::images::invalidate_manifest_cache();
-        report.warnings.push(format!(
-            "同步主机已更换（现在是{}），本机已全量重新对账",
-            if resolved.name.is_empty() {
-                resolved.base_url.clone()
-            } else {
-                format!("「{}」", resolved.name)
-            }
-        ));
+        if !multi_peer {
+            report.warnings.push(format!(
+                "同步主机已更换（现在是{}），本机已全量重新对账",
+                if resolved.name.is_empty() {
+                    resolved.base_url.clone()
+                } else {
+                    format!("「{}」", resolved.name)
+                }
+            ));
+        }
     }
 
     // 范围签名自愈：增量流是按范围过滤的，改范围后水位之下的记录永远不会再来一次，

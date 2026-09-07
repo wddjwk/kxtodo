@@ -34,7 +34,7 @@
     scalePercentValue, buildSettingsDrawerStyle, avatarStyle, avatarInitial
   } from "./styles";
   import {
-    isTauriRuntime, pickImageFile, saveAvatarImage, avatarImageUrl, openExternalUrl
+    isTauriRuntime, pickImageFile, saveAvatarImage, avatarImageUrl, openExternalUrl, trayAvailable
   } from "./backend";
   import { avatarCache, resolveAvatarSrc } from "./images";
   import Dropdown from "./Dropdown.svelte";
@@ -42,6 +42,8 @@
   import type { Settings, SyncMode } from "./types";
 
   let avatarFileInput: HTMLInputElement;
+  /** 托盘是否真的建起来了（Linux 缺 appindicator 动态库时为 false） */
+  let traySupported = true;
 
   const notificationPositionOptions: Array<{ value: Settings["notifications"]["position"]; label: string }> = [
     { value: "bottom-right", label: "右下角" },
@@ -75,6 +77,12 @@
   }
 
   async function updateLifecycle<K extends keyof Settings["lifecycle"]>(field: K, value: Settings["lifecycle"][K]): Promise<void> {
+    // 托盘没建起来（Linux 缺 appindicator 动态库）时「退到托盘」兑现不了：
+    // 提醒一句并保持退出，别让设置里留一个假的选项。
+    if (field === "closeToTray" && value === true && !traySupported) {
+      showToast("当前环境托盘不可用，关闭按钮保持「直接退出应用」");
+      return;
+    }
     // 原生副作用由 Host 在 config.set 时同步应用（§3.6）。
     const ok = await setConfigAction(`lifecycle.${field}`, Boolean(value));
     if (!ok) {
@@ -129,6 +137,11 @@
     clockTimer = window.setInterval(() => {
       clock = Date.now();
     }, 1000);
+    if (caps.trayLifecycle) {
+      void trayAvailable().then((available) => {
+        traySupported = available;
+      });
+    }
   });
   onDestroy(() => {
     if (clockTimer !== undefined) window.clearInterval(clockTimer);
@@ -141,31 +154,15 @@
   $: lanPort = $appSettings.sync?.lanPort ?? 52177;
   $: hostStatus = syncStatus?.host ?? null;
   $: p2pInfo = syncStatus?.p2p ?? null;
-  /** 主设备的展示名：目录里学到的名字，没学过就显示 id 前缀 */
-  $: p2pHubLabel = (() => {
-    const info = p2pInfo;
-    if (!info?.hubId) return "";
-    if (info.hubIsSelf) return "本机";
-    const hit = (info.peers ?? []).find((peer) => peer.id === info.hubId);
-    return hit?.name || `${info.hubId.slice(0, 8)}…`;
-  })();
   $: p2pSummary = !p2pInfo
     ? "运行时未启动"
     : !p2pInfo.running
       ? "运行时未启动"
       : p2pInfo.hubIsSelf === null || p2pInfo.hubIsSelf === undefined
         ? "解析目录中…"
-        : p2pInfo.hubIsSelf
-          ? `本机做主设备 · ${p2pInfo.onlinePeers ?? 0} 台在线`
-          : `主设备「${p2pHubLabel}」 · ${p2pInfo.onlinePeers ?? 0} 台在线`;
-  /** 设备浮层标题：在线数 + 主设备是谁 */
-  $: peersHeadline = !peers
-    ? "解析中…"
-    : `在线 ${peers.count} 台 · 主设备 ${
-        peers.hubIsSelf
-          ? "本机"
-          : peers.peers.find((peer) => peer.id === peers?.hubId)?.name || `${(peers.hubId ?? "").slice(0, 8)}…`
-      }`;
+        : `${p2pInfo.onlinePeers ?? 0} 台在线 · 每轮逐台互相同步`;
+  /** 设备浮层标题：在线台数 */
+  $: peersHeadline = !peers ? "解析中…" : `在线 ${peers.count} 台 · 每轮逐台互相同步`;
   // 名字从别处变了（CLI、另一台设备的设置同步）就跟上，别把用户的草稿冲掉
   $: if (!lanNameFocused && lanNameDraft.trim() !== lanName) lanNameDraft = lanName;
   $: if (!lanPeerFocused && lanPeerDraft.trim() !== lanPeer) lanPeerDraft = lanPeer;
@@ -206,7 +203,7 @@
     syncMode === "lan"
       ? lanHost
         ? hostStatus?.running
-          ? `本机服务器 · 端口 ${hostStatus.port}${hostPortBumped ? `（${lanPort} 被占用）` : ""}${isMobile ? " · 需保持前台" : ""}`
+          ? `本机服务器 · 端口 ${hostStatus.port}${hostPortBumped ? `（${lanPort} 被占用）` : ""}${$isMobile ? " · 需保持前台" : ""}`
           : hostStatus?.lastError
             ? `主机启动失败：${hostStatus.lastError}`
             : "主机启动中…"
@@ -784,7 +781,7 @@
         <span>关闭按钮</span>
         <Dropdown
           ariaLabel="关闭按钮"
-          value={$appSettings.lifecycle.closeToTray ? "tray" : "exit"}
+          value={traySupported && $appSettings.lifecycle.closeToTray ? "tray" : "exit"}
           options={[
             { value: "tray", label: "退到系统托盘" },
             { value: "exit", label: "直接退出应用" }
@@ -800,7 +797,11 @@
           on:change={(event) => void updateLifecycle("launchAtStartup", event.currentTarget.checked)}
         />
       </label>
-      <p class="muted">托盘图标右键菜单可打开窗口或退出应用；再次启动程序会聚焦已运行窗口。</p>
+      {#if !traySupported}
+        <p class="muted">当前环境托盘不可用（Linux 缺 appindicator 动态库），关闭按钮直接退出应用。</p>
+      {:else}
+        <p class="muted">托盘图标右键菜单可打开窗口或退出应用；再次启动程序会聚焦已运行窗口。</p>
+      {/if}
     </section>
   {/if}
 
@@ -1080,7 +1081,7 @@
           />
         </label>
         <div class="settings-row sync-peer-row">
-          <span title="同账户的设备互相发现；每轮连「主设备」——在线设备里 id 最小的那台，其它设备连它同步，它不在线会自动换一台。P2P 只在两台设备同时在线时才同步。">设备</span>
+          <span title="同账户的设备互相发现；每轮同步跟所有在线设备各交换一次数据（含本机内置库），不依赖谁当主设备。某台不在线时本轮跳过它，按重连间隔静默重试。">设备</span>
           <span class="muted sync-side">{p2pInfo?.running ? `${p2pInfo.onlinePeers ?? 0} 台在线` : "未启动"}</span>
           <button class="settings-button" type="button" disabled={peersLoading} on:click={loadPeers}>
             {peersLoading ? "解析中…" : "列表"}
@@ -1102,8 +1103,8 @@
                 {#each peers?.peers ?? [] as peer (peer.id)}
                   <div class="sync-popover-row">
                     <span class="discovery-item">
-                      <span class="discovery-name">{peer.name || `${peer.id.slice(0, 8)}…`}</span>
-                      {#if peer.id === peers?.hubId}<span class="muted">主设备</span>{/if}
+                      <span class="discovery-name">{peer.name || (peer.self ? "本机" : `${peer.id.slice(0, 8)}…`)}</span>
+                      {#if peer.self}<span class="muted">本机</span>{/if}
                       {#if peer.lastOk === false}<span class="muted">上次拨号失败</span>{/if}
                     </span>
                   </div>

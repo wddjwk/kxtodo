@@ -2,7 +2,7 @@
   import { onMount, tick } from "svelte";
   import { ChevronLeft } from "@lucide/svelte";
   import { appSettings } from "../stores";
-  import { isMobile } from "../platform";
+  import { isMobile as isMobileStore } from "../platform";
   import { uiScaleValue } from "../styles";
   import { openSubmenus, requestSubmenuClose } from "./submenu";
 
@@ -24,12 +24,14 @@
 
   /** 有子菜单打开着：移动端据此把菜单变成钻入式（一级隐藏，二级占据菜单位置） */
   $: subOpen = $openSubmenus > 0;
+  // isMobile 是 store：当布尔直接用会永远为真，桌面端就会误走移动端的钻入式菜单
+  $: mobile = $isMobileStore;
   // 子菜单开合后菜单的尺寸完全变了（移动端一级被藏起来、二级顶上来），
   // 原来收敛好的位置可能已经超出屏幕，必须重新量一次。桌面端子菜单是绝对定位的
   // 浮出面板，不改变根菜单尺寸，不必重排。
   $: if (subOpen !== lastSubOpen) {
     lastSubOpen = subOpen;
-    if (isMobile) void layout();
+    if (mobile) void layout();
   }
 
   function goBack(): void {
@@ -144,9 +146,29 @@
     inputActivityAt = performance.now();
   }
 
+  /**
+   * 菜单里是否有正在输入的控件。软键盘弹出时视口会 resize、浏览器还会把输入框
+   * 滚进可见区——两条都撞在「关菜单」的信号上，于是安卓点一下标签输入框菜单就没了
+   * （点颜色圆圈不弹键盘，所以不受影响）。这时一律不关，只重新收敛位置。
+   */
+  function editingInsideMenu(): boolean {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement) || !menuEl?.contains(active)) return false;
+    return Boolean(active.closest("input, textarea, select, [contenteditable='true']"));
+  }
+
   function handleScroll(event: Event): void {
+    if (editingInsideMenu()) return;
     if (performance.now() - inputActivityAt < 150) return;
     if (!isInside(event.target)) onClose();
+  }
+
+  function handleResize(): void {
+    if (editingInsideMenu()) {
+      void layout();
+      return;
+    }
+    onClose();
   }
 
   let blurCloseTimer: number | undefined;
@@ -172,14 +194,14 @@
     window.addEventListener("keydown", handleKeydown, true);
     window.addEventListener("blur", handleWindowBlur);
     window.addEventListener("focus", handleWindowFocus);
-    window.addEventListener("resize", onClose);
+    window.addEventListener("resize", handleResize);
     window.addEventListener("scroll", handleScroll, true);
     return () => {
       window.removeEventListener("pointerdown", handlePointerDown, true);
       window.removeEventListener("keydown", handleKeydown, true);
       window.removeEventListener("blur", handleWindowBlur);
       window.removeEventListener("focus", handleWindowFocus);
-      window.removeEventListener("resize", onClose);
+      window.removeEventListener("resize", handleResize);
       window.removeEventListener("scroll", handleScroll, true);
       window.clearTimeout(blurCloseTimer);
     };
@@ -192,7 +214,7 @@
   bind:this={menuEl}
   class="context-menu"
   class:capped={maxHeight > 0}
-  class:sub-open={subOpen}
+  class:sub-open={subOpen && mobile}
   role="menu"
   tabindex="-1"
   style={`left: ${left}px; top: ${top}px; min-width: ${minWidthPx}px;${maxHeight ? ` max-height: ${maxHeight}px; overflow-y: auto;` : ""} visibility: ${ready ? "visible" : "hidden"};`}
@@ -202,7 +224,7 @@
   on:compositionend={markInputActivity}
   on:contextmenu|preventDefault|stopPropagation
 >
-  {#if subOpen && isMobile}
+  {#if subOpen && mobile}
     <button class="menu-item menu-item-button submenu-back" type="button" data-menu-item on:click={goBack}>
       <ChevronLeft size={15} />
       <span class="menu-item-label">返回</span>

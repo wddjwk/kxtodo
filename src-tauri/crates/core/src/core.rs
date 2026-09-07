@@ -622,6 +622,7 @@ fn task_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResu
                 icon: param_str(params, "icon"),
                 parent_id: None,
                 collapsed: param_bool(params, "collapsed"),
+                card_style: param_str(params, "cardStyle"),
             };
             if let Some(parent) = params.get("parentId") {
                 changes.parent_id = Some(if parent.is_null() {

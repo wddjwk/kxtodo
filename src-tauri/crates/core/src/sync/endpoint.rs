@@ -353,34 +353,16 @@ fn probe_lan_host(host: &str, port: Option<u16>, wanted: &str) -> Option<(u16, V
     }
 }
 
-/// P2P：枢纽规则——目录在线设备（含自己）里 **EndpointId 最小**的那台当枢纽，
-/// 每轮只连一个端点。自己是枢纽就连自己的内置库（回环）；否则拨号枢纽，
+/// P2P：主设备规则——目录在线设备（含自己）里 **EndpointId 最小**的那台当主设备，
+/// 每轮只连一个端点。自己是主设备就连自己的内置库（回环）；否则拨号主设备，
 /// 在 iroh 隧道里对它做一次完整的普通 HTTP 同步（被叫方把隧道接进自己的内置服务器）。
 ///
-/// 枢纽下线时：拨号失败进 5 分钟冷却，本轮立刻试下一台；目录条目 15 分钟过期兜底。
-/// 换枢纽 = 换主机库 = engine 的换档逻辑把水位/台账清零重新播种。
+/// 这条路径只服务「需要一个端点」的调用方（配对、`fetch me`）；**同步一轮走
+/// [`resolve_p2p_round`]**，它跟所有在线设备各对账一次。
+///
+/// 主设备下线时：拨号失败进 5 分钟冷却，本轮立刻试下一台；目录条目 15 分钟过期兜底。
 fn resolve_p2p(layout: &Layout, sync: &SyncSettings) -> CoreResult<Resolution> {
-    let runtime = match crate::sync::p2p::current_for(layout) {
-        Some(runtime) => runtime,
-        // 配对发生在设置落盘**之前**（凭据还在请求里），等 Settings 域事件再启运行时
-        // 就鸡生蛋了；所以这里按「将要生效」的设置就地起一个。常驻进程里 reconcile
-        // 随后的 start 是幂等复用，CLI 单进程也因此能用 P2P。
-        None => {
-            let keys = crate::sync::crypto::derive_keys(&sync.username, &sync.secret)?;
-            crate::sync::p2p::start(crate::sync::p2p::P2pConfig {
-                layout: layout.clone(),
-                keys,
-                relay: if sync.p2p_relay.trim().is_empty() {
-                    None
-                } else {
-                    Some(sync.p2p_relay.trim().to_string())
-                },
-                directory_url: sync.p2p_directory.trim().to_string(),
-                name: desired_host_name(&sync.lan_name),
-                serve: true,
-            })?
-        }
-    };
+    let runtime = p2p_runtime(layout, sync)?;
     let entries = runtime.directory()?;
     let entry_count = entries.len();
     let self_id = runtime.device_id();
@@ -398,64 +380,17 @@ fn resolve_p2p(layout: &Layout, sync: &SyncSettings) -> CoreResult<Resolution> {
             continue;
         }
         if candidate == self_id {
-            // 本机是枢纽：连自己的内置库（P2P 模式下它只绑回环）
-            let host = load_host_state(layout);
-            if host.running && host.port > 0 {
-                let base_url = format!("http://127.0.0.1:{}", host.port);
-                if let Ok(health) = probe_health_with_timeout(&base_url, LAN_PROBE_TIMEOUT) {
-                    return Ok(plain(from_health(
-                        base_url,
-                        health,
-                        EndpointSource::Embedded,
-                        None,
-                    )));
+            match resolve_self_host(layout) {
+                Some(resolution) => return Ok(resolution),
+                None => {
+                    last_error = "本机是主设备，但内置服务器没在跑".to_string();
+                    continue;
                 }
             }
-            last_error = "本机是主设备，但内置服务器没在跑".to_string();
-            continue;
         }
-        match runtime.dial(candidate, &addrs) {
-            Ok(tunnel) => {
-                let base_url = tunnel.base_url.clone();
-                match probe_health_with_timeout(&base_url, P2P_PROBE_TIMEOUT) {
-                    Ok(health) => {
-                        let name = health_string(&health, "name");
-                        crate::sync::p2p::identity::record_peer(
-                            layout,
-                            &candidate.to_z32(),
-                            &name,
-                            true,
-                            None,
-                        );
-                        return Ok(Resolution {
-                            resolved: from_health(base_url, health, EndpointSource::P2p, None),
-                            tunnel: Some(tunnel),
-                        });
-                    }
-                    Err(error) => {
-                        runtime.note_cooldown(candidate);
-                        crate::sync::p2p::identity::record_peer(
-                            layout,
-                            &candidate.to_z32(),
-                            "",
-                            false,
-                            Some(error.message.clone()),
-                        );
-                        last_error = error.message;
-                    }
-                }
-            }
-            Err(error) => {
-                runtime.note_cooldown(candidate);
-                crate::sync::p2p::identity::record_peer(
-                    layout,
-                    &candidate.to_z32(),
-                    "",
-                    false,
-                    Some(error.message.clone()),
-                );
-                last_error = error.message;
-            }
+        match dial_peer(layout, &runtime, candidate, &addrs) {
+            Ok(resolution) => return Ok(resolution),
+            Err(error) => last_error = error,
         }
     }
     Err(CoreError::new(
@@ -466,6 +401,153 @@ fn resolve_p2p(layout: &Layout, sync: &SyncSettings) -> CoreResult<Resolution> {
              对方不在线是正常情况——P2P 只在两台设备同时在线时同步，会按重连间隔静默重试"
         ),
     ))
+}
+
+/// P2P 一轮的解析结果。
+pub struct P2pRound {
+    /// 要逐个对账的端点（本机内置库排第一）
+    pub targets: Vec<Resolution>,
+    /// 目录里的在线记录数（含本机）：用来区分「只有本机在线」与「别人拨不通」
+    pub directory_entries: usize,
+}
+
+/// P2P 一轮同步要连的**全部**端点：本机内置库 + 目录里每台在线设备的内置库。
+///
+/// 为什么不只连主设备：两台设备对目录的视图一旦不一致（发布与解析有先后、条目过期、
+/// 目录服务不可达），双方会各自认定自己是主设备、各自只跟**自己的**内置库对账——
+/// 界面报「同步成功」，数据却永远不交汇，用户完全看不出问题在哪。逐台对账不依赖
+/// 任何选举结果：谁都跟谁交换一次；视图不一致最多是这一轮少交换一台，不会整体停摆。
+///
+/// 每个 `Resolution` 自带一条隧道句柄，调用方必须让它活到那一次对账结束。
+pub fn resolve_p2p_round(layout: &Layout, sync: &SyncSettings) -> CoreResult<P2pRound> {
+    let runtime = p2p_runtime(layout, sync)?;
+    let entries = runtime.directory()?;
+    let entry_count = entries.len();
+    let self_id = runtime.device_id();
+    // 名字兜底：对方 /healthz 没报名字时用目录里的名字记录（顺带把名字写进本机已知对端）
+    let ids: Vec<iroh::EndpointId> = entries.iter().map(|entry| entry.id).collect();
+    let names = runtime.resolve_peer_names(&ids);
+
+    let mut out: Vec<Resolution> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+    // 本机排第一：不用拨号，且本机内置库正是别人推给我们的数据落地的地方
+    match resolve_self_host(layout) {
+        Some(resolution) => out.push(resolution),
+        None => failures.push("本机内置服务器没在跑".to_string()),
+    }
+    let mut ordered: Vec<&crate::sync::p2p::directory::DirectoryEntry> = entries.iter().collect();
+    ordered.sort_by(|left, right| left.id.as_bytes().cmp(right.id.as_bytes()));
+    for entry in ordered {
+        if entry.id == self_id {
+            continue;
+        }
+        if runtime.in_cooldown(entry.id) {
+            continue;
+        }
+        match dial_peer(layout, &runtime, entry.id, &entry.addrs) {
+            Ok(mut resolution) => {
+                if resolution.resolved.name.is_empty() {
+                    if let Some(name) = names.get(&entry.id.to_z32()) {
+                        resolution.resolved.name = name.clone();
+                    }
+                }
+                out.push(resolution);
+            }
+            Err(error) => failures.push(error),
+        }
+    }
+    if out.is_empty() {
+        let reason = failures.first().cloned().unwrap_or_else(|| "目录里没有任何设备记录".to_string());
+        return Err(CoreError::new(
+            crate::error::ErrorKind::Io,
+            "SYNC_P2P_NO_PEER",
+            format!(
+                "P2P 这轮找不到可用对端：{reason}（目录 {entry_count} 条在线记录）。\
+                 对方不在线是正常情况——P2P 只在设备同时在线时交换数据，会按重连间隔静默重试"
+            ),
+        ));
+    }
+    Ok(P2pRound {
+        targets: out,
+        directory_entries: entry_count,
+    })
+}
+
+/// 取本数据目录的 P2P 运行时；宿主还没起（配对早于设置落盘）就按「将要生效」的设置就地起一个。
+fn p2p_runtime(
+    layout: &Layout,
+    sync: &SyncSettings,
+) -> CoreResult<std::sync::Arc<crate::sync::p2p::net::P2pRuntime>> {
+    match crate::sync::p2p::current_for(layout) {
+        Some(runtime) => Ok(runtime),
+        // 配对发生在设置落盘**之前**（凭据还在请求里），等 Settings 域事件再启运行时
+        // 就鸡生蛋了。常驻进程里 reconcile 随后的 start 是幂等复用，CLI 单进程也因此能用 P2P。
+        None => {
+            let keys = crate::sync::crypto::derive_keys(&sync.username, &sync.secret)?;
+            crate::sync::p2p::start(crate::sync::p2p::P2pConfig {
+                layout: layout.clone(),
+                keys,
+                relay: if sync.p2p_relay.trim().is_empty() {
+                    None
+                } else {
+                    Some(sync.p2p_relay.trim().to_string())
+                },
+                directory_url: sync.p2p_directory.trim().to_string(),
+                name: desired_host_name(&sync.lan_name),
+                serve: true,
+            })
+        }
+    }
+}
+
+/// 本机内置库（P2P 模式下它只绑回环）。没在跑返回 None。
+fn resolve_self_host(layout: &Layout) -> Option<Resolution> {
+    let host = load_host_state(layout);
+    if !host.running || host.port == 0 {
+        return None;
+    }
+    let base_url = format!("http://127.0.0.1:{}", host.port);
+    let health = probe_health_with_timeout(&base_url, LAN_PROBE_TIMEOUT).ok()?;
+    Some(plain(from_health(
+        base_url,
+        health,
+        EndpointSource::Embedded,
+        None,
+    )))
+}
+
+/// 拨一台设备并在隧道里探 `/healthz`。失败会记冷却与拨号结果，返回可读原因。
+fn dial_peer(
+    layout: &Layout,
+    runtime: &crate::sync::p2p::net::P2pRuntime,
+    peer: iroh::EndpointId,
+    addrs: &[std::net::SocketAddr],
+) -> Result<Resolution, String> {
+    let id_z32 = peer.to_z32();
+    let tunnel = match runtime.dial(peer, addrs) {
+        Ok(tunnel) => tunnel,
+        Err(error) => {
+            runtime.note_cooldown(peer);
+            crate::sync::p2p::identity::record_peer(layout, &id_z32, "", false, Some(error.message.clone()));
+            return Err(error.message);
+        }
+    };
+    let base_url = tunnel.base_url.clone();
+    match probe_health_with_timeout(&base_url, P2P_PROBE_TIMEOUT) {
+        Ok(health) => {
+            let name = health_string(&health, "name");
+            crate::sync::p2p::identity::record_peer(layout, &id_z32, &name, true, None);
+            Ok(Resolution {
+                resolved: from_health(base_url, health, EndpointSource::P2p, None),
+                tunnel: Some(tunnel),
+            })
+        }
+        Err(error) => {
+            runtime.note_cooldown(peer);
+            crate::sync::p2p::identity::record_peer(layout, &id_z32, "", false, Some(error.message.clone()));
+            Err(error.message)
+        }
+    }
 }
 
 fn from_health(

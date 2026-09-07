@@ -366,11 +366,21 @@ fn sync_configure(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
                 file.sync.sync_schedules = value;
             }
             // 低于下限的间隔按下限生效（用户要的是「至少 5 秒」，不是报错）
+            // 节奏是共享子集的一部分：真的改了就要刷新 syncUpdatedAt，否则推不出去，
+            // 别的设备永远跟着旧间隔跑（设置面板改间隔走的正是这条命令）。
             if let Some(value) = interval {
-                file.sync.interval_seconds = value.clamp(5, 86400) as u32;
+                let next = value.clamp(5, 86400) as u32;
+                if file.sync.interval_seconds != next {
+                    file.sync.interval_seconds = next;
+                    file.sync_updated_at = Some(crate::time::now_iso());
+                }
             }
             if let Some(value) = reconnect {
-                file.sync.reconnect_seconds = value.clamp(5, 86400) as u32;
+                let next = value.clamp(5, 86400) as u32;
+                if file.sync.reconnect_seconds != next {
+                    file.sync.reconnect_seconds = next;
+                    file.sync_updated_at = Some(crate::time::now_iso());
+                }
             }
             // 勾选主机开关就等于选了局域网模式；主机与客户端二选一；主机必有名字。
             // 这些不变式收在 SyncSettings::apply_lan_role 里，与 config set 共用一条口径。
@@ -437,14 +447,23 @@ fn p2p_status_snapshot(layout: &crate::repo::Layout) -> Value {
         })
         .unwrap_or_default();
     let known = crate::sync::p2p::identity::load(layout).known_peers;
+    let self_z32 = self_id.to_z32();
+    let self_name = runtime.name();
     let peers: Vec<Value> = cached
         .unwrap_or_default()
         .iter()
         .map(|entry| {
             let id = entry.id.to_z32();
+            let is_self = !self_z32.is_empty() && id == self_z32;
+            let name = if is_self && !self_name.is_empty() {
+                self_name.clone()
+            } else {
+                known.get(&id).map(|peer| peer.name.clone()).unwrap_or_default()
+            };
             json!({
                 "id": id,
-                "name": known.get(&id).map(|peer| peer.name.clone()).unwrap_or_default(),
+                "name": name,
+                "self": is_self,
             })
         })
         .collect();
@@ -489,6 +508,12 @@ fn sync_peers(ctx: &ExecContext) -> CoreResult<Value> {
     let self_id = self_endpoint
         .map(|id| id.to_z32())
         .unwrap_or_default();
+    // 本机名字直接取运行时正在发布的那个（= `sync.lanName`）：解析自己的名字记录
+    // 要绕一趟网络，刚改完名还没发出去时会显示成一串 id
+    let self_name = runtime
+        .as_ref()
+        .map(|runtime| runtime.name())
+        .unwrap_or_default();
     // 枢纽口径与 endpoint.rs 完全一致：按 EndpointId **字节序**最小（z32 字符串序不保序）
     let hub_id = entries
         .iter()
@@ -502,14 +527,20 @@ fn sync_peers(ctx: &ExecContext) -> CoreResult<Value> {
         .map(|entry| {
             let id = entry.id.to_z32();
             let record = known.get(&id);
-            let name = names
-                .get(&id)
-                .cloned()
-                .or_else(|| record.map(|peer| peer.name.clone()))
-                .unwrap_or_default();
+            let is_self = !self_id.is_empty() && id == self_id;
+            let name = if is_self && !self_name.is_empty() {
+                self_name.clone()
+            } else {
+                names
+                    .get(&id)
+                    .cloned()
+                    .or_else(|| record.map(|peer| peer.name.clone()))
+                    .unwrap_or_default()
+            };
             json!({
                 "id": id,
                 "name": name,
+                "self": is_self,
                 "publishedAt": entry.published_at,
                 "lastOk": record.and_then(|peer| peer.last_ok),
                 "lastSeenAt": record.and_then(|peer| peer.last_seen_at.clone()),

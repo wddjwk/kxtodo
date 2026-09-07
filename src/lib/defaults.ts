@@ -302,6 +302,7 @@ function normalizeNode(raw: unknown): AppNode | null {
     icon: typeof source.icon === "string" ? source.icon : kind === "category" ? "folder" : "notebook",
     parentId: typeof source.parentId === "string" || source.parentId === null ? source.parentId : typeof source.parent === "string" ? source.parent : null,
     collapsed: Boolean(source.collapsed),
+    cardStyle: source.cardStyle === "card" ? "card" : undefined,
     createdAt: typeof source.createdAt === "string" ? source.createdAt : now()
   };
 }

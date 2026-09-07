@@ -35,6 +35,13 @@ export const syncConnection = writable<SyncConnection>({ online: null });
  */
 export const nextSyncAt = writable<number | null>(null);
 
+/**
+ * 手动同步（设置面板「立即同步」、移动端下拉/菜单）完成的时刻。
+ * 自动同步循环订阅它：手动跑过一轮后，下一轮从这一刻重新计一个完整间隔，
+ * 而不是沿用旧排程（否则手动同步完几秒后自动循环又插一轮，节奏看着就是乱的）。
+ */
+export const manualSyncAt = writable(0);
+
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }

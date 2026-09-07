@@ -320,6 +320,22 @@ export async function setCloseToTray(enabled: boolean): Promise<void> {
   await invoke("set_close_to_tray", { enabled });
 }
 
+/**
+ * 托盘是否真的建起来了（Linux 缺 appindicator 动态库时为 false）。
+ * 设置页据此提醒并回落；查询失败（移动端/浏览器）按 true 处理——那种环境
+ * 根本不显示这一节，而 Host 侧不可用时已经自己回落成退出了。
+ */
+export async function trayAvailable(): Promise<boolean> {
+  if (!isTauriRuntime || !caps.desktop) {
+    return true;
+  }
+  try {
+    return await invoke<boolean>("tray_available");
+  } catch {
+    return true;
+  }
+}
+
 export async function setAutostart(enabled: boolean): Promise<void> {
   if (!isTauriRuntime || !caps.desktop) {
     return;

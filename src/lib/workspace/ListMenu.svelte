@@ -3,13 +3,14 @@
   import ContextMenu from "../menu/ContextMenu.svelte";
   import MenuItem from "../menu/MenuItem.svelte";
   import MenuSeparator from "../menu/MenuSeparator.svelte";
-  import { ArrowUpDown, Download, Eraser, Eye, EyeOff, FolderInput, Image, PenLine, RotateCcw, Trash2, Upload } from "@lucide/svelte";
+  import { ArrowUpDown, Download, Eraser, Eye, EyeOff, FolderInput, Image, LayoutGrid, ListTodo, PenLine, RotateCcw, Trash2, Upload } from "@lucide/svelte";
   import { appSettings, appState, selectedBackground, accent, showToast, now, safeFileName, fileToDataUrl, appVersion } from "../stores";
   import {
     deleteNodeCascade as deleteNodeCascadeAction,
     importState as importStateAction,
     setBackground as setBackgroundAction,
     setConfig as setConfigAction,
+    setNodeCardStyle as setNodeCardStyleAction,
     setUiColor as setUiColorAction,
     unsetUiColor as unsetUiColorAction,
     applyTreeOrder as applyTreeOrderAction
@@ -405,6 +406,24 @@
             onSelect={() => { onSortMode(mode as SortMode); onClose(); }}
           />
         {/each}
+      </div>
+    </MenuItem>
+  {/if}
+  {#if node?.kind === "entry"}
+    <MenuItem icon={LayoutGrid} label="分组类型">
+      <div slot="submenu" class="submenu-list">
+        <MenuItem
+          icon={ListTodo}
+          label="Todo卡片"
+          active={(node.cardStyle ?? "todo") === "todo"}
+          onSelect={() => { void setNodeCardStyleAction(node.id, "todo"); onClose(); }}
+        />
+        <MenuItem
+          icon={LayoutGrid}
+          label="一般卡片"
+          active={node.cardStyle === "card"}
+          onSelect={() => { void setNodeCardStyleAction(node.id, "card"); onClose(); }}
+        />
       </div>
     </MenuItem>
   {/if}

@@ -1,5 +1,8 @@
 export type NodeKind = "system" | "category" | "entry";
 
+/** 条目渲染类型：todo = 可勾选的待办卡片（默认）；card = 一般卡片（隐藏勾选框，展示型） */
+export type CardStyle = "todo" | "card";
+
 export type AppNode = {
   id: string;
   kind: NodeKind;
@@ -8,6 +11,7 @@ export type AppNode = {
   parentId: string | null;
   order?: number;
   collapsed?: boolean;
+  cardStyle?: CardStyle;
   createdAt: string;
 };
 

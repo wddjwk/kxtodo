@@ -86,3 +86,37 @@ export function filterPlannedTasks(tasks: Task[], key: PlannedGroupKey, todayIso
     }
   });
 }
+
+/** 「全部」视图的互斥分区：已逾期 / 近三天 / 本周剩余 / 稍后，空分区不返回。
+ *
+ * 下拉里的分组是**过滤器**（允许交叠），分区必须是互斥的，否则一条任务会出现在
+ * 两个标题下。标签复用 [`plannedGroupOptions`] 的文案，叫法保持一致。 */
+export function plannedSections(
+  tasks: Task[],
+  todayIsoValue: string
+): Array<{ key: string; label: string; tasks: Task[] }> {
+  const weekStart = weekStartIso(todayIsoValue);
+  const weekEnd = addDays(weekStart, 6);
+  const threeDaysEnd = addDays(todayIsoValue, 2);
+  const labels = new Map(plannedGroupOptions(todayIsoValue).map((option) => [option.key, option.label]));
+  const buckets: Array<{ key: string; label: string; tasks: Task[] }> = [
+    { key: "overdue", label: "已逾期", tasks: [] },
+    { key: "threeDays", label: labels.get("threeDays") ?? "近三天", tasks: [] },
+    { key: "week", label: labels.get("week") ?? "本周", tasks: [] },
+    { key: "later", label: labels.get("later") ?? "稍后", tasks: [] }
+  ];
+  for (const task of tasks) {
+    const date = plannedDateOf(task);
+    const bucket = !date
+      ? buckets[3]
+      : date < todayIsoValue
+        ? buckets[0]
+        : date <= threeDaysEnd
+          ? buckets[1]
+          : date <= weekEnd
+            ? buckets[2]
+            : buckets[3];
+    bucket?.tasks.push(task);
+  }
+  return buckets.filter((bucket) => bucket.tasks.length > 0);
+}

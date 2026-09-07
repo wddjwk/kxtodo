@@ -261,17 +261,50 @@
   grid-template-columns: 34px minmax(0, 1fr) max-content max-content;
 }
 
-/* 折叠态标题：单行太长时折行显示，最多两行，多余的省略号（这仍然是折叠态） */
+/* 展开/折叠在移动端全部交给单击/双击：收起按钮与它占的位置一并让给内容 */
+.app-shell.mobile .task-card .collapse-button {
+  display: none;
+}
+
+.app-shell.mobile .task-card.expanded .task-body {
+  padding-right: 0;
+}
+
+/* 一般卡片（分组类型 = 一般卡片）：没有勾选框，内容从最左开始占满 */
+.app-shell.mobile .task-card.plain.compact .task-title-grid {
+  grid-template-columns: minmax(0, 1fr) max-content max-content;
+}
+
+/* 折叠态标题：折行显示。夹行与省略号由 .clamped 控制——只有「两行放不下」才夹成两行
+   并在第二行末尾加省略号；两行放得下就是普通两行文本，没有省略号、也不算折叠态。 */
 .app-shell.mobile .markdown-title-row {
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  /* 只写 -webkit- 前缀：无缀 line-clamp 在 Chromium 里会把 display 计算值顶成 flow-root，
-     反而让夹行失效（实测标题没被夹成两行） */
-  -webkit-line-clamp: 2;
   max-height: none;
   white-space: normal;
   overflow: hidden;
+}
+
+.app-shell.mobile .markdown-title-row.clamped {
+  /* 只写 -webkit- 前缀：无缀 line-clamp 在 Chromium 里会把 display 计算值顶成 flow-root，
+     反而让夹行失效（实测标题没被夹成两行） */
+  -webkit-line-clamp: 2;
   text-overflow: ellipsis;
+}
+
+/* 下拉同步提示条：高度由行内样式按下拉距离给（跟手），过阈值后文字变 accent */
+.app-shell.mobile .pull-sync-hint {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 6px;
+  overflow: hidden;
+  color: #8a8f98;
+  font-size: 13px;
+}
+
+.app-shell.mobile .pull-sync-hint.ready {
+  color: var(--accent);
 }
 
 /* 长按出菜单时不许选中文本：workspace.css 给 markdown 开了 user-select:text，
@@ -316,14 +349,13 @@
   padding-left: 48px;
 }
 
-/* Planned group chip on mobile: same slot geometry as the my-day subtitle */
+/* Planned group chip on mobile: left-aligned like the completed-section label */
 .app-shell.mobile .planned-group-bar {
   margin: -14px 0 12px;
-  padding-left: 48px;
 }
 
 .app-shell.mobile .planned-group-panel {
-  left: 48px;
+  left: 0;
 }
 
 .app-shell.mobile .planned-group-chip {

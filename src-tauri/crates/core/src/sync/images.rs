@@ -339,39 +339,43 @@ fn manifest_fingerprint(candidates: &[(String, String)]) -> String {
     sha256_hex(joined.as_bytes())
 }
 
-/// 进程内缓存：上一次「服务端已齐全」的 (作用域, 清单指纹)。
-/// 作用域 = server_url|username——同一批图片换个服务器/账户时必须重新对账，
+/// 进程内缓存：每个作用域上一次「服务端已齐全」的清单指纹。
+/// 作用域 = 主机库身份|username——同一批图片换个库/账户时必须重新对账，
 /// 否则会被误判为已齐全而永远不上传。服务端只会新增图片、不会自己丢，
 /// 所以同作用域下指纹不变时跳过对账是安全的。
-fn manifest_cache() -> &'static Mutex<Option<(String, String)>> {
-    static CACHE: std::sync::OnceLock<Mutex<Option<(String, String)>>> = std::sync::OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(None))
+///
+/// 按 scope 分键而不是单槽：P2P 一轮要跟多台设备的库逐台对账，单槽会在各台之间
+/// 来回抖动，每轮每台都白跑一次 image_check。
+fn manifest_cache() -> &'static Mutex<std::collections::BTreeMap<String, String>> {
+    static CACHE: std::sync::OnceLock<Mutex<std::collections::BTreeMap<String, String>>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(std::collections::BTreeMap::new()))
 }
+
+/// 缓存的作用域上限（正常一台设备只会见到少数几个库；超了就整表清空重来，
+/// 不值得为它写 LRU——重来的代价只是每台多一次 image_check）
+const MANIFEST_CACHE_MAX: usize = 8;
 
 /// 重新配对（register/login）时清空：服务端数据可能被管理员删过，旧结论不再可信。
 pub fn invalidate_manifest_cache() {
     if let Ok(mut cache) = manifest_cache().lock() {
-        *cache = None;
+        cache.clear();
     }
 }
 
 fn manifest_settled(scope: &str, fingerprint: &str) -> bool {
     manifest_cache()
         .lock()
-        .map(|cache| {
-            cache
-                .as_ref()
-                .map(|(cached_scope, cached_print)| {
-                    cached_scope == scope && cached_print == fingerprint
-                })
-                .unwrap_or(false)
-        })
+        .map(|cache| cache.get(scope).map(|cached| cached == fingerprint).unwrap_or(false))
         .unwrap_or(false)
 }
 
 fn remember_manifest(scope: &str, fingerprint: &str) {
     if let Ok(mut cache) = manifest_cache().lock() {
-        *cache = Some((scope.to_string(), fingerprint.to_string()));
+        if cache.len() >= MANIFEST_CACHE_MAX && !cache.contains_key(scope) {
+            cache.clear();
+        }
+        cache.insert(scope.to_string(), fingerprint.to_string());
     }
 }
 

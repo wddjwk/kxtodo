@@ -454,6 +454,7 @@ fn two_devices_converge_with_edits_and_deletes() {
                 parent_id: None,
                 order: 99.0,
                 collapsed: None,
+                card_style: None,
                 created_at: kxtodo_core::time::now_iso(),
                 updated_at: Some(kxtodo_core::time::now_iso()),
                 extra: Default::default(),

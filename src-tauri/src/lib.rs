@@ -47,6 +47,9 @@ const DEFAULT_NOTIFICATION_DURATION_MS: u64 = 3_000;
 #[cfg(desktop)]
 struct LifecycleState {
     close_to_tray: AtomicBool,
+    /// 托盘是否真的建起来了。Linux 缺 appindicator 动态库时建不起来：
+    /// 此时「关闭到托盘」必须回落成退出，否则窗口会藏进一个不存在的托盘。
+    tray_available: AtomicBool,
     quitting: AtomicBool,
 }
 
@@ -57,6 +60,7 @@ impl Default for LifecycleState {
             // Linux 默认关闭即退出：WSLg/GNOME 托盘常不可见，隐藏到看不见的托盘
             // 等于把应用弄丢；设置里仍可显式开启关闭到托盘。
             close_to_tray: AtomicBool::new(!cfg!(target_os = "linux")),
+            tray_available: AtomicBool::new(true),
             quitting: AtomicBool::new(false),
         }
     }
@@ -1119,6 +1123,14 @@ fn set_close_to_tray(state: State<LifecycleState>, enabled: bool) {
     state.close_to_tray.store(enabled, Ordering::SeqCst);
 }
 
+/// 托盘是否真的建起来了（Linux 缺 appindicator 动态库时为 false）。
+/// 前端据此在设置页提醒「当前环境托盘不可用」，并把「退到托盘」回落成退出。
+#[cfg(desktop)]
+#[tauri::command]
+fn tray_available(state: State<LifecycleState>) -> bool {
+    state.tray_available.load(Ordering::SeqCst)
+}
+
 #[cfg(desktop)]
 #[tauri::command]
 fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
@@ -2076,6 +2088,7 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
             notification_ready,
             register_global_shortcut,
             set_close_to_tray,
+            tray_available,
             set_autostart,
             get_autostart_enabled,
             set_webview_zoom,
@@ -2099,7 +2112,20 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
                 let _ = webview.set_zoom(1.0);
             }
             if default_host {
-                setup_tray(app)?;
+                // 托盘建不起来（Linux 缺 appindicator 动态库是最常见的原因）不能拖垮整个
+                // 程序：记一条日志、标记不可用，关闭按钮回落成「退出程序」，应用照常跑。
+                if let Err(error) = setup_tray(app) {
+                    let hint = if cfg!(target_os = "linux") {
+                        "（Linux 需要 ayatana-appindicator3 或 appindicator3 动态库；\
+                         缺库时以无托盘模式运行，关闭按钮直接退出）"
+                    } else {
+                        ""
+                    };
+                    eprintln!("[kxtodo] 托盘不可用，已降级为无托盘运行：{error}{hint}");
+                    app.state::<LifecycleState>()
+                        .tray_available
+                        .store(false, Ordering::SeqCst);
+                }
             }
             if mode == AppMode::Gui {
                 // 窗口创建时保持隐藏（conf visible:false），由前端首帧渲染后
@@ -2142,6 +2168,7 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
                     let lifecycle = window.state::<LifecycleState>();
                     if lifecycle.quitting.load(Ordering::SeqCst)
                         || !lifecycle.close_to_tray.load(Ordering::SeqCst)
+                        || !lifecycle.tray_available.load(Ordering::SeqCst)
                     {
                         lifecycle.quitting.store(true, Ordering::SeqCst);
                         if let Some(core) = window

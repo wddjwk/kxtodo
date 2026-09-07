@@ -194,6 +194,12 @@ pub fn settings_payload(settings: &SettingsFile) -> Value {
         "updates": {
             "autoCheck": settings.updates.auto_check,
         },
+        // 同步**节奏**是多端协商一致的部分：一端改了间隔，其它设备跟着改
+        // （LWW，最后改的赢）。服务器地址/账户/范围/暂停开关仍是本机偏好，不共享。
+        "sync": {
+            "intervalSeconds": settings.sync.interval_seconds,
+            "reconnectSeconds": settings.sync.reconnect_seconds,
+        },
     })
 }
 
@@ -382,6 +388,8 @@ fn apply_settings_record(record: &EntityRecord, settings: &mut SettingsFile) -> 
         features: Option<Value>,
         #[serde(default)]
         updates: Option<Value>,
+        #[serde(default)]
+        sync: Option<Value>,
     }
     let payload: SharedSettings =
         serde_json::from_value(record.data.clone()).map_err(|e| e.to_string())?;
@@ -421,6 +429,17 @@ fn apply_settings_record(record: &EntityRecord, settings: &mut SettingsFile) -> 
     if let Some(updates) = payload.updates {
         if let Ok(parsed) = serde_json::from_value::<crate::model::UpdateSettings>(updates) {
             settings.updates = parsed;
+        }
+    }
+    if let Some(sync) = payload.sync {
+        if let Some(map) = sync.as_object() {
+            // 节奏是多端协商的：一端改了，其它端跟着改（低于下限按下限生效，与 sync configure 同口径）
+            if let Some(value) = map.get("intervalSeconds").and_then(Value::as_u64) {
+                settings.sync.interval_seconds = value.clamp(5, 86400) as u32;
+            }
+            if let Some(value) = map.get("reconnectSeconds").and_then(Value::as_u64) {
+                settings.sync.reconnect_seconds = value.clamp(5, 86400) as u32;
+            }
         }
     }
     settings.sync_updated_at = Some(record.updated_at.clone());
@@ -512,6 +531,7 @@ mod tests {
             parent_id: parent.map(str::to_string),
             order,
             collapsed: None,
+            card_style: None,
             created_at: ts.to_string(),
             updated_at: Some(ts.to_string()),
             extra: Map::new(),
@@ -687,5 +707,45 @@ mod tests {
         assert!(node_entity.data.get("collapsed").is_none());
         let task_entity = entities.iter().find(|e| e.kind == "task").unwrap();
         assert!(task_entity.data.get("expanded").is_none());
+    }
+
+    #[test]
+    fn sync_cadence_is_part_of_the_shared_settings_subset() {
+        let mut source = SettingsFile::default();
+        source.sync.interval_seconds = 12;
+        source.sync.reconnect_seconds = 90;
+        let payload = settings_payload(&source);
+        assert_eq!(payload["sync"]["intervalSeconds"], json!(12));
+        assert_eq!(payload["sync"]["reconnectSeconds"], json!(90));
+
+        // 一端改了节奏，另一端应用后跟着改；越界值按下限/上限夹取
+        let mut target = SettingsFile::default();
+        let record = EntityRecord {
+            kind: "settings".to_string(),
+            id: SETTINGS_ENTITY_ID.to_string(),
+            updated_at: "2026-01-02T00:00:00.000Z".to_string(),
+            updated_by: "dev-b".to_string(),
+            deleted: false,
+            data: json!({ "sync": { "intervalSeconds": 3, "reconnectSeconds": 999999 } }),
+            seq: 1,
+        };
+        apply_settings_record(&record, &mut target).unwrap();
+        assert_eq!(target.sync.interval_seconds, 5, "低于下限按下限生效");
+        assert_eq!(target.sync.reconnect_seconds, 86400, "高于上限按上限生效");
+
+        // 老设备的载荷没有 sync 键：本机节奏不动
+        let mut legacy = SettingsFile::default();
+        legacy.sync.interval_seconds = 77;
+        let legacy_record = EntityRecord {
+            kind: "settings".to_string(),
+            id: SETTINGS_ENTITY_ID.to_string(),
+            updated_at: "2026-01-03T00:00:00.000Z".to_string(),
+            updated_by: "dev-b".to_string(),
+            deleted: false,
+            data: json!({ "profile": { "displayName": "x", "email": "", "avatar": "" } }),
+            seq: 2,
+        };
+        apply_settings_record(&legacy_record, &mut legacy).unwrap();
+        assert_eq!(legacy.sync.interval_seconds, 77);
     }
 }

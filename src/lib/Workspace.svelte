@@ -3,7 +3,7 @@
   import {
     ArrowLeft, Calendar, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
     ChevronsDown, ChevronsUp, FolderInput,
-    Lightbulb, MoreHorizontal, PenLine, Plus, Search, Settings as SettingsIcon, SmilePlus, Star, Sun, Tag, Trash2, X
+    Lightbulb, MoreHorizontal, PenLine, Plus, RefreshCw, Search, Settings as SettingsIcon, SmilePlus, Star, Sun, Tag, Trash2, X
   } from "@lucide/svelte";
   import {
     appState, appSettings, showToast,
@@ -16,8 +16,9 @@
     addTask as addTaskAction, setItemUi as setItemUiAction,
     setItemsUi as setItemsUiAction, replaceTaskTags as replaceTaskTagsAction,
     replaceTaskEmojis as replaceTaskEmojisAction,
-    renameNode as renameNodeAction
+    renameNode as renameNodeAction, syncNow as syncNowAction
   } from "./actions";
+  import { pullToRefresh } from "./pullrefresh";
   import { taskMoveTargets } from "./nodes";
   import { buildMainStyle } from "./styles";
   import { hasMultipleMarkdownLines } from "./markdown";
@@ -33,10 +34,10 @@
   import MoveTargetTree from "./menu/MoveTargetTree.svelte";
   import ListMenu from "./workspace/ListMenu.svelte";
   import { sortTasks, type SortMode } from "./sort";
-  import { filterPlannedTasks, plannedGroupOptions, type PlannedGroupKey } from "./plannedGroups";
+  import { filterPlannedTasks, plannedGroupOptions, plannedSections, type PlannedGroupKey } from "./plannedGroups";
   import { showMobileList, isMobile, mobileView } from "./platform";
   import { caps } from "./capabilities";
-  import type { AppNode, TagColor, Task } from "./types";
+  import type { AppNode, CardStyle, TagColor, Task } from "./types";
 
   let newTaskDraft = "";
   let showCompleted = true;
@@ -66,6 +67,26 @@
   let previewFrame: HTMLIFrameElement;
   // 分钟级 tick：让计划内分组标签（周X/日期区间）在跨天后随下次重算刷新
   let dayTick = 0;
+  // 移动端下拉同步：提示条高度/是否过阈值/上一轮是否还在跑
+  let pullDistance = 0;
+  let pullReady = false;
+  let pullBusy = false;
+
+  /** 同步功能开着（已配对且没暂停）才给下拉手势与「立即同步」入口 */
+  $: syncAvailable =
+    Boolean($appSettings.sync?.enabled) &&
+    Boolean(($appSettings.sync?.username ?? "").trim()) &&
+    Boolean(($appSettings.sync?.secret ?? "").trim());
+
+  async function runManualSyncNow(): Promise<void> {
+    if (pullBusy) return;
+    pullBusy = true;
+    try {
+      await syncNowAction();
+    } finally {
+      pullBusy = false;
+    }
+  }
 
   onMount(() => {
     const dayTimer = window.setInterval(() => {
@@ -110,16 +131,42 @@
   $: plannedSortedTasks = isPlanned
     ? sortTasks(filterPlannedTasks($visibleTasks, plannedGroup, todayIso()), sortMode)
     : [];
+  // 每张卡片按**自己所属条目**的分组类型渲染（我的一天/计划内/搜索里混着多个条目的任务）
+  $: cardStyleByNode = new Map<string, CardStyle>(
+    $appState.nodes.filter((node) => node.cardStyle === "card").map((node) => [node.id, "card"])
+  );
+  $: selectedIsCard = $selectedNode?.cardStyle === "card";
   $: incompleteTasks = isPlanned
     ? (plannedShowCompleted ? plannedSortedTasks : plannedSortedTasks.filter((task) => !task.completed))
-    : isMyDayHistory ? [] : sortedTasks.filter((task) => !task.completed);
-  $: completedTasks = isPlanned
+    : isMyDayHistory
+      ? []
+      : selectedIsCard
+        ? sortedTasks
+        : sortedTasks.filter((task) => !task.completed);
+  // 「已完成」按完成时间降序（最新完成在最上）；三点菜单的排序方式只管未完成部分。
+  // 一般卡片条目不分区：已完成的当普通卡片混在主列表里显示。
+  $: completedTasks = isPlanned || selectedIsCard
     ? []
     : isMyDay
       ? (isMyDayHistory
-          ? sortTasks(completedByDate[myDayViewDate] ?? [], sortMode)
-          : sortedTasks.filter((task) => task.completed && dateOnly(task.completedAt) === todayIso()))
-      : sortedTasks.filter((task) => task.completed);
+          ? byCompletedDesc(completedByDate[myDayViewDate] ?? [])
+          : byCompletedDesc(sortedTasks.filter((task) => task.completed && dateOnly(task.completedAt) === todayIso())))
+      : byCompletedDesc(sortedTasks.filter((task) => task.completed));
+  // 「计划内·全部」分段展示：互斥分区（已逾期/近三天/本周/稍后），空分区不渲染
+  $: plannedSectionList =
+    isPlanned && plannedGroup === "all"
+      ? plannedSections(
+          plannedShowCompleted ? plannedSortedTasks : plannedSortedTasks.filter((task) => !task.completed),
+          todayIso()
+        )
+      : [];
+  // 渲染行：分区标题 + 卡片 拍平成一条列表，避免把 TaskCard 的接线复制第三遍
+  $: taskRows = plannedSectionList.length
+    ? plannedSectionList.flatMap((section) => [
+        { kind: "label" as const, key: `section-${section.key}`, label: section.label, task: null as Task | null },
+        ...section.tasks.map((task) => ({ kind: "task" as const, key: task.id, label: "", task: task as Task | null }))
+      ])
+    : incompleteTasks.map((task) => ({ kind: "task" as const, key: task.id, label: "", task: task as Task | null }));
   $: taskMenuTask = taskMenu ? $appState.tasks.find((task) => task.id === taskMenu?.taskId) : null;
   $: hasTaskMoveTargets = taskMenu ? taskMoveTargets($appState.nodes, taskMenuTask?.nodeId ?? "").length > 0 : false;
   $: expandableTasks = $visibleTasks.filter((task) => hasMultipleMarkdownLines(task.markdown));
@@ -236,6 +283,13 @@
   function collapsedLine(md: string): string {
     const firstLine = md.split("\n")[0] ?? "";
     return firstLine.replace(/^#+\s*/, "");
+  }
+
+  /** 「已完成」固定按完成时间降序：最新完成的在最上面（与列表排序方式无关）。 */
+  function byCompletedDesc(tasks: Task[]): Task[] {
+    return [...tasks].sort((a, b) =>
+      (b.completedAt ?? b.createdAt).localeCompare(a.completedAt ?? a.createdAt)
+    );
   }
 
   export function closeOverlays(): void {
@@ -617,6 +671,9 @@
             {#if !allCollapsed}
               <MenuItem icon={ChevronsUp} label="收起全部" onSelect={() => { showHeaderMenu = false; expandAll(false); }} />
             {/if}
+            {#if syncAvailable}
+              <MenuItem icon={RefreshCw} label={pullBusy ? "同步中…" : "立即同步"} onSelect={() => { showHeaderMenu = false; void runManualSyncNow(); }} />
+            {/if}
             <MenuItem icon={MoreHorizontal} label="列表菜单" onSelect={openListMenuFromGear} />
           </div>
         {/if}
@@ -791,23 +848,48 @@
     </div>
   {/if}
 
-  <section class="task-list">
-    {#each incompleteTasks as task (task.id)}
-      <TaskCard
-        {task}
-        nodeId={task.nodeId}
-        selected={taskMenu?.taskId === task.id}
-        on:toggle={(event) => toggleCompletion(event.detail)}
-        on:expand={(event) => toggleTaskExpansion(event.detail.id, event.detail.expanded)}
-        on:edit={(event) => openTaskEditor(event.detail)}
-        on:context={openTaskMenu}
-        on:openLink={openTaskLink}
-        on:setDate={handleTaskSetDate}
-        on:removeTag={(e) => removeTagFromTask(e.detail.id, e.detail.tagId)}
-        on:editTag={(e) => editTagAtTask(e.detail.id, e.detail.tagId, e.detail.text)}
-        on:removeEmoji={(e) => removeEmojiFromTask(e.detail.id, e.detail.index)}
-        on:pickEmoji={(e) => openEmojiPickerAt(e.detail.id, e.detail.index)}
-      />
+  <section
+    class="task-list"
+    use:pullToRefresh={{
+      enabled: () => syncAvailable && $mobileView === "content",
+      busy: () => pullBusy,
+      onProgress: (distance, ready) => {
+        pullDistance = distance;
+        pullReady = ready;
+      },
+      onRelease: () => void runManualSyncNow()
+    }}
+  >
+    {#if $isMobile && syncAvailable && (pullDistance > 0 || pullBusy)}
+      <div
+        class="pull-sync-hint"
+        class:ready={pullReady || pullBusy}
+        style={`height:${pullBusy ? 36 : Math.max(26, Math.round(pullDistance * 0.7))}px`}
+      >
+        {pullBusy ? "同步中…" : pullReady ? "松开立即同步" : "下拉同步"}
+      </div>
+    {/if}
+    {#each taskRows as row (row.key)}
+      {#if row.kind === "label"}
+        <div class="task-section-label">{row.label}</div>
+      {:else if row.task}
+        <TaskCard
+          task={row.task}
+          nodeId={row.task.nodeId}
+          cardStyle={cardStyleByNode.get(row.task.nodeId) ?? "todo"}
+          selected={taskMenu?.taskId === row.task.id}
+          on:toggle={(event) => toggleCompletion(event.detail)}
+          on:expand={(event) => toggleTaskExpansion(event.detail.id, event.detail.expanded)}
+          on:edit={(event) => openTaskEditor(event.detail)}
+          on:context={openTaskMenu}
+          on:openLink={openTaskLink}
+          on:setDate={handleTaskSetDate}
+          on:removeTag={(e) => removeTagFromTask(e.detail.id, e.detail.tagId)}
+          on:editTag={(e) => editTagAtTask(e.detail.id, e.detail.tagId, e.detail.text)}
+          on:removeEmoji={(e) => removeEmojiFromTask(e.detail.id, e.detail.index)}
+          on:pickEmoji={(e) => openEmojiPickerAt(e.detail.id, e.detail.index)}
+        />
+      {/if}
     {/each}
 
     {#if completedTasks.length}
@@ -821,6 +903,7 @@
             <TaskCard
               {task}
               nodeId={task.nodeId}
+              cardStyle={cardStyleByNode.get(task.nodeId) ?? "todo"}
               selected={taskMenu?.taskId === task.id}
               on:toggle={(event) => toggleCompletion(event.detail)}
               on:expand={(event) => toggleTaskExpansion(event.detail.id, event.detail.expanded)}

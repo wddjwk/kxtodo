@@ -305,6 +305,33 @@ h1 {
   grid-template-columns: 34px minmax(0, 1fr);
 }
 
+/* 一般卡片（分组类型 = 一般卡片）：不是可勾选的 todolist，隐藏勾选框，
+   空出来的第一列给内容，展示区更宽。任务的增删改查与完成状态不受影响。 */
+.task-card.plain .task-check {
+  display: none;
+}
+
+.task-card.plain .task-body {
+  grid-column: 1;
+}
+
+.task-card.plain.compact .task-title-grid {
+  grid-template-columns: minmax(0, 1fr) max-content max-content 34px;
+}
+
+.task-card.plain .task-tags {
+  grid-column: 2;
+}
+
+.task-card.plain .task-due-wrap,
+.task-card.plain .task-due-spacer {
+  grid-column: 3;
+}
+
+.task-card.plain.expanded .task-title-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .task-card:hover,
 .task-card.selected {
   background: white;
@@ -1184,27 +1211,27 @@ h1 {
   opacity: 0.72;
 }
 
-/* 计划内视图：日期分组筛选 chip + 下拉面板（与 my-day-subtitle 同槽位）。
+/* 计划内视图：日期分组筛选 chip + 下拉面板。
+   视觉语言与「已完成」标签一致：左对齐、圆角 7、白底 70%、accent 色。
    注意：.workspace > * 统一 z-index:1，bar 与 task-list 是同级层叠上下文，
    DOM 靠后的 task-list 会盖住面板——bar 必须显式抬高。 */
 .planned-group-bar {
   position: relative;
   z-index: 30;
   margin: -20px 0 18px;
-  padding-left: 58px;
 }
 
 .planned-group-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 30px;
-  padding: 4px 12px;
-  border: 1px solid #e5e7eb;
-  border-radius: 999px;
-  background: rgb(255 255 255 / 72%);
+  gap: 7px;
+  margin: 4px 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: rgb(255 255 255 / 70%);
   color: var(--accent);
-  font-size: 13px;
+  padding: 7px 12px;
+  font-size: var(--font-control);
   cursor: pointer;
   transition: background 0.12s ease-out;
 }
@@ -1216,7 +1243,7 @@ h1 {
 .planned-group-panel {
   position: absolute;
   top: calc(100% + 2px);
-  left: 58px;
+  left: 0;
   z-index: 2000;
   display: grid;
   gap: 2px;
@@ -1228,6 +1255,24 @@ h1 {
   background: #ffffff;
   box-shadow: 0 16px 50px rgb(0 0 0 / 16%), 0 2px 8px rgb(0 0 0 / 8%);
   animation: menu-fade-in 0.1s ease-out;
+}
+
+/* 计划内「全部」的分区标题（已逾期/近三天/本周/稍后）：与「已完成」标签同款 */
+.task-section-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 10px 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: rgb(255 255 255 / 70%);
+  color: var(--accent);
+  padding: 7px 12px;
+  font-size: var(--font-control);
+}
+
+.task-section-label:first-child {
+  margin-top: 4px;
 }
 
 /* Suggestion panel */

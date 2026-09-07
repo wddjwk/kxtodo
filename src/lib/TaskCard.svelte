@@ -13,6 +13,8 @@
   export let task: Task;
   export let nodeId = "";
   export let selected = false;
+  /** 分组类型：todo = 可勾选的待办卡片（默认）；card = 一般卡片（无勾选框，内容占满） */
+  export let cardStyle: "todo" | "card" = "todo";
 
   const dispatch = createEventDispatcher<{
     toggle: string;
@@ -27,8 +29,10 @@
     pickEmoji: { id: string; index: number };
   }>();
 
-  /** 两击判定窗口：移动端单击的动作要等到这个窗口过去才执行 */
-  const DOUBLE_TAP_MS = 300;
+  /** 两击判定窗口：移动端单击的动作要等到这个窗口过去才执行。
+   * 这个值直接决定单击的「跟手感」——太大单击就发闷；太小双击会漏判。
+   * 220ms 是实测折中：单击几乎无感延迟，正常双击（100~250ms 间隔）仍稳。 */
+  const DOUBLE_TAP_MS = 220;
 
   let showPicker = false;
   let editingTagId = "";
@@ -55,19 +59,34 @@
   });
 
   /**
-   * 量折叠态标题有没有被截断：桌面是单行 nowrap（比宽度），移动端折到两行封顶（比高度）。
-   * 截断了就说明「这一行显示不完整」，展开即把它显示完整——单行内容也要能展开。
-   * 参数是渲染后的 HTML，内容一变就重量；窗口尺寸变了也重量。
+   * 量折叠态标题有没有显示不全。
+   * - 桌面：单行 nowrap，比宽度；显示不全就加省略号并可展开。
+   * - 移动端：折行显示、两行封顶。**两行放得下就不夹行、不加省略号、不算可展开**；
+   *   只有两行放不下才夹成两行、在第二行末尾加省略号并变成可展开。
+   *   所以要比的是**自然高度**与两行预算：夹行开着时 clientHeight 已被夹住，量不出需要几行，
+   *   量之前临时摘掉 clamped 类、量完恢复（同步完成，中间不会重绘）。
    */
   function measureTitle(
     node: HTMLElement,
     html: string
   ): { update: (next: string) => void; destroy: () => void } {
     const check = (): void => {
-      titleOverflow =
-        node.scrollWidth > node.clientWidth + 1 || node.scrollHeight > node.clientHeight + 1;
+      if (!mobile) {
+        titleOverflow = node.scrollWidth > node.clientWidth + 1;
+        return;
+      }
+      const wasClamped = node.classList.contains("clamped");
+      if (wasClamped) node.classList.remove("clamped");
+      const lineHeight = parseFloat(getComputedStyle(node).lineHeight) || 0;
+      const natural = node.scrollHeight;
+      if (wasClamped) node.classList.add("clamped");
+      titleOverflow = lineHeight > 0 && natural > lineHeight * 2 + 1;
     };
     check();
+    // 元素自身尺寸变化也要重量：移动端首屏卡片在 view-list 下是 display:none，
+    // 挂载时量到的全是 0；点进内容页变可见时没有任何 window 事件，只有 RO 能接到。
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => check()) : null;
+    observer?.observe(node);
     window.addEventListener("resize", check);
     let last = html;
     return {
@@ -78,6 +97,7 @@
         check();
       },
       destroy(): void {
+        observer?.disconnect();
         window.removeEventListener("resize", check);
       }
     };
@@ -242,6 +262,7 @@
   class:compact={!isExpanded}
   class:expanded={isExpanded}
   class:multiline={canExpand}
+  class:plain={cardStyle === "card"}
   class:selected
   class="task-card"
   use:longpress={handleLongPress}
@@ -265,7 +286,7 @@
           {@html fullHtml}
         </div>
       {:else}
-        <div class="markdown-body markdown-title-row" use:measureTitle={collapsedHtml} on:click={handleMarkdownClick}>
+        <div class="markdown-body markdown-title-row" class:clamped={titleOverflow} use:measureTitle={collapsedHtml} on:click={handleMarkdownClick}>
           {@html collapsedHtml}
         </div>
       {/if}

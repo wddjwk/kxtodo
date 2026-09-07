@@ -124,6 +124,11 @@ pub struct Node {
     pub order: f64,
     #[serde(rename = "collapsed", skip_serializing_if = "Option::is_none")]
     pub collapsed: Option<bool>,
+    /// 条目的渲染类型：None/"todo" = 待办卡片（可勾选、有「已完成」分区），
+    /// "card" = 一般卡片（隐藏勾选框、内容占满整个卡片，用于日志/随笔这类展示型条目）。
+    /// 纯渲染差异：任务的增删改查与完成状态一律不受影响。
+    #[serde(rename = "cardStyle", default, skip_serializing_if = "Option::is_none")]
+    pub card_style: Option<String>,
     #[serde(rename = "createdAt", default)]
     pub created_at: String,
     #[serde(rename = "updatedAt", skip_serializing_if = "Option::is_none")]
