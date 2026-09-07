@@ -65,18 +65,22 @@
     const anchorLeft = xAlign === "right" ? anchorX - width : anchorX;
     left = Math.max(MENU_MARGIN_PX, Math.min(anchorLeft, viewWidth - width - MENU_MARGIN_PX));
 
-    const availableHeight = viewHeight - MENU_MARGIN_PX * 2;
-    if (height > availableHeight) {
-      maxHeight = Math.max(120, Math.round(availableHeight));
-      top = MENU_MARGIN_PX;
-    } else {
+    // 垂直：**菜单永远从锚点下方展开**（盖住唤起它的按钮会让「点按钮」变成
+    // 「点菜单」，按下/松手直接落在菜单项上）。放不下就按向下空间限高、内部滚动；
+    // 只有向上空间明显更大时才向上翻转（右键菜单在屏幕下半部的常规行为）。
+    const spaceBelow = viewHeight - MENU_MARGIN_PX - anchorY;
+    const spaceAbove = anchorY - MENU_MARGIN_PX;
+    if (height <= spaceBelow) {
+      top = anchorY;
       maxHeight = 0;
-      if (anchorY + height > viewHeight - MENU_MARGIN_PX) {
-        const flippedTop = anchorY - height;
-        top = flippedTop >= MENU_MARGIN_PX ? flippedTop : viewHeight - height - MENU_MARGIN_PX;
-      } else {
-        top = anchorY;
-      }
+    } else if (spaceAbove > spaceBelow) {
+      const available = Math.max(120, Math.round(spaceAbove));
+      const used = Math.min(height, available);
+      top = anchorY - used;
+      maxHeight = used < height ? available : 0;
+    } else {
+      top = anchorY;
+      maxHeight = Math.max(120, Math.round(spaceBelow));
     }
     ready = true;
   }

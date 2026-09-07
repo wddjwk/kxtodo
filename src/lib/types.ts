@@ -88,6 +88,7 @@ export type Settings = {
     focusSearch: string;
     toggleWindow: string;
     openSettings: string;
+    syncNow: string;
   };
   sync: {
     enabled: boolean;

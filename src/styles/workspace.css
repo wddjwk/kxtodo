@@ -293,22 +293,18 @@ h1 {
 }
 
 .task-card.compact .task-title-grid {
-  grid-template-columns: 34px minmax(0, 1fr) max-content max-content 34px;
+  grid-template-columns: 34px minmax(0, 1fr) 34px;
   align-items: center;
-}
-
-.task-card.compact .edit-button {
-  align-self: center;
 }
 
 .task-card.expanded .task-title-grid {
   grid-template-columns: 34px minmax(0, 1fr);
 }
 
-/* 一般卡片（分组类型 = 一般卡片）：不是可勾选的 todolist，隐藏勾选框，
-   空出来的第一列给内容，展示区更宽。任务的增删改查与完成状态不受影响。 */
-.task-card.plain .task-check {
-  display: none;
+/* 一般卡片（分组类型 = 一般卡片）：不是可勾选的 todolist，没有勾选框列，
+   左上角一个主题色小角标代替它的位置感。 */
+.task-card.plain {
+  padding-left: 28px;
 }
 
 .task-card.plain .task-body {
@@ -316,20 +312,50 @@ h1 {
 }
 
 .task-card.plain.compact .task-title-grid {
-  grid-template-columns: minmax(0, 1fr) max-content max-content 34px;
-}
-
-.task-card.plain .task-tags {
-  grid-column: 2;
-}
-
-.task-card.plain .task-due-wrap,
-.task-card.plain .task-due-spacer {
-  grid-column: 3;
+  grid-template-columns: minmax(0, 1fr) 34px;
 }
 
 .task-card.plain.expanded .task-title-grid {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.task-card.plain .edit-button {
+  grid-column: 2;
+}
+
+/* 角标：小、贴左上角、颜色 = 条目主题色，+/- 表示展开折叠 */
+.card-corner {
+  position: absolute;
+  left: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 3;
+  display: grid;
+  width: 15px;
+  height: 15px;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  padding: 0;
+  color: #ffffff;
+  opacity: 0.92;
+  cursor: pointer;
+}
+
+.task-card.plain.expanded .card-corner {
+  top: 12px;
+  transform: none;
+}
+
+.card-corner:hover {
+  opacity: 1;
+}
+
+/* 一般卡片没有「已完成」语义：不画删除线、文字不灰 */
+.task-card.plain.completed .markdown-title-row,
+.task-card.plain.completed .markdown-content {
+  color: #242424;
+  text-decoration: none;
 }
 
 .task-card:hover,
@@ -937,8 +963,38 @@ h1 {
   min-width: 0;
 }
 
+/* 折叠态：正文、标签、日期排在同一条 flex 行里——标签吸附在文字末尾（文字短就跟着文字，
+   文字长就被挤到行尾），日期永远靠右；不再各占一个 grid 列留死空白。 */
+.task-card.compact .task-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.task-card.compact .markdown-title-row {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.task-card.compact .task-tags {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 68%;
+  justify-content: flex-start;
+}
+
+.task-card.compact .task-due-wrap {
+  margin-left: auto;
+}
+
 .task-card.expanded .task-body {
   padding-right: 44px;
+}
+
+/* 展开态标签落在正文下方一行，跟随内容左对齐 */
+.task-card.expanded .task-tags {
+  margin-top: 6px;
 }
 
 /* Markdown rendering */
@@ -983,9 +1039,6 @@ h1 {
 }
 
 .task-due-wrap {
-  grid-column: 4;
-  align-self: center;
-  justify-self: end;
   position: relative;
 }
 
@@ -1010,16 +1063,6 @@ h1 {
 .task-date-popover {
   position: fixed;
   z-index: 2200;
-}
-
-.task-due-spacer {
-  grid-column: 4;
-  width: 0;
-  min-width: 0;
-}
-
-.task-card.expanded .task-due-spacer {
-  display: none;
 }
 
 .markdown-body h1 {
@@ -1057,7 +1100,7 @@ h1 {
 
 .edit-button {
   display: grid;
-  grid-column: 5;
+  grid-column: 3;
   position: relative;
   z-index: 3;
   width: 30px;
@@ -1228,8 +1271,8 @@ h1 {
   margin: 4px 0 10px;
   border: 0;
   border-radius: 7px;
-  background: rgb(255 255 255 / 70%);
-  color: var(--accent);
+  background: rgb(146 152 160 / 14%);
+  color: #6b7280;
   padding: 7px 12px;
   font-size: var(--font-control);
   cursor: pointer;
@@ -1237,7 +1280,7 @@ h1 {
 }
 
 .planned-group-chip:hover {
-  background: #ffffff;
+  background: rgb(146 152 160 / 22%);
 }
 
 .planned-group-panel {
@@ -1257,18 +1300,24 @@ h1 {
   animation: menu-fade-in 0.1s ease-out;
 }
 
-/* 计划内「全部」的分区标题（已逾期/近三天/本周/稍后）：与「已完成」标签同款 */
+/* 计划内「全部」的分区标题（已逾期/今天/近三天/本周/稍后）：淡灰半透明，
+   与白色卡片区分开；本身是折叠按钮 */
 .task-section-label {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   margin: 10px 0 10px;
   border: 0;
   border-radius: 7px;
-  background: rgb(255 255 255 / 70%);
-  color: var(--accent);
-  padding: 7px 12px;
+  background: rgb(146 152 160 / 14%);
+  color: #6b7280;
+  padding: 6px 11px;
   font-size: var(--font-control);
+  cursor: pointer;
+}
+
+.task-section-label:hover {
+  background: rgb(146 152 160 / 22%);
 }
 
 .task-section-label:first-child {
@@ -1698,22 +1747,15 @@ h1 {
 /* ---------- Tags ---------- */
 
 .task-tags {
-  grid-column: 3;
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  align-self: center;
-  justify-self: end;
-  justify-content: flex-end;
-  max-width: 460px;
+  align-items: center;
 }
 
-.task-card.expanded .task-tags {
-  position: absolute;
-  top: 18px;
-  right: 50px;
-  z-index: 4;
-  grid-column: auto;
+/* 没有标签/表情时整个容器不占位：折叠态它处在 flex 行里，空容器会留下一个空 gap */
+.task-tags:empty {
+  display: none;
 }
 
 .task-tag {

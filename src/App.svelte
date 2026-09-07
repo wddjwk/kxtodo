@@ -8,7 +8,7 @@
     isHydrated,
     hydrate as hydrateStores
   } from "./lib/stores";
-  import { replaceTaskEmojis, selectNode as selectNodeAction } from "./lib/actions";
+  import { replaceTaskEmojis, selectNode as selectNodeAction, syncNow as syncNowAction } from "./lib/actions";
   import { isMobile, mobileView, startMobileRouter } from "./lib/platform";
   import { startAutoSync } from "./lib/syncRunner";
   import { revealMainWindow } from "./lib/backend";
@@ -83,6 +83,9 @@
     } else if (matchesShortcut(event, $appSettings.shortcuts.openSettings)) {
       event.preventDefault();
       showSettings.update((v) => !v);
+    } else if (matchesShortcut(event, $appSettings.shortcuts.syncNow)) {
+      event.preventDefault();
+      void syncNowAction();
     }
   }
 

@@ -101,7 +101,8 @@ export const defaultSettings: Settings = {
     newTask: "Ctrl+N",
     focusSearch: "Ctrl+F",
     toggleWindow: "Ctrl+Shift+Space",
-    openSettings: "Ctrl+,"
+    openSettings: "Ctrl+,",
+    syncNow: "F5"
   },
   sync: {
     enabled: false,
@@ -679,7 +680,8 @@ export function normalizeSettings(raw: unknown): Settings {
         typeof source?.globalShortcut === "string"
           ? source.globalShortcut
           : shortcutValue("toggleWindow", defaultSettings.shortcuts.toggleWindow),
-      openSettings: shortcutValue("openSettings", defaultSettings.shortcuts.openSettings)
+      openSettings: shortcutValue("openSettings", defaultSettings.shortcuts.openSettings),
+      syncNow: shortcutValue("syncNow", defaultSettings.shortcuts.syncNow)
     },
     sync: {
       enabled: Boolean(source?.sync?.enabled),

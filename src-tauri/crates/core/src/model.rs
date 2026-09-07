@@ -521,6 +521,9 @@ pub struct ShortcutSettings {
     pub toggle_window: String,
     #[serde(rename = "openSettings", default = "default_shortcut_open_settings")]
     pub open_settings: String,
+    /// 立即同步的应用内快捷键（默认 F5）
+    #[serde(rename = "syncNow", default = "default_shortcut_sync_now")]
+    pub sync_now: String,
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
@@ -538,6 +541,9 @@ fn default_shortcut_toggle_window() -> String {
 fn default_shortcut_open_settings() -> String {
     "Ctrl+,".to_string()
 }
+fn default_shortcut_sync_now() -> String {
+    "F5".to_string()
+}
 
 impl Default for ShortcutSettings {
     fn default() -> Self {
@@ -546,6 +552,7 @@ impl Default for ShortcutSettings {
             focus_search: default_shortcut_focus_search(),
             toggle_window: default_shortcut_toggle_window(),
             open_settings: default_shortcut_open_settings(),
+            sync_now: default_shortcut_sync_now(),
             extra: Map::new(),
         }
     }

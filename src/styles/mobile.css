@@ -219,11 +219,11 @@
   min-height: 44px;
 }
 
-/* 二级菜单钻入式：窄屏上子面板贴右缘展开必然超出屏幕，所以显示二级时隐藏一级，
-   让二级占据菜单原来的位置（ContextMenu 检测到子菜单打开会重新收敛位置与限高）。 */
-.app-shell.mobile .context-menu.sub-open > .menu-item:not(.has-submenu):not(.submenu-back),
-.app-shell.mobile .context-menu.sub-open > .menu-separator,
-.app-shell.mobile .context-menu.sub-open > .menu-section-title {
+/* 二级菜单钻入式：窄屏上子面板贴右缘展开必然超出屏幕，所以显示二级时把一级**整个**
+   藏起来（除「有二级的那一项」与「返回」），让二级占据菜单原来的位置。
+   必须用兜底选择器：菜单里除了 .menu-item 还有裸 div/label/input（UI颜色行、色盘、
+   背景链接、透明度、上传按钮），逐个列举会漏——漏了就是「一半二级一半一级」。 */
+.app-shell.mobile .context-menu.sub-open > *:not(.menu-item.has-submenu):not(.submenu-back) {
   display: none;
 }
 
@@ -258,7 +258,7 @@
 }
 
 .app-shell.mobile .task-card.compact .task-title-grid {
-  grid-template-columns: 34px minmax(0, 1fr) max-content max-content;
+  grid-template-columns: 34px minmax(0, 1fr);
 }
 
 /* 展开/折叠在移动端全部交给单击/双击：收起按钮与它占的位置一并让给内容 */
@@ -270,9 +270,9 @@
   padding-right: 0;
 }
 
-/* 一般卡片（分组类型 = 一般卡片）：没有勾选框，内容从最左开始占满 */
+/* 一般卡片（卡片类型 = 一般卡片）：没有勾选框列，正文一列占满 */
 .app-shell.mobile .task-card.plain.compact .task-title-grid {
-  grid-template-columns: minmax(0, 1fr) max-content max-content;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 /* 折叠态标题：折行显示。夹行与省略号由 .clamped 控制——只有「两行放不下」才夹成两行
@@ -292,19 +292,41 @@
   text-overflow: ellipsis;
 }
 
-/* 下拉同步提示条：高度由行内样式按下拉距离给（跟手），过阈值后文字变 accent */
-.app-shell.mobile .pull-sync-hint {
+/* 下拉同步指示器：居中的圆形同步图标，随下拉进度旋转、过阈值变主题色、同步中自转。
+   高度由行内样式按下拉距离给（跟手），这里只负责居中与外观。 */
+.app-shell.mobile .pull-sync-zone {
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  padding-bottom: 6px;
+  width: 100%;
   overflow: hidden;
-  color: #8a8f98;
-  font-size: 13px;
 }
 
-.app-shell.mobile .pull-sync-hint.ready {
+.app-shell.mobile .pull-sync-indicator {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin-bottom: 6px;
+  border: 1px solid rgb(0 0 0 / 10%);
+  border-radius: 50%;
+  background: rgb(255 255 255 / 85%);
+  color: #8a8f98;
+}
+
+.app-shell.mobile .pull-sync-indicator.ready {
+  border-color: currentColor;
   color: var(--accent);
+}
+
+.app-shell.mobile .pull-sync-indicator.spinning svg {
+  animation: pull-spin 900ms linear infinite;
+}
+
+@keyframes pull-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* 长按出菜单时不许选中文本：workspace.css 给 markdown 开了 user-select:text，

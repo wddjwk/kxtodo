@@ -907,6 +907,11 @@
         <input value={$appSettings.shortcuts.openSettings} on:change={(event) => updateShortcut("openSettings", event.currentTarget.value)} />
         <small>打开或关闭设置</small>
       </label>
+      <label class="shortcut-row">
+        立即同步
+        <input value={$appSettings.shortcuts.syncNow} on:change={(event) => updateShortcut("syncNow", event.currentTarget.value)} />
+        <small>手动跑一轮同步</small>
+      </label>
     </section>
   {/if}
 

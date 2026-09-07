@@ -97,25 +97,30 @@ export function plannedSections(
 ): Array<{ key: string; label: string; tasks: Task[] }> {
   const weekStart = weekStartIso(todayIsoValue);
   const weekEnd = addDays(weekStart, 6);
+  const tomorrow = addDays(todayIsoValue, 1);
   const threeDaysEnd = addDays(todayIsoValue, 2);
   const labels = new Map(plannedGroupOptions(todayIsoValue).map((option) => [option.key, option.label]));
   const buckets: Array<{ key: string; label: string; tasks: Task[] }> = [
     { key: "overdue", label: "已逾期", tasks: [] },
-    { key: "threeDays", label: labels.get("threeDays") ?? "近三天", tasks: [] },
+    { key: "today", label: labels.get("today") ?? "今天", tasks: [] },
+    // 「今天」单独成桶后，近三天桶从明天起算，标签区间也跟着从明天写，避免含义重叠
+    { key: "threeDays", label: `近三天（${rangeLabel(tomorrow, threeDaysEnd)}）`, tasks: [] },
     { key: "week", label: labels.get("week") ?? "本周", tasks: [] },
     { key: "later", label: labels.get("later") ?? "稍后", tasks: [] }
   ];
   for (const task of tasks) {
     const date = plannedDateOf(task);
     const bucket = !date
-      ? buckets[3]
+      ? buckets[4]
       : date < todayIsoValue
         ? buckets[0]
-        : date <= threeDaysEnd
+        : date === todayIsoValue
           ? buckets[1]
-          : date <= weekEnd
+          : date <= threeDaysEnd
             ? buckets[2]
-            : buckets[3];
+            : date <= weekEnd
+              ? buckets[3]
+              : buckets[4];
     bucket?.tasks.push(task);
   }
   return buckets.filter((bucket) => bucket.tasks.length > 0);

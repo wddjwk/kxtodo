@@ -48,6 +48,12 @@
   let plannedGroup: PlannedGroupKey = "all";
   let plannedShowCompleted = false;
   let showPlannedGroups = false;
+  /** 计划内「全部」的分区折叠状态（本地 UI 状态，不持久化） */
+  let collapsedSections: Record<string, boolean> = {};
+
+  function toggleSection(key: string): void {
+    collapsedSections = { ...collapsedSections, [key]: !collapsedSections[key] };
+  }
   let taskMenu: { taskId: string; x: number; y: number } | null = null;
   let listMenuAt: { x: number; y: number } | null = null;
   let tagInputText = "";
@@ -160,13 +166,43 @@
           todayIso()
         )
       : [];
-  // 渲染行：分区标题 + 卡片 拍平成一条列表，避免把 TaskCard 的接线复制第三遍
+  // 渲染行：分区标题 + 卡片 拍平成一条列表，避免把 TaskCard 的接线复制第三遍；
+  // 折叠的分区只留标题行（标题本身是折叠按钮）
   $: taskRows = plannedSectionList.length
-    ? plannedSectionList.flatMap((section) => [
-        { kind: "label" as const, key: `section-${section.key}`, label: section.label, task: null as Task | null },
-        ...section.tasks.map((task) => ({ kind: "task" as const, key: task.id, label: "", task: task as Task | null }))
-      ])
-    : incompleteTasks.map((task) => ({ kind: "task" as const, key: task.id, label: "", task: task as Task | null }));
+    ? plannedSectionList.flatMap((section) => {
+        const collapsed = Boolean(collapsedSections[section.key]);
+        return [
+          {
+            kind: "label" as const,
+            key: `section-${section.key}`,
+            label: section.label,
+            count: section.tasks.length,
+            sectionKey: section.key,
+            collapsed,
+            task: null as Task | null
+          },
+          ...(collapsed
+            ? []
+            : section.tasks.map((task) => ({
+                kind: "task" as const,
+                key: task.id,
+                label: "",
+                count: 0,
+                sectionKey: "",
+                collapsed: false,
+                task: task as Task | null
+              })))
+        ];
+      })
+    : incompleteTasks.map((task) => ({
+        kind: "task" as const,
+        key: task.id,
+        label: "",
+        count: 0,
+        sectionKey: "",
+        collapsed: false,
+        task: task as Task | null
+      }));
   $: taskMenuTask = taskMenu ? $appState.tasks.find((task) => task.id === taskMenu?.taskId) : null;
   $: hasTaskMoveTargets = taskMenu ? taskMoveTargets($appState.nodes, taskMenuTask?.nodeId ?? "").length > 0 : false;
   $: expandableTasks = $visibleTasks.filter((task) => hasMultipleMarkdownLines(task.markdown));
@@ -861,17 +897,23 @@
     }}
   >
     {#if $isMobile && syncAvailable && (pullDistance > 0 || pullBusy)}
-      <div
-        class="pull-sync-hint"
-        class:ready={pullReady || pullBusy}
-        style={`height:${pullBusy ? 36 : Math.max(26, Math.round(pullDistance * 0.7))}px`}
-      >
-        {pullBusy ? "同步中…" : pullReady ? "松开立即同步" : "下拉同步"}
+      <div class="pull-sync-zone" style={`height:${pullBusy ? 58 : Math.max(32, Math.round(pullDistance * 0.7))}px`}>
+        <span
+          class="pull-sync-indicator"
+          class:ready={pullReady || pullBusy}
+          class:spinning={pullBusy}
+          style={`transform: rotate(${Math.min(360, Math.round((pullDistance / 72) * 180))}deg)`}
+        >
+          <RefreshCw size={17} />
+        </span>
       </div>
     {/if}
     {#each taskRows as row (row.key)}
       {#if row.kind === "label"}
-        <div class="task-section-label">{row.label}</div>
+        <button class="task-section-label" type="button" on:click|stopPropagation={() => toggleSection(row.sectionKey)}>
+          <ChevronDown class={row.collapsed ? "collapsed" : ""} size={15} />
+          {row.label} {row.count}
+        </button>
       {:else if row.task}
         <TaskCard
           task={row.task}

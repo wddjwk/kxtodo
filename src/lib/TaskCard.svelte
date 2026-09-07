@@ -1,9 +1,9 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy } from "svelte";
-  import { Check, ChevronUp, PenLine, Plus, X } from "@lucide/svelte";
+  import { Check, ChevronUp, Minus, PenLine, Plus, X } from "@lucide/svelte";
   import { collapsedMarkdownLine, hasMultipleMarkdownLines, renderInlineMarkdown, renderMarkdown } from "./markdown";
   import { mdImageCache, resolveMarkdownImages } from "./images";
-  import { appSettings } from "./stores";
+  import { appSettings, accent } from "./stores";
   import { isMobile as isMobileStore } from "./platform";
   import { uiScaleValue } from "./styles";
   import { longpress, isLongPressSuppressed } from "./longpress";
@@ -53,6 +53,9 @@
   $: formattedDate = task.dueDate ? formatDate(task.dueDate) : "";
   $: canExpand = hasMultipleMarkdownLines(task.markdown) || titleOverflow;
   $: isExpanded = task.expanded && canExpand;
+  $: plain = cardStyle === "card";
+  /** 角标颜色 = 该条目自己的主题色（系统视图里混着多个条目，不能拿全局 accent） */
+  $: nodeColor = $appSettings.appearance.uiColors?.[nodeId] || $accent;
 
   onDestroy(() => {
     if (tapTimer !== undefined) window.clearTimeout(tapTimer);
@@ -262,7 +265,7 @@
   class:compact={!isExpanded}
   class:expanded={isExpanded}
   class:multiline={canExpand}
-  class:plain={cardStyle === "card"}
+  class:plain
   class:selected
   class="task-card"
   use:longpress={handleLongPress}
@@ -271,14 +274,30 @@
   on:dblclick={handleCardDblClick}
   on:contextmenu={openContext}
 >
-  <div class="task-title-grid">
-    <button class="task-check" type="button" aria-label="切换完成" on:click|stopPropagation={() => dispatch("toggle", task.id)}>
+  {#if plain}
+    <button
+      class="card-corner"
+      type="button"
+      style={`background:${nodeColor}`}
+      title={isExpanded ? "折叠" : "展开"}
+      aria-label={isExpanded ? "折叠" : "展开"}
+      on:click|stopPropagation={toggleExpand}
+    >
       {#if canExpand}
-        <Plus size={14} strokeWidth={3.1} />
-      {:else if task.completed}
-        <Check size={14} strokeWidth={3.2} />
+        {#if isExpanded}<Minus size={10} strokeWidth={3.4} />{:else}<Plus size={10} strokeWidth={3.4} />{/if}
       {/if}
     </button>
+  {/if}
+  <div class="task-title-grid">
+    {#if !plain}
+      <button class="task-check" type="button" aria-label="切换完成" on:click|stopPropagation={() => dispatch("toggle", task.id)}>
+        {#if canExpand}
+          <Plus size={14} strokeWidth={3.1} />
+        {:else if task.completed}
+          <Check size={14} strokeWidth={3.2} />
+        {/if}
+      </button>
+    {/if}
 
     <section class="task-body">
       {#if isExpanded}
@@ -290,59 +309,57 @@
           {@html collapsedHtml}
         </div>
       {/if}
-    </section>
 
-    <div class="task-tags">
-      {#each task.emojis as emoji, index (`${task.id}-emoji-${index}`)}
-        <span
-          class="task-emoji-badge"
-          title="点击更换表情"
-          on:click|stopPropagation={() => dispatch("pickEmoji", { id: task.id, index })}
-        >
-          {emoji}
-          <button class="tag-delete" type="button" aria-label="移除表情" on:click|stopPropagation={() => dispatch("removeEmoji", { id: task.id, index })}>
-            <X size={10} strokeWidth={3} />
-          </button>
-        </span>
-      {/each}
-      {#each task.tags as tag (tag.id)}
-        {#if editingTagId === tag.id}
-          <input
-            bind:this={tagEditEl}
-            bind:value={editingTagText}
-            class="tag-edit-input"
-            maxlength="20"
-            on:blur={commitTagEdit}
-            on:click|stopPropagation
-            on:keydown|stopPropagation={(e) => { if (e.key === "Enter") commitTagEdit(); }}
-          />
-        {:else}
+      <div class="task-tags">
+        {#each task.emojis as emoji, index (`${task.id}-emoji-${index}`)}
           <span
-            class={`task-tag tag-${tag.color}`}
-            title={tag.text || "点击编辑标签"}
-            on:click|stopPropagation={() => startTagEdit(tag.id, tag.text || "")}
+            class="task-emoji-badge"
+            title="点击更换表情"
+            on:click|stopPropagation={() => dispatch("pickEmoji", { id: task.id, index })}
           >
-            {#if tag.text}{tag.text}{/if}
-            <button class="tag-delete" type="button" aria-label="删除标签" on:click|stopPropagation={() => removeTag(tag.id)}>
+            {emoji}
+            <button class="tag-delete" type="button" aria-label="移除表情" on:click|stopPropagation={() => dispatch("removeEmoji", { id: task.id, index })}>
               <X size={10} strokeWidth={3} />
             </button>
           </span>
-        {/if}
-      {/each}
-    </div>
-
-    {#if !isExpanded && task.dueDate}
-      <div class="task-due-wrap">
-        <button bind:this={dueButtonEl} class="task-due-date" type="button" on:click|stopPropagation={toggleDatePicker}>{formattedDate}</button>
-        {#if showPicker}
-          <div class="task-date-popover" style={datePopoverStyle}>
-            <DatePicker value={task.dueDate?.slice(0, 10) ?? ""} on:select={(e) => handlePick(e.detail)} on:clear={handleClearDate} />
-          </div>
-        {/if}
+        {/each}
+        {#each task.tags as tag (tag.id)}
+          {#if editingTagId === tag.id}
+            <input
+              bind:this={tagEditEl}
+              bind:value={editingTagText}
+              class="tag-edit-input"
+              maxlength="20"
+              on:blur={commitTagEdit}
+              on:click|stopPropagation
+              on:keydown|stopPropagation={(e) => { if (e.key === "Enter") commitTagEdit(); }}
+            />
+          {:else}
+            <span
+              class={`task-tag tag-${tag.color}`}
+              title={tag.text || "点击编辑标签"}
+              on:click|stopPropagation={() => startTagEdit(tag.id, tag.text || "")}
+            >
+              {#if tag.text}{tag.text}{/if}
+              <button class="tag-delete" type="button" aria-label="删除标签" on:click|stopPropagation={() => removeTag(tag.id)}>
+                <X size={10} strokeWidth={3} />
+              </button>
+            </span>
+          {/if}
+        {/each}
       </div>
-    {:else}
-      <span class="task-due-spacer" aria-hidden="true"></span>
-    {/if}
+
+      {#if !isExpanded && task.dueDate}
+        <div class="task-due-wrap">
+          <button bind:this={dueButtonEl} class="task-due-date" type="button" on:click|stopPropagation={toggleDatePicker}>{formattedDate}</button>
+          {#if showPicker}
+            <div class="task-date-popover" style={datePopoverStyle}>
+              <DatePicker value={task.dueDate?.slice(0, 10) ?? ""} on:select={(e) => handlePick(e.detail)} on:clear={handleClearDate} />
+            </div>
+          {/if}
+        </div>
+      {/if}
+    </section>
 
     <button class="edit-button" type="button" title="编辑 Markdown" on:click|stopPropagation={openEditor}>
       <PenLine size={18} />

@@ -3,7 +3,7 @@
   import ContextMenu from "../menu/ContextMenu.svelte";
   import MenuItem from "../menu/MenuItem.svelte";
   import MenuSeparator from "../menu/MenuSeparator.svelte";
-  import { ArrowUpDown, Download, Eraser, Eye, EyeOff, FolderInput, Image, LayoutGrid, ListTodo, PenLine, RotateCcw, Trash2, Upload } from "@lucide/svelte";
+  import { ArrowUpDown, Download, Eraser, Eye, EyeOff, FolderInput, Image, LayoutGrid, ListTodo, PenLine, RefreshCw, RotateCcw, Trash2, Upload } from "@lucide/svelte";
   import { appSettings, appState, selectedBackground, accent, showToast, now, safeFileName, fileToDataUrl, appVersion } from "../stores";
   import {
     deleteNodeCascade as deleteNodeCascadeAction,
@@ -13,7 +13,8 @@
     setNodeCardStyle as setNodeCardStyleAction,
     setUiColor as setUiColorAction,
     unsetUiColor as unsetUiColorAction,
-    applyTreeOrder as applyTreeOrderAction
+    applyTreeOrder as applyTreeOrderAction,
+    syncNow as syncNowAction
   } from "../actions";
   import { moveTargetOptions, nodeAndDescendantIds, exportStateForNode } from "../nodes";
   import { normalizeState, normalizeSettings, defaultBackground, themePresets } from "../defaults";
@@ -48,6 +49,23 @@
   let presetNameDraft = "";
   let presetColorDraft = "";
   let presetEditOriginalColor = "";
+  let syncing = false;
+
+  /** 同步已配对且没暂停才给「立即同步」入口（与设置页/下拉同一口径） */
+  $: syncReady =
+    Boolean($appSettings.sync?.enabled) &&
+    Boolean(($appSettings.sync?.username ?? "").trim()) &&
+    Boolean(($appSettings.sync?.secret ?? "").trim());
+
+  async function runSync(): Promise<void> {
+    if (syncing) return;
+    syncing = true;
+    try {
+      await syncNowAction();
+    } finally {
+      syncing = false;
+    }
+  }
 
   /**
    * 隐藏 file input 拿不到焦点：系统文件选择器打开 → 窗口 blur → ContextMenu
@@ -380,6 +398,9 @@
 </script>
 
 <ContextMenu {x} {y} {xAlign} minWidth={300} onClose={handleClose}>
+  {#if syncReady}
+    <MenuItem icon={RefreshCw} label={syncing ? "同步中…" : "立即同步"} onSelect={() => { onClose(); void runSync(); }} />
+  {/if}
   {#if !isSystemNode && node}
     <MenuItem icon={PenLine} label="重命名" onSelect={() => { onRenameRequest(); }} />
     <MenuItem icon={FolderInput} label="移动到分组">
@@ -410,7 +431,7 @@
     </MenuItem>
   {/if}
   {#if node?.kind === "entry"}
-    <MenuItem icon={LayoutGrid} label="分组类型">
+    <MenuItem icon={LayoutGrid} label="卡片类型">
       <div slot="submenu" class="submenu-list">
         <MenuItem
           icon={ListTodo}
