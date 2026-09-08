@@ -3,6 +3,7 @@
 
 pub mod cli;
 pub mod core;
+pub mod diary_archive;
 pub mod doctor;
 pub mod envelope;
 pub mod error;

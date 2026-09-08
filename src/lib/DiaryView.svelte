@@ -1,25 +1,24 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import {
-    ArrowLeft, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, CloudSun,
-    Flame, FolderTree, List as ListIcon, NotebookPen, PenLine, Plus, Search,
-    Smile, Trash2, X
+    ArrowLeft, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Flame, FolderTree,
+    List as ListIcon, MoreHorizontal, NotebookPen, Plus, Search,
+    Settings as SettingsIcon, X
   } from "@lucide/svelte";
-  import { appSettings, appState, diaryEditor, diaryOpen } from "./stores";
-  import { deleteDiaryEntry, setConfig, setDiaryUi, updateDiaryEntry } from "./actions";
-  import { buildMainStyle, DIARY_ACCENT } from "./styles";
-  import { defaultBackground } from "./defaults";
+  import { appSettings, diaryEditor, diaryEntries, diaryOpen } from "./stores";
+  import { setConfig, setDiaryUi } from "./actions";
+  import { buildMainStyle, diaryAccent, diaryBackground } from "./styles";
   import { isMobile, showMobileList } from "./platform";
+  import { imageCache, resolveImageSrc } from "./images";
   import {
     calendarCells, calendarWeekdayHeaders, diaryByDate, diaryStats, filterDiaries,
-    fullDayLabel, monthOf, MOOD_PRESETS, relativeDayLabel, shiftMonth, todayDate,
-    WEATHER_PRESETS, yearGroups, type MonthCursor
+    fullDayLabel, monthOf, relativeDayLabel, shiftMonth, todayDate,
+    yearGroups, type MonthCursor
   } from "./diary";
   import DiaryCard from "./diary/DiaryCard.svelte";
-  import DatePicker from "./DatePicker.svelte";
-  import ContextMenu from "./menu/ContextMenu.svelte";
+  import DiaryEntryMenu from "./diary/DiaryEntryMenu.svelte";
   import MenuItem from "./menu/MenuItem.svelte";
-  import MenuSeparator from "./menu/MenuSeparator.svelte";
+  import ListMenu from "./workspace/ListMenu.svelte";
   import type { DiaryEntry, DiaryViewMode } from "./types";
 
   /** 链接打开走 Workspace 那一条（应用内预览 / 系统浏览器由设置决定），不重复实现。 */
@@ -34,6 +33,9 @@
   let searchOpen = false;
   let searchInput: HTMLInputElement;
   let query = "";
+  let showGear = false;
+  let gearButtonEl: HTMLButtonElement;
+  let listMenuAt: { x: number; y: number } | null = null;
   let entryMenu: { id: string; x: number; y: number } | null = null;
   let cursor: MonthCursor = monthOf(todayDate());
   let selectedDate = todayDate();
@@ -52,19 +54,32 @@
 
   $: today = dayTick >= 0 ? todayDate() : "";
   $: view = $appSettings.diary.view;
-  $: entries = filterDiaries($appState.diaries, query);
+  $: entries = filterDiaries($diaryEntries, query);
   // 统计永远基于全部日记：搜索时「共几篇/连续几天」不该跟着筛选结果变
-  $: stats = diaryStats($appState.diaries, today);
+  $: stats = diaryStats($diaryEntries, today);
   $: byDate = diaryByDate(entries);
   $: years = yearGroups(entries);
   $: cells = calendarCells(cursor, byDate);
   $: monthLabel = `${cursor.year}年${cursor.month + 1}月`;
   /** 添加按钮落在哪一天：日历视图跟着选中的日期，其余视图永远是今天 */
   $: focusDate = view === "calendar" ? selectedDate : today;
+  $: thisMonth = monthOf(today);
+  /**
+   * 「今」按钮不只看选中的那一天：日历翻到别的月份时选中日可能还是今天，
+   * 但画面已经不在今天这一屏了，同样需要一个回家的入口。
+   */
+  $: awayFromToday =
+    view === "calendar" &&
+    (selectedDate !== today || cursor.year !== thisMonth.year || cursor.month !== thisMonth.month);
+  $: showTodayButton = focusDate !== today || awayFromToday;
   $: dayEntries = byDate.get(selectedDate) ?? [];
   $: menuEntry = entryMenu
-    ? $appState.diaries.find((entry) => entry.id === entryMenu?.id) ?? null
+    ? $diaryEntries.find((entry) => entry.id === entryMenu?.id) ?? null
     : null;
+  // 日记自己的主题色与背景（settings.diary）：背景图与列表背景走同一套解析与缓存
+  $: diaryBg = diaryBackground($appSettings.diary);
+  $: resolvedBgImage = resolveImageSrc(diaryBg.image, $imageCache);
+  $: mainStyle = buildMainStyle(diaryBg, diaryAccent($appSettings.diary), resolvedBgImage);
 
   // 列表视图 = 年份分隔行 + 卡片。直接摊平分组视图算好的年→月→天，两边顺序天然一致。
   $: listRows = years.flatMap((year) => [
@@ -84,6 +99,8 @@
 
   export function closeOverlays(): void {
     entryMenu = null;
+    showGear = false;
+    listMenuAt = null;
   }
 
   function closeDiary(): void {
@@ -103,11 +120,35 @@
     void setConfig("diary.view", mode);
   }
 
+  /** 齿轮面板与其它头部浮层互斥（与 Workspace 的齿轮同一套开合规则）。 */
+  function toggleGear(): void {
+    showGear = !showGear;
+    listMenuAt = null;
+    entryMenu = null;
+  }
+
   function toggleSearch(): void {
     searchOpen = !searchOpen;
+    showGear = false;
     entryMenu = null;
     if (!searchOpen) query = "";
     void tick().then(() => searchInput?.focus());
+  }
+
+  /** 齿轮面板 → 日记菜单：锚在齿轮按钮右下角（视口像素，ContextMenu 内部除以缩放）。 */
+  function openListMenuFromGear(): void {
+    showGear = false;
+    const rect = gearButtonEl?.getBoundingClientRect();
+    if (!rect) return;
+    listMenuAt = { x: rect.right, y: rect.bottom + 6 };
+    entryMenu = null;
+  }
+
+  function handlePanelKeydown(event: KeyboardEvent): void {
+    if (!showGear) return;
+    if (event.key === "Escape" && !event.isComposing && event.keyCode !== 229) {
+      showGear = false;
+    }
   }
 
   function createEntry(): void {
@@ -150,34 +191,19 @@
 
   function handleContext(event: CustomEvent<{ id: string; x: number; y: number }>): void {
     entryMenu = { id: event.detail.id, x: event.detail.x, y: event.detail.y };
+    showGear = false;
+    listMenuAt = null;
   }
 
   function handleOpenLink(event: CustomEvent<{ href: string; title: string }>): void {
     onOpenLink(event.detail.href, event.detail.title);
   }
 
-  function setEntryDate(id: string, date: string): void {
-    entryMenu = null;
-    void updateDiaryEntry(id, { date });
-  }
-
-  function setEntryMood(id: string, emoji: string): void {
-    entryMenu = null;
-    void updateDiaryEntry(id, { mood: emoji });
-  }
-
-  function setEntryWeather(id: string, emoji: string): void {
-    entryMenu = null;
-    void updateDiaryEntry(id, { weather: emoji });
-  }
-
-  function removeEntry(id: string): void {
-    entryMenu = null;
-    void deleteDiaryEntry(id);
-  }
 </script>
 
-<main class="diary-view" style={buildMainStyle(defaultBackground, DIARY_ACCENT)}>
+<svelte:window on:keydown={handlePanelKeydown} />
+
+<main class="diary-view" style={mainStyle}>
   <section class="list-header">
     <div>
       <button class="mobile-back" type="button" aria-label="返回列表" on:click|stopPropagation={closeDiary}>
@@ -186,7 +212,7 @@
       <span class="header-icon"><NotebookPen size={34} /></span>
       <h1>日记</h1>
     </div>
-    <div class="header-actions">
+    <div class="header-actions" on:click|stopPropagation>
       <div class="diary-view-switch" role="tablist" aria-label="日记视图">
         {#each VIEWS as item (item.mode)}
           <button
@@ -200,9 +226,21 @@
           ><svelte:component this={item.icon} size={18} /></button>
         {/each}
       </div>
-      <button type="button" title="搜索日记" aria-label="搜索日记" on:click|stopPropagation={toggleSearch}>
-        {#if searchOpen}<X size={21} />{:else}<Search size={21} />{/if}
-      </button>
+      <button
+        bind:this={gearButtonEl}
+        type="button"
+        title="更多操作"
+        aria-label="更多操作"
+        aria-expanded={showGear}
+        on:click|stopPropagation={toggleGear}
+      ><SettingsIcon size={21} /></button>
+
+      {#if showGear}
+        <div class="header-menu-panel diary-gear-panel" role="menu" tabindex="-1">
+          <MenuItem icon={searchOpen ? X : Search} label={searchOpen ? "关闭搜索" : "搜索日记"} onSelect={toggleSearch} />
+          <MenuItem icon={MoreHorizontal} label="日记菜单" onSelect={openListMenuFromGear} />
+        </div>
+      {/if}
     </div>
   </section>
 
@@ -217,7 +255,8 @@
   </p>
 
   {#if searchOpen}
-    <label class="diary-search">
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <label class="diary-search" on:click|stopPropagation>
       <Search size={16} />
       <input bind:this={searchInput} bind:value={query} type="text" placeholder="搜索标题、正文或标签" />
     </label>
@@ -342,51 +381,31 @@
     {/if}
   </section>
 
+  {#if listMenuAt}
+    <ListMenu
+      x={listMenuAt.x}
+      y={listMenuAt.y}
+      xAlign="right"
+      diaryMode
+      background={diaryBg}
+      accentColor={diaryAccent($appSettings.diary)}
+      onClose={() => (listMenuAt = null)}
+    />
+  {/if}
+
   {#if entryMenu && menuEntry}
-    <ContextMenu x={entryMenu.x} y={entryMenu.y} minWidth={216} onClose={() => (entryMenu = null)}>
-      <MenuItem icon={PenLine} label="编辑" onSelect={() => openEntry(menuEntry.id)} />
-      <MenuItem icon={CalendarDays} label="修改日期">
-        <div slot="submenu" class="task-menu-date">
-          <DatePicker
-            value={menuEntry.date}
-            on:select={(event) => setEntryDate(menuEntry.id, event.detail)}
-            on:clear={() => setEntryDate(menuEntry.id, today)}
-          />
-        </div>
-      </MenuItem>
-      <MenuItem icon={Smile} label="心情">
-        <div slot="submenu" class="diary-emoji-menu">
-          {#each MOOD_PRESETS as preset (preset.emoji)}
-            <button
-              class="diary-emoji-cell"
-              type="button"
-              class:selected={menuEntry.mood === preset.emoji}
-              title={preset.label}
-              on:click|stopPropagation={() => setEntryMood(menuEntry.id, preset.emoji)}
-            >{preset.emoji}</button>
-          {/each}
-        </div>
-      </MenuItem>
-      <MenuItem icon={CloudSun} label="天气">
-        <div slot="submenu" class="diary-emoji-menu">
-          {#each WEATHER_PRESETS as preset (preset.emoji)}
-            <button
-              class="diary-emoji-cell"
-              type="button"
-              class:selected={menuEntry.weather === preset.emoji}
-              title={preset.label}
-              on:click|stopPropagation={() => setEntryWeather(menuEntry.id, preset.emoji)}
-            >{preset.emoji}</button>
-          {/each}
-        </div>
-      </MenuItem>
-      <MenuSeparator />
-      <MenuItem icon={Trash2} danger label="删除" onSelect={() => removeEntry(menuEntry.id)} />
-    </ContextMenu>
+    <DiaryEntryMenu
+      x={entryMenu.x}
+      y={entryMenu.y}
+      entry={menuEntry}
+      {today}
+      on:edit={(event) => openEntry(event.detail)}
+      on:close={() => (entryMenu = null)}
+    />
   {/if}
 
   <div class="diary-fab-row">
-    {#if focusDate !== today}
+    {#if showTodayButton}
       <button class="diary-fab-today" type="button" title="回到今天" on:click|stopPropagation={jumpToToday}>今</button>
     {/if}
     <button class="diary-fab" type="button" title="写一篇日记" aria-label="写一篇日记" on:click|stopPropagation={createEntry}>

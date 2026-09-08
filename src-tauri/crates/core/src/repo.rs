@@ -8,8 +8,8 @@ use serde_json::{Map, Value};
 
 use crate::error::{CoreError, CoreResult};
 use crate::model::{
-    DataFile, DomainMeta, IdempotencyRecord, ScheduleFile, SettingsFile, DATA_SCHEMA_VERSION,
-    SCHEDULE_SCHEMA_VERSION, SETTINGS_SCHEMA_VERSION,
+    DataFile, DiaryFile, DomainMeta, IdempotencyRecord, ScheduleFile, SettingsFile,
+    DATA_SCHEMA_VERSION, DIARY_SCHEMA_VERSION, SCHEDULE_SCHEMA_VERSION, SETTINGS_SCHEMA_VERSION,
 };
 use crate::time::now_iso;
 
@@ -17,6 +17,7 @@ pub const LOCK_FILE: &str = ".kxtodo.lock";
 pub const DATA_FILE: &str = "data.json";
 pub const SETTINGS_FILE: &str = "settings.json";
 pub const SCHEDULE_FILE: &str = "tasks.json";
+pub const DIARY_FILE: &str = "diary.json";
 pub const HISTORY_DIR: &str = "history";
 pub const SCHEDULE_HISTORY: &str = "schedule.ndjson";
 pub const AUDIT_HISTORY: &str = "audit.ndjson";
@@ -95,6 +96,7 @@ pub enum Domain {
     Data,
     Settings,
     Schedule,
+    Diary,
 }
 
 impl Domain {
@@ -103,6 +105,7 @@ impl Domain {
             Domain::Data => "data",
             Domain::Settings => "settings",
             Domain::Schedule => "schedule",
+            Domain::Diary => "diary",
         }
     }
 
@@ -111,6 +114,7 @@ impl Domain {
             Domain::Data => DATA_FILE,
             Domain::Settings => SETTINGS_FILE,
             Domain::Schedule => SCHEDULE_FILE,
+            Domain::Diary => DIARY_FILE,
         }
     }
 }
@@ -133,6 +137,9 @@ impl Layout {
     }
     pub fn schedule_file(&self) -> PathBuf {
         self.root.join(SCHEDULE_FILE)
+    }
+    pub fn diary_file(&self) -> PathBuf {
+        self.root.join(DIARY_FILE)
     }
     pub fn lock_file(&self) -> PathBuf {
         self.root.join(LOCK_FILE)
@@ -439,6 +446,11 @@ impl Repository {
                 Ok(serde_json::json!({ "initialized": true }))
             })?;
         }
+        if !self.layout.diary_file().exists() {
+            self.write_diary(None, None, "host.init", |_file| {
+                Ok(serde_json::json!({ "initialized": true }))
+            })?;
+        }
         Ok(())
     }
 
@@ -502,6 +514,29 @@ impl Repository {
         })
     }
 
+    pub fn load_diary(&self) -> CoreResult<DiaryFile> {
+        let value = read_json_value(&self.layout.diary_file())?;
+        if value.is_null() {
+            return Ok(DiaryFile {
+                meta: DomainMeta {
+                    revision: 0,
+                    schema_version: Some(DIARY_SCHEMA_VERSION),
+                    idempotency: Vec::new(),
+                    tombstones: Vec::new(),
+                    extra: Map::new(),
+                },
+                ..Default::default()
+            });
+        }
+        serde_json::from_value(value).map_err(|error| {
+            CoreError::new(
+                crate::error::ErrorKind::Io,
+                "DATA_CORRUPTED",
+                format!("diary.json 结构无效：{error}"),
+            )
+        })
+    }
+
     pub fn lookup_schedule_idempotency(
         &self,
         command: &str,
@@ -551,6 +586,25 @@ impl Repository {
         let _lock = RepoLock::acquire(&self.layout)?;
         crate::migrate::migrate_if_needed(&self.layout)?;
         let file = self.load_data()?;
+        Ok(file
+            .meta
+            .idempotency
+            .iter()
+            .find(|record| record.command == command && record.key == key)
+            .map(|record| (file.meta.revision, record.summary.clone())))
+    }
+
+    pub fn lookup_diary_idempotency(
+        &self,
+        command: &str,
+        key: Option<&str>,
+    ) -> CoreResult<Option<(u64, Value)>> {
+        let Some(key) = key else {
+            return Ok(None);
+        };
+        let _lock = RepoLock::acquire(&self.layout)?;
+        crate::migrate::migrate_if_needed(&self.layout)?;
+        let file = self.load_diary()?;
         Ok(file
             .meta
             .idempotency
@@ -795,6 +849,44 @@ impl Repository {
         let revision = file.meta.revision;
         let mut outcome = outcome.finish(revision);
         if let Err(error) = self.audit(command, Domain::Settings, revision, &summary) {
+            outcome.warnings.push(audit_warning(&error));
+        }
+        Ok((file, outcome))
+    }
+
+    pub fn write_diary<F>(
+        &self,
+        expected_revision: Option<u64>,
+        idempotency_key: Option<&str>,
+        command: &str,
+        mutate: F,
+    ) -> CoreResult<(DiaryFile, WriteOutcome)>
+    where
+        F: FnOnce(&mut DiaryFile) -> CoreResult<Value>,
+    {
+        let _lock = RepoLock::acquire(&self.layout)?;
+        crate::migrate::migrate_if_needed(&self.layout)?;
+        let mut file = self.load_diary()?;
+        let outcome = self.prepare_write(
+            Domain::Diary,
+            &file.meta,
+            expected_revision,
+            idempotency_key,
+            command,
+        )?;
+        if let Some(summary) = outcome.replay_summary.clone() {
+            return Ok((file, outcome.with_summary(summary)));
+        }
+        let summary = mutate(&mut file)?;
+        file.schema_version = DIARY_SCHEMA_VERSION;
+        file.meta.revision += 1;
+        file.meta.schema_version = Some(DIARY_SCHEMA_VERSION);
+        finalize_meta(&mut file.meta, idempotency_key, command, summary.clone());
+        let raw = serde_json::to_string_pretty(&file)?;
+        atomic_write(&self.layout.diary_file(), &raw)?;
+        let revision = file.meta.revision;
+        let mut outcome = outcome.finish(revision);
+        if let Err(error) = self.audit(command, Domain::Diary, revision, &summary) {
             outcome.warnings.push(audit_warning(&error));
         }
         Ok((file, outcome))
@@ -1136,7 +1228,6 @@ pub fn default_data_file() -> DataFile {
         },
         nodes,
         tasks: Vec::new(),
-        diaries: Vec::new(),
         selected_node_id: inbox_id,
         backgrounds,
         extra: Map::new(),

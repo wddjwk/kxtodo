@@ -70,6 +70,14 @@ export type DiaryEntry = {
 /** 日记编辑器的目标：改已有的一篇（id），或新建一篇归到某天（date）。 */
 export type DiaryEditorTarget = { id: string } | { date: string };
 
+/**
+ * 全局搜索的一条命中：任务卡片（todo / 一般卡片按所属条目的 cardStyle）或日记卡片。
+ * 结果界面按这个 union 混排，两种卡片各走各的组件。
+ */
+export type SearchHit =
+  | { kind: "task"; key: string; task: Task; cardStyle: CardStyle }
+  | { kind: "diary"; key: string; entry: DiaryEntry };
+
 export type ProfileSettings = {
   displayName: string;
   email: string;
@@ -147,9 +155,15 @@ export type Settings = {
   features: {
     showCategoryBadges: boolean;
   };
-  /** 日记偏好（本机 UI 状态，不跨设备同步） */
+  /** 日记偏好。view 是本机状态；主题色与背景跟着设置同步走（外观该多端一致）。 */
   diary: {
     view: DiaryViewMode;
+    /** 主题色 #rrggbb；空 = 用默认日记色 */
+    accent: string;
+    backgroundColor: string;
+    /** `img:<文件名>` 或 http(s)/data URL；空 = 无图 */
+    backgroundImage: string;
+    backgroundOpacity: number;
   };
 };
 
@@ -245,7 +259,6 @@ export type AppState = {
   schemaVersion: number;
   nodes: AppNode[];
   tasks: Task[];
-  diaries: DiaryEntry[];
   selectedNodeId: string;
   backgrounds: Record<string, ListBackground>;
   scheduler: SchedulerState;

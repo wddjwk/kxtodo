@@ -240,6 +240,7 @@ pub fn risk_for(command: &str) -> &'static str {
         | "task.modify"
         | "diary.add"
         | "diary.modify"
+        | "diary.import"
         | "schedule.add"
         | "schedule.modify"
         | "schedule.disable"

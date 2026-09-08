@@ -150,7 +150,7 @@ pub enum Commands {
     },
     /// 读写日记（按日期归档的 Markdown 记录）
     #[command(
-        long_about = "日记与 task 平行：以「归属日期」为核心属性，一天可以有多篇，正文/标题/心情/天气/标签均可选。\n\n动作：\n  add      新增一篇（--date 缺省为今天）\n  get      按稳定 ID 读取\n  list     列出（--date 某天 / --from --to 区间 / --limit）\n  modify   修改（改日期、标题、正文、心情、天气、标签）\n  remove   删除（high-risk-write）\n\n示例：\n  kxtodo-cli diary add --markdown \"今天把同步分层重构完了\" --mood 🙂 --weather ☀️\n  kxtodo-cli diary add --date 2026-09-01 --title \"开学\" --markdown-file note.md\n  kxtodo-cli diary list --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli diary modify --id diary-xxxx --date 2026-09-02\n  kxtodo-cli diary remove --id diary-xxxx --yes"
+        long_about = "日记与 task 平行：以「归属日期」为核心属性，一天可以有多篇，正文/标题/心情/天气/标签均可选。\n日记住在自己的 diary.json 里（独立的第四个领域文件，独立的 revision 与域事件）。\n\n动作：\n  add      新增一篇（--date 缺省为今天）\n  get      按稳定 ID 读取\n  list     列出（--date 某天 / --from --to 区间 / --limit）\n  modify   修改（改日期、标题、正文、心情、天气、标签）\n  remove   删除（high-risk-write）\n  export   导出成压缩包：年/月/YYYYMMDD[_序号][_标题].md，元数据在 YAML front-matter 里\n  import   从导出的压缩包导入（同一天已有日记不算冲突，直接当成另一篇）\n\n示例：\n  kxtodo-cli diary add --markdown \"今天把同步分层重构完了\" --mood 🙂 --weather ☀️\n  kxtodo-cli diary add --date 2026-09-01 --title \"开学\" --markdown-file note.md\n  kxtodo-cli diary list --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli diary modify --id diary-xxxx --date 2026-09-02\n  kxtodo-cli diary remove --id diary-xxxx --yes\n  kxtodo-cli diary export --out diary.zip\n  kxtodo-cli diary export --out 2026-09.zip --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli diary import --zip diary.zip --yes"
     )]
     Diary {
         #[command(subcommand)]
@@ -613,6 +613,16 @@ pub enum DiaryAction {
         long_about = "Risk: high-risk-write\n\n删除一篇日记并写同步墓碑（删除会传播到其它设备）。未带 --yes 返回退出码 10。\n\n示例：kxtodo-cli diary remove --id diary-xxxx --yes"
     )]
     Remove(DiaryIdArgs),
+    /// 导出日记为 Markdown 压缩包（Risk: read）
+    #[command(
+        long_about = "Risk: read\n\n导出成 zip：`年/月/YYYYMMDD[_序号][_标题].md`，一天多篇才带序号，没标题就只用日期。\n每篇的 title/date/time/tags/mood/weather/createdAt 写在 YAML front-matter 里，\n解压出来就是能直接读的 Markdown 树。\n不给 --from/--to 就是一键全量导出。\n\n示例：\n  kxtodo-cli diary export --out kxtodo-diary.zip\n  kxtodo-cli diary export --out 2026-09.zip --from 2026-09-01 --to 2026-09-30"
+    )]
+    Export(DiaryExportArgs),
+    /// 从导出的压缩包导入日记（Risk: write）
+    #[command(
+        long_about = "Risk: write\n\n解析 `diary export` 那种压缩包（也容忍手写的 md：没有 front-matter 就从文件名/目录取日期）。\n**同一天已有日记不算冲突**：导入进来的直接追加成另一篇，既不合并正文也不去重。\n日期非法或标题正文全空的条目会被跳过，数量在 skipped 里给出。\n\n示例：kxtodo-cli diary import --zip kxtodo-diary.zip --yes"
+    )]
+    Import(DiaryImportArgs),
 }
 
 #[derive(Debug, Args, Serialize)]
@@ -693,6 +703,28 @@ pub struct DiaryModifyArgs {
     /// 整体替换标签列表
     #[arg(long = "replace-tags", value_name = "color:text", num_args = 0..)]
     pub replace_tags: Option<Vec<String>>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiaryExportArgs {
+    /// 输出压缩包路径
+    #[arg(long, value_name = "path")]
+    pub out: String,
+    /// 起始日期（含）；不给就是全量
+    #[arg(long, value_name = "date")]
+    pub from: Option<String>,
+    /// 结束日期（含）；不给就是全量
+    #[arg(long, value_name = "date")]
+    pub to: Option<String>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiaryImportArgs {
+    /// 要导入的压缩包路径
+    #[arg(long, value_name = "path")]
+    pub zip: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1348,6 +1380,7 @@ fn supports_idempotency(command: &str) -> bool {
             | "diary.add"
             | "diary.modify"
             | "diary.remove"
+            | "diary.import"
             | "schedule.add"
             | "schedule.modify"
             | "schedule.remove"
@@ -1487,6 +1520,7 @@ fn version_data() -> Value {
             "data": crate::model::DATA_SCHEMA_VERSION,
             "settings": crate::model::SETTINGS_SCHEMA_VERSION,
             "schedule": crate::model::SCHEDULE_SCHEMA_VERSION,
+            "diary": crate::model::DIARY_SCHEMA_VERSION,
         }
     })
 }
@@ -1748,6 +1782,19 @@ fn build_diary_invocation(action: &DiaryAction) -> CoreResult<Invocation> {
             with_markdown(serialize_args(args), &args.markdown, &args.markdown_file)?,
         ),
         DiaryAction::Remove(args) => ("diary.remove", serialize_args(args)),
+        DiaryAction::Export(args) => ("diary.export", serialize_args(args)),
+        DiaryAction::Import(args) => {
+            // 压缩包在 CLI 侧读并解析（与 --markdown-file 同一套路）：
+            // 核心命令只看到普通的 entries 数组，写入仍然只有那一条业务层。
+            let bytes = std::fs::read(&args.zip).map_err(|error| {
+                CoreError::validation(
+                    "PAYLOAD_FILE_ERROR",
+                    format!("无法读取 {}：{error}", args.zip),
+                )
+            })?;
+            let entries = crate::diary_archive::parse_zip(&bytes)?;
+            ("diary.import", serde_json::json!({ "entries": entries, "source": args.zip }))
+        }
     };
     Ok(Invocation::new(name, params))
 }

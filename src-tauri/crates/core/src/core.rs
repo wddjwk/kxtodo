@@ -132,6 +132,7 @@ fn cmd_version() -> CoreResult<Value> {
             "data": crate::model::DATA_SCHEMA_VERSION,
             "settings": crate::model::SETTINGS_SCHEMA_VERSION,
             "schedule": crate::model::SCHEDULE_SCHEMA_VERSION,
+            "diary": crate::model::DIARY_SCHEMA_VERSION,
         }
     }))
 }

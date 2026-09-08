@@ -9,6 +9,7 @@ use serde_json::{Map, Value};
 pub const DATA_SCHEMA_VERSION: u32 = 6;
 pub const SETTINGS_SCHEMA_VERSION: u32 = 1;
 pub const SCHEDULE_SCHEMA_VERSION: u32 = 2;
+pub const DIARY_SCHEMA_VERSION: u32 = 1;
 
 pub const SYSTEM_NODE_IDS: [&str; 4] = ["my-day", "planned", "important", "scheduled"];
 
@@ -82,9 +83,6 @@ pub struct DataFile {
     pub nodes: Vec<Node>,
     #[serde(default)]
     pub tasks: Vec<Item>,
-    /// 日记条目（与 task 平行的一类内容，同属 data 域与「同步数据」范围）。
-    #[serde(default)]
-    pub diaries: Vec<DiaryEntry>,
     #[serde(rename = "selectedNodeId", default)]
     pub selected_node_id: String,
     #[serde(default)]
@@ -235,6 +233,10 @@ pub struct Item {
     pub extra: Map<String, Value>,
 }
 
+// ---------------------------------------------------------------------------
+// diary.json
+// ---------------------------------------------------------------------------
+
 /// 日记条目：以「归属日期」为核心属性的 Markdown 记录。
 ///
 /// 一天可以有多篇（按 `createdAt` 先后排列）；除 `date` 外全部可选，
@@ -265,6 +267,23 @@ pub struct DiaryEntry {
     pub created_at: String,
     #[serde(rename = "updatedAt", skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
+}
+
+/// diary.json：日记是独立的第四个领域文件。
+///
+/// 单独成文件的理由是写路径互不干扰——写一篇日记不该抬高 data 域的 revision、
+/// 也不该和任务写入抢同一个文件锁与幂等台账。同步上它仍然搭「同步数据」的范围。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct DiaryFile {
+    #[serde(rename = "schemaVersion", default)]
+    pub schema_version: u32,
+    #[serde(rename = "_meta", default)]
+    pub meta: DomainMeta,
+    #[serde(default)]
+    pub entries: Vec<DiaryEntry>,
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
@@ -875,20 +894,47 @@ impl DiaryView {
     }
 }
 
-/// 日记偏好。**本机 UI 状态，不进设置同步的共享子集**（每台设备可以各看各的视图）。
+/// 日记偏好。
+///
+/// `view` 是**本机 UI 状态**（每台设备各看各的视图，不进同步的共享子集）；
+/// 主题色与背景是**外观**，跟着共享子集走——和条目背景、`appearance.uiColors`
+/// 一个待遇，日记换台设备不该变脸。
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DiarySettings {
     #[serde(default)]
     pub view: DiaryView,
+    /// 主题色（#rrggbb）；空 = 用默认日记色
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub accent: String,
+    /// 背景色（#rrggbb）
+    #[serde(rename = "backgroundColor", default = "default_diary_background_color")]
+    pub background_color: String,
+    /// 背景图片：`img:<文件名>`（本地图，落在 img/background/）或 http(s)/data URL；空 = 无图
+    #[serde(rename = "backgroundImage", default, skip_serializing_if = "String::is_empty")]
+    pub background_image: String,
+    #[serde(rename = "backgroundOpacity", default = "default_diary_background_opacity")]
+    pub background_opacity: f64,
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
+}
+
+fn default_diary_background_color() -> String {
+    "#f4f1ea".to_string()
+}
+
+fn default_diary_background_opacity() -> f64 {
+    0.28
 }
 
 impl Default for DiarySettings {
     fn default() -> Self {
         Self {
             view: DiaryView::default(),
+            accent: String::new(),
+            background_color: default_diary_background_color(),
+            background_image: String::new(),
+            background_opacity: default_diary_background_opacity(),
             extra: Map::new(),
         }
     }

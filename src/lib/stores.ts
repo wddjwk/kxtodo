@@ -1,13 +1,14 @@
 import { writable, derived, get } from "svelte/store";
-import type { AppNotification, AppState, AppNode, DiaryEditorTarget, EmojiPickerTarget, NotificationTone, SchedulerState, Settings, Task } from "./types";
-import { defaultSchedulerRuntimes, defaultSettings, emptyState, normalizeState, normalizeSettings, schedulerRuntimeKeys } from "./defaults";
+import type { AppNotification, AppState, AppNode, DiaryEditorTarget, DiaryEntry, EmojiPickerTarget, NotificationTone, SchedulerState, Settings, Task } from "./types";
+import { defaultSchedulerRuntimes, defaultSettings, emptyState, normalizeDiaryEntries, normalizeState, normalizeSettings, schedulerRuntimeKeys } from "./defaults";
 import {
   loadState, saveState, loadSettings, saveSettings, loadScheduler, saveScheduler,
+  loadDiary, saveDiary,
   registerGlobalShortcut, setCloseToTray, setAutostart,
   setWebviewZoom, isTauriRuntime, resolveExecutorPaths, sendNativeNotification,
   hasCoreDispatch, coreSnapshot, getAppVersion
 } from "./backend";
-import { buildListCounts, buildVisibleTasks, getBackground } from "./nodes";
+import { buildListCounts, buildSearchHits, buildVisibleTasks, getBackground } from "./nodes";
 import { accentForNode, uiScaleValue } from "./styles";
 import { entryToUi, type ScheduleEntryV9 } from "./scheduleAdapter";
 import { caps } from "./capabilities";
@@ -106,12 +107,24 @@ export function fileToDataUrl(file: File): Promise<string> {
 
 export const appState = writable<AppState>(emptyState());
 export const appSettings = writable<Settings>(clone(defaultSettings));
+/**
+ * 日记（diary.json，独立的第四个领域）。跟 scheduleEntries 一样单独成 store：
+ * 它有自己的 revision 与域事件，塞进 appState 会让「只刷新日记」变成刷新整个数据域。
+ */
+export const diaryEntries = writable<DiaryEntry[]>([]);
 export const isHydrated = writable(false);
 export const showSettings = writable(false);
 export const searchQuery = writable("");
 export const taskEmojiPicker = writable<EmojiPickerTarget | null>(null);
 /** 正在浮窗编辑器中编辑的任务 ID（null = 编辑器关闭）。 */
 export const editorTaskId = writable<string | null>(null);
+
+/**
+ * 编辑器的「新建事项」模式：存的是归属条目 id（与 editorTaskId 互斥）。
+ * 保存时才调 task.add，正文为空就直接关掉——点了加号又改主意的，
+ * 不该留下一条空任务。
+ */
+export const editorDraftNode = writable<string | null>(null);
 
 /** 日记视图是否打开（桌面端）。移动端由 `mobileView === "diary"` 驱动，见 platform.ts。 */
 export const diaryOpen = writable(false);
@@ -217,6 +230,15 @@ export const accent = derived(
 
 export const isSearching = derived(searchQuery, ($q) => $q.trim().length > 0);
 
+/**
+ * 全局搜索的混排结果（任务 + 日记，按最近改动排序）。
+ * 桌面在工作区渲染，移动端在侧栏搜索框下方的结果面板渲染——同一份数据，两处视图。
+ */
+export const searchHits = derived(
+  [appState, diaryEntries, searchQuery],
+  ([$s, $d, $q]) => buildSearchHits($s, $d, $q)
+);
+
 // ---------------------------------------------------------------------------
 // Legacy persistence（浏览器预览路径；桌面与移动端 Tauri 走 actions.ts 命令化写入）
 // ---------------------------------------------------------------------------
@@ -224,6 +246,7 @@ export const isSearching = derived(searchQuery, ($q) => $q.trim().length > 0);
 let stateSaveTimer: number | undefined;
 let settingsSaveTimer: number | undefined;
 let schedulerSaveTimer: number | undefined;
+let diarySaveTimer: number | undefined;
 
 export function commit(next: AppState): void {
   appState.set(next);
@@ -231,6 +254,15 @@ export function commit(next: AppState): void {
   window.clearTimeout(stateSaveTimer);
   stateSaveTimer = window.setTimeout(() => {
     saveState(next).catch((error) => showToast(`保存失败：${String(error)}`));
+  }, 180);
+}
+
+export function commitDiary(next: DiaryEntry[]): void {
+  diaryEntries.set(next);
+  if (!get(isHydrated)) return;
+  window.clearTimeout(diarySaveTimer);
+  diarySaveTimer = window.setTimeout(() => {
+    saveDiary(next).catch((error) => showToast(`保存日记失败：${String(error)}`));
   }, 180);
 }
 
@@ -327,6 +359,9 @@ function applySnapshot(snapshot: Awaited<ReturnType<typeof coreSnapshot>>, domai
   }
   if (wantAll || domains?.has("settings")) {
     appSettings.set(normalizeSettings(snapshot.settings));
+  }
+  if (wantAll || domains?.has("diary")) {
+    diaryEntries.set(normalizeDiaryEntries(snapshot.diary));
   }
   if (wantAll || domains?.has("schedule")) {
     const current = get(appState);
@@ -444,12 +479,14 @@ export async function hydrate(): Promise<void> {
   // 浏览器预览路径（移动端已是 core 模式）
   let loadedSettings = clone(defaultSettings);
   try {
-    const [storedState, storedScheduler, storedSettings, resolvedExecutors] = await Promise.all([
+    const [storedState, storedScheduler, storedSettings, storedDiary, resolvedExecutors] = await Promise.all([
       loadState(),
       loadScheduler(),
       loadSettings(),
+      loadDiary(),
       resolveExecutorPaths().catch(() => defaultSchedulerRuntimes)
     ]);
+    diaryEntries.set(storedDiary);
     const scheduler: SchedulerState = {
       ...storedScheduler,
       runtimes: schedulerRuntimeKeys.reduce((acc, key) => {

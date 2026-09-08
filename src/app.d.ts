@@ -20,5 +20,7 @@ interface Window {
   kxtodoAndroid?: {
     installApk(path: string): string;
     shareText(filename: string, mime: string, text: string): string;
+    /** 分享一个已存在于应用缓存目录里的文件（日记导出的 zip） */
+    shareFile(path: string, mime: string): string;
   };
 }

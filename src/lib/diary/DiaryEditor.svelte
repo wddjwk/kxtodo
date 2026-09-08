@@ -7,7 +7,9 @@
   import { mdImageCache, primeMdImageCache, resolveMarkdownImages } from "../images";
   import { isTauriRuntime, mdImageUrl, pickImageFile, saveMdImage, saveMdImageFromDataUrl } from "../backend";
   import { caps } from "../capabilities";
-  import { appState, fileToDataUrl, showToast } from "../stores";
+  import { get } from "svelte/store";
+  import { appSettings, diaryEntries, fileToDataUrl, showToast } from "../stores";
+  import { diaryAccent } from "../styles";
   import { addDiaryEntry, updateDiaryEntry, type DiaryChanges } from "../actions";
   import DatePicker from "../DatePicker.svelte";
   import {
@@ -29,7 +31,7 @@
   ];
 
   const editingId = "id" in target ? target.id : null;
-  const existing = editingId ? $appState.diaries.find((entry) => entry.id === editingId) : undefined;
+  const existing = editingId ? get(diaryEntries).find((entry) => entry.id === editingId) : undefined;
 
   let host: HTMLDivElement;
   let imageFileInput: HTMLInputElement;
@@ -61,6 +63,9 @@
   $: dateLabel = date === today ? `今天 · ${fullDayLabel(date)}` : relativeDayLabel(date, today);
 
   onMount(() => {
+    // 捕获阶段：对话框对 pointerdown/click 做了 stopPropagation，冒泡阶段收不到里面的交互
+    window.addEventListener("pointerdown", dismissPopovers, true);
+    window.addEventListener("focusin", dismissPopovers, true);
     view = createMarkdownEditor(host, text, {
       placeholder: "写下今天……",
       onSave: () => void saveAndClose(),
@@ -75,10 +80,20 @@
       void tick().then(() => titleInput?.focus());
     }
     return () => {
+      window.removeEventListener("pointerdown", dismissPopovers, true);
+      window.removeEventListener("focusin", dismissPopovers, true);
       view?.destroy();
       view = null;
     };
   });
+
+  /** 点/焦点落到当前打开的那个字段之外 → 收起浮层。字段内部（含它自己的浮层）交给字段自己的开关。 */
+  function dismissPopovers(event: Event): void {
+    if (!openPicker) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest(".editor-meta-field")) return;
+    openPicker = "";
+  }
 
   // 外部路径卸载（移动端硬件返回弹历史栈）时未保存内容不能丢：尽力保存一次，
   // 与桌面 Esc / 点遮罩「保存并关闭」语义一致。
@@ -265,7 +280,8 @@
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="editor-overlay" on:pointerdown={handleBackdropPointerDown} on:contextmenu|preventDefault|stopPropagation>
-  <div class="editor-dialog diary-editor" role="dialog" aria-label="编辑日记" tabindex="-1" on:pointerdown|stopPropagation on:click|stopPropagation>
+  <!-- --accent 内联：编辑器浮层挂在 App 层，拿不到 .diary-view 的主题色，跟着用户选的日记色走 -->
+  <div class="editor-dialog diary-editor" style={`--accent: ${diaryAccent($appSettings.diary)}`} role="dialog" aria-label="编辑日记" tabindex="-1" on:pointerdown|stopPropagation on:click|stopPropagation>
     <header class="editor-header">
       <div class="editor-mode-switch" role="tablist">
         <button type="button" role="tab" class:active={mode === "edit"} aria-selected={mode === "edit"} on:click={() => toggleMode("edit")}>
@@ -292,26 +308,27 @@
     </header>
 
     <!-- 日期 / 心情 / 天气 / 标签：一行元数据，浮层都在对话框内向下展开 -->
-    <div class="diary-editor-meta" on:click|stopPropagation>
-      <div class="diary-meta-field" class:open={openPicker === "date"}>
-        <button class="diary-meta-trigger" type="button" title="归属日期" on:click={() => togglePicker("date")}>
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div class="editor-meta" on:click|stopPropagation>
+      <div class="editor-meta-field" class:open={openPicker === "date"}>
+        <button class="editor-meta-trigger" type="button" title="归属日期" on:click={() => togglePicker("date")}>
           <CalendarDays size={15} />{dateLabel}
         </button>
         {#if openPicker === "date"}
-          <div class="diary-meta-pop">
+          <div class="editor-meta-pop">
             <DatePicker value={date} on:select={(event) => pickDate(event.detail)} on:clear={() => pickDate(today)} />
           </div>
         {/if}
       </div>
 
-      <div class="diary-meta-field" class:open={openPicker === "mood"}>
-        <button class="diary-meta-trigger" type="button" class:filled={Boolean(mood)} title="心情" on:click={() => togglePicker("mood")}>
+      <div class="editor-meta-field" class:open={openPicker === "mood"}>
+        <button class="editor-meta-trigger" type="button" class:filled={Boolean(mood)} title="心情" on:click={() => togglePicker("mood")}>
           <Smile size={15} />{mood || "心情"}
         </button>
         {#if openPicker === "mood"}
-          <div class="diary-meta-pop diary-emoji-grid-pop">
+          <div class="editor-meta-pop editor-emoji-grid-pop">
             {#each MOOD_PRESETS as preset (preset.emoji)}
-              <button class="diary-emoji-cell" type="button" class:selected={mood === preset.emoji} title={preset.label} on:click={() => pickMood(preset.emoji)}>
+              <button class="emoji-pick-cell" type="button" class:selected={mood === preset.emoji} title={preset.label} on:click={() => pickMood(preset.emoji)}>
                 {preset.emoji}
               </button>
             {/each}
@@ -319,14 +336,14 @@
         {/if}
       </div>
 
-      <div class="diary-meta-field" class:open={openPicker === "weather"}>
-        <button class="diary-meta-trigger" type="button" class:filled={Boolean(weather)} title="天气" on:click={() => togglePicker("weather")}>
+      <div class="editor-meta-field" class:open={openPicker === "weather"}>
+        <button class="editor-meta-trigger" type="button" class:filled={Boolean(weather)} title="天气" on:click={() => togglePicker("weather")}>
           <CloudSun size={15} />{weather || "天气"}
         </button>
         {#if openPicker === "weather"}
-          <div class="diary-meta-pop diary-emoji-grid-pop">
+          <div class="editor-meta-pop editor-emoji-grid-pop">
             {#each WEATHER_PRESETS as preset (preset.emoji)}
-              <button class="diary-emoji-cell" type="button" class:selected={weather === preset.emoji} title={preset.label} on:click={() => pickWeather(preset.emoji)}>
+              <button class="emoji-pick-cell" type="button" class:selected={weather === preset.emoji} title={preset.label} on:click={() => pickWeather(preset.emoji)}>
                 {preset.emoji}
               </button>
             {/each}
@@ -334,7 +351,7 @@
         {/if}
       </div>
 
-      <div class="diary-meta-field diary-meta-tags" class:open={openPicker === "tag"}>
+      <div class="editor-meta-field editor-meta-tags" class:open={openPicker === "tag"}>
         {#each tags as tag (tag.id)}
           <span class={`task-tag tag-${tag.color}`}>
             {tag.text || ""}
@@ -343,11 +360,11 @@
             </button>
           </span>
         {/each}
-        <button class="diary-meta-trigger diary-tag-add" type="button" title="标签" on:click={() => togglePicker("tag")}>
+        <button class="editor-meta-trigger editor-tag-add" type="button" title="标签" on:click={() => togglePicker("tag")}>
           <TagIcon size={14} />{tags.length ? "" : "标签"}
         </button>
         {#if openPicker === "tag"}
-          <div class="diary-meta-pop diary-tag-pop" on:click|stopPropagation>
+          <div class="editor-meta-pop editor-tag-pop" on:click|stopPropagation>
             <div class="tag-editor-input-row">
               <input
                 type="text"
@@ -379,7 +396,7 @@
     <input
       bind:this={titleInput}
       bind:value={title}
-      class="diary-editor-title"
+      class="editor-title-input"
       type="text"
       maxlength="120"
       placeholder="标题（可留空，直接写正文）"

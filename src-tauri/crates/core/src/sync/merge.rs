@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use crate::model::{DataFile, ScheduleFile, SettingsFile};
+use crate::model::{DataFile, DiaryFile, ScheduleFile, SettingsFile};
 
 pub const SETTINGS_ENTITY_ID: &str = "settings";
 
@@ -97,7 +97,7 @@ impl EntityRecord {
     }
 }
 
-/// 本地实体的版本戳（数据域：node/task/diary 活实体或墓碑）。
+/// 本地实体的版本戳（数据域：node/task 活实体或墓碑）。
 pub fn data_entity_stamp(data: &DataFile, id: &str) -> Option<String> {
     if let Some(node) = data.nodes.iter().find(|node| node.id == id) {
         return Some(
@@ -113,7 +113,16 @@ pub fn data_entity_stamp(data: &DataFile, id: &str) -> Option<String> {
                 .unwrap_or_else(|| item.created_at.clone()),
         );
     }
-    if let Some(entry) = data.diaries.iter().find(|entry| entry.id == id) {
+    data.meta
+        .tombstones
+        .iter()
+        .find(|tomb| tomb.id == id)
+        .map(|tomb| tomb.updated_at.clone())
+}
+
+/// 本地实体的版本戳（diary 域：活实体或墓碑）。
+pub fn diary_entity_stamp(diary: &DiaryFile, id: &str) -> Option<String> {
+    if let Some(entry) = diary.entries.iter().find(|entry| entry.id == id) {
         return Some(
             entry
                 .updated_at
@@ -121,7 +130,8 @@ pub fn data_entity_stamp(data: &DataFile, id: &str) -> Option<String> {
                 .unwrap_or_else(|| entry.created_at.clone()),
         );
     }
-    data.meta
+    diary
+        .meta
         .tombstones
         .iter()
         .find(|tomb| tomb.id == id)
@@ -217,12 +227,20 @@ pub fn settings_payload(settings: &SettingsFile) -> Value {
             "intervalSeconds": settings.sync.interval_seconds,
             "reconnectSeconds": settings.sync.reconnect_seconds,
         },
+        // 日记的主题色与背景是外观，跟着走；**view 不带**——每台设备各看各的视图。
+        "diary": {
+            "accent": settings.diary.accent,
+            "backgroundColor": settings.diary.background_color,
+            "backgroundImage": settings.diary.background_image,
+            "backgroundOpacity": settings.diary.background_opacity,
+        },
     })
 }
 
 /// 提取本设备的全部同步实体（含墓碑），按 scope 裁剪。
 pub fn extract_entities(
     data: &DataFile,
+    diary: &DiaryFile,
     settings: &SettingsFile,
     schedule: &ScheduleFile,
     scopes: &Scopes,
@@ -258,7 +276,23 @@ pub fn extract_entities(
                 seq: 0,
             });
         }
-        for entry in &data.diaries {
+        for tomb in &data.meta.tombstones {
+            if tomb.kind == "node" || tomb.kind == "task" {
+                out.push(EntityRecord {
+                    kind: tomb.kind.clone(),
+                    id: tomb.id.clone(),
+                    updated_at: tomb.updated_at.clone(),
+                    updated_by: device_id.to_string(),
+                    deleted: true,
+                    data: Value::Null,
+                    seq: 0,
+                });
+            }
+        }
+    }
+    // 日记是独立的领域文件，但同步范围仍搭「同步数据」的车（不新增第四个勾选框）
+    if scopes.data {
+        for entry in &diary.entries {
             out.push(EntityRecord {
                 kind: "diary".to_string(),
                 id: entry.id.clone(),
@@ -272,10 +306,10 @@ pub fn extract_entities(
                 seq: 0,
             });
         }
-        for tomb in &data.meta.tombstones {
-            if tomb.kind == "node" || tomb.kind == "task" || tomb.kind == "diary" {
+        for tomb in &diary.meta.tombstones {
+            if tomb.kind == "diary" {
                 out.push(EntityRecord {
-                    kind: tomb.kind.clone(),
+                    kind: "diary".to_string(),
                     id: tomb.id.clone(),
                     updated_at: tomb.updated_at.clone(),
                     updated_by: device_id.to_string(),
@@ -364,14 +398,22 @@ fn apply_task_record(record: &EntityRecord, data: &mut DataFile) -> Result<(), S
     Ok(())
 }
 
-fn apply_diary_record(record: &EntityRecord, data: &mut DataFile) -> Result<(), String> {
+pub fn apply_diary_record(record: &EntityRecord, diary: &mut DiaryFile) -> Result<(), String> {
+    if record.deleted {
+        diary.entries.retain(|d| d.id != record.id);
+        diary
+            .meta
+            .record_tombstone(&record.id, "diary", &record.updated_at);
+        return Ok(());
+    }
     let mut entry: crate::model::DiaryEntry =
         serde_json::from_value(record.data.clone()).map_err(|e| e.to_string())?;
-    if let Some(existing) = data.diaries.iter().find(|d| d.id == entry.id) {
+    // expanded 是本机 UI 状态，远端载荷里没有它，合并时必须留住本地值
+    if let Some(existing) = diary.entries.iter().find(|d| d.id == entry.id) {
         entry.expanded = existing.expanded;
     }
-    data.diaries.retain(|d| d.id != entry.id);
-    data.diaries.push(entry);
+    diary.entries.retain(|d| d.id != entry.id);
+    diary.entries.push(entry);
     Ok(())
 }
 
@@ -432,6 +474,8 @@ fn apply_settings_record(record: &EntityRecord, settings: &mut SettingsFile) -> 
         updates: Option<Value>,
         #[serde(default)]
         sync: Option<Value>,
+        #[serde(default)]
+        diary: Option<Value>,
     }
     let payload: SharedSettings =
         serde_json::from_value(record.data.clone()).map_err(|e| e.to_string())?;
@@ -484,6 +528,23 @@ fn apply_settings_record(record: &EntityRecord, settings: &mut SettingsFile) -> 
             }
         }
     }
+    if let Some(diary) = payload.diary {
+        if let Some(map) = diary.as_object() {
+            // 逐字段合并：老设备的载荷没有 diary 键时，本机外观一动不动
+            if let Some(value) = map.get("accent").and_then(Value::as_str) {
+                settings.diary.accent = value.to_string();
+            }
+            if let Some(value) = map.get("backgroundColor").and_then(Value::as_str) {
+                settings.diary.background_color = value.to_string();
+            }
+            if let Some(value) = map.get("backgroundImage").and_then(Value::as_str) {
+                settings.diary.background_image = value.to_string();
+            }
+            if let Some(value) = map.get("backgroundOpacity").and_then(Value::as_f64) {
+                settings.diary.background_opacity = value.clamp(0.0, 1.0);
+            }
+        }
+    }
     settings.sync_updated_at = Some(record.updated_at.clone());
     Ok(())
 }
@@ -507,11 +568,6 @@ pub fn apply_data_record(
                 data.meta
                     .record_tombstone(&record.id, "task", &record.updated_at);
             }
-            "diary" => {
-                data.diaries.retain(|d| d.id != record.id);
-                data.meta
-                    .record_tombstone(&record.id, "diary", &record.updated_at);
-            }
             other => return Err(format!("未知数据域墓碑类型 `{other}`")),
         }
         return Ok(());
@@ -519,7 +575,6 @@ pub fn apply_data_record(
     match record.kind.as_str() {
         "node" => apply_node_record(record, data),
         "task" => apply_task_record(record, data),
-        "diary" => apply_diary_record(record, data),
         other => Err(format!("未知数据域实体类型 `{other}`")),
     }
 }
@@ -557,7 +612,11 @@ pub fn normalize_data_orders(data: &mut DataFile) {
             .then_with(|| cmp_f64(ka.1, kb.1))
             .then_with(|| ka.2.cmp(kb.2))
     });
-    data.diaries.sort_by(|a, b| {
+}
+
+/// 日记的规范数组序：日期由近及远，同一天内按写作先后。
+pub fn normalize_diary_orders(diary: &mut DiaryFile) {
+    diary.entries.sort_by(|a, b| {
         b.date
             .cmp(&a.date)
             .then_with(|| a.created_at.cmp(&b.created_at))
@@ -619,7 +678,6 @@ mod tests {
             meta: Default::default(),
             nodes: Vec::new(),
             tasks: Vec::new(),
-            diaries: Vec::new(),
             selected_node_id: String::new(),
             backgrounds: Map::new(),
             extra: Map::new(),
@@ -748,6 +806,7 @@ mod tests {
 
         let entities = extract_entities(
             &data,
+            &DiaryFile::default(),
             &settings,
             &schedule,
             &Scopes {
@@ -820,18 +879,29 @@ mod tests {
         }
     }
 
+    fn empty_diary() -> DiaryFile {
+        DiaryFile {
+            schema_version: 0,
+            meta: Default::default(),
+            entries: Vec::new(),
+            extra: Map::new(),
+        }
+    }
+
     #[test]
     fn diary_rides_the_data_scope_and_keeps_ui_state_local() {
-        let mut data = DataFile {
-            diaries: vec![diary("d1", "2026-09-08", "2026-09-08T00:00:00.000Z")],
-            ..empty_data()
+        let mut local = DiaryFile {
+            entries: vec![diary("d1", "2026-09-08", "2026-09-08T00:00:00.000Z")],
+            ..empty_diary()
         };
-        data.diaries[0].expanded = Some(true);
+        local.entries[0].expanded = Some(true);
+        let data = empty_data();
         let settings = SettingsFile::default();
         let schedule = ScheduleFile::default();
 
         let on = extract_entities(
             &data,
+            &local,
             &settings,
             &schedule,
             &Scopes {
@@ -853,14 +923,11 @@ mod tests {
         );
         assert_eq!(entity.data["date"], json!("2026-09-08"));
 
-        let off = extract_entities(
-            &data,
-            &settings,
-            &schedule,
-            &Scopes::default(),
-            "dev-a",
+        let off = extract_entities(&data, &local, &settings, &schedule, &Scopes::default(), "dev-a");
+        assert!(
+            off.iter().all(|e| e.kind != "diary"),
+            "关掉数据范围就不推日记"
         );
-        assert!(off.iter().all(|e| e.kind != "diary"), "关掉数据范围就不推日记");
 
         // 远端更新胜出：内容替换，但本机的展开状态留着
         let remote = record(
@@ -872,22 +939,22 @@ mod tests {
         );
         assert!(remote_wins(
             &remote,
-            data_entity_stamp(&data, "d1").as_deref().map(|ts| (ts, "dev-a"))
+            diary_entity_stamp(&local, "d1").as_deref().map(|ts| (ts, "dev-a"))
         ));
-        apply_data_record(&remote, &mut data).unwrap();
-        assert_eq!(data.diaries.len(), 1);
+        apply_diary_record(&remote, &mut local).unwrap();
+        assert_eq!(local.entries.len(), 1);
         assert_eq!(
-            data.diaries[0].updated_at.as_deref(),
+            local.entries[0].updated_at.as_deref(),
             Some("2026-09-09T00:00:00.000Z")
         );
-        assert_eq!(data.diaries[0].expanded, Some(true));
+        assert_eq!(local.entries[0].expanded, Some(true));
         assert_eq!(
-            data_entity_stamp(&data, "d1").as_deref(),
+            diary_entity_stamp(&local, "d1").as_deref(),
             Some("2026-09-09T00:00:00.000Z"),
             "对账水位要能从日记上读到版本戳"
         );
 
-        // 远端墓碑 → 删除 + 记 diary 墓碑
+        // 远端墓碑 → 删除 + 在 diary 域自己的 _meta 里记墓碑
         let tomb = EntityRecord {
             kind: "diary".to_string(),
             id: "d1".to_string(),
@@ -897,10 +964,10 @@ mod tests {
             data: Value::Null,
             seq: 3,
         };
-        apply_data_record(&tomb, &mut data).unwrap();
-        assert!(data.diaries.is_empty());
-        assert_eq!(data.meta.tombstones.len(), 1);
-        assert_eq!(data.meta.tombstones[0].kind, "diary");
+        apply_diary_record(&tomb, &mut local).unwrap();
+        assert!(local.entries.is_empty());
+        assert_eq!(local.meta.tombstones.len(), 1);
+        assert_eq!(local.meta.tombstones[0].kind, "diary");
 
         // 旧的远端活实体（9 日）打不过墓碑（10 日）→ 不复活
         let stale = record(
@@ -912,23 +979,58 @@ mod tests {
         );
         assert!(!remote_wins(
             &stale,
-            data_entity_stamp(&data, "d1").as_deref().map(|ts| (ts, "dev-b"))
+            diary_entity_stamp(&local, "d1").as_deref().map(|ts| (ts, "dev-b"))
         ));
     }
 
     #[test]
     fn diary_array_order_is_canonical_after_merge() {
-        let mut data = DataFile {
-            diaries: vec![
+        let mut local = DiaryFile {
+            entries: vec![
                 diary("d-old", "2026-09-01", "2026-09-01T00:00:00.000Z"),
                 diary("d-late", "2026-09-08", "2026-09-08T09:00:00.000Z"),
                 diary("d-early", "2026-09-08", "2026-09-08T07:00:00.000Z"),
             ],
-            ..empty_data()
+            ..empty_diary()
         };
-        normalize_data_orders(&mut data);
-        let ids: Vec<&str> = data.diaries.iter().map(|e| e.id.as_str()).collect();
+        normalize_diary_orders(&mut local);
+        let ids: Vec<&str> = local.entries.iter().map(|e| e.id.as_str()).collect();
         // 日期由近及远，同一天内按写作先后
         assert_eq!(ids, vec!["d-early", "d-late", "d-old"]);
+    }
+
+    #[test]
+    fn diary_appearance_syncs_but_the_view_choice_does_not() {
+        let mut source = SettingsFile::default();
+        source.diary.accent = "#123456".to_string();
+        source.diary.background_color = "#0f0f0f".to_string();
+        source.diary.view = crate::model::DiaryView::Group;
+        let payload = settings_payload(&source);
+        assert_eq!(payload["diary"]["accent"], json!("#123456"));
+        assert_eq!(payload["diary"]["backgroundColor"], json!("#0f0f0f"));
+        assert!(
+            payload["diary"].get("view").is_none(),
+            "视图选择是本机偏好，不该跟着设置同步跑到别的设备上"
+        );
+
+        let mut target = SettingsFile::default();
+        target.diary.view = crate::model::DiaryView::Calendar;
+        let record = EntityRecord {
+            kind: "settings".to_string(),
+            id: SETTINGS_ENTITY_ID.to_string(),
+            updated_at: "2026-01-02T00:00:00.000Z".to_string(),
+            updated_by: "dev-b".to_string(),
+            deleted: false,
+            data: payload,
+            seq: 1,
+        };
+        apply_settings_record(&record, &mut target).unwrap();
+        assert_eq!(target.diary.accent, "#123456");
+        assert_eq!(target.diary.background_color, "#0f0f0f");
+        assert_eq!(
+            target.diary.view,
+            crate::model::DiaryView::Calendar,
+            "本机选的视图不能被远端载荷抹掉"
+        );
     }
 }

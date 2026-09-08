@@ -7,15 +7,16 @@
   } from "@lucide/svelte";
   import {
     appState, appSettings, showToast,
-    searchQuery, selectedNode, visibleTasks, selectedBackground,
+    searchQuery, searchHits, selectedNode, visibleTasks, selectedBackground,
     accent, isSearching, todayIso, yesterdayIso, dateOnly,
-    taskEmojiPicker, editorTaskId, fileToDataUrl
+    taskEmojiPicker, editorTaskId, editorDraftNode, diaryEditor, diaryEntries, fileToDataUrl
   } from "./stores";
   import {
     updateTask as updateTaskAction, deleteTask as deleteTaskAction,
     addTask as addTaskAction, setItemUi as setItemUiAction,
     setItemsUi as setItemsUiAction, replaceTaskTags as replaceTaskTagsAction,
     replaceTaskEmojis as replaceTaskEmojisAction,
+    setDiaryUi as setDiaryUiAction,
     renameNode as renameNodeAction, syncNow as syncNowAction
   } from "./actions";
   import { pullToRefresh } from "./pullrefresh";
@@ -26,6 +27,8 @@
   import { imageCache, resolveImageSrc, mdImageCache, primeMdImageCache } from "./images";
   import IconGlyph from "./IconGlyph.svelte";
   import TaskCard from "./TaskCard.svelte";
+  import DiaryCard from "./diary/DiaryCard.svelte";
+  import DiaryEntryMenu from "./diary/DiaryEntryMenu.svelte";
   import ScheduledTasksView from "./ScheduledTasksView.svelte";
   import DatePicker from "./DatePicker.svelte";
   import ContextMenu from "./menu/ContextMenu.svelte";
@@ -55,6 +58,8 @@
     collapsedSections = { ...collapsedSections, [key]: !collapsedSections[key] };
   }
   let taskMenu: { taskId: string; x: number; y: number } | null = null;
+  /** 搜索结果里的日记卡片菜单（与 taskMenu 互斥） */
+  let diaryMenu: { id: string; x: number; y: number } | null = null;
   let listMenuAt: { x: number; y: number } | null = null;
   let tagInputText = "";
   let selectedTagColor: TagColor = "yellow";
@@ -204,6 +209,7 @@
         task: task as Task | null
       }));
   $: taskMenuTask = taskMenu ? $appState.tasks.find((task) => task.id === taskMenu?.taskId) : null;
+  $: diaryMenuEntry = diaryMenu ? $diaryEntries.find((entry) => entry.id === diaryMenu?.id) ?? null : null;
   $: hasTaskMoveTargets = taskMenu ? taskMoveTargets($appState.nodes, taskMenuTask?.nodeId ?? "").length > 0 : false;
   $: expandableTasks = $visibleTasks.filter((task) => hasMultipleMarkdownLines(task.markdown));
   $: allExpanded = expandableTasks.length > 0 && expandableTasks.every((task) => task.expanded);
@@ -335,6 +341,7 @@
     showPlannedGroups = false;
     schedulerViewRef?.closeOverlays();
     taskMenu = null;
+    diaryMenu = null;
     listMenuAt = null;
     linkPreviewUrl = "";
     linkPreviewTitle = "";
@@ -498,6 +505,16 @@
     void tick().then(resizeComposer);
   }
 
+  /** 加号：直接开编辑器新建一条（归属条目与输入框同一个）。 */
+  function openComposerEditor(): void {
+    const targetNode = taskTargetNode();
+    if (!targetNode) {
+      showToast("请先创建一个条目");
+      return;
+    }
+    editorDraftNode.set(targetNode.id);
+  }
+
   function handleComposerKeydown(event: KeyboardEvent): void {
     if (event.isComposing || event.keyCode === 229) return;
     if (event.key === "Enter" && !event.shiftKey) {
@@ -547,7 +564,24 @@
 
   function openTaskMenu(event: CustomEvent<{ id: string; x: number; y: number }>): void {
     taskMenu = { taskId: event.detail.id, x: event.detail.x, y: event.detail.y };
+    diaryMenu = null;
     listMenuAt = null;
+  }
+
+  // ---- 搜索结果里的日记卡片 ----
+  function openDiaryMenu(event: CustomEvent<{ id: string; x: number; y: number }>): void {
+    diaryMenu = { id: event.detail.id, x: event.detail.x, y: event.detail.y };
+    taskMenu = null;
+    listMenuAt = null;
+  }
+
+  function openDiaryEntry(id: string): void {
+    diaryMenu = null;
+    diaryEditor.set({ id });
+  }
+
+  function handleDiaryExpand(event: CustomEvent<{ id: string; expanded: boolean }>): void {
+    void setDiaryUiAction(event.detail.id, { expanded: event.detail.expanded });
   }
 
   function setTaskDate(taskId: string, date: string): void {
@@ -908,6 +942,39 @@
         </span>
       </div>
     {/if}
+    {#if $isSearching}
+      <!-- 全局搜索：任务卡（todo / 一般）与日记卡按「最近改动」混排在一条列表里 -->
+      {#each $searchHits as hit (hit.key)}
+        {#if hit.kind === "task"}
+          <TaskCard
+            task={hit.task}
+            nodeId={hit.task.nodeId}
+            cardStyle={hit.cardStyle}
+            selected={taskMenu?.taskId === hit.task.id}
+            on:toggle={(event) => toggleCompletion(event.detail)}
+            on:expand={(event) => toggleTaskExpansion(event.detail.id, event.detail.expanded)}
+            on:edit={(event) => openTaskEditor(event.detail)}
+            on:context={openTaskMenu}
+            on:openLink={openTaskLink}
+            on:setDate={handleTaskSetDate}
+            on:removeTag={(e) => removeTagFromTask(e.detail.id, e.detail.tagId)}
+            on:editTag={(e) => editTagAtTask(e.detail.id, e.detail.tagId, e.detail.text)}
+            on:removeEmoji={(e) => removeEmojiFromTask(e.detail.id, e.detail.index)}
+            on:pickEmoji={(e) => openEmojiPickerAt(e.detail.id, e.detail.index)}
+          />
+        {:else}
+          <DiaryCard
+            entry={hit.entry}
+            today={todayIso()}
+            selected={diaryMenu?.id === hit.entry.id}
+            on:expand={handleDiaryExpand}
+            on:edit={(event) => openDiaryEntry(event.detail)}
+            on:context={openDiaryMenu}
+            on:openLink={openTaskLink}
+          />
+        {/if}
+      {/each}
+    {:else}
     {#each taskRows as row (row.key)}
       {#if row.kind === "label"}
         <button class="task-section-label" type="button" on:click|stopPropagation={() => toggleSection(row.sectionKey)}>
@@ -934,7 +1001,7 @@
       {/if}
     {/each}
 
-    {#if completedTasks.length}
+    {#if !$isSearching && completedTasks.length}
       <section class="completed-section">
         <button class="completed-toggle" type="button" on:click|stopPropagation={() => (showCompleted = !showCompleted)}>
           <ChevronDown class={!showCompleted ? "collapsed" : ""} size={17} />
@@ -962,8 +1029,9 @@
         {/if}
       </section>
     {/if}
+    {/if}
 
-    {#if incompleteTasks.length === 0 && completedTasks.length === 0}
+    {#if $isSearching ? $searchHits.length === 0 : incompleteTasks.length === 0 && completedTasks.length === 0}
       <div class="empty-state">
         <strong>{$isSearching
           ? "没有搜索结果"
@@ -978,6 +1046,17 @@
       </div>
     {/if}
   </section>
+
+  {#if diaryMenu && diaryMenuEntry}
+    <DiaryEntryMenu
+      x={diaryMenu.x}
+      y={diaryMenu.y}
+      entry={diaryMenuEntry}
+      today={todayIso()}
+      on:edit={(event) => openDiaryEntry(event.detail)}
+      on:close={() => (diaryMenu = null)}
+    />
+  {/if}
 
   {#if taskMenu && taskMenuTask}
     <ContextMenu x={taskMenu.x} y={taskMenu.y} minWidth={236} onClose={() => (taskMenu = null)}>
@@ -1082,7 +1161,9 @@
 
   {#if !isMyDayHistory}
     <section class="add-task-bar" on:click|stopPropagation>
-      <Plus size={24} />
+      <button class="composer-plus" type="button" title="用编辑器新建事项" aria-label="用编辑器新建事项" on:click|stopPropagation={openComposerEditor}>
+        <Plus size={24} />
+      </button>
       <div class="composer-main">
         <textarea
           bind:this={taskInput}

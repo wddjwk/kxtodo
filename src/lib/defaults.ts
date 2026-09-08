@@ -131,7 +131,11 @@ export const defaultSettings: Settings = {
     showCategoryBadges: true
   },
   diary: {
-    view: "list"
+    view: "list",
+    accent: "",
+    backgroundColor: "#f4f1ea",
+    backgroundImage: "",
+    backgroundOpacity: 0.28
   }
 };
 
@@ -263,7 +267,6 @@ export function emptyState(): AppState {
     schemaVersion,
     nodes: [...systemNodes, inbox],
     tasks: [],
-    diaries: [],
     selectedNodeId: inbox.id,
     backgrounds: {
       [inbox.id]: { ...defaultBackground }
@@ -581,11 +584,6 @@ export function normalizeState(raw: unknown): AppState {
     ? source.tasks.map((item) => normalizeTask(item, fallbackEntry.id)).filter((task): task is Task => task !== null && validNodeIds.has(task.nodeId))
     : [];
 
-  // 日记不挂在任何条目下，没有「节点必须存在」这层过滤
-  const diaries = Array.isArray(source?.diaries)
-    ? source.diaries.map(normalizeDiaryEntry).filter((entry): entry is DiaryEntry => entry !== null)
-    : [];
-
   const backgrounds: Record<string, ListBackground> = {};
   const rawBackgrounds = source?.backgrounds as Record<string, Partial<ListBackground>> | undefined;
   const legacyThemes = (source as { lists?: Array<{ id?: string; theme?: Partial<{ background: string; image: string; imageOpacity: number }> }> }).lists;
@@ -614,11 +612,20 @@ export function normalizeState(raw: unknown): AppState {
     schemaVersion,
     nodes: mergedNodes,
     tasks,
-    diaries,
     selectedNodeId,
     backgrounds,
     scheduler: normalizeSchedulerState(source?.scheduler)
   };
+}
+
+/**
+ * 规范化 diary.json（独立的第四个领域文件）。
+ * 日记不挂在任何条目下，所以没有「节点必须存在」那层过滤。
+ */
+export function normalizeDiaryEntries(raw: unknown): DiaryEntry[] {
+  const source = raw as { entries?: unknown } | undefined;
+  const list = Array.isArray(source?.entries) ? source?.entries : Array.isArray(raw) ? raw : [];
+  return list.map(normalizeDiaryEntry).filter((entry): entry is DiaryEntry => entry !== null);
 }
 
 export function normalizeSettings(raw: unknown): Settings {
@@ -776,7 +783,14 @@ export function normalizeSettings(raw: unknown): Settings {
           : defaultSettings.features.showCategoryBadges
     },
     diary: {
-      view: normalizeDiaryView(source?.diary?.view)
+      view: normalizeDiaryView(source?.diary?.view),
+      accent: normalizeHexColor(source?.diary?.accent ?? "", ""),
+      backgroundColor: normalizeHexColor(source?.diary?.backgroundColor, defaultSettings.diary.backgroundColor),
+      backgroundImage: typeof source?.diary?.backgroundImage === "string" ? source.diary.backgroundImage : "",
+      backgroundOpacity:
+        typeof source?.diary?.backgroundOpacity === "number" && Number.isFinite(source.diary.backgroundOpacity)
+          ? Math.min(1, Math.max(0, source.diary.backgroundOpacity))
+          : defaultSettings.diary.backgroundOpacity
     }
   };
 }

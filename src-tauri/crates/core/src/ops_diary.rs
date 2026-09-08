@@ -1,7 +1,7 @@
-//! diary domain: 日记条目的业务操作（GUI 与 CLI 共用同一条命令层）。
+//! diary domain: 日记的业务操作（GUI 与 CLI 共用同一条命令层）。
 //!
-//! 日记与 task 是平行的两类内容，但同住 `data.json`：同一个域事件、同一把文件锁、
-//! 同一个同步范围（「同步数据」），只是同步实体 kind 为 `diary`。
+//! 日记住在自己的 `diary.json` 里（第四个领域文件），于是写一篇日记既不抬高 data 域的
+//! revision，也不和任务写入抢同一把幂等台账。同步上它仍然搭「同步数据」的范围。
 
 use serde_json::{json, Map, Value};
 
@@ -12,7 +12,7 @@ use crate::core::{
 use crate::envelope::Meta;
 use crate::error::{CoreError, CoreResult};
 use crate::ids::gen_id;
-use crate::model::{DataFile, DiaryEntry, Tag};
+use crate::model::{DiaryEntry, DiaryFile, Tag};
 use crate::ops_task::{build_tag, parse_tag_input};
 use crate::repo::Domain;
 use crate::time::{now_iso, parse_date, today_local};
@@ -29,6 +29,8 @@ pub fn diary_dispatch(
         "list" => diary_list(inv, ctx, meta),
         "modify" => diary_modify(inv, ctx, meta),
         "remove" => diary_remove(inv, ctx, meta),
+        "import" => diary_import(inv, ctx, meta),
+        "export" => diary_export(inv, ctx, meta),
         other => Err(CoreError::validation(
             "UNKNOWN_ACTION",
             format!("未知 diary 动作 `{other}`"),
@@ -40,8 +42,8 @@ pub fn diary_dispatch(
 // helpers
 // ---------------------------------------------------------------------------
 
-pub fn find_diary<'a>(data: &'a DataFile, id: &str) -> Option<&'a DiaryEntry> {
-    data.diaries.iter().find(|entry| entry.id == id)
+pub fn find_diary<'a>(file: &'a DiaryFile, id: &str) -> Option<&'a DiaryEntry> {
+    file.entries.iter().find(|entry| entry.id == id)
 }
 
 fn not_found(id: &str) -> CoreError {
@@ -95,13 +97,28 @@ pub fn diary_view(entry: &DiaryEntry) -> Value {
 }
 
 /// 日记的稳定展示顺序：日期由近及远，同一天内按写作先后（早的在上）。
-fn sort_diaries(entries: &mut [DiaryEntry]) {
+pub fn sort_entries(entries: &mut [DiaryEntry]) {
     entries.sort_by(|a, b| {
         b.date
             .cmp(&a.date)
             .then_with(|| a.created_at.cmp(&b.created_at))
             .then_with(|| a.id.cmp(&b.id))
     });
+}
+
+/// 日期区间过滤（`from`/`to` 都是闭区间，None = 不限）。
+fn in_range(date: &str, from: Option<&str>, to: Option<&str>) -> bool {
+    if let Some(from) = from {
+        if date < from {
+            return false;
+        }
+    }
+    if let Some(to) = to {
+        if date > to {
+            return false;
+        }
+    }
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -122,7 +139,7 @@ fn diary_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult
     let tags = tags_param(params, "tags")?.unwrap_or_default();
 
     let mut created = Value::Null;
-    let (_file, outcome) = ctx.repo.write_data(
+    let (_file, outcome) = ctx.repo.write_diary(
         inv.controls.if_revision,
         inv.controls.idempotency_key.as_deref(),
         &inv.command,
@@ -142,13 +159,13 @@ fn diary_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult
                 extra: Map::new(),
             };
             let view = diary_view(&entry);
-            file.diaries.push(entry);
+            file.entries.push(entry);
             created = view.clone();
             Ok(idem_summary(&view))
         },
     )?;
-    apply_write_outcome(meta, Domain::Data, &outcome);
-    notify_host(ctx, Domain::Data, outcome.revision, vec![]);
+    apply_write_outcome(meta, Domain::Diary, &outcome);
+    notify_host(ctx, Domain::Diary, outcome.revision, vec![]);
     if outcome.replayed {
         return Ok(outcome.replay_summary.unwrap_or(created));
     }
@@ -157,54 +174,38 @@ fn diary_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult
 
 fn diary_get(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
     let id = required_str(&inv.params, "id")?;
-    let data = ctx.repo.load_data()?;
-    set_read_revision(meta, Domain::Data, data.meta.revision);
-    let entry = find_diary(&data, &id).ok_or_else(|| not_found(&id))?;
+    let file = ctx.repo.load_diary()?;
+    set_read_revision(meta, Domain::Diary, file.meta.revision);
+    let entry = find_diary(&file, &id).ok_or_else(|| not_found(&id))?;
     Ok(diary_view(entry))
 }
 
 fn diary_list(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
     let params = &inv.params;
-    let data = ctx.repo.load_data()?;
-    set_read_revision(meta, Domain::Data, data.meta.revision);
+    let file = ctx.repo.load_diary()?;
+    set_read_revision(meta, Domain::Diary, file.meta.revision);
     let date = param_str(params, "date").map(|raw| parse_date(&raw)).transpose()?;
     let from = param_str(params, "from").map(|raw| parse_date(&raw)).transpose()?;
     let to = param_str(params, "to").map(|raw| parse_date(&raw)).transpose()?;
-    let limit = params
-        .get("limit")
-        .and_then(Value::as_u64)
-        .map(|value| value as usize);
+    let limit = params.get("limit").and_then(Value::as_u64).map(|v| v as usize);
 
-    let mut entries: Vec<DiaryEntry> = data
-        .diaries
+    let mut entries: Vec<DiaryEntry> = file
+        .entries
         .iter()
         .filter(|entry| {
             if let Some(date) = &date {
-                if &entry.date != date {
-                    return false;
-                }
+                return entry.date == *date;
             }
-            if let Some(from) = &from {
-                if entry.date.as_str() < from.as_str() {
-                    return false;
-                }
-            }
-            if let Some(to) = &to {
-                if entry.date.as_str() > to.as_str() {
-                    return false;
-                }
-            }
-            true
+            in_range(&entry.date, from.as_deref(), to.as_deref())
         })
         .cloned()
         .collect();
-    sort_diaries(&mut entries);
+    sort_entries(&mut entries);
     if let Some(limit) = limit {
         entries.truncate(limit);
     }
-    let total = data.diaries.len();
     Ok(json!({
-        "total": total,
+        "total": file.entries.len(),
         "returned": entries.len(),
         "items": entries.iter().map(diary_view).collect::<Vec<_>>(),
     }))
@@ -221,13 +222,13 @@ fn diary_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRes
     let tags = tags_param(params, "replaceTags")?;
 
     let mut updated = Value::Null;
-    let (_file, outcome) = ctx.repo.write_data(
+    let (_file, outcome) = ctx.repo.write_diary(
         inv.controls.if_revision,
         inv.controls.idempotency_key.as_deref(),
         &inv.command,
         |file| {
             let entry = file
-                .diaries
+                .entries
                 .iter_mut()
                 .find(|entry| entry.id == id)
                 .ok_or_else(|| not_found(&id))?;
@@ -256,8 +257,8 @@ fn diary_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRes
             Ok(idem_summary(&view))
         },
     )?;
-    apply_write_outcome(meta, Domain::Data, &outcome);
-    notify_host(ctx, Domain::Data, outcome.revision, vec![id.clone()]);
+    apply_write_outcome(meta, Domain::Diary, &outcome);
+    notify_host(ctx, Domain::Diary, outcome.revision, vec![id.clone()]);
     if outcome.replayed {
         return Ok(outcome.replay_summary.unwrap_or(updated));
     }
@@ -266,8 +267,8 @@ fn diary_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRes
 
 fn diary_remove(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
     let id = required_str(&inv.params, "id")?;
-    let data = ctx.repo.load_data()?;
-    let entry = find_diary(&data, &id).ok_or_else(|| not_found(&id))?;
+    let file = ctx.repo.load_diary()?;
+    let entry = find_diary(&file, &id).ok_or_else(|| not_found(&id))?;
     let plan = json!({
         "type": "diary",
         "id": id,
@@ -280,26 +281,216 @@ fn diary_remove(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRes
         plan.clone(),
     )?;
     if inv.controls.dry_run {
-        set_read_revision(meta, Domain::Data, data.meta.revision);
+        set_read_revision(meta, Domain::Diary, file.meta.revision);
         return Ok(json!({ "dryRun": true, "action": "remove", "plan": plan }));
     }
-    let (_file, outcome) = ctx.repo.write_data(
+    let (_file, outcome) = ctx.repo.write_diary(
         inv.controls.if_revision,
         inv.controls.idempotency_key.as_deref(),
         &inv.command,
         |file| {
             let index = file
-                .diaries
+                .entries
                 .iter()
                 .position(|entry| entry.id == id)
                 .ok_or_else(|| not_found(&id))?;
-            file.diaries.remove(index);
+            file.entries.remove(index);
             // 删除必须显式传播：服务器只见密文，没有墓碑对端会把它推回来。
             file.meta.record_tombstone(&id, "diary", &now_iso());
-            Ok(json!({ "removed": plan.clone() }))
+            Ok(json!({ "removed": plan }))
         },
     )?;
-    apply_write_outcome(meta, Domain::Data, &outcome);
-    notify_host(ctx, Domain::Data, outcome.revision, vec![id.clone()]);
+    apply_write_outcome(meta, Domain::Diary, &outcome);
+    notify_host(ctx, Domain::Diary, outcome.revision, vec![id.clone()]);
     Ok(json!({ "removed": plan, "revision": outcome.revision }))
+}
+
+/// 导入压缩包解析出来的日记（前端/CLI 先解析，写入永远过这一条命令层）。
+///
+/// **同一天已有日记不算冲突**：日记本来就允许一天多篇，导入进来的直接追加成另一篇，
+/// 既不合并正文也不去重——用户的两篇就是两篇。
+fn diary_import(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
+    let params = &inv.params;
+    let raw = params
+        .get("entries")
+        .and_then(Value::as_array)
+        .ok_or_else(|| CoreError::validation("MISSING_PARAM", "缺少 entries 数组"))?;
+
+    // 先在事务外把每一条都校验一遍：一条坏数据不该让整个导入半途而废
+    let mut drafts: Vec<(String, String, String, String, String, Vec<Tag>, String)> = Vec::new();
+    let mut skipped = 0usize;
+    for item in raw {
+        let date = match item.get("date").and_then(Value::as_str) {
+            Some(raw) => match parse_date(raw) {
+                Ok(date) => date,
+                Err(_) => {
+                    skipped += 1;
+                    continue;
+                }
+            },
+            None => {
+                skipped += 1;
+                continue;
+            }
+        };
+        let title = item
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .chars()
+            .take(120)
+            .collect::<String>();
+        let markdown = item
+            .get("markdown")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if ensure_has_content(&title, &markdown).is_err() {
+            skipped += 1;
+            continue;
+        }
+        let mood = item
+            .get("mood")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let weather = item
+            .get("weather")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let mut tags = Vec::new();
+        for raw_tag in item
+            .get("tags")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+        {
+            if let Ok(tag) = parse_tag_input(raw_tag.as_str().unwrap_or_default()) {
+                tags.push(build_tag(&tag));
+            }
+        }
+        let created = item
+            .get("createdAt")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(now_iso);
+        drafts.push((date, title, markdown, mood, weather, tags, created));
+    }
+    if drafts.is_empty() && !raw.is_empty() {
+        return Err(CoreError::validation(
+            "DIARY_IMPORT_EMPTY",
+            "压缩包里没有任何可导入的日记（每篇至少要有一个合法日期，且标题与正文不同时为空）",
+        ));
+    }
+
+    let count = drafts.len();
+    // 导入是追加而不是合并：同一个包跑两遍就会得到两份，所以要走确认门
+    //（GUI 桥接默认 yes=true，不受影响）。
+    require_confirmation(
+        &inv.controls,
+        format!("导入 {count} 篇日记（跳过 {skipped} 条无效记录）；同一天已有日记会并存为多篇"),
+        json!({ "type": "diary-import", "imported": count, "skipped": skipped }),
+    )?;
+    if inv.controls.dry_run {
+        let file = ctx.repo.load_diary()?;
+        set_read_revision(meta, Domain::Diary, file.meta.revision);
+        return Ok(json!({
+            "dryRun": true,
+            "action": "import",
+            "imported": count,
+            "skipped": skipped,
+        }));
+    }
+
+    let mut imported_ids: Vec<String> = Vec::new();
+    let (_file, outcome) = ctx.repo.write_diary(
+        inv.controls.if_revision,
+        inv.controls.idempotency_key.as_deref(),
+        &inv.command,
+        |file| {
+            for (date, title, markdown, mood, weather, tags, created_at) in drafts {
+                let id = gen_id("diary");
+                file.entries.push(DiaryEntry {
+                    id: id.clone(),
+                    date,
+                    title,
+                    markdown,
+                    mood,
+                    weather,
+                    tags,
+                    expanded: None,
+                    updated_at: Some(created_at.clone()),
+                    created_at,
+                    extra: Map::new(),
+                });
+                imported_ids.push(id);
+            }
+            sort_entries(&mut file.entries);
+            Ok(json!({ "imported": imported_ids.len() }))
+        },
+    )?;
+    apply_write_outcome(meta, Domain::Diary, &outcome);
+    notify_host(ctx, Domain::Diary, outcome.revision, imported_ids.clone());
+    Ok(json!({
+        "imported": if outcome.replayed { 0 } else { count },
+        "skipped": skipped,
+        "ids": imported_ids,
+        "revision": outcome.revision,
+    }))
+}
+
+/// 导出成压缩包：`年/月/YYYYMMDD[_序号][_标题].md`，元数据写进 YAML front-matter。
+/// `--out` 给路径就直接落盘（CLI/桌面），不给就返回 base64（移动端交给分享桥）。
+fn diary_export(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
+    let params = &inv.params;
+    let file = ctx.repo.load_diary()?;
+    set_read_revision(meta, Domain::Diary, file.meta.revision);
+    let from = param_str(params, "from").map(|raw| parse_date(&raw)).transpose()?;
+    let to = param_str(params, "to").map(|raw| parse_date(&raw)).transpose()?;
+
+    let entries: Vec<&DiaryEntry> = {
+        let mut picked: Vec<&DiaryEntry> = file
+            .entries
+            .iter()
+            .filter(|entry| in_range(&entry.date, from.as_deref(), to.as_deref()))
+            .collect();
+        // 导出顺序 = 阅读顺序：日期由远及近，同一天内按写作先后
+        picked.sort_by(|a, b| {
+            a.date
+                .cmp(&b.date)
+                .then_with(|| a.created_at.cmp(&b.created_at))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        picked
+    };
+    let archive = crate::diary_archive::build_zip(&entries)?;
+    let name = crate::diary_archive::archive_name(from.as_deref(), to.as_deref());
+
+    if let Some(path) = param_str(params, "out") {
+        let target = std::path::Path::new(&path);
+        if let Some(parent) = target.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        std::fs::write(target, &archive)
+            .map_err(|error| CoreError::io(format!("无法写入 {}：{error}", target.display())))?;
+        return Ok(json!({
+            "path": target.display().to_string(),
+            "entries": entries.len(),
+            "bytes": archive.len(),
+            "name": name,
+        }));
+    }
+    use base64::Engine as _;
+    Ok(json!({
+        "name": name,
+        "entries": entries.len(),
+        "bytes": archive.len(),
+        "base64": base64::engine::general_purpose::STANDARD.encode(&archive),
+    }))
 }

@@ -21,6 +21,7 @@
   import IconGlyph from "./IconGlyph.svelte";
   import IconPicker from "./IconPicker.svelte";
   import ListTree from "./ListTree.svelte";
+  import SearchResults from "./SearchResults.svelte";
   import ContextMenu from "./menu/ContextMenu.svelte";
   import MenuItem from "./menu/MenuItem.svelte";
   import MenuSeparator from "./menu/MenuSeparator.svelte";
@@ -31,6 +32,7 @@
   const dispatch = createEventDispatcher<{ suppressClose: void }>();
 
   let searchInput: HTMLInputElement;
+  let searchResultsRef: SearchResults;
   let sidebarWidth = 320;
   let renamingId: string | null = null;
   let renameDraft = "";
@@ -59,6 +61,7 @@
     treeMenu = null;
     emptyAreaMenu = null;
     iconPickerListId = null;
+    searchResultsRef?.closeOverlays();
   }
 
   export function shouldSuppressClose(): boolean {
@@ -320,7 +323,7 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<aside class="sidebar" style={`width: ${sidebarWidth}px; min-width: ${sidebarWidth}px;`} on:click|stopPropagation>
+<aside class="sidebar" class:searching={$isMobile && $isSearching} style={`width: ${sidebarWidth}px; min-width: ${sidebarWidth}px;`} on:click|stopPropagation>
   <button class="profile-card" type="button" on:click|stopPropagation={() => { showSettings.update((v) => !v); }}>
     <span class="avatar" style={avStyle}>{$appSettings.profile.avatar ? "" : avInitial}</span>
     <span class="profile-text">
@@ -333,6 +336,10 @@
     <Search size={19} />
     <input bind:this={searchInput} bind:value={$searchQuery} placeholder="搜索" />
   </label>
+
+  {#if $isMobile && $isSearching}
+    <SearchResults bind:this={searchResultsRef} />
+  {/if}
 
   <nav class="system-nav">
     {#each systemNavNodes as node (node.id)}

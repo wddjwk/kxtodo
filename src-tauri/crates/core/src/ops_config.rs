@@ -19,6 +19,12 @@ pub fn is_shared_settings_path(path: &str) -> bool {
             | "appearance.uiColors"
             | "updates.autoCheck"
             | "features.showCategoryBadges"
+            // 日记的主题色与背景是外观，跟条目背景/uiColors 一个待遇；
+            // diary.view 刻意不在这里——每台设备各看各的视图
+            | "diary.accent"
+            | "diary.backgroundColor"
+            | "diary.backgroundImage"
+            | "diary.backgroundOpacity"
     )
 }
 
@@ -293,6 +299,30 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         description: "日记视图（本机偏好，不跨设备同步）",
         is_map: false,
     },
+    FieldMeta {
+        path: "diary.accent",
+        kind: "color",
+        description: "日记界面主题色（空串 = 默认日记色）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "diary.backgroundColor",
+        kind: "color",
+        description: "日记界面背景色",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "diary.backgroundImage",
+        kind: "string",
+        description: "日记界面背景图（img:<文件名> 或 http(s)/data URL；空串 = 无图）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "diary.backgroundOpacity",
+        kind: "number",
+        description: "日记界面背景图透明度（0-1）",
+        is_map: false,
+    },
 ];
 
 pub fn field_meta(path: &str) -> Option<&'static FieldMeta> {
@@ -376,6 +406,10 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "updates.autoCheck" => json!(settings.updates.auto_check),
         "features.showCategoryBadges" => json!(settings.features.show_category_badges),
         "diary.view" => json!(settings.diary.view.as_str()),
+        "diary.accent" => json!(settings.diary.accent),
+        "diary.backgroundColor" => json!(settings.diary.background_color),
+        "diary.backgroundImage" => json!(settings.diary.background_image),
+        "diary.backgroundOpacity" => json!(settings.diary.background_opacity),
         _ => return Err(unknown_field(path)),
     };
     Ok(value)
@@ -814,6 +848,26 @@ pub fn set_value(
             settings.diary.view = DiaryView::parse(&raw)
                 .ok_or_else(|| invalid_value(path, "应为 list/calendar/group"))?;
         }
+        "diary.accent" => {
+            // 空串 = 恢复默认日记色，所以不能直接走 expect_color
+            let raw = expect_string(path, &value)?.trim().to_string();
+            if !raw.is_empty() && !is_hex_color(&raw) {
+                return Err(invalid_value(path, "应为 #rrggbb 颜色或空串"));
+            }
+            settings.diary.accent = raw;
+        }
+        "diary.backgroundColor" => {
+            settings.diary.background_color = expect_color(path, &value)?;
+        }
+        "diary.backgroundImage" => {
+            settings.diary.background_image = expect_string(path, &value)?.trim().to_string();
+        }
+        "diary.backgroundOpacity" => {
+            let raw = value
+                .as_f64()
+                .ok_or_else(|| invalid_value(path, "应为 0-1 的数字"))?;
+            settings.diary.background_opacity = raw.clamp(0.0, 1.0);
+        }
         _ => return Err(unknown_field(path)),
     }
     outcome.value = get_typed(settings, path)?;
@@ -980,6 +1034,16 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
             target.features.show_category_badges = defaults.features.show_category_badges
         }
         "diary.view" => target.diary.view = defaults.diary.view,
+        "diary.accent" => target.diary.accent = defaults.diary.accent.clone(),
+        "diary.backgroundColor" => {
+            target.diary.background_color = defaults.diary.background_color.clone()
+        }
+        "diary.backgroundImage" => {
+            target.diary.background_image = defaults.diary.background_image.clone()
+        }
+        "diary.backgroundOpacity" => {
+            target.diary.background_opacity = defaults.diary.background_opacity
+        }
         _ => return Err(unknown_field(path)),
     }
     Ok(())

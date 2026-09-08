@@ -23,7 +23,7 @@ KXToDo v9 提供脚本化 CLI。本 SKILL 说明**何时调用、按什么步骤
 - `category`：分类文件夹，可嵌套，位于根级或另一 category 下。
 - `entry`：左栏条目，位于根级或 category 下。
 - `item`：条目内的具体任务（Markdown 正文 + 状态），只能归属 entry。
-- `diary`：日记（按归属日期归档的 Markdown 记录），**不属于任何 entry/category**，一天可以有多篇。
+- `diary`：日记（按归属日期归档的 Markdown 记录），住自己的 `diary.json`，**不属于任何 entry/category**，一天可以有多篇。
 - `system`：我的一天/计划内/收藏等内置视图，只读。
 - ID 全部不透明，**不得拼造或按前缀推断类型**；先通过 tree/list/find/get 获取。
 
@@ -41,13 +41,16 @@ KXToDo v9 提供脚本化 CLI。本 SKILL 说明**何时调用、按什么步骤
 
 ## 日记
 
-- **什么时候用 diary 而不是 task**：用户要「记一笔」「写今天的日记」「补记某天发生的事」→ `diary`；要「待办/提醒/勾选完成」→ `task`。日记没有完成状态、没有归属条目，也不出现在任何列表视图里。
-- 写：`diary add --markdown "..."`（`--date` 缺省为**本地今天**），可带 `--title`、`--mood <emoji>`、`--weather <emoji>`、`--tag "color:text"`（可重复）。长正文用 `--markdown-file <path|->`。**标题与正文不能同时为空**（`DIARY_EMPTY`）。
+- **什么时候用 diary 而不是 task**：用户要「记一笔」「写今天的日记」「补记某天发生的事」→ `diary`；要「待办/提醒/勾选完成」→ `task`。日记没有完成状态、不属于任何 entry/category，也不出现在任何列表视图或角标计数里。
+- 日记住在**自己的 `diary.json`**（第四个领域文件，独立的 revision 与幂等台账）；写一篇日记不会抬高 data 域的 revision。
+- 写：`diary add --markdown "..."`（`--date` 缺省为**本地今天**），可带 `--title`、`--mood <emoji>`、`--weather <emoji>`、`--tag "color:text"`（可重复，只给 `color` 就是无文字标签）。长正文用 `--markdown-file <path|->`。**标题与正文不能同时为空**（`DIARY_EMPTY`）。
 - **`--date` 是「归属日期」不是创建时间**：补写昨天的日记就传昨天的日期，`createdAt` 仍是现在。同一天可以有多篇，`diary list` 按日期由近及远、同一天内按写作先后返回。
 - 读：`diary list [--date <某天> | --from <起> --to <止>] [--limit N]`（`total` 是全部条数，`returned` 是这一页）；单篇 `diary get --id`。
 - 改：`diary modify --id ... --date/--title/--markdown/--mood/--weather`，字段缺省 = 不变，**心情/天气/标题传空串 = 清除**；标签用 `--replace-tags` 整体替换。
 - 删：`diary remove --id ... --yes`（high-risk-write，会写同步墓碑，删除传播到其它设备）。
-- 视图偏好 `config get|set diary.view list|calendar|group` 是**本机 UI 状态**，不跨设备同步，也不影响任何命令的输出。
+- **导出**：`diary export --out <path.zip> [--from <起> --to <止>]`（不给范围就是一键全量）。压缩包是给人读的：`年/月/YYYYMMDD[_序号][_标题].md`，一天多篇才带序号，没标题就只用日期；每篇的 `title/date/time/tags/mood/weather/createdAt` 写在 YAML front-matter 里，解压出来任何编辑器都能直接看。
+- **导入**：`diary import --zip <path> --yes`（bulk 写，要确认；`--dry-run` 先看会进多少条）。解析很宽容：没有 front-matter 的手写 md 也能进（日期退回文件名 `YYYYMMDD` 或目录 `年/月`），非 UTF-8 按 lossy 解码，日期非法或标题正文全空的条目跳过并计入 `skipped`。**同一天已有日记不算冲突**：导入进来的直接追加成另一篇，不合并正文也不去重——所以同一个包导两遍就会得到两份，别重试。
+- 视图偏好 `config get|set diary.view list|calendar|group` 是**本机 UI 状态**，不跨设备同步；日记的主题色与背景（`diary.accent` / `diary.backgroundColor` / `diary.backgroundImage` / `diary.backgroundOpacity`）**是**同步的（外观该多端一致）。这几项都不影响任何命令的输出。
 
 ## 定时任务工作流
 

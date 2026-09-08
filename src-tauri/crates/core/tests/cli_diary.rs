@@ -131,9 +131,10 @@ fn remove_is_gated_by_yes_and_writes_a_sync_tombstone() {
     assert_eq!(removed["removed"]["diaryIds"][0], Value::String(id.clone()));
     assert_eq!(env.ok(&["diary", "list"])["total"], 0);
 
-    // 删除必须显式传播：服务器只见密文，没有墓碑对端会把它推回来
-    let data = env.read_file("data.json");
-    let tombstones = data["_meta"]["tombstones"].as_array().unwrap();
+    // 删除必须显式传播：服务器只见密文，没有墓碑对端会把它推回来。
+    // 墓碑记在 diary 域自己的 _meta 里（diary.json），不在 data.json。
+    let diary = env.read_file("diary.json");
+    let tombstones = diary["_meta"]["tombstones"].as_array().unwrap();
     assert!(
         tombstones
             .iter()
@@ -195,4 +196,59 @@ fn diary_view_preference_is_a_local_setting() {
 
     env.ok(&["config", "reset", "diary.view", "--yes"]);
     assert_eq!(env.ok(&["config", "get", "diary.view"])["value"], "list");
+}
+
+#[test]
+fn export_then_import_round_trips_and_same_day_just_adds_another_entry() {
+    let env = TestEnv::fresh();
+    add(&env, &["--date", "2026-09-08", "--title", "早上的想法", "--markdown", "早上的正文", "--mood", "🙂", "--tag", "blue:工作"]);
+    add(&env, &["--date", "2026-09-08", "--markdown", "没标题的第二篇"]);
+    add(&env, &["--date", "2026-01-05", "--title", "跨年", "--markdown", "跨年的正文", "--weather", "☀️"]);
+
+    let zip = env.path().join("export.zip");
+    let zip_path = zip.to_string_lossy().to_string();
+    let exported = env.ok(&["diary", "export", "--out", &zip_path]);
+    assert_eq!(exported["entries"], 3);
+    assert!(zip.is_file(), "压缩包没落盘");
+
+    // 日期范围导出：只要 9 月那两篇
+    let partial = env.path().join("sept.zip");
+    let partial_path = partial.to_string_lossy().to_string();
+    let ranged = env.ok(&[
+        "diary", "export", "--out", &partial_path,
+        "--from", "2026-09-01", "--to", "2026-09-30",
+    ]);
+    assert_eq!(ranged["entries"], 2);
+
+    // 导进一个空数据目录：三篇都在，元数据一个不少
+    let target = TestEnv::fresh();
+    let target_zip = target.path().join("export.zip");
+    std::fs::copy(&zip, &target_zip).unwrap();
+    let target_path = target_zip.to_string_lossy().to_string();
+    target.err(&["diary", "import", "--zip", &target_path], 10);
+    let imported = target.ok(&["diary", "import", "--zip", &target_path, "--yes"]);
+    assert_eq!(imported["imported"], 3);
+    assert_eq!(imported["skipped"], 0);
+
+    let listed = target.ok(&["diary", "list"]);
+    assert_eq!(listed["total"], 3);
+    let items = listed["items"].as_array().unwrap();
+    let morning = items
+        .iter()
+        .find(|item| item["title"] == "早上的想法")
+        .expect("带标题的那篇要能找回来");
+    assert_eq!(morning["date"], "2026-09-08");
+    assert_eq!(morning["markdown"], "早上的正文");
+    assert_eq!(morning["mood"], "🙂");
+    assert_eq!(morning["tags"][0]["color"], "blue");
+    assert_eq!(morning["tags"][0]["text"], "工作");
+    let new_year = items.iter().find(|item| item["title"] == "跨年").unwrap();
+    assert_eq!(new_year["weather"], "☀️");
+
+    // 同一天已有日记不是冲突：再导一遍就是再多三篇，不合并正文也不去重
+    let again = target.ok(&["diary", "import", "--zip", &target_path, "--yes"]);
+    assert_eq!(again["imported"], 3);
+    assert_eq!(target.ok(&["diary", "list"])["total"], 6);
+    let same_day = target.ok(&["diary", "list", "--date", "2026-09-08"]);
+    assert_eq!(same_day["returned"], 4, "9 月 8 日现在应该有 4 篇");
 }

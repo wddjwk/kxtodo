@@ -7,15 +7,19 @@
 import { get } from "svelte/store";
 import type { AppNode, AppState, CardStyle, DiaryEntry, ScheduledTask, SchedulerState, Settings, SyncMode, Tag, TagColor, Task } from "./types";
 import {
-  appState, appSettings, commit, commitScheduler, commitSettings,
-  coreMode, createDiaryId, createTaskId, editBaseUpdatedAt, markEditStart, clearEditBase, rebaseEditBase,
+  appState, appSettings, commit, commitDiary, commitScheduler, commitSettings,
+  coreMode, createDiaryId, createTaskId, diaryEntries, editBaseUpdatedAt, markEditStart, clearEditBase, rebaseEditBase,
   manualSyncAt, refreshFromCore, scheduleEntries, syncConnection, showToast, todayIso
 } from "./stores";
-import { coreDispatch, CoreCommandError } from "./backend";
+import {
+  coreDispatch, CoreCommandError, exportDiaryZip, importDiaryZipFromDialog, importDiaryZipFromFile,
+  type DiaryArchiveResult, type DiaryExportRange
+} from "./backend";
 import {
   createCategoryNode, createEntryNode, defaultBackground, createScheduledTask, DEFAULT_ENTRY_ICON
 } from "./defaults";
 import { nodeAndDescendantIds } from "./nodes";
+import { isMobilePlatform } from "./capabilities";
 import { uiToPatch, uiToSpec, type ScheduleEntryV9 } from "./scheduleAdapter";
 
 function clone<T>(value: T): T {
@@ -677,7 +681,11 @@ function diaryTagParams(tags: Tag[]): string[] {
 }
 
 function findDiary(id: string): DiaryEntry | undefined {
-  return state().diaries.find((entry) => entry.id === id);
+  return get(diaryEntries).find((entry) => entry.id === id);
+}
+
+function diaries(): DiaryEntry[] {
+  return get(diaryEntries);
 }
 
 function applyDiaryChanges(entry: DiaryEntry, changes: DiaryChanges): DiaryEntry {
@@ -719,7 +727,7 @@ export async function addDiaryEntry(draft: DiaryDraft): Promise<DiaryEntry | nul
       updatedAt: createdAt
     };
     // 本地即时生效（Domain 事件会兜底一致性）
-    appState.update((s) => ({ ...s, diaries: [...s.diaries, entry] }));
+    diaryEntries.update((list) => [...list, entry]);
     return entry;
   }
   const entry: DiaryEntry = {
@@ -733,12 +741,14 @@ export async function addDiaryEntry(draft: DiaryDraft): Promise<DiaryEntry | nul
     createdAt,
     updatedAt: createdAt
   };
-  commit({ ...state(), diaries: [...state().diaries, entry] });
+  commitDiary([...diaries(), entry]);
   return entry;
 }
 
 export async function updateDiaryEntry(id: string, changes: DiaryChanges): Promise<boolean> {
   if (!findDiary(id)) return false;
+  const patch = (list: DiaryEntry[]): DiaryEntry[] =>
+    list.map((entry) => (entry.id === id ? applyDiaryChanges(entry, changes) : entry));
   if (coreMode) {
     const params: Record<string, unknown> = { id };
     if (changes.date !== undefined) params.date = changes.date;
@@ -753,20 +763,15 @@ export async function updateDiaryEntry(id: string, changes: DiaryChanges): Promi
       await report(error, "日记保存失败");
       return false;
     }
-    appState.update((s) => ({
-      ...s,
-      diaries: s.diaries.map((entry) => (entry.id === id ? applyDiaryChanges(entry, changes) : entry))
-    }));
+    diaryEntries.update(patch);
     return true;
   }
-  commit({
-    ...state(),
-    diaries: state().diaries.map((entry) => (entry.id === id ? applyDiaryChanges(entry, changes) : entry))
-  });
+  commitDiary(patch(diaries()));
   return true;
 }
 
 export async function deleteDiaryEntry(id: string): Promise<void> {
+  const keep = (list: DiaryEntry[]): DiaryEntry[] => list.filter((entry) => entry.id !== id);
   if (coreMode) {
     try {
       await coreDispatch("diary.remove", { id });
@@ -774,18 +779,15 @@ export async function deleteDiaryEntry(id: string): Promise<void> {
       await report(error, "日记删除失败");
       return;
     }
-    appState.update((s) => ({ ...s, diaries: s.diaries.filter((entry) => entry.id !== id) }));
+    diaryEntries.update(keep);
     return;
   }
-  commit({ ...state(), diaries: state().diaries.filter((entry) => entry.id !== id) });
+  commitDiary(keep(diaries()));
 }
 
 /** 展开/收起：本机 UI 状态，core 侧不触碰 updatedAt（不该被推到别的设备）。 */
 export async function setDiaryUi(id: string, ui: { expanded?: boolean }): Promise<void> {
-  appState.update((s) => ({
-    ...s,
-    diaries: s.diaries.map((entry) => (entry.id === id ? { ...entry, ...ui } : entry))
-  }));
+  diaryEntries.update((list) => list.map((entry) => (entry.id === id ? { ...entry, ...ui } : entry)));
   if (coreMode) {
     try {
       await coreDispatch("gui.set-diary-ui", { id, ...ui });
@@ -794,7 +796,57 @@ export async function setDiaryUi(id: string, ui: { expanded?: boolean }): Promis
     }
     return;
   }
-  commit(state());
+  commitDiary(diaries());
+}
+
+/** 导出压缩包。不给范围就是一键全量；返回导出的篇数（0 = 用户取消或没有内容）。 */
+export async function exportDiaryArchive(range: DiaryExportRange = {}): Promise<number> {
+  try {
+    const count = await exportDiaryZip(range);
+    if (count > 0) {
+      showToast(`已导出 ${count} 篇日记`);
+    }
+    return count;
+  } catch (error) {
+    await report(error, "日记导出失败");
+    return 0;
+  }
+}
+
+/** 桌面：原生对话框选包导入。返回 null 表示用户取消。 */
+export async function importDiaryArchive(): Promise<boolean> {
+  try {
+    const result = await importDiaryZipFromDialog();
+    if (!result) return false;
+    await afterDiaryImport(result);
+    return true;
+  } catch (error) {
+    await report(error, "日记导入失败");
+    return false;
+  }
+}
+
+/** 移动端 / 浏览器：隐藏 file input 拿到的 File 走这条。 */
+export async function importDiaryArchiveFile(file: File): Promise<boolean> {
+  try {
+    await afterDiaryImport(await importDiaryZipFromFile(file));
+    return true;
+  } catch (error) {
+    await report(error, "日记导入失败");
+    return false;
+  }
+}
+
+async function afterDiaryImport(result: DiaryArchiveResult): Promise<void> {
+  const imported = result.imported ?? 0;
+  const skipped = result.skipped ?? 0;
+  // core 已经写过盘并发过域事件，这里兜底回刷一次，免得面板停在旧数据上
+  await refreshFromCore(["diary"]);
+  showToast(
+    skipped > 0
+      ? `已导入 ${imported} 篇日记，跳过 ${skipped} 条无效记录`
+      : `已导入 ${imported} 篇日记`
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1325,8 +1377,9 @@ export async function syncNow(options: { silent?: boolean } = {}): Promise<boole
     const { pulled, pushed, conflicts, imagesPulled, imagesPushed, peers } = result;
     const up = pushed + (imagesPushed ?? 0);
     const down = pulled + (imagesPulled ?? 0);
-    // P2P 一轮会跟多台设备各对账一次：把名单亮出来，「同步成功但没同步」就藏不住了
-    const withPeers = peers && peers.length > 1 ? `（${peers.join("、")}）` : "";
+    // P2P 一轮会跟多台设备各对账一次：把名单亮出来，「同步成功但没同步」就藏不住了。
+    // 移动端不带名单——手机上一条 toast 就那么宽，设备名会把真正的数字挤没。
+    const withPeers = !isMobilePlatform && peers && peers.length > 1 ? `（${peers.join("、")}）` : "";
     showToast(
       conflicts > 0
         ? `同步完成 ↑${up} ↓${down}${withPeers}，冲突 ${conflicts}（下次同步重试）`

@@ -1,12 +1,13 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { caps } from "./capabilities";
-import { defaultSettings, emptySchedulerState, emptyState, normalizeSchedulerState, normalizeSettings, normalizeState } from "./defaults";
-import type { AppNotification, AppState, SchedulerRuntimePaths, SchedulerState, Settings } from "./types";
+import { defaultSettings, emptySchedulerState, emptyState, normalizeDiaryEntries, normalizeSchedulerState, normalizeSettings, normalizeState } from "./defaults";
+import type { AppNotification, AppState, DiaryEntry, SchedulerRuntimePaths, SchedulerState, Settings } from "./types";
 
 const stateKey = "todo-note-state-v3";
 const settingsKey = "todo-note-settings-v3";
 const schedulerKey = "todo-note-scheduler-v8";
+const diaryKey = "todo-note-diary-v1";
 
 export const isTauriRuntime = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -52,6 +53,14 @@ export async function loadScheduler(): Promise<SchedulerState> {
 
 export async function saveScheduler(scheduler: SchedulerState): Promise<void> {
   localStorage.setItem(schedulerKey, JSON.stringify(scheduler));
+}
+
+export async function loadDiary(): Promise<DiaryEntry[]> {
+  return normalizeDiaryEntries(readLocal(diaryKey, { entries: [] }));
+}
+
+export async function saveDiary(entries: DiaryEntry[]): Promise<void> {
+  localStorage.setItem(diaryKey, JSON.stringify({ entries }));
 }
 
 export async function resolveExecutorPaths(): Promise<SchedulerRuntimePaths> {
@@ -119,6 +128,98 @@ export async function exportData(payload: unknown, defaultName: string): Promise
   link.download = defaultName;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+export type DiaryArchiveResult = { imported?: number; skipped?: number; entries?: number; path?: string; name?: string };
+
+/** 日记压缩包命令返回的是 core envelope，失败时是序列化后的错误串——与 coreDispatch 同一套解包。 */
+async function invokeDiaryArchive(command: string, args: Record<string, unknown>): Promise<DiaryArchiveResult> {
+  try {
+    const envelope = await invoke<CoreEnvelope<DiaryArchiveResult>>(command, args);
+    return envelope.data;
+  } catch (error) {
+    if (typeof error === "string") {
+      try {
+        const envelope = JSON.parse(error) as CoreEnvelope;
+        if (envelope.error) {
+          throw new Error(envelope.error.message);
+        }
+      } catch (parseError) {
+        if (parseError instanceof Error && parseError.message !== error) {
+          throw parseError;
+        }
+      }
+    }
+    throw new Error(String(error));
+  }
+}
+
+export type DiaryExportRange = { from?: string; to?: string };
+
+/**
+ * 导出日记压缩包，返回导出的篇数（0 = 用户取消）。
+ * 桌面走「另存为」对话框；移动端 dialog 的 save() 只给 content:// URI（Rust 写不了），
+ * 所以不传 path，让 Rust 落进应用缓存目录，再交给 Kotlin 分享桥拉起系统分享面板。
+ */
+export async function exportDiaryZip(range: DiaryExportRange): Promise<number> {
+  if (!isTauriRuntime) {
+    throw new Error("浏览器预览不支持导出日记压缩包");
+  }
+  const from = range.from ?? null;
+  const to = range.to ?? null;
+  if (caps.nativeFileDialogs) {
+    const filePath = await save({
+      defaultPath: "kxtodo-diary.zip",
+      filters: [{ name: "日记压缩包", extensions: ["zip"] }]
+    });
+    if (!filePath) {
+      return 0;
+    }
+    const result = await invokeDiaryArchive("diary_export_zip", { path: filePath, from, to });
+    return result.entries ?? 0;
+  }
+  const result = await invokeDiaryArchive("diary_export_zip", { path: null, from, to });
+  const bridge = window.kxtodoAndroid;
+  if (!bridge?.shareFile) {
+    throw new Error("当前 APK 不支持分享压缩包");
+  }
+  if (!result.path) {
+    throw new Error("导出没有产出文件");
+  }
+  const error = bridge.shareFile(result.path, "application/zip");
+  if (error) {
+    throw new Error(error);
+  }
+  return result.entries ?? 0;
+}
+
+/** 桌面：原生「打开」对话框选一个 zip 导入。返回 null 表示用户取消。 */
+export async function importDiaryZipFromDialog(): Promise<DiaryArchiveResult | null> {
+  if (!isTauriRuntime) {
+    throw new Error("浏览器预览不支持导入日记压缩包");
+  }
+  const picked = await open({
+    multiple: false,
+    directory: false,
+    filters: [{ name: "日记压缩包", extensions: ["zip"] }]
+  });
+  if (!picked || typeof picked !== "string") {
+    return null;
+  }
+  return invokeDiaryArchive("diary_import_zip", { path: picked, base64: null });
+}
+
+/** 移动端：无原生对话框，用隐藏 file input 读字节后以 base64 交给 Rust。 */
+export async function importDiaryZipFromFile(file: File): Promise<DiaryArchiveResult> {
+  if (!isTauriRuntime) {
+    throw new Error("浏览器预览不支持导入日记压缩包");
+  }
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 32768) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + 32768));
+  }
+  return invokeDiaryArchive("diary_import_zip", { path: null, base64: btoa(binary) });
 }
 
 export async function deleteBackgroundImage(filename: string): Promise<void> {
@@ -299,7 +400,8 @@ export type CoreSnapshot = {
     runtimes: SchedulerRuntimePaths;
     tasks: unknown[];
   };
-  revisions: { data: number; settings: number; schedule: number };
+  diary: unknown;
+  revisions: { data: number; settings: number; schedule: number; diary: number };
 };
 
 export async function coreSnapshot(): Promise<CoreSnapshot> {

@@ -646,19 +646,48 @@
 }
 
 /* 编辑器：元数据行贴边一点，浮层不许超出对话框（对话框是 overflow:hidden） */
-.app-shell.mobile .diary-editor-meta {
+.app-shell.mobile .editor-meta {
   gap: 6px;
   padding: 8px 12px;
 }
 
-.app-shell.mobile .diary-editor-title {
+.app-shell.mobile .editor-title-input {
   padding: 11px 14px 7px;
 }
 
-.app-shell.mobile .diary-meta-pop {
+.app-shell.mobile .editor-meta-pop {
   max-width: calc(100vw - 24px);
 }
 
-.app-shell.mobile .diary-emoji-grid-pop {
+.app-shell.mobile .editor-emoji-grid-pop {
   grid-template-columns: repeat(5, 34px);
+}
+
+/* ---------- 全局搜索的结果面板（移动端） ----------
+   搜索结果本来只渲染在工作区里，而移动端首屏是列表视图、工作区 display:none，
+   于是安卓上搜什么都「没反应」。这里让侧栏在搜索态把导航与树收起来，
+   把搜索框以下的整块高度交给结果面板（与桌面同一套卡片组件，混排是白拿的）。 */
+
+.app-shell.mobile .sidebar.searching .system-nav,
+.app-shell.mobile .sidebar.searching .nav-divider,
+.app-shell.mobile .sidebar.searching .custom-nav,
+.app-shell.mobile .sidebar.searching .sidebar-footer {
+  display: none;
+}
+
+.app-shell.mobile .search-results {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  margin: 0 8px;
+  padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
+}
+
+.app-shell.mobile .search-results-empty {
+  display: grid;
+  place-items: center;
+  gap: 9px;
+  padding: 54px 12px;
+  color: #8b929e;
+  font-size: 15px;
 }

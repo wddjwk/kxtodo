@@ -1,6 +1,6 @@
 import { get, writable } from "svelte/store";
 import { platform as tauriPlatform } from "@tauri-apps/plugin-os";
-import { diaryEditor, editorTaskId, showSettings } from "./stores";
+import { diaryEditor, editorDraftNode, editorTaskId, showSettings } from "./stores";
 
 /**
  * Mobile detection is intentionally user-agent based so the Windows desktop
@@ -89,12 +89,14 @@ function handlePopState(event: PopStateEvent): void {
       mobileView.set("content");
       showSettings.set(false);
       editorTaskId.set(null);
+      editorDraftNode.set(null);
       diaryEditor.set(null);
       break;
     case "toolbox":
       mobileView.set("toolbox");
       showSettings.set(false);
       editorTaskId.set(null);
+      editorDraftNode.set(null);
       diaryEditor.set(null);
       break;
     case "diary":
@@ -102,6 +104,7 @@ function handlePopState(event: PopStateEvent): void {
       mobileView.set("diary");
       showSettings.set(false);
       editorTaskId.set(null);
+      editorDraftNode.set(null);
       diaryEditor.set(null);
       break;
     case "diary-editor":
@@ -112,6 +115,7 @@ function handlePopState(event: PopStateEvent): void {
       mobileView.set("list");
       showSettings.set(true);
       editorTaskId.set(null);
+      editorDraftNode.set(null);
       diaryEditor.set(null);
       break;
     case "editor":
@@ -122,10 +126,21 @@ function handlePopState(event: PopStateEvent): void {
       mobileView.set("list");
       showSettings.set(false);
       editorTaskId.set(null);
+      editorDraftNode.set(null);
       diaryEditor.set(null);
       break;
   }
   releaseGuardLater();
+}
+
+/** 编辑器层的压栈/回退：任务编辑与新建草稿共用同一层（两者互斥）。 */
+function syncEditorLayer(open: boolean): void {
+  if (!get(isMobile) || applyingHistory) return;
+  if (open) {
+    if (currentLayer() !== "editor") pushLayer("editor");
+  } else if (currentLayer() === "editor") {
+    history.back();
+  }
 }
 
 export function startMobileRouter(): void {
@@ -144,14 +159,9 @@ export function startMobileRouter(): void {
   });
 
   // 浮窗编辑器：null → id 压层 {mv:"editor"}；id → null 且顶层是它则回退。
-  editorTaskId.subscribe((id) => {
-    if (!get(isMobile) || applyingHistory) return;
-    if (id !== null) {
-      if (currentLayer() !== "editor") pushLayer("editor");
-    } else if (currentLayer() === "editor") {
-      history.back();
-    }
-  });
+  // 「新建事项」模式（editorDraftNode）共用同一层：两者互斥，不会同时开着。
+  editorTaskId.subscribe((id) => syncEditorLayer(id !== null));
+  editorDraftNode.subscribe((nodeId) => syncEditorLayer(nodeId !== null));
 
   // 日记编辑器同一套路（与任务编辑器互斥，不会同时开着）
   diaryEditor.subscribe((target) => {

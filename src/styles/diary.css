@@ -567,132 +567,12 @@
 
 /* ---------- 日记编辑器 ---------- */
 
-/* 编辑器浮层挂在 App 层，拿不到 .diary-view 内联的 --accent，这里补一个同色值
-   （与 styles.ts 的 DIARY_ACCENT 一致），于是复用的 .editor-* 规则也跟着走日记的主题色。 */
+/* 编辑器浮层挂在 App 层，拿不到 .diary-view 内联的 --accent。
+   DiaryEditor 会把 settings.diary 里解析出来的日记主题色内联到对话框上，
+   这里只给一个兼容默认值（与 styles.ts 的 DIARY_ACCENT 一致），
+   于是复用的 .editor-* 规则也跟着走日记的颜色。 */
 .editor-dialog.diary-editor {
   --accent: #4f5d8a;
-}
-
-.diary-editor-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  padding: 9px 16px;
-  border-bottom: 1px solid #eceff3;
-  background: #ffffff;
-}
-
-.diary-meta-field {
-  position: relative;
-}
-
-.diary-meta-trigger {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-  padding: 5px 11px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
-  color: #64748b;
-  font-size: calc(var(--font-control) - 3px);
-  cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
-}
-
-.diary-meta-trigger:hover {
-  background: #eef2f7;
-  color: #334155;
-}
-
-.diary-meta-trigger.filled {
-  color: #1f2937;
-}
-
-.diary-meta-field.open .diary-meta-trigger {
-  border-color: var(--accent);
-  background: #ffffff;
-  color: var(--accent);
-}
-
-.diary-meta-pop {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 60;
-  padding: 8px;
-  border: 1px solid #e5e5e5;
-  border-radius: 10px;
-  background: #ffffff;
-  box-shadow: 0 16px 50px rgb(0 0 0 / 16%);
-}
-
-.diary-emoji-grid-pop {
-  display: grid;
-  grid-template-columns: repeat(6, 34px);
-  gap: 4px;
-}
-
-.diary-emoji-cell {
-  display: grid;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  padding: 0;
-  background: transparent;
-  font-size: 19px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.diary-emoji-cell:hover {
-  background: #f2f4f7;
-}
-
-.diary-emoji-cell.selected {
-  border-color: var(--accent);
-  background: #eef2f9;
-}
-
-.diary-tag-pop {
-  width: 236px;
-}
-
-.diary-meta-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-  align-items: center;
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.diary-tag-add {
-  padding: 5px 9px;
-}
-
-/* 触屏没有 hover：编辑器里的标签删除按钮必须一直在 */
-.diary-meta-tags .task-tag .tag-delete {
-  opacity: 1;
-}
-
-.diary-editor-title {
-  padding: 13px 20px 8px;
-  border: 0;
-  border-bottom: 1px solid #f1f4f8;
-  background: transparent;
-  color: #1f2937;
-  font-size: calc(var(--font-control) + 4px);
-  font-weight: 700;
-  outline: none;
-}
-
-.diary-editor-title::placeholder {
-  color: #b6bcc6;
-  font-weight: 500;
 }
 
 /* 菜单里的心情/天气选择格（ContextMenu 的子面板内） */
@@ -703,8 +583,104 @@
   padding: 5px;
 }
 
-.diary-emoji-menu .diary-emoji-cell {
+.diary-emoji-menu .emoji-pick-cell {
   width: 32px;
   height: 32px;
   font-size: 18px;
+}
+
+/* ---------- 背景图层（日记现在也支持背景图，与列表同一套 --bg-image 机制） ---------- */
+
+.diary-view::before {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-image: var(--bg-image);
+  background-position: center;
+  background-size: cover;
+  content: "";
+  opacity: var(--bg-opacity);
+  pointer-events: none;
+}
+
+.diary-view > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* 上一条把所有直接子元素压到同一层，而本文件比 workspace.css 晚加载，
+   于是 .list-header 原本的 z-index:20 被盖掉——齿轮下拉面板会被 DOM 靠后的
+   副标题挡在下面。这里用更高优先级显式抬回来（与 .planned-group-bar 同一个坑）。 */
+.diary-view .list-header {
+  z-index: 20;
+}
+
+/* ---------- 齿轮面板（桌面） ----------
+   移动端那一份在 mobile.css（.app-shell.mobile .header-menu-panel）；日记的齿轮
+   在桌面也出现，所以这里补一份同形状的桌面规则，不去动 workspace.css。 */
+.app-shell:not(.mobile) .diary-gear-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 2200;
+  display: grid;
+  gap: 2px;
+  min-width: 176px;
+  padding: 6px;
+  border: 1px solid #e5e5e5;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 16px 50px rgb(0 0 0 / 16%), 0 2px 8px rgb(0 0 0 / 8%);
+  animation: menu-fade-in 0.1s ease-out;
+}
+
+/* ---------- 菜单里的「按日期范围导出」 ---------- */
+
+.diary-export-range {
+  display: grid;
+  gap: 8px;
+  padding: 8px 10px;
+  min-width: 210px;
+}
+
+.diary-export-range label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: #4b5563;
+  font-size: calc(var(--font-control) - 3px);
+}
+
+.diary-export-range input {
+  min-width: 0;
+  flex: 1;
+  padding: 5px 7px;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #1f2937;
+  font-size: calc(var(--font-control) - 3px);
+}
+
+.diary-export-range .menu-action-button {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---------- 触屏：不要那层蓝色点按高亮 ----------
+   WebView 默认给可点元素补一层 tap highlight，日记卡片单击是展开、双击是编辑，
+   罩子看起来像「卡片被选中了」，纯粹是干扰。 */
+.diary-view button,
+.diary-card,
+.diary-calendar-cell,
+.diary-fab,
+.diary-fab-today {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.diary-card:focus,
+.diary-card:focus-visible {
+  outline: none;
 }

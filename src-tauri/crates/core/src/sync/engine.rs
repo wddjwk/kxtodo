@@ -16,9 +16,10 @@ use crate::repo::Repository;
 use crate::sync::crypto::{derive_keys, open_entity, seal_entity, sha256_hex, SyncKeys};
 use crate::sync::endpoint;
 use crate::sync::merge::{
-    apply_data_record, apply_record_settings, apply_schedule_record, data_entity_stamp,
-    normalize_data_orders, normalize_schedule_orders, remote_wins, schedule_entity_stamp,
-    EntityRecord, Scopes, SETTINGS_ENTITY_ID, SyncEnvelope,
+    apply_data_record, apply_diary_record, apply_record_settings, apply_schedule_record,
+    data_entity_stamp, diary_entity_stamp, normalize_data_orders, normalize_diary_orders,
+    normalize_schedule_orders, remote_wins, schedule_entity_stamp, EntityRecord, Scopes,
+    SETTINGS_ENTITY_ID, SyncEnvelope,
 };
 use crate::sync::state::{load_state, save_state, PushedEntry, SyncStateFile};
 use crate::sync::transport::{ChangeItem, PutError, SyncClient, PAGE_LIMIT};
@@ -211,6 +212,37 @@ fn merge_data_records(
     }
     if applied > 0 {
         normalize_data_orders(file);
+    }
+    applied
+}
+
+/// 在 write_diary 闭包内做 diary 域的 LWW 应用；返回应用数。
+fn merge_diary_records(
+    file: &mut crate::model::DiaryFile,
+    records: &[EntityRecord],
+    state: &SyncStateFile,
+    warnings: &mut Vec<String>,
+) -> usize {
+    let mut applied = 0;
+    for record in records {
+        let stamp = local_stamp(state, &record.id, diary_entity_stamp(file, &record.id));
+        debug_log(format!(
+            "merge diary {} remote=({},{}) local={:?} -> {}",
+            record.id,
+            record.updated_at,
+            record.updated_by,
+            stamp,
+            remote_wins(record, stamp_ref(&stamp))
+        ));
+        if remote_wins(record, stamp_ref(&stamp)) {
+            match apply_diary_record(record, file) {
+                Ok(()) => applied += 1,
+                Err(error) => warnings.push(format!("日记 {} 应用失败：{error}", record.id)),
+            }
+        }
+    }
+    if applied > 0 {
+        normalize_diary_orders(file);
     }
     applied
 }
@@ -455,10 +487,13 @@ fn run_sync_inner(
     // 3. MERGE（按域分事务）
     let data_records: Vec<EntityRecord> = records
         .iter()
-        .filter(|record| {
-            (record.kind == "node" || record.kind == "task" || record.kind == "diary")
-                && scopes.data
-        })
+        .filter(|record| (record.kind == "node" || record.kind == "task") && scopes.data)
+        .cloned()
+        .collect();
+    // 日记是独立的领域文件（独立事务、独立 revision），但同步范围仍搭「同步数据」的车
+    let diary_records: Vec<EntityRecord> = records
+        .iter()
+        .filter(|record| record.kind == "diary" && scopes.data)
         .cloned()
         .collect();
     let settings_records: Vec<EntityRecord> = records
@@ -483,7 +518,6 @@ fn run_sync_inner(
                 // 全新设备：丢弃内存里的默认数据，直接落服务端内容
                 file.nodes.clear();
                 file.tasks.clear();
-                file.diaries.clear();
                 file.backgrounds.clear();
             }
             applied = merge_data_records(file, &records_snapshot, &state_snapshot, &mut warnings);
@@ -514,6 +548,24 @@ fn run_sync_inner(
                         crate::model::SYSTEM_NODE_IDS[0].to_string();
                 }
             }
+            Ok(json!({ "applied": applied, "pulled": records_snapshot.len() }))
+        })?;
+        report.applied += applied;
+        report.warnings.extend(warnings);
+    }
+
+    if !diary_records.is_empty() {
+        let state_snapshot = state.clone();
+        let records_snapshot = diary_records.clone();
+        let diary_existed = repo.layout.diary_file().exists();
+        let mut applied = 0usize;
+        let mut warnings: Vec<String> = Vec::new();
+        let (_file, _outcome) = repo.write_diary(None, None, "sync.pull", |file| {
+            if !diary_existed {
+                // 全新设备：丢掉内存里的默认（空）日记，直接落服务端内容
+                file.entries.clear();
+            }
+            applied = merge_diary_records(file, &records_snapshot, &state_snapshot, &mut warnings);
             Ok(json!({ "applied": applied, "pulled": records_snapshot.len() }))
         })?;
         report.applied += applied;
@@ -576,11 +628,13 @@ fn run_sync_inner(
     // - 本地当前版本 == 拉到的版本（刚应用或本就相同）→ 以远端 (u, by, seq) 对账；
     // - 本地版本更新（本地胜出）→ 保留本地 (u, by)，仅刷新 seq 作为 OCC 基线。
     let data_after = repo.load_data()?;
+    let diary_after = repo.load_diary()?;
     let settings_after = repo.load_settings()?;
     let schedule_after = repo.load_schedule()?;
     for record in &records {
         let local_ts = match record.kind.as_str() {
-            "node" | "task" | "diary" => data_entity_stamp(&data_after, &record.id),
+            "node" | "task" => data_entity_stamp(&data_after, &record.id),
+            "diary" => diary_entity_stamp(&diary_after, &record.id),
             "schedule" => schedule_entity_stamp(&schedule_after, &record.id),
             "settings" => settings_after.sync_updated_at.clone(),
             _ => None,
@@ -610,11 +664,14 @@ fn run_sync_inner(
 
     // 4. PUSH：本地版本戳 != 已对账版本戳 → 推送
     let data_existed = repo.layout.data_file().exists();
+    let diary_existed = repo.layout.diary_file().exists();
     let data = data_after;
+    let diary = diary_after;
     let settings_now = settings_after;
     let schedule = schedule_after;
     let local_entities = crate::sync::merge::extract_entities(
         &data,
+        &diary,
         &settings_now,
         &schedule,
         &scopes,
@@ -622,10 +679,11 @@ fn run_sync_inner(
     )
     .into_iter()
     .filter(|entity| {
-        // data.json 不存在（全新设备且服务端无数据域实体）→ 不推送内存默认数据
-        if !data_existed
-            && (entity.kind == "node" || entity.kind == "task" || entity.kind == "diary")
-        {
+        // 领域文件不存在（全新设备且服务端没有该域实体）→ 不推送内存里的默认数据
+        if !data_existed && (entity.kind == "node" || entity.kind == "task") {
+            return false;
+        }
+        if !diary_existed && entity.kind == "diary" {
             return false;
         }
         true
@@ -755,10 +813,17 @@ fn resolve_conflict(
     let state_snapshot = state.clone();
     let mut warnings: Vec<String> = Vec::new();
     match entity.kind.as_str() {
-        "node" | "task" | "diary" => {
+        "node" | "task" => {
             let records = vec![remote.clone()];
             let _ = repo.write_data(None, None, "sync.conflict", |file| {
                 merge_data_records(file, &records, &state_snapshot, &mut warnings);
+                Ok(json!({}))
+            });
+        }
+        "diary" => {
+            let records = vec![remote.clone()];
+            let _ = repo.write_diary(None, None, "sync.conflict", |file| {
+                merge_diary_records(file, &records, &state_snapshot, &mut warnings);
                 Ok(json!({}))
             });
         }
@@ -796,10 +861,12 @@ fn resolve_conflict(
 
     // 重新提取该实体：远端胜出 → 以远端对账；本地仍胜 → 重推一次
     let data = repo.load_data()?;
+    let diary = repo.load_diary()?;
     let settings = repo.load_settings()?;
     let schedule = repo.load_schedule()?;
     let entities = crate::sync::merge::extract_entities(
         &data,
+        &diary,
         &settings,
         &schedule,
         scopes,

@@ -31,6 +31,20 @@ export function accentForNode(node?: AppNode, uiColors: Record<string, string> =
   return isHexColor(customColor) ? customColor : defaultAccentForNode(node);
 }
 
+/** 日记的主题色：设置里空着就用默认日记色（空串进 CSS 变量会把整块配色打没）。 */
+export function diaryAccent(diary: Settings["diary"]): string {
+  return isHexColor(diary.accent) ? diary.accent : DIARY_ACCENT;
+}
+
+/** 日记的背景：与条目背景同一个 ListBackground 形状，于是能直接喂给 buildMainStyle。 */
+export function diaryBackground(diary: Settings["diary"]): ListBackground {
+  return {
+    color: isHexColor(diary.backgroundColor) ? diary.backgroundColor : defaultBackground.color,
+    image: diary.backgroundImage || undefined,
+    imageOpacity: diary.backgroundOpacity
+  };
+}
+
 export function avatarStyle(avatar: string): string {
   return avatar ? `background-image: url("${escapeCssUrl(avatar)}");` : "";
 }

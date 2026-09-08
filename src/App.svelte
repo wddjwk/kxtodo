@@ -5,7 +5,7 @@
   import {
     appSettings, appState, showSettings, searchQuery,
     taskEmojiPicker, editorTaskId, appVersion, showToast,
-    isHydrated, diaryOpen, diaryEditor,
+    isHydrated, diaryOpen, diaryEditor, editorDraftNode,
     hydrate as hydrateStores
   } from "./lib/stores";
   import { replaceTaskEmojis, selectNode as selectNodeAction, syncNow as syncNowAction } from "./lib/actions";
@@ -79,7 +79,7 @@
   }
 
   function handleShortcut(event: KeyboardEvent): void {
-    if ($editorTaskId || $diaryEditor) return;
+    if ($editorTaskId || $editorDraftNode || $diaryEditor) return;
     if (matchesShortcut(event, $appSettings.shortcuts.focusSearch)) {
       event.preventDefault();
       sidebarRef?.focusSearch();
@@ -93,6 +93,12 @@
       event.preventDefault();
       void syncNowAction();
     }
+  }
+
+  /** 两种模式共用一个编辑器实例，关闭时两个 store 一起清 */
+  function closeTaskEditor(): void {
+    editorTaskId.set(null);
+    editorDraftNode.set(null);
   }
 
   function handleEmojiPick(emoji: string): void {
@@ -153,12 +159,13 @@
 
   <Toast />
 
-  {#if $editorTaskId}
+  {#if $editorTaskId || $editorDraftNode}
     {#await import("./lib/editor/MarkdownEditorModal.svelte") then module}
       <svelte:component
         this={module.default}
-        taskId={$editorTaskId}
-        onClose={() => editorTaskId.set(null)}
+        taskId={$editorTaskId ?? ""}
+        draftNodeId={$editorDraftNode ?? ""}
+        onClose={closeTaskEditor}
         onOpenLink={(url) => workspaceRef?.openLinkUrl(url)}
       />
     {/await}

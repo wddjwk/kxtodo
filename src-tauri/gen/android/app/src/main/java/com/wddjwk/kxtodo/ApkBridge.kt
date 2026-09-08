@@ -77,4 +77,43 @@ class ApkBridge(private val context: Context) {
       error.message ?: error.toString()
     }
   }
+
+  /**
+   * 分享一个**已经存在**的文件（日记导出的 zip 由 Rust 写进缓存目录）。
+   * 与 installApk 同一套穿越校验：只允许应用缓存目录内的路径。
+   */
+  @JavascriptInterface
+  fun shareFile(path: String, mime: String): String {
+    return try {
+      if (path.isEmpty()) {
+        return "路径为空"
+      }
+      val cacheDir = context.cacheDir.canonicalFile
+      val target = File(path).canonicalFile
+      if (!target.path.startsWith(cacheDir.path + File.separator)) {
+        return "路径不在应用缓存目录内"
+      }
+      if (!target.isFile) {
+        return "文件不存在"
+      }
+      val uri = FileProvider.getUriForFile(
+        context,
+        context.packageName + ".fileprovider",
+        target
+      )
+      val send = Intent(Intent.ACTION_SEND).apply {
+        type = mime
+        putExtra(Intent.EXTRA_STREAM, uri)
+        putExtra(Intent.EXTRA_SUBJECT, target.name)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      }
+      val chooser = Intent.createChooser(send, null).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      }
+      context.startActivity(chooser)
+      ""
+    } catch (error: Exception) {
+      error.message ?: error.toString()
+    }
+  }
 }

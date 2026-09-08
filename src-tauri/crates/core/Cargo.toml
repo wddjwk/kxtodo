@@ -21,6 +21,9 @@ rand = "0.8"
 regex = "1"
 iana-time-zone = "0.1"
 encoding_rs = "0.8"
+# 日记导出/导入的压缩包（年/月/*.md + YAML front-matter）。关掉默认特性只留 deflate：
+# 走 flate2 的纯 Rust 后端，Android 交叉编译不会因此多出一个 C 依赖。
+zip = { version = "2", default-features = false, features = ["deflate"] }
 # 数据多端同步（v0.4.0）：E2E 加密 + HTTP 客户端，全部纯 Rust（Android 交叉零负担）
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 argon2 = "0.5"

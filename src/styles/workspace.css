@@ -963,8 +963,10 @@ h1 {
   min-width: 0;
 }
 
-/* 折叠态：正文、标签、日期排在同一条 flex 行里——标签吸附在文字末尾（文字短就跟着文字，
-   文字长就被挤到行尾），日期永远靠右；不再各占一个 grid 列留死空白。 */
+/* 折叠态：正文、标签、日期排在同一条 flex 行里。标题 flex-basis 归零再 grow，
+   吃满剩余宽度就把标签与日期顶到行尾：桌面右缘正好贴笔形按钮那一列（不写死偏移），
+   移动端那一列被隐藏，于是贴到卡片自己的右内边距。标题让位但不为零——标签容器最多 68%，
+   再多就在自己里面折行。日期不再用 margin-left:auto：auto 外边距会跟 grow 抢同一段剩余空间。 */
 .task-card.compact .task-body {
   display: flex;
   flex-wrap: wrap;
@@ -973,7 +975,7 @@ h1 {
 }
 
 .task-card.compact .markdown-title-row {
-  flex: 0 1 auto;
+  flex: 1 1 0%;
   min-width: 0;
 }
 
@@ -981,11 +983,7 @@ h1 {
   flex: 0 1 auto;
   min-width: 0;
   max-width: 68%;
-  justify-content: flex-start;
-}
-
-.task-card.compact .task-due-wrap {
-  margin-left: auto;
+  justify-content: flex-end;
 }
 
 .task-card.expanded .task-body {
@@ -1221,8 +1219,30 @@ h1 {
   box-shadow: 0 10px 30px rgb(90 55 42 / 9%);
 }
 
-.add-task-bar > svg {
-  margin-top: 0;
+/* 输入框左侧的加号：看着还是那个加号，但现在是个按钮——
+   悬浮有反馈，点它直接用编辑器新建事项（不点就还是原来的输入流程）。 */
+.composer-plus {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  padding: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.14s ease, transform 0.14s ease;
+}
+
+.composer-plus:hover {
+  background: rgb(0 0 0 / 6%);
+  transform: scale(1.12);
+}
+
+.composer-plus:active {
+  transform: scale(0.92);
 }
 
 .composer-main {
@@ -1271,7 +1291,7 @@ h1 {
   margin: 4px 0 10px;
   border: 0;
   border-radius: 7px;
-  background: rgb(146 152 160 / 14%);
+  background: rgb(255 255 255 / 50%);
   color: #6b7280;
   padding: 7px 12px;
   font-size: var(--font-control);
@@ -1280,7 +1300,7 @@ h1 {
 }
 
 .planned-group-chip:hover {
-  background: rgb(146 152 160 / 22%);
+  background: rgb(255 255 255 / 70%);
 }
 
 .planned-group-panel {
@@ -1300,8 +1320,8 @@ h1 {
   animation: menu-fade-in 0.1s ease-out;
 }
 
-/* 计划内「全部」的分区标题（已逾期/今天/近三天/本周/稍后）：淡灰半透明，
-   与白色卡片区分开；本身是折叠按钮 */
+/* 计划内「全部」的分区标题（已逾期/今天/近三天/本周/稍后）：半透明淡白，
+   比白色卡片（84%）更透一档，读起来是卡片的浅色同类而不是灰块；本身是折叠按钮 */
 .task-section-label {
   display: inline-flex;
   align-items: center;
@@ -1309,7 +1329,7 @@ h1 {
   margin: 10px 0 10px;
   border: 0;
   border-radius: 7px;
-  background: rgb(146 152 160 / 14%);
+  background: rgb(255 255 255 / 50%);
   color: #6b7280;
   padding: 6px 11px;
   font-size: var(--font-control);
@@ -1317,7 +1337,7 @@ h1 {
 }
 
 .task-section-label:hover {
-  background: rgb(146 152 160 / 22%);
+  background: rgb(255 255 255 / 70%);
 }
 
 .task-section-label:first-child {

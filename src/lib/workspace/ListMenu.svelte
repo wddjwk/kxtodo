@@ -3,7 +3,7 @@
   import ContextMenu from "../menu/ContextMenu.svelte";
   import MenuItem from "../menu/MenuItem.svelte";
   import MenuSeparator from "../menu/MenuSeparator.svelte";
-  import { ArrowUpDown, Download, Eraser, Eye, EyeOff, FolderInput, Image, LayoutGrid, ListTodo, PenLine, RefreshCw, RotateCcw, Trash2, Upload } from "@lucide/svelte";
+  import { ArrowUpDown, CalendarRange, Download, Eraser, Eye, EyeOff, FileArchive, FolderInput, Image, LayoutGrid, ListTodo, PenLine, RefreshCw, RotateCcw, Trash2, Upload } from "@lucide/svelte";
   import { appSettings, appState, selectedBackground, accent, showToast, now, safeFileName, fileToDataUrl, appVersion } from "../stores";
   import {
     deleteNodeCascade as deleteNodeCascadeAction,
@@ -14,6 +14,9 @@
     setUiColor as setUiColorAction,
     unsetUiColor as unsetUiColorAction,
     applyTreeOrder as applyTreeOrderAction,
+    exportDiaryArchive as exportDiaryArchiveAction,
+    importDiaryArchive as importDiaryArchiveAction,
+    importDiaryArchiveFile as importDiaryArchiveFileAction,
     syncNow as syncNowAction
   } from "../actions";
   import { moveTargetOptions, nodeAndDescendantIds, exportStateForNode } from "../nodes";
@@ -41,6 +44,13 @@
   export let onSortMode: (mode: SortMode) => void = () => {};
   export let onRenameRequest: () => void = () => {};
   export let onClose: () => void = () => {};
+  /**
+   * 日记模式：日记不是节点，背景与主题色来自 `settings.diary`（由调用方以
+   * `background` / `accentColor` 覆盖进来），导出导入走 zip 而不是 JSON。
+   */
+  export let diaryMode = false;
+  export let background: ListBackground | null = null;
+  export let accentColor: string | null = null;
 
   let importInput: HTMLInputElement;
   let colorPickerInput: HTMLInputElement;
@@ -104,9 +114,23 @@
   $: presets = $appSettings.appearance.themePresets.length
     ? $appSettings.appearance.themePresets
     : themePresets;
-  $: backgroundLinkDraft = isLocalImageRef($selectedBackground.image) ? "" : ($selectedBackground.image ?? "");
+  /** 生效的背景与主题色：日记模式用传进来的覆盖值，否则跟着当前选中的条目 */
+  $: bg = background ?? $selectedBackground;
+  $: accentValue = accentColor ?? $accent;
+  $: backgroundLinkDraft = isLocalImageRef(bg.image) ? "" : (bg.image ?? "");
 
   function setBackground(patch: Partial<ListBackground>): void {
+    if (diaryMode) {
+      // 日记的外观是 settings.diary 上的几个扁平配置项，一个 patch 拆成多次 config.set
+      if (patch.color !== undefined) void setConfigAction("diary.backgroundColor", patch.color);
+      if (patch.image !== undefined) {
+        void setConfigAction("diary.backgroundImage", patch.image ?? "");
+      }
+      if (patch.imageOpacity !== undefined) {
+        void setConfigAction("diary.backgroundOpacity", patch.imageOpacity);
+      }
+      return;
+    }
     if (!node) return;
     void setBackgroundAction(node.id, {
       color: patch.color,
@@ -133,7 +157,7 @@
   function updateBackgroundLink(event: Event): void {
     const target = event.currentTarget;
     if (!(target instanceof HTMLInputElement)) return;
-    const previous = $selectedBackground.image;
+    const previous = bg.image;
     const next = target.value.trim() || undefined;
     setBackground({ image: next });
     if (isLocalImageRef(previous) && previous !== next) void deleteBackgroundImage(localImageFilename(previous));
@@ -156,7 +180,7 @@
     try {
       const path = await pickImageFile();
       if (!path) return;
-      const previous = $selectedBackground.image;
+      const previous = bg.image;
       const filename = await importBackgroundImage(path);
       const url = await backgroundImageUrl(filename);
       primeImageCache(filename, url);
@@ -174,7 +198,7 @@
       const dataUrl = await fileToDataUrl(target.files[0]);
       if (isTauriRuntime) {
         // Tauri（移动端 + 桌面兜底）：dataURL 交给 Rust 落盘为本地图片文件。
-        const previous = $selectedBackground.image;
+        const previous = bg.image;
         const filename = await saveBackgroundImageFromDataUrl(dataUrl);
         const url = await backgroundImageUrl(filename);
         primeImageCache(filename, url);
@@ -195,6 +219,18 @@
   /** 清除背景 = 恢复默认：必须显式传 image: null（undefined 会被 actions.setBackground
    * 视为“不修改”，沿用旧图片导致清除无效），颜色与透明度一并回默认值。 */
   async function clearBackground(): Promise<void> {
+    if (diaryMode) {
+      const previous = bg.image;
+      await Promise.all([
+        setConfigAction("diary.backgroundColor", defaultBackground.color),
+        setConfigAction("diary.backgroundImage", ""),
+        setConfigAction("diary.backgroundOpacity", defaultBackground.imageOpacity ?? 0.28)
+      ]);
+      if (isLocalImageRef(previous)) {
+        void deleteBackgroundImage(localImageFilename(previous));
+      }
+      return;
+    }
     if (!node) return;
     const previous = $selectedBackground.image;
     await setBackgroundAction(node.id, {
@@ -209,6 +245,10 @@
   }
 
   function setUiColor(color: string): void {
+    if (diaryMode) {
+      void setConfigAction("diary.accent", color);
+      return;
+    }
     if (!node) return;
     void setUiColorAction(node.id, color);
   }
@@ -221,6 +261,11 @@
   }
 
   function resetUiColor(): void {
+    if (diaryMode) {
+      // 空串 = 用默认日记色（与 core 的 diary.accent 同口径）
+      void setConfigAction("diary.accent", "");
+      return;
+    }
     if (!node) return;
     void unsetUiColorAction(node.id);
   }
@@ -236,7 +281,7 @@
     editingPresetIndex = index;
     presetNameDraft = preset.name;
     presetColorDraft = preset.color;
-    presetEditOriginalColor = $selectedBackground.color;
+    presetEditOriginalColor = bg.color;
   }
 
   function cancelPresetEdit(): void {
@@ -366,6 +411,54 @@
     }
   }
 
+  // ---- 日记导出/导入（zip：年/月/YYYYMMDD[_序号][_标题].md + YAML front-matter） ----
+  let diaryZipInput: HTMLInputElement;
+  let exportFrom = "";
+  let exportTo = "";
+
+  /** 一键全量导出。关掉菜单再等结果：另存为/分享面板都是系统级 UI，不该压在菜单下面。 */
+  async function exportAllDiary(): Promise<void> {
+    onClose();
+    await exportDiaryArchiveAction();
+  }
+
+  async function exportDiaryRange(): Promise<void> {
+    if (!exportFrom && !exportTo) {
+      showToast("先选一个起止日期");
+      return;
+    }
+    onClose();
+    await exportDiaryArchiveAction({ from: exportFrom || undefined, to: exportTo || undefined });
+  }
+
+  async function importDiary(): Promise<void> {
+    if (!isTauriRuntime) {
+      showToast("浏览器预览不支持导入日记压缩包");
+      return;
+    }
+    if (!caps.nativeFileDialogs) {
+      // 移动端无原生对话框：走隐藏 input，选择器打开期间必须吞掉 onClose（见 markFilePickerOpen）
+      markFilePickerOpen();
+      diaryZipInput.click();
+      return;
+    }
+    onClose();
+    await importDiaryArchiveAction();
+  }
+
+  async function importDiaryFromInput(event: Event): Promise<void> {
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLInputElement) || !target.files?.[0]) return;
+    try {
+      await importDiaryArchiveFileAction(target.files[0]);
+    } finally {
+      target.value = "";
+      window.clearTimeout(filePickerResetTimer);
+      filePickerOpen = false;
+      onClose();
+    }
+  }
+
   function moveNodeToGroup(nodeId: string, parentId: string | null): void {
     const source = $appState.nodes.find((n) => n.id === nodeId);
     if (!source || source.kind === "system" || source.parentId === parentId) {
@@ -417,7 +510,7 @@
       </div>
     </MenuItem>
   {/if}
-  {#if !isScheduled}
+  {#if !isScheduled && !diaryMode}
     <MenuItem icon={ArrowUpDown} label="排序方式">
       <div slot="submenu" class="submenu-list">
         {#each Object.entries(sortLabels) as [mode, label]}
@@ -460,18 +553,39 @@
   {/if}
 
   <MenuSeparator />
-  <MenuItem icon={Upload} label="导出当前" onSelect={() => void exportCurrentList()} />
-  <MenuItem icon={Upload} label="一键全部导出" onSelect={() => void exportAll()} />
-  <MenuItem icon={Download} label="导入 JSON" onSelect={() => { markFilePickerOpen(); importInput.click(); }} />
+  {#if diaryMode}
+    <MenuItem icon={FileArchive} label="导出全部日记" onSelect={() => void exportAllDiary()} />
+    <MenuItem icon={CalendarRange} label="按日期范围导出">
+      <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+      <div slot="submenu" class="diary-export-range" on:click|stopPropagation>
+        <label>
+          从
+          <input type="date" bind:value={exportFrom} on:keydown|stopPropagation />
+        </label>
+        <label>
+          到
+          <input type="date" bind:value={exportTo} on:keydown|stopPropagation />
+        </label>
+        <button class="menu-action-button" type="button" on:click|stopPropagation={() => void exportDiaryRange()}>
+          <Upload size={15} /> 导出这一段
+        </button>
+      </div>
+    </MenuItem>
+    <MenuItem icon={Download} label="导入日记压缩包" onSelect={() => void importDiary()} />
+  {:else}
+    <MenuItem icon={Upload} label="导出当前" onSelect={() => void exportCurrentList()} />
+    <MenuItem icon={Upload} label="一键全部导出" onSelect={() => void exportAll()} />
+    <MenuItem icon={Download} label="导入 JSON" onSelect={() => { markFilePickerOpen(); importInput.click(); }} />
+  {/if}
 
   <MenuSeparator />
   <div class="menu-section-title">UI颜色</div>
   <div class="ui-color-row">
     <label class="ui-color-picker" title="修改当前界面的标题和控件颜色">
-      <span style={`--swatch: ${$accent}`}></span>
-      <input type="color" value={$accent} on:input={handleUiColorPick} />
+      <span style={`--swatch: ${accentValue}`}></span>
+      <input type="color" value={accentValue} on:input={handleUiColorPick} />
     </label>
-    <span class="ui-color-value">{$accent}</span>
+    <span class="ui-color-value">{accentValue}</span>
     <button class="menu-action-button" type="button" on:click={resetUiColor}>默认</button>
   </div>
 
@@ -506,14 +620,14 @@
       </div>
     </div>
   {/if}
-  <input bind:this={colorPickerInput} class="hidden-file" type="color" value={$selectedBackground.color} on:input={handleColorPick} />
+  <input bind:this={colorPickerInput} class="hidden-file" type="color" value={bg.color} on:input={handleColorPick} />
   <label class="background-link">
     背景图片链接
     <input value={backgroundLinkDraft} placeholder="https://..." on:input={updateBackgroundLink} />
   </label>
   <label class="opacity-row">
     图片透明度
-    <input type="range" min="0" max="80" value={Math.round(($selectedBackground.imageOpacity ?? 0.28) * 100)} on:input={updateBackgroundOpacity} />
+    <input type="range" min="0" max="80" value={Math.round((bg.imageOpacity ?? 0.28) * 100)} on:input={updateBackgroundOpacity} />
   </label>
   <div class="menu-inline two">
     <button class="menu-action-button" type="button" on:click={pickBackgroundImage}><Image size={15} /> 上传图片</button>
@@ -521,5 +635,6 @@
   </div>
 
   <input bind:this={importInput} class="hidden-file" type="file" accept="application/json,.json" on:change={importFromFile} />
+  <input bind:this={diaryZipInput} class="hidden-file" type="file" accept=".zip,application/zip" on:change={importDiaryFromInput} />
   <input bind:this={backgroundFileInput} class="hidden-file" type="file" accept="image/*" on:change={uploadBackgroundImage} />
 </ContextMenu>

@@ -2098,7 +2098,9 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
             open_url,
             core_dispatch,
             core_snapshot,
-            core_ping
+            core_ping,
+            diary_export_zip,
+            diary_import_zip
         ])
         .setup(move |app| {
             let core =
@@ -2275,19 +2277,116 @@ async fn core_snapshot(core: State<'_, Arc<domain::host::HostCore>>) -> Result<V
             .repo
             .load_schedule()
             .map_err(|error| error.to_string())?;
+        let diary = host.repo.load_diary().map_err(|error| error.to_string())?;
         Ok(serde_json::json!({
             "data": data,
             "settings": settings,
             "schedule": schedule,
+            "diary": diary,
             "revisions": {
                 "data": data.meta.revision,
                 "settings": settings.meta.revision,
                 "schedule": schedule.meta.revision,
+                "diary": diary.meta.revision,
             }
         }))
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// 日记导出成压缩包。给了 `path` 就写到那儿（桌面「另存为」对话框的结果）；
+/// 没给就落进应用缓存目录并返回路径——移动端拿这个路径交给系统分享面板
+/// （dialog 的 save() 在 Android 返回 content:// URI，Rust 写不了）。
+#[tauri::command]
+async fn diary_export_zip(
+    app: AppHandle,
+    core: State<'_, Arc<domain::host::HostCore>>,
+    path: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
+) -> Result<Value, String> {
+    let host = core.inner().clone();
+    let dest = match path {
+        Some(path) if !path.trim().is_empty() => PathBuf::from(path),
+        _ => {
+            use tauri::Manager as _;
+            let name = domain::diary_archive::archive_name(from.as_deref(), to.as_deref());
+            let cache = app
+                .path()
+                .app_cache_dir()
+                .map_err(|error| error.to_string())?;
+            fs::create_dir_all(&cache).map_err(|error| error.to_string())?;
+            cache.join(name)
+        }
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        run_diary_core(
+            &host,
+            "diary.export",
+            serde_json::json!({
+                "out": dest.to_string_lossy(),
+                "from": from,
+                "to": to,
+            }),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// 日记导入：桌面给压缩包路径，移动端给 `<input type=file>` 读出来的字节。
+/// 解压与解析在这里完成，**写入仍然走 core 的 `diary.import` 命令层**（铁律）。
+#[tauri::command]
+async fn diary_import_zip(
+    core: State<'_, Arc<domain::host::HostCore>>,
+    path: Option<String>,
+    base64: Option<String>,
+) -> Result<Value, String> {
+    let host = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // 移动端从 <input type=file> 拿到的是字节：走 base64 而不是 Vec<u8>，
+        // 后者在 JSON IPC 里会把 1MB 的包摊成一百万个逗号分隔的数字。
+        let raw = match (base64, path) {
+            (Some(encoded), _) => {
+                use base64::Engine as _;
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded.as_bytes())
+                    .map_err(|error| format!("压缩包内容解码失败：{error}"))?
+            }
+            (None, Some(path)) => {
+                fs::read(&path).map_err(|error| format!("无法读取 {path}：{error}"))?
+            }
+            (None, None) => return Err("缺少压缩包路径或内容".to_string()),
+        };
+        let entries = domain::diary_archive::parse_zip(&raw).map_err(|error| error.to_string())?;
+        run_diary_core(&host, "diary.import", serde_json::json!({ "entries": entries }))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// 以 GUI 的身份跑一条日记命令（与 core_dispatch 同一套上下文与确认语义）。
+fn run_diary_core(
+    host: &Arc<domain::host::HostCore>,
+    command: &str,
+    params: Value,
+) -> Result<Value, String> {
+    let mut invocation = domain::core::Invocation::new(command, params);
+    // GUI 操作本身就是用户在界面上的确认行为，跳过 CLI 的 --yes 确认门。
+    invocation.controls.yes = true;
+    let ctx = domain::core::ExecContext {
+        repo: &host.repo,
+        cwd: host.data_dir.clone(),
+        host: Some(host.as_ref()),
+        custom_data_dir: host.custom_data_dir,
+    };
+    let outcome = domain::core::execute(&invocation, &ctx);
+    if outcome.code == 0 {
+        Ok(outcome.envelope)
+    } else {
+        Err(serde_json::to_string(&outcome.envelope).unwrap_or_default())
+    }
 }
 
 /// 内部启动参数：`--kxtodo-host [--data-dir <path>]` → 隐藏 Host 模式。
@@ -2454,6 +2553,8 @@ pub fn run() {
                 core_dispatch,
                 core_snapshot,
                 core_ping,
+                diary_export_zip,
+                diary_import_zip,
                 app_version,
                 open_url,
                 save_background_image,

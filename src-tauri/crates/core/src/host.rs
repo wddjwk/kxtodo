@@ -277,6 +277,8 @@ impl HostCore {
             // 设置里带着「本机作为服务器」的开关与主机名/端口：变了就要启停内置服务器
             Domain::Settings => self.reconcile_sync_host(),
             Domain::Data => {}
+            // 日记没有宿主侧副作用：事件只是让 GUI 回刷快照
+            Domain::Diary => {}
         }
         if let Ok(backend) = self.backend.read() {
             if let Some(backend) = backend.as_ref() {
