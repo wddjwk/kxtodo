@@ -1,7 +1,7 @@
 <script lang="ts">
   import { ExternalLink, NotebookPen, PenLine, Trash2 } from "@lucide/svelte";
   import {
-    appState, diaryEditor, editorTaskId, searchHits, searchQuery, showToast,
+    appState, appSettings, diaryEditor, editorTaskId, searchHits, searchQuery, showToast,
     taskEmojiPicker, todayIso
   } from "./stores";
   import {
@@ -11,7 +11,8 @@
     updateTask as updateTaskAction
   } from "./actions";
   import { openExternalUrl } from "./backend";
-  import { showMobileContent, showMobileDiary } from "./platform";
+  import { dropSearchLayer, showMobileContent, showMobileDiary } from "./platform";
+  import { accentForNode, diaryAccent } from "./styles";
   import TaskCard from "./TaskCard.svelte";
   import DiaryCard from "./diary/DiaryCard.svelte";
   import DiaryEntryMenu from "./diary/DiaryEntryMenu.svelte";
@@ -35,6 +36,14 @@
     ? $searchHits.find((hit) => hit.kind === "diary" && hit.entry.id === diaryMenu?.id)
     : null;
   $: diaryEntry = diaryHit && diaryHit.kind === "diary" ? diaryHit.entry : null;
+
+  /** 结果面板挂在侧栏里，拿不到工作区内联的 --accent：勾选圆圈、日期栏这些靠
+      var(--accent) 画的控件会整个消失。每条结果自带所属条目的主题色。 */
+  function hitAccent(nodeId: string): string {
+    return accentForNode($appState.nodes.find((node) => node.id === nodeId), $appSettings.appearance.uiColors);
+  }
+
+  $: diaryHitAccent = diaryAccent($appSettings.diary);
 
   function closeMenus(): void {
     taskMenu = null;
@@ -118,6 +127,7 @@
   /** 跳到这条结果所在的界面（搜索词一并清掉，否则跳过去还是过滤后的列表）。 */
   function goToTask(nodeId: string): void {
     closeMenus();
+    dropSearchLayer();
     searchQuery.set("");
     void selectNodeAction(nodeId);
     showMobileContent();
@@ -125,6 +135,7 @@
 
   function goToDiary(): void {
     closeMenus();
+    dropSearchLayer();
     searchQuery.set("");
     showMobileDiary();
   }
@@ -157,32 +168,36 @@
 <section class="search-results">
   {#each $searchHits as hit (hit.key)}
     {#if hit.kind === "task"}
-      <TaskCard
-        task={hit.task}
-        nodeId={hit.task.nodeId}
-        cardStyle={hit.cardStyle}
-        selected={taskMenu?.id === hit.task.id}
-        on:toggle={(event) => toggleTask(event.detail)}
-        on:expand={handleTaskExpand}
-        on:edit={(event) => openTaskEditor(event.detail)}
-        on:context={(event) => openTaskMenu(event, hit.task.nodeId)}
-        on:openLink={(event) => openLink(event.detail.href)}
-        on:setDate={setTaskDate}
-        on:removeTag={removeTaskTag}
-        on:editTag={editTaskTag}
-        on:removeEmoji={removeTaskEmoji}
-        on:pickEmoji={pickTaskEmoji}
-      />
+      <div class="search-hit" style={`--accent: ${hitAccent(hit.task.nodeId)}`}>
+        <TaskCard
+          task={hit.task}
+          nodeId={hit.task.nodeId}
+          cardStyle={hit.cardStyle}
+          selected={taskMenu?.id === hit.task.id}
+          on:toggle={(event) => toggleTask(event.detail)}
+          on:expand={handleTaskExpand}
+          on:edit={(event) => openTaskEditor(event.detail)}
+          on:context={(event) => openTaskMenu(event, hit.task.nodeId)}
+          on:openLink={(event) => openLink(event.detail.href)}
+          on:setDate={setTaskDate}
+          on:removeTag={removeTaskTag}
+          on:editTag={editTaskTag}
+          on:removeEmoji={removeTaskEmoji}
+          on:pickEmoji={pickTaskEmoji}
+        />
+      </div>
     {:else}
-      <DiaryCard
-        entry={hit.entry}
-        today={todayIso()}
-        selected={diaryMenu?.id === hit.entry.id}
-        on:expand={handleDiaryExpand}
-        on:edit={(event) => openDiaryEntry(event.detail)}
-        on:context={openDiaryMenu}
-        on:openLink={(event) => openLink(event.detail.href)}
-      />
+      <div class="search-hit" style={`--accent: ${diaryHitAccent}`}>
+        <DiaryCard
+          entry={hit.entry}
+          today={todayIso()}
+          selected={diaryMenu?.id === hit.entry.id}
+          on:expand={handleDiaryExpand}
+          on:edit={(event) => openDiaryEntry(event.detail)}
+          on:context={openDiaryMenu}
+          on:openLink={(event) => openLink(event.detail.href)}
+        />
+      </div>
     {/if}
   {:else}
     <div class="search-results-empty">

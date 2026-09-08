@@ -1533,10 +1533,33 @@ fn update_download_apk(app: AppHandle, params: UpdateApkParams) -> Result<(), St
     Ok(())
 }
 
+/// window-state 插件有个竞态：Windows 最小化会把窗口挪到 (-32000,-32000) 并压成极小尺寸，
+/// 「最小化时不记录」的守卫可能赶在系统标记最小化之前失效，脏值进缓存、退出时落盘，
+/// 下次启动原样恢复——窗口缩成一条标题栏小条。reveal 前校验一次兜底。
+#[cfg(desktop)]
+fn sanitize_main_window_geometry(window: &tauri::WebviewWindow) {
+    const MIN_WIDTH: u32 = 400;
+    const MIN_HEIGHT: u32 = 300;
+    let offscreen = window
+        .outer_position()
+        .map(|position| position.x <= -30000 || position.y <= -30000)
+        .unwrap_or(false);
+    let too_small = window
+        .outer_size()
+        .map(|size| size.width < MIN_WIDTH || size.height < MIN_HEIGHT)
+        .unwrap_or(false);
+    if !offscreen && !too_small {
+        return;
+    }
+    let _ = window.set_size(tauri::LogicalSize::new(1180.0_f64, 820.0_f64));
+    let _ = window.center();
+}
+
 #[cfg(desktop)]
 #[tauri::command]
 fn reveal_main_window(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
+        sanitize_main_window_geometry(&window);
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -2359,8 +2382,13 @@ async fn diary_import_zip(
             }
             (None, None) => return Err("缺少压缩包路径或内容".to_string()),
         };
-        let entries = domain::diary_archive::parse_zip(&raw).map_err(|error| error.to_string())?;
-        run_diary_core(&host, "diary.import", serde_json::json!({ "entries": entries }))
+        // 解析与插图落盘都在 core 的 diary.import 里（写入永远过命令层这条铁律不变）
+        use base64::Engine as _;
+        run_diary_core(
+            &host,
+            "diary.import",
+            serde_json::json!({ "zipBase64": base64::engine::general_purpose::STANDARD.encode(&raw) }),
+        )
     })
     .await
     .map_err(|error| error.to_string())?

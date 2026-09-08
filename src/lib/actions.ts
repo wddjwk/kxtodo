@@ -840,12 +840,14 @@ export async function importDiaryArchiveFile(file: File): Promise<boolean> {
 async function afterDiaryImport(result: DiaryArchiveResult): Promise<void> {
   const imported = result.imported ?? 0;
   const skipped = result.skipped ?? 0;
+  const images = result.images ?? 0;
   // core 已经写过盘并发过域事件，这里兜底回刷一次，免得面板停在旧数据上
   await refreshFromCore(["diary"]);
+  const imageNote = images > 0 ? `，含 ${images} 张插图` : "";
   showToast(
     skipped > 0
-      ? `已导入 ${imported} 篇日记，跳过 ${skipped} 条无效记录`
-      : `已导入 ${imported} 篇日记`
+      ? `已导入 ${imported} 篇日记${imageNote}，跳过 ${skipped} 条无效记录`
+      : `已导入 ${imported} 篇日记${imageNote}`
   );
 }
 
@@ -1336,17 +1338,58 @@ export async function syncPeers(): Promise<SyncPeers | null> {
   }
 }
 
-// 自动同步与手动同步共用一条命令；撞上「另一个同步正在进行」时短等待重试。
-async function dispatchSyncNow(): Promise<SyncReport> {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      const envelope = await coreDispatch<SyncReport>("sync.now", {});
-      return envelope.data;
-    } catch (error) {
-      const busy = error instanceof CoreCommandError && error.code === "SYNC_IN_PROGRESS";
-      if (!busy || attempt >= 2) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 700));
+// 自动同步与手动同步共用一条命令；撞上「另一个同步正在进行」时等它跑完拿它的结果。
+const SYNC_BUSY_WAIT_MS = 50_000;
+const SYNC_BUSY_POLL_MS = 600;
+
+/**
+ * 等待正在进行的那一轮同步结束。下拉刷新/手点「立即同步」撞上自动循环的那一轮时，
+ * 自己再插一轮是浪费（移动端尤其），把「正在同步」报成失败更是误导——等它跑完、
+ * 把它落盘的 lastResult 当本轮结果报出去就好。
+ * 返回 null 表示等到超时也没见这一轮收尾。
+ */
+async function waitForInFlightSync(before: { at?: string; error?: string | null }): Promise<SyncReport | null> {
+  const deadline = Date.now() + SYNC_BUSY_WAIT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, SYNC_BUSY_POLL_MS));
+    const status = await syncStatus();
+    if (!status) continue;
+    // 等的那一轮自己失败了：last_sync_at 不动、last_error 换新，按它的错误报
+    if (status.lastError && status.lastError !== before.error) {
+      throw new CoreCommandError("SYNC_FAILED", status.lastError);
     }
+    if (status.lastSyncAt && status.lastSyncAt !== before.at) {
+      const result = status.lastResult;
+      return {
+        pulled: result?.pulled ?? 0,
+        applied: result?.applied ?? 0,
+        pushed: result?.pushed ?? 0,
+        conflicts: result?.conflicts ?? 0,
+        imagesPulled: result?.imagesPulled ?? 0,
+        imagesPushed: result?.imagesPushed ?? 0
+      };
+    }
+  }
+  return null;
+}
+
+async function dispatchSyncNow(): Promise<SyncReport> {
+  let before: { at?: string; error?: string | null } = {};
+  try {
+    const status = await syncStatus();
+    before = { at: status?.lastSyncAt, error: status?.lastError ?? null };
+  } catch {
+    // 状态读不到不影响主路径：撞忙时退化成直接报错
+  }
+  try {
+    const envelope = await coreDispatch<SyncReport>("sync.now", {});
+    return envelope.data;
+  } catch (error) {
+    const busy = error instanceof CoreCommandError && error.code === "SYNC_IN_PROGRESS";
+    if (!busy) throw error;
+    const finished = await waitForInFlightSync(before);
+    if (finished) return finished;
+    throw error;
   }
 }
 
@@ -1366,6 +1409,11 @@ export async function syncNow(options: { silent?: boolean } = {}): Promise<boole
     // 暂停不是故障：不动连接状态缓存（🟢/🔴 保持上次探测结论）
     if (error instanceof CoreCommandError && error.code === "SYNC_PAUSED") {
       if (!silent) showToast("同步已暂停，点「恢复同步」继续");
+      return false;
+    }
+    // 等了一轮还没跑完（超大首同步之类）：不是故障，别报「同步失败」
+    if (error instanceof CoreCommandError && error.code === "SYNC_IN_PROGRESS") {
+      if (!silent) showToast("同步正在进行中，完成后可再试");
       return false;
     }
     if (!silent) await report(error, "同步失败");

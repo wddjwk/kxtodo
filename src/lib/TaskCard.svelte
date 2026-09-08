@@ -1,9 +1,9 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy } from "svelte";
-  import { Check, ChevronUp, Minus, PenLine, Plus, X } from "@lucide/svelte";
+  import { Check, ChevronUp, PenLine, Plus, X } from "@lucide/svelte";
   import { collapsedMarkdownLine, hasMultipleMarkdownLines, renderInlineMarkdown, renderMarkdown } from "./markdown";
   import { mdImageCache, resolveMarkdownImages } from "./images";
-  import { appSettings, accent } from "./stores";
+  import { appSettings } from "./stores";
   import { isMobile as isMobileStore } from "./platform";
   import { uiScaleValue } from "./styles";
   import { longpress, isLongPressSuppressed } from "./longpress";
@@ -54,8 +54,6 @@
   $: canExpand = hasMultipleMarkdownLines(task.markdown) || titleOverflow;
   $: isExpanded = task.expanded && canExpand;
   $: plain = cardStyle === "card";
-  /** 角标颜色 = 该条目自己的主题色（系统视图里混着多个条目，不能拿全局 accent） */
-  $: nodeColor = $appSettings.appearance.uiColors?.[nodeId] || $accent;
 
   onDestroy(() => {
     if (tapTimer !== undefined) window.clearTimeout(tapTimer);
@@ -274,20 +272,6 @@
   on:dblclick={handleCardDblClick}
   on:contextmenu={openContext}
 >
-  {#if plain}
-    <button
-      class="card-corner"
-      type="button"
-      style={`background:${nodeColor}`}
-      title={isExpanded ? "折叠" : "展开"}
-      aria-label={isExpanded ? "折叠" : "展开"}
-      on:click|stopPropagation={toggleExpand}
-    >
-      {#if canExpand}
-        {#if isExpanded}<Minus size={10} strokeWidth={3.4} />{:else}<Plus size={10} strokeWidth={3.4} />{/if}
-      {/if}
-    </button>
-  {/if}
   <div class="task-title-grid">
     {#if !plain}
       <button class="task-check" type="button" aria-label="切换完成" on:click|stopPropagation={() => dispatch("toggle", task.id)}>

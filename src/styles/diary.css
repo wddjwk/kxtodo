@@ -21,6 +21,16 @@
   display: none;
 }
 
+/* 但全局搜索的混排结果只渲染在工作区里：日记开着时搜什么都「没反应」。
+   搜索态把主区域让给工作区，清空搜索词即回到日记（diaryOpen 不变）。 */
+.app-shell.diary-open.searching .workspace {
+  display: flex;
+}
+
+.app-shell.diary-open.searching .diary-view {
+  display: none;
+}
+
 /* ---------- 头部 ---------- */
 
 .diary-view-switch {
@@ -603,16 +613,17 @@
   pointer-events: none;
 }
 
-.diary-view > * {
+/* 只抬正文流里的直接子元素。**绝不要写成 `.diary-view > *`**：那条规则的特异性
+   与 `.context-menu`、`.diary-fab-row` 自己的定位规则相同（都是 0,1,0），而本文件
+   比 menu.css 晚加载 → 后来者赢，浮层菜单和浮动按钮全被改成 `position: relative`
+   掉回正文流：菜单被拉成整行宽、又被 `.diary-view` 的 overflow:hidden 裁掉一半，
+   + 按钮跑到左下角。（`.workspace > *` 没这个病，因为 workspace.css 在 menu.css 之前。）
+   `.list-header` 自己就带 `position: relative; z-index: 20`，不必再列进来。 */
+.diary-view > .diary-subtitle,
+.diary-view > .diary-search,
+.diary-view > .diary-scroll {
   position: relative;
   z-index: 1;
-}
-
-/* 上一条把所有直接子元素压到同一层，而本文件比 workspace.css 晚加载，
-   于是 .list-header 原本的 z-index:20 被盖掉——齿轮下拉面板会被 DOM 靠后的
-   副标题挡在下面。这里用更高优先级显式抬回来（与 .planned-group-bar 同一个坑）。 */
-.diary-view .list-header {
-  z-index: 20;
 }
 
 /* ---------- 齿轮面板（桌面） ----------

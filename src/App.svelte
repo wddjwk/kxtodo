@@ -3,7 +3,7 @@
   import { matchesShortcut } from "./lib/shortcuts";
   import { buildAppShellStyle, buildMobileShellStyle } from "./lib/styles";
   import {
-    appSettings, appState, showSettings, searchQuery,
+    appSettings, appState, showSettings, searchQuery, isSearching,
     taskEmojiPicker, editorTaskId, appVersion, showToast,
     isHydrated, diaryOpen, diaryEditor, editorDraftNode,
     hydrate as hydrateStores
@@ -129,6 +129,7 @@
   class:view-toolbox={$isMobile && $mobileView === "toolbox"}
   class:view-diary={$isMobile && $mobileView === "diary"}
   class:diary-open={!$isMobile && $diaryOpen}
+  class:searching={$isSearching}
   class:view-settings={$isMobile && $showSettings}
   style={appShellStyle}
   on:click={closeOverlays}

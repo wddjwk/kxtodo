@@ -726,10 +726,6 @@ mod tests {
 
     #[test]
     fn lww_local_newer_ignores_remote() {
-        let mut data = DataFile {
-            nodes: vec![node("entry-a", None, 0.0, "2026-03-01T00:00:00.000Z")],
-            ..empty_data()
-        };
         let remote = record(
             "node",
             "entry-a",

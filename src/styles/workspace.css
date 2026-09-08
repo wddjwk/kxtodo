@@ -302,11 +302,7 @@ h1 {
 }
 
 /* 一般卡片（分组类型 = 一般卡片）：不是可勾选的 todolist，没有勾选框列，
-   左上角一个主题色小角标代替它的位置感。 */
-.task-card.plain {
-  padding-left: 28px;
-}
-
+   正文一列占满。 */
 .task-card.plain .task-body {
   grid-column: 1;
 }
@@ -321,34 +317,6 @@ h1 {
 
 .task-card.plain .edit-button {
   grid-column: 2;
-}
-
-/* 角标：小、贴左上角、颜色 = 条目主题色，+/- 表示展开折叠 */
-.card-corner {
-  position: absolute;
-  left: 7px;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 3;
-  display: grid;
-  width: 15px;
-  height: 15px;
-  place-items: center;
-  border: 0;
-  border-radius: 4px;
-  padding: 0;
-  color: #ffffff;
-  opacity: 0.92;
-  cursor: pointer;
-}
-
-.task-card.plain.expanded .card-corner {
-  top: 12px;
-  transform: none;
-}
-
-.card-corner:hover {
-  opacity: 1;
 }
 
 /* 一般卡片没有「已完成」语义：不画删除线、文字不灰 */
@@ -2113,6 +2081,52 @@ h1 {
   min-height: 0;
   width: 100%;
   border: 0;
+}
+
+/* 桌面：无标题栏全屏，iframe 占满整窗。顶部一条透明感应带捕捉「鼠标上划到顶」，
+   浮出两个圆钮（外部打开 + 红X）——跨源 iframe 吞掉鼠标事件，感应带必须是自己的元素。 */
+.link-preview-hotzone {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 2;
+  height: 12px;
+}
+
+.link-preview-float {
+  position: absolute;
+  top: 10px;
+  right: 14px;
+  z-index: 3;
+  display: flex;
+  gap: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.link-preview-float.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.link-preview-float .link-preview-close {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 94%);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 20%);
+  color: #4b5563;
+}
+
+.link-preview-float .link-preview-close:hover {
+  background: #ffffff;
+}
+
+/* 关闭就是那个红 X */
+.link-preview-float .link-preview-exit {
+  color: #c0392b;
 }
 
 /* ---------- Color grid reset button ---------- */

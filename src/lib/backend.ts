@@ -130,7 +130,7 @@ export async function exportData(payload: unknown, defaultName: string): Promise
   URL.revokeObjectURL(url);
 }
 
-export type DiaryArchiveResult = { imported?: number; skipped?: number; entries?: number; path?: string; name?: string };
+export type DiaryArchiveResult = { imported?: number; skipped?: number; images?: number; entries?: number; path?: string; name?: string };
 
 /** 日记压缩包命令返回的是 core envelope，失败时是序列化后的错误串——与 coreDispatch 同一套解包。 */
 async function invokeDiaryArchive(command: string, args: Record<string, unknown>): Promise<DiaryArchiveResult> {

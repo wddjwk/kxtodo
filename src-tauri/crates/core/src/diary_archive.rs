@@ -6,8 +6,10 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::io::{Cursor, Read, Write};
+use std::sync::OnceLock;
 
 use chrono::{DateTime, Local, TimeZone};
+use regex::Regex;
 use serde_json::{json, Value};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
@@ -21,6 +23,40 @@ const MAX_FILES: usize = 20_000;
 const MAX_FILE_BYTES: u64 = 20 * 1024 * 1024;
 /// 文件名里的标题上限（按字符数，中文标题 48 字已经很长）
 const TITLE_CHARS_IN_NAME: usize = 48;
+/// 压缩包内插图统一放这个目录（解压出来与 年/月 同级）
+const IMAGES_DIR: &str = "images";
+
+fn image_ref_pattern() -> &'static Regex {
+    static PATTERN: OnceLock<Regex> = OnceLock::new();
+    PATTERN.get_or_init(|| Regex::new(r"!\[([^\]]*)\]\(([^)]+)\)").expect("valid regex"))
+}
+
+fn is_remote_src(src: &str) -> bool {
+    src.starts_with("http://") || src.starts_with("https://") || src.starts_with("data:")
+}
+
+/// 逐处改写 Markdown 里的图片引用。回调返回 None 表示这一处不动。
+/// 远程链接与 data: 内联图永远不碰。
+fn rewrite_image_refs(markdown: &str, mut map: impl FnMut(&str) -> Option<String>) -> String {
+    image_ref_pattern()
+        .replace_all(markdown, |caps: &regex::Captures<'_>| {
+            let alt = &caps[1];
+            let src = caps[2].trim();
+            if is_remote_src(src) {
+                return caps[0].to_string();
+            }
+            match map(src) {
+                Some(next) => format!("![{alt}]({next})"),
+                None => caps[0].to_string(),
+            }
+        })
+        .into_owned()
+}
+
+/// 取引用里的最后一段文件名（容忍 `../../images/x.png` 与手写 md 的相对路径）。
+fn ref_basename(src: &str) -> &str {
+    src.rsplit(['/', '\\']).next().unwrap_or(src)
+}
 
 // ---------------------------------------------------------------------------
 // 导出
@@ -38,7 +74,13 @@ pub fn archive_name(from: Option<&str>, to: Option<&str>) -> String {
 
 /// 构建压缩包字节。`entries` 必须已经按（日期升序，同天内写作先后）排好——
 /// 序号就是从这个顺序数出来的。
-pub fn build_zip(entries: &[&DiaryEntry]) -> CoreResult<Vec<u8>> {
+///
+/// `read_image` 按文件名取日记插图字节（调用方从 `img/data/diary/` 读）：
+/// 取得到的随包带走、正文引用改写成 `images/<文件名>` 的相对路径，取不到的引用原样保留。
+pub fn build_zip(
+    entries: &[&DiaryEntry],
+    read_image: &dyn Fn(&str) -> Option<Vec<u8>>,
+) -> CoreResult<Vec<u8>> {
     let mut totals: BTreeMap<&str, usize> = BTreeMap::new();
     for entry in entries {
         *totals.entry(entry.date.as_str()).or_insert(0) += 1;
@@ -48,13 +90,14 @@ pub fn build_zip(entries: &[&DiaryEntry]) -> CoreResult<Vec<u8>> {
     let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
     let mut seen_per_day: BTreeMap<&str, usize> = BTreeMap::new();
     let mut used_paths: HashSet<String> = HashSet::new();
+    let mut images: BTreeMap<String, Vec<u8>> = BTreeMap::new();
 
     for entry in entries {
         let index = seen_per_day.entry(entry.date.as_str()).or_insert(0);
         *index += 1;
         let total = totals.get(entry.date.as_str()).copied().unwrap_or(1);
         let path = entry_path(entry, *index, total, &mut used_paths);
-        let body = render_markdown(entry);
+        let body = render_markdown_with_images(entry, read_image, &mut images);
         writer
             .start_file(path, options)
             .map_err(|error| CoreError::internal(format!("写入压缩包失败：{error}")))?;
@@ -62,10 +105,47 @@ pub fn build_zip(entries: &[&DiaryEntry]) -> CoreResult<Vec<u8>> {
             .write_all(body.as_bytes())
             .map_err(|error| CoreError::internal(format!("写入压缩包失败：{error}")))?;
     }
+
+    // 图片本身已是压缩格式，二次 Deflate 只烧 CPU 不换体积
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    for (name, bytes) in &images {
+        writer
+            .start_file(format!("{IMAGES_DIR}/{name}"), stored)
+            .map_err(|error| CoreError::internal(format!("写入压缩包失败：{error}")))?;
+        writer
+            .write_all(bytes)
+            .map_err(|error| CoreError::internal(format!("写入压缩包失败：{error}")))?;
+    }
+
     let cursor = writer
         .finish()
         .map_err(|error| CoreError::internal(format!("收尾压缩包失败：{error}")))?;
     Ok(cursor.into_inner())
+}
+
+/// 一篇日记的导出文本：正文里读得到的本地图引用改写成包内相对路径，字节收进 images 表。
+fn render_markdown_with_images(
+    entry: &DiaryEntry,
+    read_image: &dyn Fn(&str) -> Option<Vec<u8>>,
+    images: &mut BTreeMap<String, Vec<u8>>,
+) -> String {
+    let body = rewrite_image_refs(entry.markdown.trim_end(), |src| {
+        let name = ref_basename(src);
+        if !is_safe_image_name(name) {
+            return None;
+        }
+        if !images.contains_key(name) {
+            let Some(bytes) = read_image(name) else {
+                return None;
+            };
+            images.insert(name.to_string(), bytes);
+        }
+        Some(format!("{IMAGES_DIR}/{name}"))
+    });
+    let mut text = render_front_matter(entry);
+    text.push_str(&body);
+    text.push('\n');
+    text
 }
 
 /// `年/月/YYYYMMDD[_序号][_标题].md`。一天只有一篇就不写序号，没有标题就不写标题。
@@ -127,6 +207,14 @@ fn sanitize_for_filename(raw: &str) -> String {
 
 /// 一篇日记 → 带 front-matter 的 Markdown 文本。空字段直接不写（文件是给人读的）。
 pub fn render_markdown(entry: &DiaryEntry) -> String {
+    let mut out = render_front_matter(entry);
+    out.push_str(entry.markdown.trim_end());
+    out.push('\n');
+    out
+}
+
+/// 只产出 `---` 包裹的元数据块（正文由调用方拼，导出带图时要先改写引用）。
+fn render_front_matter(entry: &DiaryEntry) -> String {
     let mut out = String::from("---\n");
     put_scalar(&mut out, "title", &entry.title);
     out.push_str(&format!("date: {}\n", entry.date));
@@ -146,8 +234,6 @@ pub fn render_markdown(entry: &DiaryEntry) -> String {
     }
     put_scalar(&mut out, "createdAt", &entry.created_at);
     out.push_str("---\n\n");
-    out.push_str(entry.markdown.trim_end());
-    out.push('\n');
     out
 }
 
@@ -192,9 +278,15 @@ fn time_of(iso: &str) -> String {
 // 导入
 // ---------------------------------------------------------------------------
 
-/// 解析压缩包 → `diary.import` 的 entries 数组。**不落盘、不解压到文件系统**，
-/// 全部在内存里读成文本，所以没有 zip-slip 一说。
-pub fn parse_zip(bytes: &[u8]) -> CoreResult<Vec<Value>> {
+/// 解析结果：日记草稿数组 + 包内插图（按文件名索引，导入时落回 `img/data/diary/`）。
+#[derive(Default)]
+pub struct ParsedArchive {
+    pub entries: Vec<Value>,
+    pub images: BTreeMap<String, Vec<u8>>,
+}
+
+/// 解析压缩包。**不落盘、不解压到文件系统**，全部在内存里读，所以没有 zip-slip 一说。
+pub fn parse_zip(bytes: &[u8]) -> CoreResult<ParsedArchive> {
     if bytes.is_empty() {
         return Err(CoreError::validation("DIARY_IMPORT_INVALID", "压缩包是空的"));
     }
@@ -217,21 +309,45 @@ pub fn parse_zip(bytes: &[u8]) -> CoreResult<Vec<Value>> {
         ));
     }
 
-    let mut out = Vec::new();
+    let mut out = ParsedArchive::default();
     let mut total_bytes: u64 = 0;
+
+    // 第一遍只收插图：导出包里 images/ 排在所有 md 之后，
+    // 单遍扫描的话 md 先被处理，引用归一永远看不到包里的图。
     for index in 0..archive.len() {
-        let mut file = match archive.by_index(index) {
-            Ok(file) => file,
-            Err(_) => continue, // 单个条目读不了（不支持的压缩算法等）不影响其余
-        };
-        if file.is_dir() {
+        let Ok(mut file) = archive.by_index(index) else { continue };
+        if file.is_dir() || file.size() > MAX_FILE_BYTES {
+            continue;
+        }
+        let name = file.name().to_string();
+        if !is_image_name(&name) {
+            continue;
+        }
+        let mut raw: Vec<u8> = Vec::new();
+        if file.read_to_end(&mut raw).is_err() {
+            continue;
+        }
+        total_bytes += raw.len() as u64;
+        if total_bytes > MAX_ARCHIVE_BYTES as u64 {
+            return Err(CoreError::validation(
+                "DIARY_IMPORT_TOO_LARGE",
+                "解压后体积超过上限（疑似压缩包炸弹）",
+            ));
+        }
+        let base = ref_basename(&name).to_string();
+        if is_safe_image_name(&base) {
+            out.images.entry(base).or_insert(raw);
+        }
+    }
+
+    // 第二遍解析日记正文，并把引用归一回裸文件名
+    for index in 0..archive.len() {
+        let Ok(mut file) = archive.by_index(index) else { continue };
+        if file.is_dir() || file.size() > MAX_FILE_BYTES {
             continue;
         }
         let name = file.name().to_string();
         if !is_markdown(&name) {
-            continue;
-        }
-        if file.size() > MAX_FILE_BYTES {
             continue;
         }
         let mut raw: Vec<u8> = Vec::new();
@@ -247,7 +363,16 @@ pub fn parse_zip(bytes: &[u8]) -> CoreResult<Vec<Value>> {
         }
         // 用户可能在别的编辑器里存成 GBK：lossy 解码保住能读的部分，别整篇丢掉
         let text = String::from_utf8_lossy(&raw);
-        out.push(parse_markdown(&text, &name));
+        let mut draft = parse_markdown(&text, &name);
+        if let Some(markdown) = draft.get("markdown").and_then(Value::as_str).map(str::to_string) {
+            let rewritten = rewrite_image_refs(&markdown, |src| {
+                let base = ref_basename(src);
+                // 包里有这张图才归一回裸文件名；没有就原样保留（别把外链改坏）
+                out.images.contains_key(base).then(|| base.to_string())
+            });
+            draft["markdown"] = Value::String(rewritten);
+        }
+        out.entries.push(draft);
     }
     Ok(out)
 }
@@ -255,6 +380,27 @@ pub fn parse_zip(bytes: &[u8]) -> CoreResult<Vec<Value>> {
 fn is_markdown(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower.ends_with(".md") || lower.ends_with(".markdown") || lower.ends_with(".txt")
+}
+
+fn is_image_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with(".png")
+        || lower.ends_with(".jpg")
+        || lower.ends_with(".jpeg")
+        || lower.ends_with(".gif")
+        || lower.ends_with(".webp")
+        || lower.ends_with(".bmp")
+}
+
+/// 落盘前的文件名护栏：不带路径分隔符与 `..`、没有控制字符、长度有界。
+/// 包内名字来自外部输入，拼进本地目录前必须过这一道。
+pub fn is_safe_image_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 200
+        && !name.contains(['/', '\\'])
+        && !name.contains("..")
+        && !name.starts_with('.')
+        && !name.chars().any(|ch| ch.is_control())
 }
 
 /// 从 zip 内路径取最后一段文件名（也容忍用户解压后重新打包多出来的一层目录）。
@@ -551,7 +697,7 @@ mod tests {
         let a = entry("d1", "2026-09-08", "早上的想法", "正文一", "2026-09-08T01:00:00+08:00");
         let b = entry("d2", "2026-09-08", "", "正文二", "2026-09-08T09:00:00+08:00");
         let c = entry("d3", "2026-01-05", "跨年", "正文三", "2026-01-05T20:00:00+08:00");
-        let mut names = names_of(&build_zip(&[&a, &b, &c]).unwrap());
+        let mut names = names_of(&build_zip(&[&a, &b, &c], &|_| None).unwrap());
         names.sort();
         assert_eq!(
             names,
@@ -572,7 +718,7 @@ mod tests {
             "正文",
             "2026-09-08T01:00:00+08:00",
         );
-        let names = names_of(&build_zip(&[&nasty]).unwrap());
+        let names = names_of(&build_zip(&[&nasty], &|_| None).unwrap());
         assert_eq!(names.len(), 1);
         let name = &names[0];
         assert!(name.starts_with("2026/09/20260908_"), "{name}");
@@ -590,7 +736,7 @@ mod tests {
         // 两篇标题清洗后撞车 → 用 id 尾巴区分，谁也不覆盖谁
         let x = entry("diary-aaaaaa111111", "2026-09-08", "???", "一", "2026-09-08T01:00:00+08:00");
         let y = entry("diary-bbbbbb222222", "2026-09-08", "???", "二", "2026-09-08T02:00:00+08:00");
-        let names = names_of(&build_zip(&[&x, &y]).unwrap());
+        let names = names_of(&build_zip(&[&x, &y], &|_| None).unwrap());
         assert_eq!(names.len(), 2);
         assert_ne!(names[0], names[1], "撞名必须被区分开：{names:?}");
     }
@@ -645,8 +791,8 @@ mod tests {
     fn a_whole_archive_round_trips_through_zip() {
         let a = entry("d1", "2026-09-08", "早", "早上的正文", "2026-09-08T08:00:00+08:00");
         let b = entry("d2", "2026-09-08", "晚", "晚上的正文", "2026-09-08T22:00:00+08:00");
-        let bytes = build_zip(&[&a, &b]).unwrap();
-        let parsed = parse_zip(&bytes).unwrap();
+        let bytes = build_zip(&[&a, &b], &|_| None).unwrap();
+        let parsed = parse_zip(&bytes).unwrap().entries;
         assert_eq!(parsed.len(), 2);
         let titles: Vec<&str> = parsed.iter().map(|p| p["title"].as_str().unwrap()).collect();
         assert!(titles.contains(&"早") && titles.contains(&"晚"));
@@ -687,9 +833,54 @@ mod tests {
         writer.write_all(&[0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe]).unwrap();
         let bytes = writer.finish().unwrap().into_inner();
 
-        let parsed = parse_zip(&bytes).unwrap();
+        let parsed = parse_zip(&bytes).unwrap().entries;
         // .md 与 .txt 收进来（用户可能把日记存成 txt），二进制图片跳过而不是整体报错
         assert_eq!(parsed.len(), 2, "{parsed:?}");
         assert!(parsed.iter().any(|p| p["markdown"].as_str().unwrap().contains("能读的一篇")));
+    }
+
+    #[test]
+    fn images_round_trip_through_the_archive() {
+        let png: Vec<u8> = vec![0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3];
+        let with_image = entry(
+            "d1",
+            "2026-09-08",
+            "带图的一篇",
+            "看图：\n\n![截图](md-111.png)\n\n![外链](https://example.com/a.png)\n\n![丢了](md-missing.png)",
+            "2026-09-08T08:00:00+08:00",
+        );
+        let store = [("md-111.png".to_string(), png.clone())].into_iter().collect::<BTreeMap<_, _>>();
+        let bytes = build_zip(&[&with_image], &|name| store.get(name).cloned()).unwrap();
+
+        let names = names_of(&bytes);
+        assert!(names.contains(&"images/md-111.png".to_string()), "{names:?}");
+
+        let parsed = parse_zip(&bytes).unwrap();
+        assert_eq!(parsed.images.get("md-111.png"), Some(&png));
+        let markdown = parsed.entries[0]["markdown"].as_str().unwrap();
+        // 包内有图：引用归一回裸文件名（KXToDo 内部约定）
+        assert!(markdown.contains("![截图](md-111.png)"), "{markdown}");
+        // 远程链接永远不碰
+        assert!(markdown.contains("![外链](https://example.com/a.png)"), "{markdown}");
+        // 包里没有的图：原样保留，不当坏引用处理
+        assert!(markdown.contains("![丢了](md-missing.png)"), "{markdown}");
+    }
+
+    #[test]
+    fn exported_markdown_points_at_the_in_archive_image_path() {
+        let png: Vec<u8> = vec![0x89, 0x50, 0x4e, 0x47, 9];
+        let with_image = entry("d1", "2026-09-08", "图", "![截图](md-111.png)", "2026-09-08T08:00:00+08:00");
+        let store = [("md-111.png".to_string(), png)].into_iter().collect::<BTreeMap<_, _>>();
+        let bytes = build_zip(&[&with_image], &|name| store.get(name).cloned()).unwrap();
+
+        // 解压出来 年/月/x.md 与 images/ 同级，相对路径要能直接显示
+        let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let mut text = String::new();
+        archive
+            .by_name("2026/09/20260908_图.md")
+            .unwrap()
+            .read_to_string(&mut text)
+            .unwrap();
+        assert!(text.contains("![截图](images/md-111.png)"), "{text}");
     }
 }

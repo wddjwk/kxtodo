@@ -1784,16 +1784,22 @@ fn build_diary_invocation(action: &DiaryAction) -> CoreResult<Invocation> {
         DiaryAction::Remove(args) => ("diary.remove", serialize_args(args)),
         DiaryAction::Export(args) => ("diary.export", serialize_args(args)),
         DiaryAction::Import(args) => {
-            // 压缩包在 CLI 侧读并解析（与 --markdown-file 同一套路）：
-            // 核心命令只看到普通的 entries 数组，写入仍然只有那一条业务层。
+            // 压缩包在 CLI 侧读成字节（与 --markdown-file 同一套路），解析与插图落盘
+            // 都在 core 的 diary.import 里完成——写入仍然只有那一条业务层。
             let bytes = std::fs::read(&args.zip).map_err(|error| {
                 CoreError::validation(
                     "PAYLOAD_FILE_ERROR",
                     format!("无法读取 {}：{error}", args.zip),
                 )
             })?;
-            let entries = crate::diary_archive::parse_zip(&bytes)?;
-            ("diary.import", serde_json::json!({ "entries": entries, "source": args.zip }))
+            use base64::Engine as _;
+            (
+                "diary.import",
+                serde_json::json!({
+                    "zipBase64": base64::engine::general_purpose::STANDARD.encode(&bytes),
+                    "source": args.zip,
+                }),
+            )
         }
     };
     Ok(Invocation::new(name, params))

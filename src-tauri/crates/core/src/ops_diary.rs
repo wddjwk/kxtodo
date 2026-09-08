@@ -305,21 +305,28 @@ fn diary_remove(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRes
     Ok(json!({ "removed": plan, "revision": outcome.revision }))
 }
 
-/// 导入压缩包解析出来的日记（前端/CLI 先解析，写入永远过这一条命令层）。
+/// 导入压缩包（`zipBase64`）里的日记与插图。**解析在 core 侧完成**：插图字节要和
+/// entries 一起拿到，才能把 `images/` 里的图落回 `img/data/diary/`。
 ///
 /// **同一天已有日记不算冲突**：日记本来就允许一天多篇，导入进来的直接追加成另一篇，
 /// 既不合并正文也不去重——用户的两篇就是两篇。
 fn diary_import(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
     let params = &inv.params;
-    let raw = params
-        .get("entries")
-        .and_then(Value::as_array)
-        .ok_or_else(|| CoreError::validation("MISSING_PARAM", "缺少 entries 数组"))?;
+    let encoded = params
+        .get("zipBase64")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CoreError::validation("MISSING_PARAM", "缺少 zipBase64 压缩包内容"))?;
+    use base64::Engine as _;
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(encoded.as_bytes())
+        .map_err(|error| CoreError::validation("DIARY_IMPORT_INVALID", format!("压缩包内容解码失败：{error}")))?;
+    let archive = crate::diary_archive::parse_zip(&raw)?;
+    let raw_entries = &archive.entries;
 
     // 先在事务外把每一条都校验一遍：一条坏数据不该让整个导入半途而废
     let mut drafts: Vec<(String, String, String, String, String, Vec<Tag>, String)> = Vec::new();
     let mut skipped = 0usize;
-    for item in raw {
+    for item in raw_entries {
         let date = match item.get("date").and_then(Value::as_str) {
             Some(raw) => match parse_date(raw) {
                 Ok(date) => date,
@@ -380,7 +387,7 @@ fn diary_import(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRes
             .unwrap_or_else(now_iso);
         drafts.push((date, title, markdown, mood, weather, tags, created));
     }
-    if drafts.is_empty() && !raw.is_empty() {
+    if drafts.is_empty() && !raw_entries.is_empty() {
         return Err(CoreError::validation(
             "DIARY_IMPORT_EMPTY",
             "压缩包里没有任何可导入的日记（每篇至少要有一个合法日期，且标题与正文不同时为空）",
@@ -404,6 +411,23 @@ fn diary_import(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRes
             "imported": count,
             "skipped": skipped,
         }));
+    }
+
+    // 插图落回 img/data/diary/：正文里的引用是裸文件名，图不在就等于日记丢了图。
+    // 已存在的同名文件不覆盖——图片是内容寻址的不可变 blob，重导同一个包必须幂等。
+    let mut images_written = 0usize;
+    if !archive.images.is_empty() {
+        let image_dir = ctx.repo.layout.entry_img_dir(crate::model::DIARY_IMAGE_NODE);
+        std::fs::create_dir_all(&image_dir)?;
+        for (name, bytes) in &archive.images {
+            let target = image_dir.join(name);
+            if target.exists() {
+                continue;
+            }
+            std::fs::write(&target, bytes)
+                .map_err(|error| CoreError::io(format!("无法写入插图 {}：{error}", target.display())))?;
+            images_written += 1;
+        }
     }
 
     let mut imported_ids: Vec<String> = Vec::new();
@@ -438,6 +462,7 @@ fn diary_import(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRes
     Ok(json!({
         "imported": if outcome.replayed { 0 } else { count },
         "skipped": skipped,
+        "images": images_written,
         "ids": imported_ids,
         "revision": outcome.revision,
     }))
@@ -467,7 +492,14 @@ fn diary_export(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRes
         });
         picked
     };
-    let archive = crate::diary_archive::build_zip(&entries)?;
+    // 插图随包带走：正文里引用到的本地图从 img/data/diary/ 读字节，读不到的引用原样保留
+    let image_dir = ctx.repo.layout.entry_img_dir(crate::model::DIARY_IMAGE_NODE);
+    let archive = crate::diary_archive::build_zip(&entries, &|name| {
+        if !crate::diary_archive::is_safe_image_name(name) {
+            return None;
+        }
+        std::fs::read(image_dir.join(name)).ok()
+    })?;
     let name = crate::diary_archive::archive_name(from.as_deref(), to.as_deref());
 
     if let Some(path) = param_str(params, "out") {

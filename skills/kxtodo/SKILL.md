@@ -48,8 +48,8 @@ KXToDo v9 提供脚本化 CLI。本 SKILL 说明**何时调用、按什么步骤
 - 读：`diary list [--date <某天> | --from <起> --to <止>] [--limit N]`（`total` 是全部条数，`returned` 是这一页）；单篇 `diary get --id`。
 - 改：`diary modify --id ... --date/--title/--markdown/--mood/--weather`，字段缺省 = 不变，**心情/天气/标题传空串 = 清除**；标签用 `--replace-tags` 整体替换。
 - 删：`diary remove --id ... --yes`（high-risk-write，会写同步墓碑，删除传播到其它设备）。
-- **导出**：`diary export --out <path.zip> [--from <起> --to <止>]`（不给范围就是一键全量）。压缩包是给人读的：`年/月/YYYYMMDD[_序号][_标题].md`，一天多篇才带序号，没标题就只用日期；每篇的 `title/date/time/tags/mood/weather/createdAt` 写在 YAML front-matter 里，解压出来任何编辑器都能直接看。
-- **导入**：`diary import --zip <path> --yes`（bulk 写，要确认；`--dry-run` 先看会进多少条）。解析很宽容：没有 front-matter 的手写 md 也能进（日期退回文件名 `YYYYMMDD` 或目录 `年/月`），非 UTF-8 按 lossy 解码，日期非法或标题正文全空的条目跳过并计入 `skipped`。**同一天已有日记不算冲突**：导入进来的直接追加成另一篇，不合并正文也不去重——所以同一个包导两遍就会得到两份，别重试。
+- **导出**：`diary export --out <path.zip> [--from <起> --to <止>]`（不给范围就是一键全量）。压缩包是给人读的：`年/月/YYYYMMDD[_序号][_标题].md`，一天多篇才带序号，没标题就只用日期；每篇的 `title/date/time/tags/mood/weather/createdAt` 写在 YAML front-matter 里，解压出来任何编辑器都能直接看。**插图随包走**：正文里引用到的本地图进包内 `images/`，md 里的引用改写成相对路径，解压即可显示。
+- **导入**：`diary import --zip <path> --yes`（bulk 写，要确认；`--dry-run` 先看会进多少条）。解析很宽容：没有 front-matter 的手写 md 也能进（日期退回文件名 `YYYYMMDD` 或目录 `年/月`），非 UTF-8 按 lossy 解码，日期非法或标题正文全空的条目跳过并计入 `skipped`；包内 `images/` 的图落回 `img/data/diary/`（已存在的同名文件不覆盖），落盘张数在返回值 `images` 里。**同一天已有日记不算冲突**：导入进来的直接追加成另一篇，不合并正文也不去重——所以同一个包导两遍就会得到两份，别重试。
 - 视图偏好 `config get|set diary.view list|calendar|group` 是**本机 UI 状态**，不跨设备同步；日记的主题色与背景（`diary.accent` / `diary.backgroundColor` / `diary.backgroundImage` / `diary.backgroundOpacity`）**是**同步的（外观该多端一致）。这几项都不影响任何命令的输出。
 
 ## 定时任务工作流

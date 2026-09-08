@@ -11,6 +11,10 @@ pub const SETTINGS_SCHEMA_VERSION: u32 = 1;
 pub const SCHEDULE_SCHEMA_VERSION: u32 = 2;
 pub const DIARY_SCHEMA_VERSION: u32 = 1;
 
+/// 日记插图复用「按条目分目录」的图片通道（`img/data/<nodeId>/`），伪条目 id 固定为
+/// `diary`——与前端 `diary.ts` 的 DIARY_IMAGE_NODE 同名，图片存储与同步一行都不用改。
+pub const DIARY_IMAGE_NODE: &str = "diary";
+
 pub const SYSTEM_NODE_IDS: [&str; 4] = ["my-day", "planned", "important", "scheduled"];
 
 // ---------------------------------------------------------------------------

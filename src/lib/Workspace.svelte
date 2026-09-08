@@ -2,7 +2,7 @@
   import { onMount, tick } from "svelte";
   import {
     ArrowLeft, Calendar, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
-    ChevronsDown, ChevronsUp, FolderInput,
+    ChevronsDown, ChevronsUp, ExternalLink, FolderInput,
     Lightbulb, MoreHorizontal, PenLine, Plus, RefreshCw, Search, Settings as SettingsIcon, SmilePlus, Star, Sun, Tag, Trash2, X
   } from "@lucide/svelte";
   import {
@@ -76,6 +76,8 @@
   /** 内置浏览器顶部标题栏的文字：链接文字 → 同源时读到的网页标题 → 主机名兜底 */
   let linkPreviewTitle = "";
   let previewFrame: HTMLIFrameElement;
+  /** 桌面全屏预览：悬浮的关闭/外部打开控件是否露出来（鼠标上划到顶才显示） */
+  let previewControls = false;
   // 分钟级 tick：让计划内分组标签（周X/日期区间）在跨天后随下次重算刷新
   let dayTick = 0;
   // 移动端下拉同步：提示条高度/是否过阈值/上一轮是否还在跑
@@ -639,6 +641,7 @@
     } else {
       linkPreviewUrl = url;
       linkPreviewTitle = (title ?? "").trim() || hostOf(url);
+      previewControls = false;
     }
   }
 
@@ -668,6 +671,14 @@
   function closeLinkPreview(): void {
     linkPreviewUrl = "";
     linkPreviewTitle = "";
+    previewControls = false;
+  }
+
+  /** 网站拒绝被 iframe 框住时（X-Frame-Options / CSP frame-ancestors）的一条出路。 */
+  function openPreviewExternal(): void {
+    const url = linkPreviewUrl;
+    if (!url) return;
+    void openExternalUrl(url).catch((error) => showToast(`打开链接失败：${String(error)}`));
   }
 
   function openEmojiPickerForTask(taskId: string): void {
@@ -1182,12 +1193,43 @@
 
   {#if linkPreviewUrl}
     <div class="link-preview-overlay">
-      <div class="link-preview-bar">
-        <span class="link-preview-title" title={linkPreviewTitle}>{linkPreviewTitle}</span>
-        <button class="link-preview-close" type="button" title="关闭预览" aria-label="关闭预览" on:click={closeLinkPreview}>
-          <X size={18} strokeWidth={2.5} />
-        </button>
-      </div>
+      {#if $isMobile}
+        <div class="link-preview-bar">
+          <span class="link-preview-title" title={linkPreviewTitle}>{linkPreviewTitle}</span>
+          <button
+            class="link-preview-close"
+            type="button"
+            title="在系统浏览器打开"
+            aria-label="在系统浏览器打开"
+            on:click={openPreviewExternal}
+          >
+            <ExternalLink size={17} />
+          </button>
+          <button class="link-preview-close" type="button" title="关闭预览" aria-label="关闭预览" on:click={closeLinkPreview}>
+            <X size={18} strokeWidth={2.5} />
+          </button>
+        </div>
+      {:else}
+        <!-- 桌面：无标题栏全屏。跨源 iframe 吞掉鼠标事件，只能靠顶部这条自己的感应带
+             捕捉「鼠标上划到顶」，浮出控件；控件自己 mouseleave 再收回去。 -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="link-preview-hotzone" on:mouseenter={() => (previewControls = true)}></div>
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="link-preview-float" class:visible={previewControls} on:mouseleave={() => (previewControls = false)}>
+          <button
+            class="link-preview-close"
+            type="button"
+            title="在系统浏览器打开"
+            aria-label="在系统浏览器打开"
+            on:click={openPreviewExternal}
+          >
+            <ExternalLink size={16} />
+          </button>
+          <button class="link-preview-close link-preview-exit" type="button" title="关闭预览" aria-label="关闭预览" on:click={closeLinkPreview}>
+            <X size={20} strokeWidth={2.5} />
+          </button>
+        </div>
+      {/if}
       <iframe
         bind:this={previewFrame}
         class="link-preview-frame"

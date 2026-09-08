@@ -1,6 +1,6 @@
 import { get, writable } from "svelte/store";
 import { platform as tauriPlatform } from "@tauri-apps/plugin-os";
-import { diaryEditor, editorDraftNode, editorTaskId, showSettings } from "./stores";
+import { diaryEditor, editorDraftNode, editorTaskId, searchQuery, showSettings } from "./stores";
 
 /**
  * Mobile detection is intentionally user-agent based so the Windows desktop
@@ -55,7 +55,7 @@ export type MobileView = "list" | "content" | "toolbox" | "diary";
 
 export const mobileView = writable<MobileView>("list");
 
-type MobileLayer = "content" | "settings" | "editor" | "toolbox" | "diary" | "diary-editor";
+type MobileLayer = "content" | "settings" | "editor" | "toolbox" | "diary" | "diary-editor" | "search";
 
 function currentLayer(): string | undefined {
   if (typeof history === "undefined") return undefined;
@@ -74,6 +74,11 @@ function pushLayer(layer: MobileLayer): void {
  */
 let applyingHistory = false;
 
+/** 进入搜索层之前的栈顶状态：程序化撤掉 search 层时 replaceState 回它。
+    NOT_PUSHED = 本会话没压过 search 层（订阅初始触发不许据此回退历史栈）。 */
+const NOT_PUSHED = Symbol("search-layer-not-pushed");
+let searchReturnState: unknown = NOT_PUSHED;
+
 function releaseGuardLater(): void {
   window.setTimeout(() => {
     applyingHistory = false;
@@ -84,7 +89,15 @@ function handlePopState(event: PopStateEvent): void {
   if (!get(isMobile)) return;
   applyingHistory = true;
   const layer = (event.state as { mv?: string } | null)?.mv;
+  // 返回键把搜索层退掉时（落到进入搜索前的那一层）顺手清空搜索词：
+  // 不清的话侧栏还停在搜索态，用户只能再按一次返回——那一下就直接退出应用了。
+  if (layer !== "search" && get(searchQuery).trim()) {
+    searchQuery.set("");
+  }
   switch (layer) {
+    case "search":
+      // 搜索层仍在栈顶（搜索期间开过的编辑器被返回键关掉落回这里），状态不变
+      break;
     case "content":
       mobileView.set("content");
       showSettings.set(false);
@@ -172,6 +185,35 @@ export function startMobileRouter(): void {
       history.back();
     }
   });
+
+  // 搜索态也占一层：安卓的返回键经 webview.goBack 消费历史栈，没有这一层的话
+  // 搜索结果页吃不到返回信号，多按一下就 finish() 退出应用。
+  searchQuery.subscribe((query) => {
+    if (!get(isMobile) || applyingHistory) return;
+    if (query.trim()) {
+      if (currentLayer() !== "search") {
+        searchReturnState = typeof history === "undefined" ? null : history.state;
+        pushLayer("search");
+      }
+    } else if (currentLayer() === "search" && searchReturnState !== NOT_PUSHED) {
+      // 只有本会话自己压过这层才回退：订阅的初始触发（上次会话残留的栈顶 + 空词）
+      // 若在挂载期间 history.back()，会和 WebView 的初始化抢历史栈。
+      history.back();
+      searchReturnState = NOT_PUSHED;
+    }
+  });
+}
+
+/**
+ * 程序化离开搜索（点结果跳转、菜单里的「打开所在列表」）：把 search 层原地替换回
+ * 进入搜索前的栈顶状态。走 history.back() 的话 popstate 是异步的，会和随后的
+ * pushLayer 抢历史栈（先 back 再 push，back 又把新层弹掉）。
+ */
+export function dropSearchLayer(): void {
+  if (typeof history === "undefined" || get(isMobile) === false) return;
+  if (currentLayer() !== "search") return;
+  history.replaceState(searchReturnState ?? null, "");
+  searchReturnState = NOT_PUSHED;
 }
 
 // 模块顶层不能挂路由：platform→stores→backend→capabilities→platform 存在

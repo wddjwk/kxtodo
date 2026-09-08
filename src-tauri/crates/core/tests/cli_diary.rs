@@ -252,3 +252,36 @@ fn export_then_import_round_trips_and_same_day_just_adds_another_entry() {
     let same_day = target.ok(&["diary", "list", "--date", "2026-09-08"]);
     assert_eq!(same_day["returned"], 4, "9 月 8 日现在应该有 4 篇");
 }
+
+#[test]
+fn diary_images_travel_with_the_archive() {
+    let env = TestEnv::fresh();
+    let image_dir = env.path().join("img").join("data").join("diary");
+    std::fs::create_dir_all(&image_dir).unwrap();
+    let png: Vec<u8> = vec![0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7, 7, 7];
+    std::fs::write(image_dir.join("md-42.png"), &png).unwrap();
+    add(&env, &["--date", "2026-09-08", "--title", "带图", "--markdown", "看图：\n\n![截图](md-42.png)"]);
+
+    let zip = env.path().join("with-images.zip");
+    let zip_path = zip.to_string_lossy().to_string();
+    env.ok(&["diary", "export", "--out", &zip_path]);
+
+    let target = TestEnv::fresh();
+    let target_zip = target.path().join("with-images.zip");
+    std::fs::copy(&zip, &target_zip).unwrap();
+    let target_path = target_zip.to_string_lossy().to_string();
+    let imported = target.ok(&["diary", "import", "--zip", &target_path, "--yes"]);
+    assert_eq!(imported["imported"], 1);
+    assert_eq!(imported["images"], 1, "插图要随包落盘并计数");
+
+    let restored = target.path().join("img").join("data").join("diary").join("md-42.png");
+    assert_eq!(std::fs::read(restored).unwrap(), png, "插图要跟着包落回目标数据目录");
+
+    let listed = target.ok(&["diary", "list"]);
+    let markdown = listed["items"][0]["markdown"].as_str().unwrap();
+    assert!(markdown.contains("![截图](md-42.png)"), "引用归一回裸文件名：{markdown}");
+
+    // 重导同一个包：图已存在就不覆盖、不重复计数（图片是内容寻址的不可变 blob）
+    let again = target.ok(&["diary", "import", "--zip", &target_path, "--yes"]);
+    assert_eq!(again["images"], 0);
+}
