@@ -11,7 +11,7 @@
     updateTask as updateTaskAction
   } from "./actions";
   import { openExternalUrl } from "./backend";
-  import { dropSearchLayer, showMobileContent, showMobileDiary } from "./platform";
+  import { showMobileContent, showMobileDiary } from "./platform";
   import { accentForNode, diaryAccent } from "./styles";
   import TaskCard from "./TaskCard.svelte";
   import DiaryCard from "./diary/DiaryCard.svelte";
@@ -127,7 +127,6 @@
   /** 跳到这条结果所在的界面（搜索词一并清掉，否则跳过去还是过滤后的列表）。 */
   function goToTask(nodeId: string): void {
     closeMenus();
-    dropSearchLayer();
     searchQuery.set("");
     void selectNodeAction(nodeId);
     showMobileContent();
@@ -135,7 +134,6 @@
 
   function goToDiary(): void {
     closeMenus();
-    dropSearchLayer();
     searchQuery.set("");
     showMobileDiary();
   }

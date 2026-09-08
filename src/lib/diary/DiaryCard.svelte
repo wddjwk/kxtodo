@@ -2,6 +2,7 @@
   import { createEventDispatcher, onDestroy } from "svelte";
   import { Image as ImageIcon, PenLine } from "@lucide/svelte";
   import { markdownTitle, renderMarkdown } from "../markdown";
+  import { markdownWire } from "../markdownControls";
   import { mdImageCache, resolveMarkdownImages } from "../images";
   import { isMobile as isMobileStore } from "../platform";
   import { longpress, isLongPressSuppressed } from "../longpress";
@@ -176,7 +177,7 @@
     </header>
 
     {#if isExpanded}
-      <div class="markdown-body markdown-content diary-card-content" on:click={handleBodyClick}>
+      <div class="markdown-body markdown-content diary-card-content" use:markdownWire on:click={handleBodyClick}>
         {@html fullHtml}
       </div>
     {:else if excerpt}

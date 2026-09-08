@@ -3,19 +3,23 @@
   import { CalendarDays, Check, Eye, ImagePlus, PenLine, Plus, SmilePlus, Tag as TagIcon, X } from "@lucide/svelte";
   import type { EditorView } from "@codemirror/view";
   import { createMarkdownEditor, insertAtCursor } from "./codemirrorSetup";
-  import { hasMultipleMarkdownLines, markdownTitle, renderMarkdown } from "../markdown";
+  import { markdownTitle, renderMarkdown } from "../markdown";
+  import { markdownWire } from "../markdownControls";
   import { mdImageCache, primeMdImageCache, resolveMarkdownImages } from "../images";
   import {
     isTauriRuntime, mdImageUrl, pickImageFile, saveMdImage, saveMdImageFromDataUrl
   } from "../backend";
   import { caps } from "../capabilities";
-  import { appState, clearEditBase, fileToDataUrl, markEditStart, showToast, todayIso } from "../stores";
+  import { appState, appSettings, clearEditBase, fileToDataUrl, markEditStart, showToast, todayIso } from "../stores";
   import {
     addTask, replaceTaskEmojis, replaceTaskTags, saveTaskMarkdown, updateTask,
     type TaskChanges
   } from "../actions";
   import DatePicker from "../DatePicker.svelte";
   import IconPicker from "../IconPicker.svelte";
+  import { touchOnly } from "../platform";
+  import { clampPopoverToViewport } from "../popover";
+  import { uiScaleValue } from "../styles";
   import type { Tag, TagColor } from "../types";
 
   /** 空串 = 新建模式（配合 draftNodeId），此时保存才创建任务，空正文关掉即消失。 */
@@ -34,6 +38,7 @@
 
   let host: HTMLDivElement;
   let imageFileInput: HTMLInputElement;
+  let metaRowEl: HTMLDivElement;
   let view: EditorView | null = null;
   let mode: "edit" | "preview" = "edit";
   let text = "";
@@ -61,6 +66,21 @@
   let emojiPickerOpen = false;
   let tagDraft = "";
   let tagColor: TagColor = "yellow";
+  /** 触屏上点了一下、露出删除叉的标签/表情（桌面靠 hover，不用它） */
+  let revealedTagId = "";
+  let revealedEmojiIndex = -1;
+
+  function toggleTagReveal(tagId: string): void {
+    if (!touchOnly) return;
+    revealedTagId = revealedTagId === tagId ? "" : tagId;
+    revealedEmojiIndex = -1;
+  }
+
+  function toggleEmojiReveal(index: number): void {
+    if (!touchOnly) return;
+    revealedEmojiIndex = revealedEmojiIndex === index ? -1 : index;
+    revealedTagId = "";
+  }
 
   // 预览惰性渲染：编辑态不做全量 markdown+高亮（长文档逐键全量渲染会卡死主线程）
   let previewHtml = "";
@@ -104,8 +124,12 @@
 
   /** 点/焦点落到元数据行之外 → 收起浮层（行内的开关交给触发器自己）。 */
   function dismissPopovers(event: Event): void {
-    if (!metaOpen) return;
     const target = event.target as HTMLElement | null;
+    if ((revealedTagId || revealedEmojiIndex >= 0) && !target?.closest(".task-tag, .task-emoji-badge")) {
+      revealedTagId = "";
+      revealedEmojiIndex = -1;
+    }
+    if (!metaOpen) return;
     if (target?.closest(".editor-meta-field")) return;
     metaOpen = "";
   }
@@ -158,7 +182,8 @@
       clearEditBase(taskId);
       return true;
     }
-    const ok = await saveTaskMarkdown(taskId, markdown, hasMultipleMarkdownLines(markdown));
+    // 展开/折叠只该由用户在列表里触发：保存正文时保留当前展开态，不按行数强制展开
+    const ok = await saveTaskMarkdown(taskId, markdown, task?.expanded === true);
     if (ok) initialText = markdown;
     return ok;
   }
@@ -195,6 +220,9 @@
 
   function toggleMeta(name: typeof metaOpen): void {
     metaOpen = metaOpen === name ? "" : name;
+    if (metaOpen) {
+      void clampPopoverToViewport(metaRowEl, uiScaleValue($appSettings.appearance.uiScale));
+    }
   }
 
   function pickDate(date: string): void {
@@ -367,7 +395,7 @@
     <!-- 日期 / 表情 / 标签：与日记编辑器同一套元数据行（样式在 editor.css）。
          日期不设默认值——没填就是没填，不会悄悄给今天。 -->
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-    <div class="editor-meta" on:click|stopPropagation>
+    <div class="editor-meta" bind:this={metaRowEl} on:click|stopPropagation>
       <div class="editor-meta-field" class:open={metaOpen === "date"}>
         <button class="editor-meta-trigger" type="button" class:filled={Boolean(dueDate)} title="添加日期" on:click={() => toggleMeta("date")}>
           <CalendarDays size={15} />{dateLabel || "添加日期"}
@@ -381,17 +409,26 @@
 
       <div class="editor-meta-field editor-meta-tags">
         {#each emojis as emoji, index (`emoji-${index}`)}
-          <span class="task-emoji-badge" title="点击移除">
+          <span
+            class="task-emoji-badge"
+            title="点击移除"
+            class:reveal-delete={revealedEmojiIndex === index}
+            on:click|stopPropagation={() => toggleEmojiReveal(index)}
+          >
             {emoji}
-            <button class="tag-delete" type="button" aria-label="移除表情" on:click={() => removeEmoji(index)}>
+            <button class="tag-delete" type="button" aria-label="移除表情" on:click|stopPropagation={() => removeEmoji(index)}>
               <X size={10} strokeWidth={3} />
             </button>
           </span>
         {/each}
         {#each tags as tag (tag.id)}
-          <span class={`task-tag tag-${tag.color}`}>
+          <span
+            class={`task-tag tag-${tag.color}`}
+            class:reveal-delete={revealedTagId === tag.id}
+            on:click|stopPropagation={() => toggleTagReveal(tag.id)}
+          >
             {tag.text || ""}
-            <button class="tag-delete" type="button" aria-label="删除标签" on:click={() => removeTag(tag.id)}>
+            <button class="tag-delete" type="button" aria-label="删除标签" on:click|stopPropagation={() => removeTag(tag.id)}>
               <X size={10} strokeWidth={3} />
             </button>
           </span>
@@ -437,7 +474,7 @@
     <div class="editor-body">
       <div bind:this={host} class="editor-cm-host" class:hidden-host={mode !== "edit"}></div>
       {#if mode === "preview"}
-        <div class="markdown-body markdown-content editor-preview" on:click={handlePreviewClick}>
+        <div class="markdown-body markdown-content editor-preview" use:markdownWire on:click={handlePreviewClick}>
           {@html previewHtml}
         </div>
       {/if}

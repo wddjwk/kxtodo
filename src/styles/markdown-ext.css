@@ -1,0 +1,363 @@
+/* markdown-ext.css — markdown 扩展渲染的外观：callout（ksimple 同款配色）、
+   front-matter、代码块折叠、mermaid/markmap 图框与全屏查看、数学公式、链接图标。
+   全部本地样式，不请求网络。 */
+
+/* ---------- callout（> [!type] 标题）：配色与 ksimple _admonitions.scss 一致 ---------- */
+
+.admonition {
+  --adm: #096ae1;
+  margin: 12px 0;
+  border-left: 4px solid var(--adm);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--adm) 6%, #ffffff);
+}
+
+.admonition.abstract { --adm: #209fb5; }
+.admonition.ai { --adm: #4d6bfe; }
+.admonition.bug { --adm: #de3a3a; }
+.admonition.caution { --adm: #e64553; }
+.admonition.code { --adm: #7287fd; }
+.admonition.conclusion { --adm: #dd7878; }
+.admonition.danger { --adm: #fe640b; }
+.admonition.error { --adm: #d20f39; }
+.admonition.example { --adm: #dc8a78; }
+.admonition.experiment { --adm: #51bb2a; }
+.admonition.flag { --adm: #d12920; }
+.admonition.goal { --adm: #e64553; }
+.admonition.idea { --adm: #ffa82e; }
+.admonition.important { --adm: #7d4dda; }
+.admonition.info { --adm: #04a5e5; }
+.admonition.memo { --adm: #e64553; }
+.admonition.message { --adm: #85db5a; }
+.admonition.note { --adm: #096ae1; }
+.admonition.notify { --adm: #0d48bd; }
+.admonition.question { --adm: #dc461d; }
+.admonition.quote { --adm: #7287fd; }
+.admonition.reference { --adm: #3271ae; }
+.admonition.success { --adm: #40a02b; }
+.admonition.task { --adm: #1a61cc; }
+.admonition.tip { --adm: #179299; }
+.admonition.tldr { --adm: #66a99e; }
+.admonition.todo { --adm: #41a5ee; }
+.admonition.warning { --adm: #df8e1d; }
+
+.admonition-header {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 8px 4px 10px;
+  color: var(--adm);
+  font-weight: 600;
+  font-size: 0.95em;
+  border-radius: 4px 4px 0 0;
+}
+
+.admonition-header svg {
+  width: 0.9em;
+  height: 0.9em;
+  flex: none;
+  fill: currentColor;
+}
+
+.admonition-content {
+  padding: 0 10px 6px 14px;
+  color: #333a45;
+  font-size: 0.95em;
+}
+
+.admonition-content > *:first-child {
+  margin-top: 0;
+}
+
+.admonition-content > *:last-child {
+  margin-bottom: 0;
+}
+
+/* ---------- front-matter：键值表，不再露出两行 --- ---------- */
+
+.front-matter {
+  display: grid;
+  gap: 3px;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px dashed #d5dae1;
+  border-radius: 8px;
+  background: #f7f9fb;
+}
+
+.fm-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.fm-key {
+  flex: 0 0 auto;
+  min-width: 64px;
+  color: #5b6472;
+  font-weight: 600;
+}
+
+.fm-value {
+  min-width: 0;
+  color: #1f2937;
+  word-break: break-word;
+}
+
+/* ---------- 代码块：语言条 + 复制 + 折叠 ---------- */
+
+.code-block {
+  position: relative;
+  margin: 10px 0;
+  border: 1px solid #e3e6ea;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f8f9fb;
+}
+
+.code-block pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  max-height: none;
+}
+
+.code-bar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 3px 8px;
+  border-bottom: 1px solid #e3e6ea;
+  background: #eef1f5;
+}
+
+.code-lang {
+  margin-right: auto;
+  color: #5b6472;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.code-btn {
+  border: 0;
+  border-radius: 5px;
+  padding: 2px 8px;
+  background: transparent;
+  color: #5b6472;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.code-btn:hover {
+  background: #dfe4ea;
+  color: #1f2937;
+}
+
+.code-collapsible.collapsed pre {
+  max-height: 240px;
+  overflow: hidden;
+}
+
+.code-collapsible.collapsed::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 42px;
+  background: linear-gradient(transparent, #f8f9fb 78%);
+  pointer-events: none;
+}
+
+/* ---------- 图框（mermaid / markmap） ---------- */
+
+.diagram-frame {
+  margin: 10px 0;
+  border: 1px solid #e3e6ea;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fbfcfd;
+}
+
+.diagram-toolbar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 3px 8px;
+  border-bottom: 1px solid #e3e6ea;
+  background: #eef1f5;
+}
+
+.diagram-lang {
+  margin-right: auto;
+  color: #5b6472;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.diagram-btn {
+  border: 0;
+  border-radius: 5px;
+  padding: 2px 8px;
+  background: transparent;
+  color: #5b6472;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.diagram-btn:hover {
+  background: #dfe4ea;
+  color: #1f2937;
+}
+
+.diagram-canvas {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  max-height: 480px;
+  padding: 10px;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+}
+
+.diagram-canvas:active {
+  cursor: grabbing;
+}
+
+.diagram-canvas svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.diagram-canvas .markmap-svg {
+  width: 100%;
+  height: 420px;
+}
+
+.diagram-loading,
+.diagram-error {
+  color: #8a94a2;
+  font-size: 12px;
+}
+
+.diagram-error {
+  color: #b42318;
+}
+
+pre.diagram-source {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid #e3e6ea;
+  border-radius: 0;
+  background: #f8f9fb;
+  max-height: 240px;
+  overflow: auto;
+}
+
+/* ---------- 全屏查看 ---------- */
+
+.md-fullscreen-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9500;
+  display: none;
+  flex-direction: column;
+  background: #ffffff;
+}
+
+.md-fullscreen-overlay.active {
+  display: flex;
+}
+
+.md-fullscreen-bar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 14px;
+  border-bottom: 1px solid #e3e6ea;
+  color: #5b6472;
+  font-size: 12px;
+}
+
+.md-fullscreen-close {
+  margin-left: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  padding: 5px 12px;
+  background: #ffffff;
+  color: #1f2937;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.md-fullscreen-close:hover {
+  background: #f2f4f7;
+}
+
+.md-fullscreen-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.md-fullscreen-stage .diagram-canvas {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+}
+
+.md-fullscreen-stage .diagram-canvas .markmap-svg {
+  height: 100%;
+}
+
+/* ---------- 数学公式 ---------- */
+
+.kx-math-block {
+  margin: 10px 0;
+  overflow-x: auto;
+  text-align: center;
+}
+
+.kx-math-block .katex {
+  font-size: 1.08em;
+}
+
+.markdown-body .katex {
+  font-size: 1.02em;
+}
+
+/* ---------- 超链接图标（ksimple 同款：链接前一个小链环） ---------- */
+
+.markdown-body p a:not(:has(img))::before,
+.markdown-body li a:not(:has(img))::before,
+.admonition-content a:not(:has(img))::before {
+  content: "";
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  margin: 0 3px -2px 0;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237a8699' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71'/%3E%3Cpath d='M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+
+/* ---------- 窄屏：图框与代码块别撑破卡片 ---------- */
+
+.app-shell.mobile .diagram-canvas {
+  max-height: 360px;
+  padding: 6px;
+}
+
+.app-shell.mobile .code-collapsible.collapsed pre {
+  max-height: 200px;
+}

@@ -61,6 +61,25 @@
   let presetEditOriginalColor = "";
   let syncing = false;
 
+  /**
+   * 拖动期间的本地草稿。日记模式的写入走 `config.set`——它等 IPC 往返回来才更新
+   * store，滞后的回渲会把「已提交的旧值」写回 range/color input，thumb 被拽回去
+   * （透明度条不跟手、取色器跳变的根因；条目页的 setBackground 同步改 store 所以没这病）。
+   * 交互期间显示值冻结、不跟随 committed，change/blur 后再放开。
+   */
+  let opacityLive = false;
+  let opacityValue = 0;
+  let uiColorLive = false;
+  let uiColorValue = "";
+  let linkLive = false;
+  let linkValue = "";
+
+  $: opacityCommitted = Math.round((bg.imageOpacity ?? defaultBackground.imageOpacity ?? 0.28) * 100);
+  $: if (!opacityLive) opacityValue = opacityCommitted;
+  $: if (!uiColorLive) uiColorValue = accentValue;
+  $: linkCommitted = isLocalImageRef(bg.image) ? "" : (bg.image ?? "");
+  $: if (!linkLive) linkValue = linkCommitted;
+
   /** 同步已配对且没暂停才给「立即同步」入口（与设置页/下拉同一口径） */
   $: syncReady =
     Boolean($appSettings.sync?.enabled) &&
@@ -117,7 +136,6 @@
   /** 生效的背景与主题色：日记模式用传进来的覆盖值，否则跟着当前选中的条目 */
   $: bg = background ?? $selectedBackground;
   $: accentValue = accentColor ?? $accent;
-  $: backgroundLinkDraft = isLocalImageRef(bg.image) ? "" : (bg.image ?? "");
 
   function setBackground(patch: Partial<ListBackground>): void {
     if (diaryMode) {
@@ -157,17 +175,29 @@
   function updateBackgroundLink(event: Event): void {
     const target = event.currentTarget;
     if (!(target instanceof HTMLInputElement)) return;
+    linkLive = true;
+    linkValue = target.value;
     const previous = bg.image;
     const next = target.value.trim() || undefined;
     setBackground({ image: next });
     if (isLocalImageRef(previous) && previous !== next) void deleteBackgroundImage(localImageFilename(previous));
   }
 
+  function endBackgroundLinkEdit(): void {
+    linkLive = false;
+  }
+
   function updateBackgroundOpacity(event: Event): void {
     const target = event.currentTarget;
     if (target instanceof HTMLInputElement) {
+      opacityLive = true;
+      opacityValue = Number(target.value);
       setBackground({ imageOpacity: Number(target.value) / 100 });
     }
+  }
+
+  function endBackgroundOpacityEdit(): void {
+    opacityLive = false;
   }
 
   async function pickBackgroundImage(): Promise<void> {
@@ -256,8 +286,14 @@
   function handleUiColorPick(event: Event): void {
     const target = event.currentTarget;
     if (target instanceof HTMLInputElement) {
+      uiColorLive = true;
+      uiColorValue = target.value;
       setUiColor(target.value);
     }
+  }
+
+  function endUiColorPick(): void {
+    uiColorLive = false;
   }
 
   function resetUiColor(): void {
@@ -583,7 +619,7 @@
   <div class="ui-color-row">
     <label class="ui-color-picker" title="修改当前界面的标题和控件颜色">
       <span style={`--swatch: ${accentValue}`}></span>
-      <input type="color" value={accentValue} on:input={handleUiColorPick} />
+      <input type="color" value={uiColorValue} on:input={handleUiColorPick} on:change={endUiColorPick} />
     </label>
     <span class="ui-color-value">{accentValue}</span>
     <button class="menu-action-button" type="button" on:click={resetUiColor}>默认</button>
@@ -623,11 +659,18 @@
   <input bind:this={colorPickerInput} class="hidden-file" type="color" value={bg.color} on:input={handleColorPick} />
   <label class="background-link">
     背景图片链接
-    <input value={backgroundLinkDraft} placeholder="https://..." on:input={updateBackgroundLink} />
+    <input value={linkValue} placeholder="https://..." on:focus={() => (linkLive = true)} on:input={updateBackgroundLink} on:blur={endBackgroundLinkEdit} />
   </label>
   <label class="opacity-row">
     图片透明度
-    <input type="range" min="0" max="80" value={Math.round((bg.imageOpacity ?? 0.28) * 100)} on:input={updateBackgroundOpacity} />
+    <input
+      type="range"
+      min="0"
+      max="80"
+      value={opacityValue}
+      on:input={updateBackgroundOpacity}
+      on:change={endBackgroundOpacityEdit}
+    />
   </label>
   <div class="menu-inline two">
     <button class="menu-action-button" type="button" on:click={pickBackgroundImage}><Image size={15} /> 上传图片</button>

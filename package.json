@@ -31,7 +31,11 @@
     "emoji-picker-element": "^1.29.1",
     "github-markdown-css": "^5.9.0",
     "highlight.js": "^11.11.1",
+    "katex": "^0.18.7",
     "marked": "^15.0.7",
+    "markmap-lib": "^0.18.12",
+    "markmap-view": "^0.18.12",
+    "mermaid": "^11.17.2",
     "svelte": "^5.20.2"
   },
   "devDependencies": {

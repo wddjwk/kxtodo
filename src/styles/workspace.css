@@ -2083,52 +2083,6 @@ h1 {
   border: 0;
 }
 
-/* 桌面：无标题栏全屏，iframe 占满整窗。顶部一条透明感应带捕捉「鼠标上划到顶」，
-   浮出两个圆钮（外部打开 + 红X）——跨源 iframe 吞掉鼠标事件，感应带必须是自己的元素。 */
-.link-preview-hotzone {
-  position: absolute;
-  top: 0;
-  right: 0;
-  left: 0;
-  z-index: 2;
-  height: 12px;
-}
-
-.link-preview-float {
-  position: absolute;
-  top: 10px;
-  right: 14px;
-  z-index: 3;
-  display: flex;
-  gap: 8px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.15s ease;
-}
-
-.link-preview-float.visible {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.link-preview-float .link-preview-close {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: rgb(255 255 255 / 94%);
-  box-shadow: 0 4px 14px rgb(0 0 0 / 20%);
-  color: #4b5563;
-}
-
-.link-preview-float .link-preview-close:hover {
-  background: #ffffff;
-}
-
-/* 关闭就是那个红 X */
-.link-preview-float .link-preview-exit {
-  color: #c0392b;
-}
-
 /* ---------- Color grid reset button ---------- */
 
 .reset-bg-button {

@@ -7,6 +7,7 @@
   import { isMobile as isMobileStore } from "./platform";
   import { uiScaleValue } from "./styles";
   import { longpress, isLongPressSuppressed } from "./longpress";
+  import { markdownWire } from "./markdownControls";
   import DatePicker from "./DatePicker.svelte";
   import type { Task } from "./types";
 
@@ -52,7 +53,10 @@
   $: fullHtml = renderMarkdown(resolvedMd);
   $: formattedDate = task.dueDate ? formatDate(task.dueDate) : "";
   $: canExpand = hasMultipleMarkdownLines(task.markdown) || titleOverflow;
-  $: isExpanded = task.expanded && canExpand;
+  // 展开态只认存储值：canExpand 是量出来的易失值（列表增减导致滚动条出现/消失、
+  // 宽度一变标题溢出判定就翻转），拿它门控渲染会出现「动了别的任务这张卡自己展开」。
+  // canExpand 只留给手势/按钮当「有没有内容可展开」的判据。
+  $: isExpanded = task.expanded === true;
   $: plain = cardStyle === "card";
 
   onDestroy(() => {
@@ -189,7 +193,8 @@
     // 这里再跑桌面的「双击展开/收起」就会让双击既开编辑器又改变展开状态。
     if (mobile) return;
     if (isInteractiveTarget(event)) return;
-    if (!canExpand) return;
+    // 量不出可展开内容但存储态是展开的（标题又放得下了）也要能收起
+    if (!canExpand && !isExpanded) return;
     event.preventDefault();
     window.getSelection()?.removeAllRanges();
     toggleExpand();
@@ -285,7 +290,7 @@
 
     <section class="task-body">
       {#if isExpanded}
-        <div class="markdown-body markdown-content" on:click={handleMarkdownClick}>
+        <div class="markdown-body markdown-content" use:markdownWire on:click={handleMarkdownClick}>
           {@html fullHtml}
         </div>
       {:else}

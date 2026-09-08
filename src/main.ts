@@ -2,6 +2,7 @@ import { mount } from "svelte";
 import App from "./App.svelte";
 import "github-markdown-css/github-markdown-light.css";
 import "highlight.js/styles/github.css";
+import "katex/dist/katex.min.css";
 import "./styles/base.css";
 import "./styles/titlebar.css";
 import "./styles/sidebar.css";
@@ -11,6 +12,7 @@ import "./styles/menu.css";
 import "./styles/shared.css";
 import "./styles/editor.css";
 import "./styles/diary.css";
+import "./styles/markdown-ext.css";
 import "./styles/mobile.css";
 
 const target = document.getElementById("app");

@@ -17,6 +17,15 @@ function detectMobile(): boolean {
 
 export const isMobile = writable(detectMobile());
 
+/**
+ * 纯触屏设备（hover:none）。触屏补偿交互（点标签露出删除叉之类）只在这里启用，
+ * 桌面（含触屏笔记本，hover 仍为 true）继续走 hover 语义。
+ */
+export const touchOnly: boolean =
+  typeof window !== "undefined" &&
+  typeof window.matchMedia === "function" &&
+  window.matchMedia("(hover: none)").matches;
+
 export type HostOs = "windows" | "linux" | "macos" | "android" | "ios" | "unknown";
 
 /**
@@ -55,7 +64,7 @@ export type MobileView = "list" | "content" | "toolbox" | "diary";
 
 export const mobileView = writable<MobileView>("list");
 
-type MobileLayer = "content" | "settings" | "editor" | "toolbox" | "diary" | "diary-editor" | "search";
+type MobileLayer = "content" | "settings" | "editor" | "toolbox" | "diary" | "diary-editor";
 
 function currentLayer(): string | undefined {
   if (typeof history === "undefined") return undefined;
@@ -74,11 +83,6 @@ function pushLayer(layer: MobileLayer): void {
  */
 let applyingHistory = false;
 
-/** 进入搜索层之前的栈顶状态：程序化撤掉 search 层时 replaceState 回它。
-    NOT_PUSHED = 本会话没压过 search 层（订阅初始触发不许据此回退历史栈）。 */
-const NOT_PUSHED = Symbol("search-layer-not-pushed");
-let searchReturnState: unknown = NOT_PUSHED;
-
 function releaseGuardLater(): void {
   window.setTimeout(() => {
     applyingHistory = false;
@@ -89,15 +93,7 @@ function handlePopState(event: PopStateEvent): void {
   if (!get(isMobile)) return;
   applyingHistory = true;
   const layer = (event.state as { mv?: string } | null)?.mv;
-  // 返回键把搜索层退掉时（落到进入搜索前的那一层）顺手清空搜索词：
-  // 不清的话侧栏还停在搜索态，用户只能再按一次返回——那一下就直接退出应用了。
-  if (layer !== "search" && get(searchQuery).trim()) {
-    searchQuery.set("");
-  }
   switch (layer) {
-    case "search":
-      // 搜索层仍在栈顶（搜索期间开过的编辑器被返回键关掉落回这里），状态不变
-      break;
     case "content":
       mobileView.set("content");
       showSettings.set(false);
@@ -186,34 +182,27 @@ export function startMobileRouter(): void {
     }
   });
 
-  // 搜索态也占一层：安卓的返回键经 webview.goBack 消费历史栈，没有这一层的话
-  // 搜索结果页吃不到返回信号，多按一下就 finish() 退出应用。
-  searchQuery.subscribe((query) => {
-    if (!get(isMobile) || applyingHistory) return;
-    if (query.trim()) {
-      if (currentLayer() !== "search") {
-        searchReturnState = typeof history === "undefined" ? null : history.state;
-        pushLayer("search");
-      }
-    } else if (currentLayer() === "search" && searchReturnState !== NOT_PUSHED) {
-      // 只有本会话自己压过这层才回退：订阅的初始触发（上次会话残留的栈顶 + 空词）
-      // 若在挂载期间 history.back()，会和 WebView 的初始化抢历史栈。
-      history.back();
-      searchReturnState = NOT_PUSHED;
-    }
-  });
+  // 搜索态不压历史栈（pushState 条目进 WebView 会话恢复后，「搜索过再退出、
+  // 重开必闪退一次」就是从那来的）。返回键改由 MainActivity 问这条桥：
+  // 搜索态消费掉（清词），其余返回 false 交给 WebView 历史 / finish。
+  registerBackHandler();
 }
 
 /**
- * 程序化离开搜索（点结果跳转、菜单里的「打开所在列表」）：把 search 层原地替换回
- * 进入搜索前的栈顶状态。走 history.back() 的话 popstate 是异步的，会和随后的
- * pushLayer 抢历史栈（先 back 再 push，back 又把新层弹掉）。
+ * 安卓硬件返回键的前端消费口。MainActivity 的 OnBackPressedCallback 会
+ * evaluateJavascript 调它：返回 true = 这一记返回被覆盖层吃掉，不再 goBack/finish。
+ * 桌面/浏览器没有这条回调链，注册了也无害。
  */
-export function dropSearchLayer(): void {
-  if (typeof history === "undefined" || get(isMobile) === false) return;
-  if (currentLayer() !== "search") return;
-  history.replaceState(searchReturnState ?? null, "");
-  searchReturnState = NOT_PUSHED;
+function registerBackHandler(): void {
+  const w = window as Window & { kxtodoBackHandler?: () => boolean };
+  w.kxtodoBackHandler = () => {
+    if (!get(isMobile)) return false;
+    if (get(searchQuery).trim()) {
+      searchQuery.set("");
+      return true;
+    }
+    return false;
+  };
 }
 
 // 模块顶层不能挂路由：platform→stores→backend→capabilities→platform 存在

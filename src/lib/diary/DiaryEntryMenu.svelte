@@ -1,13 +1,13 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
-  import { CalendarDays, CloudSun, PenLine, Smile, Trash2 } from "@lucide/svelte";
+  import { CalendarDays, CloudSun, PenLine, Plus, Smile, Tag as TagIcon, Trash2 } from "@lucide/svelte";
   import { deleteDiaryEntry, updateDiaryEntry } from "../actions";
   import DatePicker from "../DatePicker.svelte";
   import ContextMenu from "../menu/ContextMenu.svelte";
   import MenuItem from "../menu/MenuItem.svelte";
   import MenuSeparator from "../menu/MenuSeparator.svelte";
   import { MOOD_PRESETS, WEATHER_PRESETS } from "../diary";
-  import type { DiaryEntry } from "../types";
+  import type { DiaryEntry, Tag, TagColor } from "../types";
 
   /**
    * 日记卡片菜单。日记视图与全局搜索结果都要用同一份，所以抽出来——
@@ -20,6 +20,19 @@
   export let today = "";
 
   const dispatch = createEventDispatcher<{ edit: string; close: void }>();
+
+  const TAG_COLORS: Array<[TagColor, string]> = [
+    ["red", "红色"],
+    ["yellow", "黄色"],
+    ["blue", "蓝色"],
+    ["green", "绿色"],
+    ["gray", "灰色"]
+  ];
+
+  let tagInputText = "";
+  let selectedTagColor: TagColor = "yellow";
+  let editingTagId = "";
+  let editingTagText = "";
 
   function close(): void {
     dispatch("close");
@@ -44,6 +57,35 @@
     void updateDiaryEntry(entry.id, { weather: emoji });
   }
 
+  // ---- 标签：整体替换（与任务菜单同一套交互，写入仍过命令层） ----
+  function withTags(next: Tag[]): void {
+    void updateDiaryEntry(entry.id, { tags: next });
+  }
+
+  function submitTagInput(): void {
+    const text = tagInputText.trim().slice(0, 20);
+    if (!text) return;
+    withTags([
+      ...entry.tags,
+      { id: `tag-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, color: selectedTagColor, text }
+    ]);
+    tagInputText = "";
+  }
+
+  function submitTagEdit(): void {
+    if (!editingTagId) return;
+    withTags(
+      entry.tags.map((tag) =>
+        tag.id === editingTagId ? { ...tag, text: editingTagText.trim().slice(0, 20) || undefined } : tag
+      )
+    );
+    editingTagId = "";
+  }
+
+  function removeTag(tagId: string): void {
+    withTags(entry.tags.filter((tag) => tag.id !== tagId));
+  }
+
   function remove(): void {
     close();
     void deleteDiaryEntry(entry.id);
@@ -55,6 +97,68 @@
   <MenuItem icon={CalendarDays} label="修改日期">
     <div slot="submenu" class="task-menu-date">
       <DatePicker value={entry.date} on:select={(event) => setDate(event.detail)} on:clear={() => setDate(today)} />
+    </div>
+  </MenuItem>
+  <MenuItem icon={TagIcon} label="标签">
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div slot="submenu" class="tag-editor-panel" on:click|stopPropagation={() => (editingTagId = "")}>
+      {#if entry.tags.length > 0}
+        {#each entry.tags as tag (tag.id)}
+          {#if editingTagId === tag.id}
+            <div class="tag-editor-input-row" on:click|stopPropagation>
+              <input
+                type="text"
+                maxlength="20"
+                value={editingTagText}
+                on:input={(e) => (editingTagText = e.currentTarget.value)}
+                on:keydown|stopPropagation={(e) => { if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) submitTagEdit(); }}
+                on:blur={submitTagEdit}
+              />
+              <button class="tag-add-btn" type="button" on:click|stopPropagation={submitTagEdit}>
+                <Plus size={15} />
+              </button>
+            </div>
+          {:else}
+            <div
+              class={`tag-list-item bg-${tag.color}`}
+              on:click|stopPropagation={() => { editingTagId = tag.id; editingTagText = tag.text || ""; }}
+            >
+              <span class="tag-list-text">{tag.text || "(无文字)"}</span>
+              <button class="tag-list-delete" type="button" title="删除此标签" on:click|stopPropagation={() => removeTag(tag.id)}>
+                <Trash2 size={14} />
+              </button>
+            </div>
+          {/if}
+        {/each}
+      {/if}
+      <div class="tag-editor-input-row">
+        <input
+          type="text"
+          placeholder="输入标签文字..."
+          maxlength="20"
+          value={tagInputText}
+          on:input={(e) => (tagInputText = e.currentTarget.value)}
+          on:keydown|stopPropagation={(e) => { if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) submitTagInput(); }}
+        />
+        <button class="tag-add-btn" type="button" title="添加标签" on:click|stopPropagation={submitTagInput}>
+          <Plus size={15} />
+        </button>
+      </div>
+      <div class="tag-editor-colors">
+        {#each TAG_COLORS as [color, label]}
+          <button
+            class={`color-circle ${color}`}
+            class:selected={selectedTagColor === color}
+            title={label}
+            on:click|stopPropagation={() => (selectedTagColor = color)}
+          ></button>
+        {/each}
+      </div>
+      {#if entry.tags.length > 0}
+        <button class="menu-item menu-item-button danger tag-clear-all" on:click|stopPropagation={() => withTags([])}>
+          <Trash2 size={14} /> 清除所有标签
+        </button>
+      {/if}
     </div>
   </MenuItem>
   <MenuItem icon={Smile} label="心情">

@@ -308,10 +308,10 @@
   padding: 5px 9px;
 }
 
-/* 触屏没有 hover：编辑器里的标签/表情删除按钮必须一直在。
-   桌面仍走 workspace.css 的 hover 规则——这条不加 `.app-shell.mobile` 前缀，
-   特异性就压过 `:hover`，桌面上每个标签右上角都会常驻一个红叉。 */
-.app-shell.mobile .editor-meta-tags .tag-delete {
+/* 触屏没有 hover：编辑器里的标签/表情删除按钮靠「点一下标签露出、点别处收回」
+   （reveal-delete 由组件在 hover:none 的设备上切换）。桌面仍走 workspace.css 的 hover
+   规则——若像 v0.6.7 那样直接给移动端常驻 opacity:1，红叉就又一个接一个挂在标签上。 */
+.reveal-delete .tag-delete {
   opacity: 1;
 }
 

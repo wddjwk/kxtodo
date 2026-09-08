@@ -4,12 +4,14 @@
   import type { EditorView } from "@codemirror/view";
   import { createMarkdownEditor, insertAtCursor } from "../editor/codemirrorSetup";
   import { renderMarkdown } from "../markdown";
+  import { markdownWire } from "../markdownControls";
   import { mdImageCache, primeMdImageCache, resolveMarkdownImages } from "../images";
   import { isTauriRuntime, mdImageUrl, pickImageFile, saveMdImage, saveMdImageFromDataUrl } from "../backend";
   import { caps } from "../capabilities";
   import { get } from "svelte/store";
   import { appSettings, diaryEntries, fileToDataUrl, showToast } from "../stores";
-  import { diaryAccent } from "../styles";
+  import { diaryAccent, uiScaleValue } from "../styles";
+  import { clampPopoverToViewport } from "../popover";
   import { addDiaryEntry, updateDiaryEntry, type DiaryChanges } from "../actions";
   import DatePicker from "../DatePicker.svelte";
   import {
@@ -17,6 +19,7 @@
     fullDayLabel, relativeDayLabel, todayDate
   } from "../diary";
   import type { DiaryEditorTarget, Tag, TagColor } from "../types";
+  import { touchOnly } from "../platform";
 
   export let target: DiaryEditorTarget;
   export let onClose: () => void = () => {};
@@ -36,6 +39,7 @@
   let host: HTMLDivElement;
   let imageFileInput: HTMLInputElement;
   let titleInput: HTMLInputElement;
+  let metaRowEl: HTMLDivElement;
   let view: EditorView | null = null;
   let mode: "edit" | "preview" = "edit";
   let saving = false;
@@ -53,6 +57,13 @@
   let openPicker: "" | "date" | "mood" | "weather" | "tag" = "";
   let tagDraft = "";
   let tagColor: TagColor = "yellow";
+  /** 触屏上被点了一下、露出删除叉的标签（桌面靠 hover，不用它） */
+  let revealedTagId = "";
+
+  function toggleTagReveal(tagId: string): void {
+    if (!touchOnly) return;
+    revealedTagId = revealedTagId === tagId ? "" : tagId;
+  }
 
   // 预览惰性渲染：编辑态不做全量 markdown + 高亮（长文档逐键全量渲染会卡死主线程）
   let previewHtml = "";
@@ -89,8 +100,11 @@
 
   /** 点/焦点落到当前打开的那个字段之外 → 收起浮层。字段内部（含它自己的浮层）交给字段自己的开关。 */
   function dismissPopovers(event: Event): void {
-    if (!openPicker) return;
     const target = event.target as HTMLElement | null;
+    if (revealedTagId && !target?.closest(".task-tag, .task-emoji-badge")) {
+      revealedTagId = "";
+    }
+    if (!openPicker) return;
     if (target?.closest(".editor-meta-field")) return;
     openPicker = "";
   }
@@ -152,6 +166,9 @@
 
   function togglePicker(name: typeof openPicker): void {
     openPicker = openPicker === name ? "" : name;
+    if (openPicker) {
+      void clampPopoverToViewport(metaRowEl, uiScaleValue($appSettings.appearance.uiScale));
+    }
   }
 
   function pickDate(value: string): void {
@@ -309,7 +326,7 @@
 
     <!-- 日期 / 心情 / 天气 / 标签：一行元数据，浮层都在对话框内向下展开 -->
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-    <div class="editor-meta" on:click|stopPropagation>
+    <div class="editor-meta" bind:this={metaRowEl} on:click|stopPropagation>
       <div class="editor-meta-field" class:open={openPicker === "date"}>
         <button class="editor-meta-trigger" type="button" title="归属日期" on:click={() => togglePicker("date")}>
           <CalendarDays size={15} />{dateLabel}
@@ -353,9 +370,13 @@
 
       <div class="editor-meta-field editor-meta-tags" class:open={openPicker === "tag"}>
         {#each tags as tag (tag.id)}
-          <span class={`task-tag tag-${tag.color}`}>
+          <span
+            class={`task-tag tag-${tag.color}`}
+            class:reveal-delete={revealedTagId === tag.id}
+            on:click|stopPropagation={() => toggleTagReveal(tag.id)}
+          >
             {tag.text || ""}
-            <button class="tag-delete" type="button" aria-label="删除标签" on:click={() => removeTag(tag.id)}>
+            <button class="tag-delete" type="button" aria-label="删除标签" on:click|stopPropagation={() => removeTag(tag.id)}>
               <X size={10} strokeWidth={3} />
             </button>
           </span>
@@ -406,7 +427,7 @@
     <div class="editor-body">
       <div bind:this={host} class="editor-cm-host" class:hidden-host={mode !== "edit"}></div>
       {#if mode === "preview"}
-        <div class="markdown-body markdown-content editor-preview" on:click={handlePreviewClick}>
+        <div class="markdown-body markdown-content editor-preview" use:markdownWire on:click={handlePreviewClick}>
           {@html previewHtml}
         </div>
       {/if}
