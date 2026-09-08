@@ -3,6 +3,12 @@ import { defaultBackground, defaultSettings } from "./defaults";
 
 const DEFAULT_ACCENT = "#2564cf";
 
+/**
+ * 日记不属于任何条目，`accentForNode` 给不出颜色，用它自己的主题色。
+ * 墨蓝偏灰：和四个系统视图的主题色都不撞，也压得住默认的纸色背景。
+ */
+export const DIARY_ACCENT = "#4f5d8a";
+
 export function escapeCssUrl(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, "%22").replace(/\n/g, "");
 }

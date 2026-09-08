@@ -1,5 +1,5 @@
 import { writable, derived, get } from "svelte/store";
-import type { AppNotification, AppState, AppNode, EmojiPickerTarget, NotificationTone, SchedulerState, Settings, Task } from "./types";
+import type { AppNotification, AppState, AppNode, DiaryEditorTarget, EmojiPickerTarget, NotificationTone, SchedulerState, Settings, Task } from "./types";
 import { defaultSchedulerRuntimes, defaultSettings, emptyState, normalizeState, normalizeSettings, schedulerRuntimeKeys } from "./defaults";
 import {
   loadState, saveState, loadSettings, saveSettings, loadScheduler, saveScheduler,
@@ -78,6 +78,15 @@ export function createTaskId(): string {
     .slice(2, 10)}`;
 }
 
+export function createDiaryId(): string {
+  if (crypto.randomUUID) return `diary-${crypto.randomUUID().replace(/-/g, "")}`;
+  return `diary-${Math.random().toString(16).slice(2, 10)}${Math.random()
+    .toString(16)
+    .slice(2, 10)}${Math.random().toString(16).slice(2, 10)}${Math.random()
+    .toString(16)
+    .slice(2, 10)}`;
+}
+
 export function safeFileName(name: string): string {
   return name.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-").slice(0, 80) || "todo-note";
 }
@@ -103,6 +112,15 @@ export const searchQuery = writable("");
 export const taskEmojiPicker = writable<EmojiPickerTarget | null>(null);
 /** 正在浮窗编辑器中编辑的任务 ID（null = 编辑器关闭）。 */
 export const editorTaskId = writable<string | null>(null);
+
+/** 日记视图是否打开（桌面端）。移动端由 `mobileView === "diary"` 驱动，见 platform.ts。 */
+export const diaryOpen = writable(false);
+
+/**
+ * 正在编辑的日记：`{ id }` 改已有的一篇，`{ date }` 新建一篇（**保存时才落盘**，
+ * 于是关掉一个空草稿不会留下一篇空日记）。null = 编辑器关闭。
+ */
+export const diaryEditor = writable<DiaryEditorTarget | null>(null);
 
 // ---------------------------------------------------------------------------
 // Toast

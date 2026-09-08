@@ -105,6 +105,27 @@ pub fn gui_dispatch(
             meta.revision = Some(outcome.revision);
             Ok(json!({ "updated": ids.len() }))
         }
+        "set-diary-ui" => {
+            let id = required_str(&inv.params, "id")?;
+            let expanded = inv.params.get("expanded").and_then(Value::as_bool);
+            // UI 临时状态：不触碰 updatedAt。
+            let (_file, outcome) = ctx.repo.write_data(None, None, &inv.command, |file| {
+                let entry = file
+                    .diaries
+                    .iter_mut()
+                    .find(|entry| entry.id == id)
+                    .ok_or_else(|| {
+                        CoreError::not_found("DIARY_NOT_FOUND", format!("未找到日记 {id}"))
+                    })?;
+                if let Some(expanded) = expanded {
+                    entry.expanded = Some(expanded);
+                }
+                Ok(json!({ "id": id }))
+            })?;
+            meta.revision_domain = Some(Domain::Data);
+            meta.revision = Some(outcome.revision);
+            Ok(json!({ "id": id, "expanded": expanded }))
+        }
         "set-schedule-ui" => {
             let id = required_str(&inv.params, "id")?;
             let expanded = inv.params.get("expanded").and_then(Value::as_bool);
@@ -345,6 +366,18 @@ fn apply_import_state(file: &mut DataFile, state: &Value) -> CoreResult<()> {
             file.meta.record_tombstone(&item.id, "task", &now);
         }
     }
+    // 只有载荷里真的带 diaries 才接管日记：节点范围的导出文件没有这个字段，
+    // 一律按空处理会把用户整本日记抹掉。
+    let import_diaries = state.get("diaries").is_some();
+    if import_diaries {
+        let new_diary_ids: std::collections::HashSet<&str> =
+            imported.diaries.iter().map(|entry| entry.id.as_str()).collect();
+        for entry in &file.diaries {
+            if !new_diary_ids.contains(entry.id.as_str()) {
+                file.meta.record_tombstone(&entry.id, "diary", &now);
+            }
+        }
+    }
     let mut imported = imported;
     let mut nodes: Vec<crate::model::Node> = Vec::new();
     for sys_id in SYSTEM_NODE_IDS {
@@ -387,6 +420,9 @@ fn apply_import_state(file: &mut DataFile, state: &Value) -> CoreResult<()> {
     }
     file.nodes = nodes;
     file.tasks = imported.tasks;
+    if import_diaries {
+        file.diaries = imported.diaries;
+    }
     file.backgrounds = imported.backgrounds;
     let selected = imported.selected_node_id;
     file.selected_node_id = if task_ops::find_node(file, &selected).is_some() {

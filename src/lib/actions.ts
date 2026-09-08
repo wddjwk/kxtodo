@@ -5,11 +5,11 @@
 // ---------------------------------------------------------------------------
 
 import { get } from "svelte/store";
-import type { AppNode, AppState, CardStyle, ScheduledTask, SchedulerState, Settings, SyncMode, Tag, TagColor, Task } from "./types";
+import type { AppNode, AppState, CardStyle, DiaryEntry, ScheduledTask, SchedulerState, Settings, SyncMode, Tag, TagColor, Task } from "./types";
 import {
   appState, appSettings, commit, commitScheduler, commitSettings,
-  coreMode, createTaskId, editBaseUpdatedAt, markEditStart, clearEditBase, rebaseEditBase,
-  manualSyncAt, refreshFromCore, scheduleEntries, syncConnection, showToast
+  coreMode, createDiaryId, createTaskId, editBaseUpdatedAt, markEditStart, clearEditBase, rebaseEditBase,
+  manualSyncAt, refreshFromCore, scheduleEntries, syncConnection, showToast, todayIso
 } from "./stores";
 import { coreDispatch, CoreCommandError } from "./backend";
 import {
@@ -654,6 +654,147 @@ export async function setUiColor(nodeId: string, color: string): Promise<boolean
   next.appearance.uiColors[nodeId] = color;
   commitSettings(next);
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// 日记
+// ---------------------------------------------------------------------------
+
+export type DiaryDraft = {
+  /** 归属日期 YYYY-MM-DD；缺省为今天 */
+  date?: string;
+  title?: string;
+  markdown?: string;
+  mood?: string;
+  weather?: string;
+  tags?: Tag[];
+};
+
+export type DiaryChanges = DiaryDraft;
+
+function diaryTagParams(tags: Tag[]): string[] {
+  return tags.map((tag) => `${tag.color}:${tag.text ?? ""}`);
+}
+
+function findDiary(id: string): DiaryEntry | undefined {
+  return state().diaries.find((entry) => entry.id === id);
+}
+
+function applyDiaryChanges(entry: DiaryEntry, changes: DiaryChanges): DiaryEntry {
+  const next: DiaryEntry = { ...entry, updatedAt: new Date().toISOString() };
+  if (changes.date !== undefined) next.date = changes.date;
+  if (changes.title !== undefined) next.title = changes.title;
+  if (changes.markdown !== undefined) next.markdown = changes.markdown;
+  if (changes.mood !== undefined) next.mood = changes.mood;
+  if (changes.weather !== undefined) next.weather = changes.weather;
+  if (changes.tags !== undefined) next.tags = changes.tags;
+  return next;
+}
+
+export async function addDiaryEntry(draft: DiaryDraft): Promise<DiaryEntry | null> {
+  const createdAt = new Date().toISOString();
+  if (coreMode) {
+    let created;
+    try {
+      created = await coreDispatch<{ id: string; date: string }>("diary.add", {
+        date: draft.date,
+        title: draft.title ?? "",
+        markdown: draft.markdown ?? "",
+        mood: draft.mood ?? "",
+        weather: draft.weather ?? "",
+        tags: diaryTagParams(draft.tags ?? [])
+      });
+    } catch (error) {
+      return await report(error, "日记创建失败");
+    }
+    const entry: DiaryEntry = {
+      id: created.data.id,
+      date: created.data.date,
+      title: draft.title ?? "",
+      markdown: draft.markdown ?? "",
+      mood: draft.mood ?? "",
+      weather: draft.weather ?? "",
+      tags: draft.tags ?? [],
+      createdAt,
+      updatedAt: createdAt
+    };
+    // 本地即时生效（Domain 事件会兜底一致性）
+    appState.update((s) => ({ ...s, diaries: [...s.diaries, entry] }));
+    return entry;
+  }
+  const entry: DiaryEntry = {
+    id: createDiaryId(),
+    date: draft.date ?? todayIso(),
+    title: draft.title ?? "",
+    markdown: draft.markdown ?? "",
+    mood: draft.mood ?? "",
+    weather: draft.weather ?? "",
+    tags: draft.tags ?? [],
+    createdAt,
+    updatedAt: createdAt
+  };
+  commit({ ...state(), diaries: [...state().diaries, entry] });
+  return entry;
+}
+
+export async function updateDiaryEntry(id: string, changes: DiaryChanges): Promise<boolean> {
+  if (!findDiary(id)) return false;
+  if (coreMode) {
+    const params: Record<string, unknown> = { id };
+    if (changes.date !== undefined) params.date = changes.date;
+    if (changes.title !== undefined) params.title = changes.title;
+    if (changes.markdown !== undefined) params.markdown = changes.markdown;
+    if (changes.mood !== undefined) params.mood = changes.mood;
+    if (changes.weather !== undefined) params.weather = changes.weather;
+    if (changes.tags !== undefined) params.replaceTags = diaryTagParams(changes.tags);
+    try {
+      await coreDispatch("diary.modify", params);
+    } catch (error) {
+      await report(error, "日记保存失败");
+      return false;
+    }
+    appState.update((s) => ({
+      ...s,
+      diaries: s.diaries.map((entry) => (entry.id === id ? applyDiaryChanges(entry, changes) : entry))
+    }));
+    return true;
+  }
+  commit({
+    ...state(),
+    diaries: state().diaries.map((entry) => (entry.id === id ? applyDiaryChanges(entry, changes) : entry))
+  });
+  return true;
+}
+
+export async function deleteDiaryEntry(id: string): Promise<void> {
+  if (coreMode) {
+    try {
+      await coreDispatch("diary.remove", { id });
+    } catch (error) {
+      await report(error, "日记删除失败");
+      return;
+    }
+    appState.update((s) => ({ ...s, diaries: s.diaries.filter((entry) => entry.id !== id) }));
+    return;
+  }
+  commit({ ...state(), diaries: state().diaries.filter((entry) => entry.id !== id) });
+}
+
+/** 展开/收起：本机 UI 状态，core 侧不触碰 updatedAt（不该被推到别的设备）。 */
+export async function setDiaryUi(id: string, ui: { expanded?: boolean }): Promise<void> {
+  appState.update((s) => ({
+    ...s,
+    diaries: s.diaries.map((entry) => (entry.id === id ? { ...entry, ...ui } : entry))
+  }));
+  if (coreMode) {
+    try {
+      await coreDispatch("gui.set-diary-ui", { id, ...ui });
+    } catch {
+      // UI 态写入失败可忽略
+    }
+    return;
+  }
+  commit(state());
 }
 
 // ---------------------------------------------------------------------------

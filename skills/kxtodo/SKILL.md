@@ -23,6 +23,7 @@ KXToDo v9 提供脚本化 CLI。本 SKILL 说明**何时调用、按什么步骤
 - `category`：分类文件夹，可嵌套，位于根级或另一 category 下。
 - `entry`：左栏条目，位于根级或 category 下。
 - `item`：条目内的具体任务（Markdown 正文 + 状态），只能归属 entry。
+- `diary`：日记（按归属日期归档的 Markdown 记录），**不属于任何 entry/category**，一天可以有多篇。
 - `system`：我的一天/计划内/收藏等内置视图，只读。
 - ID 全部不透明，**不得拼造或按前缀推断类型**；先通过 tree/list/find/get 获取。
 
@@ -37,6 +38,16 @@ KXToDo v9 提供脚本化 CLI。本 SKILL 说明**何时调用、按什么步骤
 - 所有修改/删除按稳定 ID 进行：`task modify --type item --id ...`。
 - patch 语义：字段缺省 = 不变；显式 null = 清空；数组整体替换。
 - 删除一律 high-risk-write：先 `--dry-run` 看影响，再 `--yes` 执行。非空节点需 `--cascade`。
+
+## 日记
+
+- **什么时候用 diary 而不是 task**：用户要「记一笔」「写今天的日记」「补记某天发生的事」→ `diary`；要「待办/提醒/勾选完成」→ `task`。日记没有完成状态、没有归属条目，也不出现在任何列表视图里。
+- 写：`diary add --markdown "..."`（`--date` 缺省为**本地今天**），可带 `--title`、`--mood <emoji>`、`--weather <emoji>`、`--tag "color:text"`（可重复）。长正文用 `--markdown-file <path|->`。**标题与正文不能同时为空**（`DIARY_EMPTY`）。
+- **`--date` 是「归属日期」不是创建时间**：补写昨天的日记就传昨天的日期，`createdAt` 仍是现在。同一天可以有多篇，`diary list` 按日期由近及远、同一天内按写作先后返回。
+- 读：`diary list [--date <某天> | --from <起> --to <止>] [--limit N]`（`total` 是全部条数，`returned` 是这一页）；单篇 `diary get --id`。
+- 改：`diary modify --id ... --date/--title/--markdown/--mood/--weather`，字段缺省 = 不变，**心情/天气/标题传空串 = 清除**；标签用 `--replace-tags` 整体替换。
+- 删：`diary remove --id ... --yes`（high-risk-write，会写同步墓碑，删除传播到其它设备）。
+- 视图偏好 `config get|set diary.view list|calendar|group` 是**本机 UI 状态**，不跨设备同步，也不影响任何命令的输出。
 
 ## 定时任务工作流
 

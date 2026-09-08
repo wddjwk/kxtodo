@@ -1,0 +1,710 @@
+/* diary.css — 日记视图（列表 / 日历 / 分组）、日记卡片、日记编辑器。
+   盒子与配色沿用 workspace.css 的同一套视觉语言（白底 84%、圆角、极浅描边），
+   主题色由 DiaryView 内联的 --accent 给（styles.ts 的 DIARY_ACCENT）。 */
+
+.diary-view {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  padding: 44px 56px 54px 56px;
+  border-radius: 12px 0 0 0;
+  color: #292929;
+  transition: background 160ms ease;
+  overflow: hidden;
+}
+
+/* 日记占着主区域时把任务工作区藏起来——它仍然挂着（不销毁），
+   于是日记编辑器里的链接照样能用到它那套内置预览浮层。 */
+.app-shell.diary-open .workspace {
+  display: none;
+}
+
+/* ---------- 头部 ---------- */
+
+.diary-view-switch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding: 3px;
+  border: 1px solid rgb(0 0 0 / 7%);
+  border-radius: 9px;
+  background: rgb(255 255 255 / 62%);
+}
+
+.diary-view-switch button {
+  display: grid;
+  width: 30px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  padding: 0;
+  background: transparent;
+  color: var(--accent);
+  opacity: 0.5;
+  cursor: pointer;
+  transition: background 0.12s ease, opacity 0.12s ease;
+}
+
+.diary-view-switch button:hover {
+  opacity: 0.85;
+}
+
+.diary-view-switch button.active {
+  background: var(--accent);
+  color: #ffffff;
+  opacity: 1;
+}
+
+.diary-subtitle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: -20px 0 18px;
+  padding-left: 58px;
+  color: var(--accent);
+  font-size: calc(var(--font-control) - 4px);
+  opacity: 0.82;
+}
+
+.diary-stat-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentcolor;
+  opacity: 0.5;
+}
+
+.diary-stat-streak {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.diary-search {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: -8px 0 16px;
+  padding: 8px 13px;
+  border: 1px solid rgb(0 0 0 / 8%);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 84%);
+  color: #8b929e;
+}
+
+.diary-search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: #23272f;
+  font-size: var(--font-control);
+  outline: none;
+}
+
+/* ---------- 滚动区 ---------- */
+
+.diary-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  margin-right: -56px;
+  /* 底部留出浮动添加按钮的高度，最后一张卡片能滚到它上面来 */
+  padding: 0 51px 78px 0;
+}
+
+/* ---------- 列表视图：年份分隔 ---------- */
+
+.diary-year-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0 11px;
+}
+
+.diary-year-divider:first-child {
+  margin-top: 2px;
+}
+
+.diary-year-divider span {
+  color: var(--accent);
+  font-size: calc(var(--font-control) + 3px);
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.diary-year-divider em {
+  color: #9aa1ac;
+  font-size: calc(var(--font-control) - 5px);
+  font-style: normal;
+}
+
+.diary-year-divider::after {
+  height: 1px;
+  flex: 1 1 auto;
+  background: rgb(0 0 0 / 8%);
+  content: "";
+}
+
+/* ---------- 日记卡片 ---------- */
+
+.diary-card {
+  position: relative;
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  max-width: 100%;
+  margin-bottom: 8px;
+  padding: 13px 12px 13px 14px;
+  border: 1px solid rgb(0 0 0 / 3%);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 84%);
+  box-shadow: 0 1px 1px rgb(0 0 0 / 2%);
+  transition: background 0.12s ease, box-shadow 0.12s ease;
+}
+
+.diary-card:hover,
+.diary-card.selected {
+  background: white;
+  box-shadow: 0 8px 24px rgb(110 61 42 / 9%);
+}
+
+.diary-card.expandable {
+  cursor: pointer;
+}
+
+/* 左侧日期栏：日 / 月，与正文之间一条极浅的竖线（列表视图的「日期｜标题、月份｜正文」） */
+.diary-date-block {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  flex: 0 0 44px;
+  align-self: stretch;
+  padding-right: 12px;
+  border-right: 1px solid rgb(0 0 0 / 6%);
+}
+
+.diary-date-day {
+  color: var(--accent);
+  font-size: calc(var(--font-control) + 7px);
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  line-height: 1.06;
+}
+
+.diary-date-month {
+  color: #93989f;
+  font-size: calc(var(--font-control) - 5px);
+  letter-spacing: 0.02em;
+}
+
+.diary-card-main {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.diary-card-head {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.diary-card-title {
+  min-width: 0;
+  overflow: hidden;
+  flex: 1 1 auto;
+  margin: 0;
+  color: #23272f;
+  font-size: calc(var(--font-control) + 1px);
+  font-weight: 700;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diary-card-meta {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  flex: 0 0 auto;
+  color: #93989f;
+  font-size: calc(var(--font-control) - 5px);
+}
+
+.diary-meta-chip {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+  font-size: calc(var(--font-control) - 4px);
+  line-height: 1;
+}
+
+.diary-meta-images {
+  color: #93989f;
+}
+
+.diary-meta-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.diary-card-excerpt {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 5px 0 0;
+  color: #5c6470;
+  font-size: var(--font-control);
+  line-height: 1.62;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.diary-card-content {
+  margin-top: 8px;
+  font-size: var(--font-task);
+}
+
+.diary-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.diary-edit-button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 7px;
+  padding: 0;
+  background: transparent;
+  color: #8b929e;
+  opacity: 0;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, opacity 0.12s ease;
+}
+
+.diary-card:hover .diary-edit-button,
+.diary-edit-button:focus-visible {
+  opacity: 1;
+}
+
+.diary-edit-button:hover {
+  background: rgb(0 0 0 / 6%);
+  color: var(--accent);
+}
+
+/* ---------- 日历视图 ---------- */
+
+.diary-calendar {
+  max-width: 760px;
+  margin: 0 auto 20px;
+  padding: 14px 18px 18px;
+  border: 1px solid rgb(0 0 0 / 4%);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 70%);
+}
+
+.diary-calendar-bar {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.diary-calendar-bar strong {
+  min-width: 8em;
+  color: var(--accent);
+  font-size: calc(var(--font-control) + 2px);
+  font-weight: 800;
+  text-align: center;
+}
+
+.diary-calendar-bar > button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  padding: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.diary-calendar-bar > button:hover {
+  background: rgb(0 0 0 / 6%);
+}
+
+.diary-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.diary-calendar-head {
+  padding-bottom: 3px;
+  color: #9aa1ac;
+  font-size: calc(var(--font-control) - 5px);
+  text-align: center;
+}
+
+.diary-calendar-cell {
+  position: relative;
+  display: grid;
+  place-items: center;
+  gap: 3px;
+  min-height: 62px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 6px 0;
+  background: transparent;
+  color: #333a45;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.diary-calendar-cell:hover {
+  background: rgb(146 152 160 / 13%);
+}
+
+.diary-calendar-cell.other-month {
+  color: #b9bec7;
+}
+
+.diary-calendar-cell.today .diary-cell-day {
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.diary-calendar-cell.selected {
+  border-color: var(--accent);
+  background: rgb(255 255 255 / 94%);
+  box-shadow: 0 2px 10px rgb(31 41 55 / 10%);
+}
+
+.diary-cell-day {
+  font-size: var(--font-control);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.diary-cell-mood {
+  font-size: calc(var(--font-control) - 6px);
+  line-height: 1;
+}
+
+.diary-cell-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.65;
+}
+
+.diary-cell-count {
+  position: absolute;
+  top: 4px;
+  right: 7px;
+  color: #9aa1ac;
+  font-size: calc(var(--font-control) - 8px);
+  font-variant-numeric: tabular-nums;
+}
+
+.diary-day-head {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  margin: 0 0 11px;
+}
+
+.diary-day-head strong {
+  color: var(--accent);
+  font-size: calc(var(--font-control) + 1px);
+  font-weight: 800;
+}
+
+.diary-day-head span {
+  color: #93989f;
+  font-size: calc(var(--font-control) - 4px);
+}
+
+.diary-day-empty {
+  padding: 12px 2px;
+  color: #93989f;
+  font-size: var(--font-control);
+}
+
+/* ---------- 分组视图 ---------- */
+
+.diary-group {
+  margin-bottom: 4px;
+}
+
+.diary-group-head,
+.diary-group-subhead {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  background: rgb(146 152 160 / 14%);
+  color: #6b7280;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s ease;
+}
+
+.diary-group-head {
+  margin: 12px 0 10px;
+  padding: 8px 13px;
+  font-size: var(--font-control);
+}
+
+.diary-group-head:first-child {
+  margin-top: 2px;
+}
+
+.diary-group-head:hover,
+.diary-group-subhead:hover {
+  background: rgb(146 152 160 / 22%);
+}
+
+.diary-group-head strong {
+  color: var(--accent);
+  font-size: calc(var(--font-control) + 1px);
+  font-weight: 800;
+}
+
+.diary-group-head em,
+.diary-group-subhead em {
+  margin-left: auto;
+  color: #8b929e;
+  font-size: calc(var(--font-control) - 5px);
+  font-style: normal;
+}
+
+.diary-group-month {
+  padding-left: 16px;
+}
+
+.diary-group-subhead {
+  margin: 0 0 8px;
+  padding: 6px 11px;
+  font-size: calc(var(--font-control) - 2px);
+}
+
+.diary-group-subhead span {
+  color: #4f5763;
+  font-weight: 700;
+}
+
+/* ---------- 浮动添加按钮 ---------- */
+
+.diary-fab-row {
+  position: absolute;
+  right: 30px;
+  bottom: 26px;
+  z-index: 40;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.diary-fab {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  padding: 0;
+  background: var(--accent);
+  color: #ffffff;
+  cursor: pointer;
+  box-shadow: 0 10px 26px rgb(31 41 55 / 26%);
+  transition: filter 0.12s ease, transform 0.12s ease;
+}
+
+.diary-fab:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+.diary-fab:active {
+  transform: none;
+}
+
+/* 「今」：选中/查看的不是今天时出现，点一下跳回今天 */
+.diary-fab-today {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid rgb(0 0 0 / 8%);
+  border-radius: 50%;
+  padding: 0;
+  background: rgb(255 255 255 / 94%);
+  color: var(--accent);
+  font-size: calc(var(--font-control) - 2px);
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgb(31 41 55 / 14%);
+}
+
+.diary-fab-today:hover {
+  background: #ffffff;
+}
+
+/* ---------- 日记编辑器 ---------- */
+
+/* 编辑器浮层挂在 App 层，拿不到 .diary-view 内联的 --accent，这里补一个同色值
+   （与 styles.ts 的 DIARY_ACCENT 一致），于是复用的 .editor-* 规则也跟着走日记的主题色。 */
+.editor-dialog.diary-editor {
+  --accent: #4f5d8a;
+}
+
+.diary-editor-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 9px 16px;
+  border-bottom: 1px solid #eceff3;
+  background: #ffffff;
+}
+
+.diary-meta-field {
+  position: relative;
+}
+
+.diary-meta-trigger {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 5px 11px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: calc(var(--font-control) - 3px);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.diary-meta-trigger:hover {
+  background: #eef2f7;
+  color: #334155;
+}
+
+.diary-meta-trigger.filled {
+  color: #1f2937;
+}
+
+.diary-meta-field.open .diary-meta-trigger {
+  border-color: var(--accent);
+  background: #ffffff;
+  color: var(--accent);
+}
+
+.diary-meta-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  padding: 8px;
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 16px 50px rgb(0 0 0 / 16%);
+}
+
+.diary-emoji-grid-pop {
+  display: grid;
+  grid-template-columns: repeat(6, 34px);
+  gap: 4px;
+}
+
+.diary-emoji-cell {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0;
+  background: transparent;
+  font-size: 19px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.diary-emoji-cell:hover {
+  background: #f2f4f7;
+}
+
+.diary-emoji-cell.selected {
+  border-color: var(--accent);
+  background: #eef2f9;
+}
+
+.diary-tag-pop {
+  width: 236px;
+}
+
+.diary-meta-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.diary-tag-add {
+  padding: 5px 9px;
+}
+
+/* 触屏没有 hover：编辑器里的标签删除按钮必须一直在 */
+.diary-meta-tags .task-tag .tag-delete {
+  opacity: 1;
+}
+
+.diary-editor-title {
+  padding: 13px 20px 8px;
+  border: 0;
+  border-bottom: 1px solid #f1f4f8;
+  background: transparent;
+  color: #1f2937;
+  font-size: calc(var(--font-control) + 4px);
+  font-weight: 700;
+  outline: none;
+}
+
+.diary-editor-title::placeholder {
+  color: #b6bcc6;
+  font-weight: 500;
+}
+
+/* 菜单里的心情/天气选择格（ContextMenu 的子面板内） */
+.diary-emoji-menu {
+  display: grid;
+  grid-template-columns: repeat(5, 32px);
+  gap: 4px;
+  padding: 5px;
+}
+
+.diary-emoji-menu .diary-emoji-cell {
+  width: 32px;
+  height: 32px;
+  font-size: 18px;
+}

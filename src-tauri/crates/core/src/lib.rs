@@ -15,6 +15,7 @@ pub mod jq;
 pub mod migrate;
 pub mod model;
 pub mod ops_config;
+pub mod ops_diary;
 pub mod ops_gui;
 pub mod ops_schedule;
 pub mod ops_sync;

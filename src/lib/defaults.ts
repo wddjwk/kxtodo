@@ -2,6 +2,8 @@ import { platform as tauriPlatform } from "@tauri-apps/plugin-os";
 import type {
   AppNode,
   AppState,
+  DiaryEntry,
+  DiaryViewMode,
   ListBackground,
   AppNotification,
   NotificationPosition,
@@ -127,6 +129,9 @@ export const defaultSettings: Settings = {
   },
   features: {
     showCategoryBadges: true
+  },
+  diary: {
+    view: "list"
   }
 };
 
@@ -258,6 +263,7 @@ export function emptyState(): AppState {
     schemaVersion,
     nodes: [...systemNodes, inbox],
     tasks: [],
+    diaries: [],
     selectedNodeId: inbox.id,
     backgrounds: {
       [inbox.id]: { ...defaultBackground }
@@ -363,6 +369,41 @@ function normalizeTask(raw: unknown, fallbackNodeId: string): Task | null {
   };
 }
 
+const DIARY_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** ISO 时间戳 → 本地日历日 YYYY-MM-DD（解析不出返回空串）。 */
+function localDateOf(iso: string): string {
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, "0")}-${String(parsed.getDate()).padStart(2, "0")}`;
+}
+
+function normalizeDiaryEntry(raw: unknown): DiaryEntry | null {
+  const source = raw as Partial<DiaryEntry> | undefined;
+  if (!source || typeof source !== "object") return null;
+  const title = typeof source.title === "string" ? source.title.trim().slice(0, 120) : "";
+  const markdown = typeof source.markdown === "string" ? source.markdown : "";
+  // 标题与正文都空的是误操作留下的空壳，不留
+  if (!title && !markdown.trim()) return null;
+  const createdAt = typeof source.createdAt === "string" ? source.createdAt : now();
+  // 日期是日记的骨架：缺失或非法时退回创建那天，再退回今天
+  const date = DIARY_DATE_RE.test(source.date ?? "")
+    ? (source.date as string)
+    : localDateOf(createdAt) || localDateOf(now());
+  return {
+    id: typeof source.id === "string" && source.id ? source.id : createId("diary"),
+    date,
+    title,
+    markdown,
+    mood: typeof source.mood === "string" ? source.mood.trim() : "",
+    weather: typeof source.weather === "string" ? source.weather.trim() : "",
+    tags: normalizeTags(source.tags),
+    expanded: source.expanded === true,
+    createdAt,
+    updatedAt: typeof source.updatedAt === "string" ? source.updatedAt : undefined
+  };
+}
+
 function normalizeSchedulerCondition(raw: unknown, fallbackEnabled = false): SchedulerCondition {
   const source = raw as Partial<SchedulerCondition> | undefined;
   return {
@@ -453,6 +494,13 @@ function normalizeSyncMode(raw: unknown, serverUrl: unknown): SyncMode {
   return typeof serverUrl === "string" && serverUrl.trim() ? "server" : "lan";
 }
 
+function normalizeDiaryView(raw: unknown): DiaryViewMode {
+  if (raw === "list" || raw === "calendar" || raw === "group") {
+    return raw;
+  }
+  return defaultSettings.diary.view;
+}
+
 function normalizeScheduledTrigger(raw: unknown): ScheduledTaskTrigger {
   const source = raw as Partial<ScheduledTaskTrigger> | undefined;
   const type =
@@ -533,6 +581,11 @@ export function normalizeState(raw: unknown): AppState {
     ? source.tasks.map((item) => normalizeTask(item, fallbackEntry.id)).filter((task): task is Task => task !== null && validNodeIds.has(task.nodeId))
     : [];
 
+  // 日记不挂在任何条目下，没有「节点必须存在」这层过滤
+  const diaries = Array.isArray(source?.diaries)
+    ? source.diaries.map(normalizeDiaryEntry).filter((entry): entry is DiaryEntry => entry !== null)
+    : [];
+
   const backgrounds: Record<string, ListBackground> = {};
   const rawBackgrounds = source?.backgrounds as Record<string, Partial<ListBackground>> | undefined;
   const legacyThemes = (source as { lists?: Array<{ id?: string; theme?: Partial<{ background: string; image: string; imageOpacity: number }> }> }).lists;
@@ -561,6 +614,7 @@ export function normalizeState(raw: unknown): AppState {
     schemaVersion,
     nodes: mergedNodes,
     tasks,
+    diaries,
     selectedNodeId,
     backgrounds,
     scheduler: normalizeSchedulerState(source?.scheduler)
@@ -579,6 +633,7 @@ export function normalizeSettings(raw: unknown): Settings {
     shortcuts?: Partial<Settings["shortcuts"]> | Array<{ id: string; combo: string }>;
     sync?: Partial<Settings["sync"]>;
     features?: Partial<Settings["features"]>;
+    diary?: Partial<Settings["diary"]>;
   };
   const legacyShortcuts = Array.isArray(source?.shortcuts) ? source.shortcuts : [];
   const shortcutValue = (key: keyof Settings["shortcuts"], fallback: string) => {
@@ -719,6 +774,9 @@ export function normalizeSettings(raw: unknown): Settings {
         typeof source?.features?.showCategoryBadges === "boolean"
           ? source.features.showCategoryBadges
           : defaultSettings.features.showCategoryBadges
+    },
+    diary: {
+      view: normalizeDiaryView(source?.diary?.view)
     }
   };
 }

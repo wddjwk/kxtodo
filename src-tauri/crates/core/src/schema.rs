@@ -232,11 +232,14 @@ pub fn command_schema(root: &clap::Command, path: &str) -> CoreResult<Value> {
 /// Risk levels per command (§3.2). Kept next to help text via long_about too.
 pub fn risk_for(command: &str) -> &'static str {
     match command {
-        "task.remove" | "schedule.remove" | "schedule.enable" | "schedule.run" | "config.reset" => {
+        "task.remove" | "schedule.remove" | "schedule.enable" | "schedule.run" | "config.reset"
+        | "diary.remove" => {
             "high-risk-write"
         }
         "task.add"
         | "task.modify"
+        | "diary.add"
+        | "diary.modify"
         | "schedule.add"
         | "schedule.modify"
         | "schedule.disable"

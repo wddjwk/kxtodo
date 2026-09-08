@@ -1,12 +1,12 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
   import {
-    ChevronsDownUp, ChevronsUpDown, FilePlus2, FolderInput, FolderPlus, Pencil, Search, Shapes, Toolbox, Trash2, Upload
+    ChevronsDownUp, ChevronsUpDown, FilePlus2, FolderInput, FolderPlus, NotebookPen, Pencil, Search, Shapes, Toolbox, Trash2, Upload
   } from "@lucide/svelte";
   import {
     appState, appSettings, showToast, showSettings,
     searchQuery, listCounts, isSearching,
-    now, safeFileName, appVersion
+    now, safeFileName, appVersion, diaryOpen, diaryEditor
   } from "./stores";
   import {
     selectNode as selectNodeAction, toggleCategory as toggleCategoryAction,
@@ -24,7 +24,7 @@
   import ContextMenu from "./menu/ContextMenu.svelte";
   import MenuItem from "./menu/MenuItem.svelte";
   import MenuSeparator from "./menu/MenuSeparator.svelte";
-  import { mobileView, showMobileContent, showMobileToolbox } from "./platform";
+  import { isMobile, mobileView, showMobileContent, showMobileDiary, showMobileToolbox } from "./platform";
   import { caps } from "./capabilities";
   import { longpress, isLongPressSuppressed } from "./longpress";
 
@@ -48,6 +48,8 @@
   $: avInitial = avatarInitial($appSettings.profile.displayName);
   // 移动端没有调度引擎：隐藏"定时任务"系统节点
   $: systemNavNodes = $appState.nodes.filter((n) => n.kind === "system" && (caps.scheduler || n.id !== "scheduled"));
+  // 日记不是节点：高亮跟着「谁占着主区域」走（移动端 mobileView，桌面 diaryOpen）
+  $: diaryActive = $isMobile ? $mobileView === "diary" : $diaryOpen;
 
   export function closeOverlays(): void {
     if (ignoreOverlayCloseOnce) {
@@ -73,11 +75,25 @@
 
   function selectNode(id: string): void {
     searchQuery.set("");
+    diaryEditor.set(null);
+    diaryOpen.set(false);
     void selectNodeAction(id);
     treeMenu = null;
     emptyAreaMenu = null;
     iconPickerListId = null;
     showMobileContent();
+  }
+
+  function openDiary(): void {
+    searchQuery.set("");
+    treeMenu = null;
+    emptyAreaMenu = null;
+    iconPickerListId = null;
+    if ($isMobile) {
+      showMobileDiary();
+      return;
+    }
+    diaryOpen.set(true);
   }
 
   function toggleCategory(id: string): void {
@@ -320,7 +336,7 @@
 
   <nav class="system-nav">
     {#each systemNavNodes as node (node.id)}
-      <button class:selected={$appState.selectedNodeId === node.id && !$isSearching} class="nav-row" type="button" on:click={() => selectNode(node.id)}>
+      <button class:selected={!diaryActive && $appState.selectedNodeId === node.id && !$isSearching} class="nav-row" type="button" on:click={() => selectNode(node.id)}>
         <span class="active-rail"></span>
         <span class="system-icon"><IconGlyph icon={node.icon} size={19} /></span>
         <span class="list-name">{node.name}</span>
@@ -328,6 +344,14 @@
           <span class="count-pill">{$listCounts[node.id]}</span>
         {/if}
       </button>
+      {#if node.id === "important"}
+        <!-- 日记不是节点：显式排在「收藏」下面（移动端「定时任务」隐藏，于是正好在「工具箱」上面） -->
+        <button class:selected={diaryActive} class="nav-row" type="button" on:click={openDiary}>
+          <span class="active-rail"></span>
+          <span class="system-icon"><NotebookPen size={19} /></span>
+          <span class="list-name">日记</span>
+        </button>
+      {/if}
     {/each}
     {#if caps.toolbox}
       <!-- 移动端专属：工具箱（预留能力位，不选中任何节点，走独立视图层） -->
@@ -344,7 +368,7 @@
   <nav class="custom-nav" class:root-drop-active={draggingId !== null} use:longpress={handleEmptyAreaLongPress} on:contextmenu={openEmptyAreaMenu} on:click|stopPropagation>
     <ListTree
       nodes={$appState.nodes}
-      selectedNodeId={$appState.selectedNodeId}
+      selectedNodeId={diaryActive ? "" : $appState.selectedNodeId}
       counts={$listCounts}
       showCategoryCounts={$appSettings.features.showCategoryBadges}
       {renamingId}

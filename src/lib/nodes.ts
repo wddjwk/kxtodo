@@ -114,7 +114,9 @@ export function getBackground(nodeId: string | undefined, backgrounds: Record<st
   return nodeId ? (backgrounds[nodeId] ?? defaultBackground) : defaultBackground;
 }
 
-export function exportStateForNode(node: AppNode, state: AppState): AppState {
+// 节点范围导出**不带 diaries 键**：core 的导入只在载荷真的有这个字段时才接管日记，
+// 给个空数组等于把用户整本日记抹掉。
+export function exportStateForNode(node: AppNode, state: AppState): Omit<AppState, "diaries"> {
   const tasks = tasksForNode(node, state.tasks, state.nodes);
   const nodeIds = new Set<string>();
   if (node.kind === "category") {

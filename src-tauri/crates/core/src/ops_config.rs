@@ -3,7 +3,7 @@
 use serde_json::{json, Map, Value};
 
 use crate::error::{CoreError, CoreResult};
-use crate::model::{LinkOpenMode, NotificationPosition, SettingsFile, SyncMode, ThemePreset};
+use crate::model::{DiaryView, LinkOpenMode, NotificationPosition, SettingsFile, SyncMode, ThemePreset};
 use crate::time::now_iso;
 
 /// 这些配置项属于跨设备共享子集：值变化时刷新设置实体的 LWW 时间戳。
@@ -174,6 +174,12 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         is_map: false,
     },
     FieldMeta {
+        path: "shortcuts.syncNow",
+        kind: "string",
+        description: "立即同步快捷键",
+        is_map: false,
+    },
+    FieldMeta {
         path: "sync.enabled",
         kind: "boolean",
         description: "启用数据同步（false = 暂停同步，服务器与账户配置保留）",
@@ -281,6 +287,12 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         description: "侧栏分类行显示未完成角标（特性开关）",
         is_map: false,
     },
+    FieldMeta {
+        path: "diary.view",
+        kind: "enum(list|calendar|group)",
+        description: "日记视图（本机偏好，不跨设备同步）",
+        is_map: false,
+    },
 ];
 
 pub fn field_meta(path: &str) -> Option<&'static FieldMeta> {
@@ -343,6 +355,7 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "shortcuts.focusSearch" => json!(settings.shortcuts.focus_search),
         "shortcuts.toggleWindow" => json!(settings.shortcuts.toggle_window),
         "shortcuts.openSettings" => json!(settings.shortcuts.open_settings),
+        "shortcuts.syncNow" => json!(settings.shortcuts.sync_now),
         "sync.enabled" => json!(settings.sync.enabled),
         // 报「生效的」方式：用户还没显式选过时按已有配置推断，不留 null 给调用方猜
         "sync.mode" => json!(settings.sync.effective_mode().as_str()),
@@ -362,6 +375,7 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "sync.reconnectSeconds" => json!(settings.sync.reconnect_seconds),
         "updates.autoCheck" => json!(settings.updates.auto_check),
         "features.showCategoryBadges" => json!(settings.features.show_category_badges),
+        "diary.view" => json!(settings.diary.view.as_str()),
         _ => return Err(unknown_field(path)),
     };
     Ok(value)
@@ -692,6 +706,10 @@ pub fn set_value(
             settings.shortcuts.open_settings = expect_shortcut(path, &value)?;
             outcome.native_effects.push("shortcuts");
         }
+        "shortcuts.syncNow" => {
+            settings.shortcuts.sync_now = expect_shortcut(path, &value)?;
+            outcome.native_effects.push("shortcuts");
+        }
         "sync.enabled" => {
             settings.sync.enabled = expect_bool(path, &value)?;
         }
@@ -790,6 +808,11 @@ pub fn set_value(
         "updates.autoCheck" => settings.updates.auto_check = expect_bool(path, &value)?,
         "features.showCategoryBadges" => {
             settings.features.show_category_badges = expect_bool(path, &value)?;
+        }
+        "diary.view" => {
+            let raw = expect_string(path, &value)?;
+            settings.diary.view = DiaryView::parse(&raw)
+                .ok_or_else(|| invalid_value(path, "应为 list/calendar/group"))?;
         }
         _ => return Err(unknown_field(path)),
     }
@@ -931,6 +954,7 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "shortcuts.openSettings" => {
             target.shortcuts.open_settings = defaults.shortcuts.open_settings.clone()
         }
+        "shortcuts.syncNow" => target.shortcuts.sync_now = defaults.shortcuts.sync_now.clone(),
         "sync.enabled" => target.sync.enabled = defaults.sync.enabled,
         "sync.mode" => target.sync.mode = defaults.sync.mode,
         "sync.lanHost" => target.sync.lan_host = defaults.sync.lan_host,
@@ -955,6 +979,7 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "features.showCategoryBadges" => {
             target.features.show_category_badges = defaults.features.show_category_badges
         }
+        "diary.view" => target.diary.view = defaults.diary.view,
         _ => return Err(unknown_field(path)),
     }
     Ok(())

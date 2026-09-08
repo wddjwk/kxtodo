@@ -46,6 +46,30 @@ export type EmojiPickerTarget = {
   index: number;
 };
 
+/** 日记视图：列表（时间轴）/ 日历（月历 + 当日卡片）/ 分组（按年月折叠） */
+export type DiaryViewMode = "list" | "calendar" | "group";
+
+export type DiaryEntry = {
+  id: string;
+  /** 归属日期 YYYY-MM-DD（可以后补写别的日子，不等于 createdAt 的日期） */
+  date: string;
+  /** 标题；空 = 卡片直接展示正文首行 */
+  title: string;
+  markdown: string;
+  /** 心情 emoji；空 = 没记 */
+  mood: string;
+  /** 天气 emoji；空 = 没记 */
+  weather: string;
+  tags: Tag[];
+  /** 本机 UI 状态，不参与同步 */
+  expanded?: boolean;
+  createdAt: string;
+  updatedAt?: string;
+};
+
+/** 日记编辑器的目标：改已有的一篇（id），或新建一篇归到某天（date）。 */
+export type DiaryEditorTarget = { id: string } | { date: string };
+
 export type ProfileSettings = {
   displayName: string;
   email: string;
@@ -122,6 +146,10 @@ export type Settings = {
   };
   features: {
     showCategoryBadges: boolean;
+  };
+  /** 日记偏好（本机 UI 状态，不跨设备同步） */
+  diary: {
+    view: DiaryViewMode;
   };
 };
 
@@ -217,6 +245,7 @@ export type AppState = {
   schemaVersion: number;
   nodes: AppNode[];
   tasks: Task[];
+  diaries: DiaryEntry[];
   selectedNodeId: string;
   backgrounds: Record<string, ListBackground>;
   scheduler: SchedulerState;

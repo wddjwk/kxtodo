@@ -175,13 +175,13 @@ pub fn cmd_validate(commands: &[String], flags: &[String]) -> CoreResult<Value> 
     // current CLI catalog. Only command domains are recognized, avoiding
     // accidental matches on ordinary prose words.
     let command_regex = regex::Regex::new(
-        r"(?:kxtodo\s+)?(task|schedule|config|skills|doctor|notify|schema|version)(?:\s+([a-z][a-z-]*))?",
+        r"(?:kxtodo\s+)?(task|diary|schedule|config|skills|doctor|notify|schema|version)(?:\s+([a-z][a-z-]*))?",
     )
     .expect("static command regex");
     let mut referenced = Vec::new();
     for capture in command_regex.captures_iter(SKILL_CONTENT) {
         let domain = &capture[1];
-        let command = if matches!(domain, "task" | "schedule" | "config" | "skills") {
+        let command = if matches!(domain, "task" | "diary" | "schedule" | "config" | "skills") {
             capture
                 .get(2)
                 .map(|action| format!("{domain}.{}", action.as_str()))

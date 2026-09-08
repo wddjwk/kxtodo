@@ -455,7 +455,10 @@ fn run_sync_inner(
     // 3. MERGE（按域分事务）
     let data_records: Vec<EntityRecord> = records
         .iter()
-        .filter(|record| (record.kind == "node" || record.kind == "task") && scopes.data)
+        .filter(|record| {
+            (record.kind == "node" || record.kind == "task" || record.kind == "diary")
+                && scopes.data
+        })
         .cloned()
         .collect();
     let settings_records: Vec<EntityRecord> = records
@@ -480,6 +483,7 @@ fn run_sync_inner(
                 // 全新设备：丢弃内存里的默认数据，直接落服务端内容
                 file.nodes.clear();
                 file.tasks.clear();
+                file.diaries.clear();
                 file.backgrounds.clear();
             }
             applied = merge_data_records(file, &records_snapshot, &state_snapshot, &mut warnings);
@@ -576,7 +580,7 @@ fn run_sync_inner(
     let schedule_after = repo.load_schedule()?;
     for record in &records {
         let local_ts = match record.kind.as_str() {
-            "node" | "task" => data_entity_stamp(&data_after, &record.id),
+            "node" | "task" | "diary" => data_entity_stamp(&data_after, &record.id),
             "schedule" => schedule_entity_stamp(&schedule_after, &record.id),
             "settings" => settings_after.sync_updated_at.clone(),
             _ => None,
@@ -619,7 +623,9 @@ fn run_sync_inner(
     .into_iter()
     .filter(|entity| {
         // data.json 不存在（全新设备且服务端无数据域实体）→ 不推送内存默认数据
-        if !data_existed && (entity.kind == "node" || entity.kind == "task") {
+        if !data_existed
+            && (entity.kind == "node" || entity.kind == "task" || entity.kind == "diary")
+        {
             return false;
         }
         true
@@ -749,7 +755,7 @@ fn resolve_conflict(
     let state_snapshot = state.clone();
     let mut warnings: Vec<String> = Vec::new();
     match entity.kind.as_str() {
-        "node" | "task" => {
+        "node" | "task" | "diary" => {
             let records = vec![remote.clone()];
             let _ = repo.write_data(None, None, "sync.conflict", |file| {
                 merge_data_records(file, &records, &state_snapshot, &mut warnings);

@@ -64,6 +64,13 @@ pub fn now_iso() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
+/// 本地时区的今天 `YYYY-MM-DD`。
+///
+/// 日记的「今天」必须是本地日历日——`now_iso` 是 UTC，东八区的凌晨会算成昨天。
+pub fn today_local() -> String {
+    Local::now().date_naive().format("%Y-%m-%d").to_string()
+}
+
 /// Validate / normalize a `YYYY-MM-DD` date. Accepts relative forms `+Nd`.
 pub fn parse_date(raw: &str) -> CoreResult<String> {
     let value = raw.trim();

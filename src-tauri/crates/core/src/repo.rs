@@ -1136,6 +1136,7 @@ pub fn default_data_file() -> DataFile {
         },
         nodes,
         tasks: Vec::new(),
+        diaries: Vec::new(),
         selected_node_id: inbox_id,
         backgrounds,
         extra: Map::new(),

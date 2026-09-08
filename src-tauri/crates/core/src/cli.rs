@@ -148,6 +148,14 @@ pub enum Commands {
         #[command(subcommand)]
         action: TaskAction,
     },
+    /// 读写日记（按日期归档的 Markdown 记录）
+    #[command(
+        long_about = "日记与 task 平行：以「归属日期」为核心属性，一天可以有多篇，正文/标题/心情/天气/标签均可选。\n\n动作：\n  add      新增一篇（--date 缺省为今天）\n  get      按稳定 ID 读取\n  list     列出（--date 某天 / --from --to 区间 / --limit）\n  modify   修改（改日期、标题、正文、心情、天气、标签）\n  remove   删除（high-risk-write）\n\n示例：\n  kxtodo-cli diary add --markdown \"今天把同步分层重构完了\" --mood 🙂 --weather ☀️\n  kxtodo-cli diary add --date 2026-09-01 --title \"开学\" --markdown-file note.md\n  kxtodo-cli diary list --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli diary modify --id diary-xxxx --date 2026-09-02\n  kxtodo-cli diary remove --id diary-xxxx --yes"
+    )]
+    Diary {
+        #[command(subcommand)]
+        action: DiaryAction,
+    },
     /// 管理和运行定时任务
     #[command(
         long_about = "定时任务的完整定义只能通过 --spec/--patch JSON 输入（结构见 kxtodo-cli schema schedule.spec）。\n\n动作：\n  add/validate/get/list/find/modify/remove  定义管理\n  enable/disable/run/stop/logs/status       运行控制\n  runtime list/detect/set                   脚本运行时\n\n示例流程见 kxtodo-cli skills read kxtodo。"
@@ -575,6 +583,116 @@ pub struct TaskTreeArgs {
     /// 包含任务计数（默认 true）
     #[arg(long, value_name = "true|false")]
     pub include_counts: Option<bool>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DiaryAction {
+    /// 新增一篇日记（Risk: write）
+    #[command(
+        visible_alias = "create",
+        long_about = "Risk: write\n\n新增一篇日记。--date 缺省为本地今天；--markdown 与 --markdown-file 二选一，\n标题与正文不能同时为空。一天可以有多篇。\n\n输出：创建后的完整资源（含系统生成的 ID）。\n\n示例：\n  kxtodo-cli diary add --markdown \"今天把同步分层重构完了\" --mood 🙂 --weather ☀️ --tag blue:工作\n  kxtodo-cli diary add --date 2026-09-01 --title \"开学\" --markdown-file -\n\n建议：Agent 调用使用 --idempotency-key 防重试重复创建。"
+    )]
+    Add(DiaryAddArgs),
+    /// 按稳定 ID 获取一篇日记（Risk: read）
+    #[command(long_about = "Risk: read\n\n按 --id 精确读取，输出含 Markdown 全文。")]
+    Get(DiaryIdArgs),
+    /// 列出日记（Risk: read）
+    #[command(
+        long_about = "Risk: read\n\n按日期由近及远输出（同一天内按写作先后）。\n--date 只看某天；--from/--to 限定日期区间；--limit 截断条数。\n\n示例：\n  kxtodo-cli diary list --date 2026-09-08\n  kxtodo-cli diary list --from 2026-09-01 --to 2026-09-30 --limit 20"
+    )]
+    List(DiaryListArgs),
+    /// 修改一篇日记（Risk: write）
+    #[command(
+        visible_alias = "update",
+        long_about = "Risk: write\n\n按稳定 ID 修改。--date 改归属日期（补写到别的日子）；--title/--mood/--weather\n传空串即清除；--replace-tags 整体替换标签（不给则不动）。\n\n示例：\n  kxtodo-cli diary modify --id diary-xxxx --title \"补记\" --markdown-file note.md\n  kxtodo-cli diary modify --id diary-xxxx --date 2026-09-02 --mood \"\"\n  kxtodo-cli diary modify --id diary-xxxx --replace-tags \"green:旅行\""
+    )]
+    Modify(DiaryModifyArgs),
+    /// 删除一篇日记（Risk: high-risk-write）
+    #[command(
+        visible_alias = "delete",
+        long_about = "Risk: high-risk-write\n\n删除一篇日记并写同步墓碑（删除会传播到其它设备）。未带 --yes 返回退出码 10。\n\n示例：kxtodo-cli diary remove --id diary-xxxx --yes"
+    )]
+    Remove(DiaryIdArgs),
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiaryIdArgs {
+    /// 稳定 ID
+    #[arg(long, value_name = "id")]
+    pub id: String,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiaryAddArgs {
+    /// 归属日期 YYYY-MM-DD 或相对写法 +Nd（缺省为本地今天）
+    #[arg(long, value_name = "date")]
+    pub date: Option<String>,
+    /// 标题
+    #[arg(long, value_name = "text")]
+    pub title: Option<String>,
+    /// Markdown 正文（与 --markdown-file 二选一）
+    #[arg(long, value_name = "text", conflicts_with = "markdown_file")]
+    pub markdown: Option<String>,
+    /// 从文件或标准输入读取 Markdown
+    #[arg(long, value_name = "path|-")]
+    pub markdown_file: Option<String>,
+    /// 心情（emoji）
+    #[arg(long, value_name = "emoji")]
+    pub mood: Option<String>,
+    /// 天气（emoji）
+    #[arg(long, value_name = "emoji")]
+    pub weather: Option<String>,
+    /// 标签（可重复）
+    #[arg(long = "tag", value_name = "color:text")]
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiaryListArgs {
+    /// 只看某一天
+    #[arg(long, value_name = "date")]
+    pub date: Option<String>,
+    /// 起始日期（含）
+    #[arg(long, value_name = "date")]
+    pub from: Option<String>,
+    /// 结束日期（含）
+    #[arg(long, value_name = "date")]
+    pub to: Option<String>,
+    /// 最多返回条数
+    #[arg(long, value_name = "n")]
+    pub limit: Option<u64>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiaryModifyArgs {
+    /// 稳定 ID
+    #[arg(long, value_name = "id")]
+    pub id: String,
+    /// 新归属日期
+    #[arg(long, value_name = "date")]
+    pub date: Option<String>,
+    /// 新标题（空串清除）
+    #[arg(long, value_name = "text")]
+    pub title: Option<String>,
+    /// 替换 Markdown 正文
+    #[arg(long, value_name = "text", conflicts_with = "markdown_file")]
+    pub markdown: Option<String>,
+    /// 从文件或标准输入读取 Markdown
+    #[arg(long, value_name = "path|-")]
+    pub markdown_file: Option<String>,
+    /// 心情（空串清除）
+    #[arg(long, value_name = "emoji")]
+    pub mood: Option<String>,
+    /// 天气（空串清除）
+    #[arg(long, value_name = "emoji")]
+    pub weather: Option<String>,
+    /// 整体替换标签列表
+    #[arg(long = "replace-tags", value_name = "color:text", num_args = 0..)]
+    pub replace_tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1227,6 +1345,9 @@ fn supports_idempotency(command: &str) -> bool {
         "task.add"
             | "task.modify"
             | "task.remove"
+            | "diary.add"
+            | "diary.modify"
+            | "diary.remove"
             | "schedule.add"
             | "schedule.modify"
             | "schedule.remove"
@@ -1398,6 +1519,7 @@ fn build_invocation(cli: &Cli, cwd: &Path) -> CoreResult<Option<(Invocation, Opt
             Invocation::new("notify", params)
         }
         Commands::Task { action } => build_task_invocation(action)?,
+        Commands::Diary { action } => build_diary_invocation(action)?,
         Commands::Schedule { action } => build_schedule_invocation(action)?,
         Commands::Config { action } => build_config_invocation(action)?,
         Commands::Sync { action } => build_sync_invocation(action)?,
@@ -1599,6 +1721,33 @@ fn build_task_invocation(action: &TaskAction) -> CoreResult<Invocation> {
         }
         TaskAction::Remove(args) => ("task.remove", serialize_args(args)),
         TaskAction::Tree(args) => ("task.tree", serialize_args(args)),
+    };
+    Ok(Invocation::new(name, params))
+}
+
+fn build_diary_invocation(action: &DiaryAction) -> CoreResult<Invocation> {
+    /// `--markdown` / `--markdown-file` → 单一 markdown 参数（执行器只认后者）。
+    fn with_markdown(mut params: Value, args_md: &Option<String>, file: &Option<String>) -> CoreResult<Value> {
+        if let Some(markdown) = resolve_markdown(args_md.clone(), file.clone())? {
+            params["markdown"] = Value::String(markdown);
+        }
+        params
+            .as_object_mut()
+            .map(|map| map.remove("markdownFile"));
+        Ok(params)
+    }
+    let (name, params) = match action {
+        DiaryAction::Add(args) => (
+            "diary.add",
+            with_markdown(serialize_args(args), &args.markdown, &args.markdown_file)?,
+        ),
+        DiaryAction::Get(args) => ("diary.get", serialize_args(args)),
+        DiaryAction::List(args) => ("diary.list", serialize_args(args)),
+        DiaryAction::Modify(args) => (
+            "diary.modify",
+            with_markdown(serialize_args(args), &args.markdown, &args.markdown_file)?,
+        ),
+        DiaryAction::Remove(args) => ("diary.remove", serialize_args(args)),
     };
     Ok(Invocation::new(name, params))
 }

@@ -5,7 +5,7 @@
   import {
     appSettings, appState, showSettings, searchQuery,
     taskEmojiPicker, editorTaskId, appVersion, showToast,
-    isHydrated,
+    isHydrated, diaryOpen, diaryEditor,
     hydrate as hydrateStores
   } from "./lib/stores";
   import { replaceTaskEmojis, selectNode as selectNodeAction, syncNow as syncNowAction } from "./lib/actions";
@@ -17,16 +17,21 @@
   import Toast from "./lib/Toast.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
   import Workspace from "./lib/Workspace.svelte";
+  import DiaryView from "./lib/DiaryView.svelte";
   import ToolboxView from "./lib/ToolboxView.svelte";
   import SettingsDrawer from "./lib/SettingsDrawer.svelte";
   import IconPicker from "./lib/IconPicker.svelte";
 
   let sidebarRef: Sidebar;
   let workspaceRef: Workspace;
+  let diaryViewRef: DiaryView;
 
   $: appShellStyle = $isMobile
     ? buildMobileShellStyle($appSettings.appearance)
     : buildAppShellStyle($appSettings.appearance);
+
+  /** 日记占着主区域：桌面看 diaryOpen，移动端看历史栈驱动的 mobileView。 */
+  $: diaryVisible = $isMobile ? $mobileView === "diary" : $diaryOpen;
 
   $: emojiPickerTask = $taskEmojiPicker
     ? $appState.tasks.find((t) => t.id === $taskEmojiPicker?.taskId) ?? null
@@ -69,11 +74,12 @@
       sidebarRef?.closeOverlays();
     }
     workspaceRef?.closeOverlays();
+    diaryViewRef?.closeOverlays();
     showSettings.set(false);
   }
 
   function handleShortcut(event: KeyboardEvent): void {
-    if ($editorTaskId) return;
+    if ($editorTaskId || $diaryEditor) return;
     if (matchesShortcut(event, $appSettings.shortcuts.focusSearch)) {
       event.preventDefault();
       sidebarRef?.focusSearch();
@@ -115,6 +121,8 @@
   class:view-list={$isMobile && $mobileView === "list"}
   class:view-content={$isMobile && $mobileView === "content"}
   class:view-toolbox={$isMobile && $mobileView === "toolbox"}
+  class:view-diary={$isMobile && $mobileView === "diary"}
+  class:diary-open={!$isMobile && $diaryOpen}
   class:view-settings={$isMobile && $showSettings}
   style={appShellStyle}
   on:click={closeOverlays}
@@ -127,6 +135,10 @@
     <Sidebar bind:this={sidebarRef} />
 
     <Workspace bind:this={workspaceRef} />
+
+    {#if diaryVisible}
+      <DiaryView bind:this={diaryViewRef} onOpenLink={(url, title) => workspaceRef?.openLinkUrl(url, title)} />
+    {/if}
 
     {#if $isMobile && $mobileView === "toolbox"}
       <ToolboxView />
@@ -148,6 +160,17 @@
         taskId={$editorTaskId}
         onClose={() => editorTaskId.set(null)}
         onOpenLink={(url) => workspaceRef?.openLinkUrl(url)}
+      />
+    {/await}
+  {/if}
+
+  {#if $diaryEditor}
+    {#await import("./lib/diary/DiaryEditor.svelte") then module}
+      <svelte:component
+        this={module.default}
+        target={$diaryEditor}
+        onClose={() => diaryEditor.set(null)}
+        onOpenLink={(url, title) => workspaceRef?.openLinkUrl(url, title)}
       />
     {/await}
   {/if}

@@ -111,6 +111,7 @@ fn run(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value
         ["version"] => cmd_version(),
         ["notify"] => cmd_notify(inv, ctx, meta),
         ["task", action] => task_dispatch(action, inv, ctx, meta),
+        ["diary", action] => crate::ops_diary::diary_dispatch(action, inv, ctx, meta),
         ["schedule", action] => schedule_dispatch(action, inv, ctx, meta),
         ["schedule", "runtime", action] => schedule_runtime_dispatch(action, inv, ctx, meta),
         ["config", action] => config_dispatch(action, inv, ctx, meta),
@@ -139,15 +140,15 @@ fn cmd_version() -> CoreResult<Value> {
 // helpers
 // ---------------------------------------------------------------------------
 
-fn param_str(params: &Value, key: &str) -> Option<String> {
+pub(crate) fn param_str(params: &Value, key: &str) -> Option<String> {
     params.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
-fn param_bool(params: &Value, key: &str) -> Option<bool> {
+pub(crate) fn param_bool(params: &Value, key: &str) -> Option<bool> {
     params.get(key).and_then(Value::as_bool)
 }
 
-fn required_str(params: &Value, key: &str) -> CoreResult<String> {
+pub(crate) fn required_str(params: &Value, key: &str) -> CoreResult<String> {
     param_str(params, key)
         .ok_or_else(|| CoreError::validation("MISSING_PARAM", format!("缺少必填参数 --{key}")))
 }
@@ -168,7 +169,7 @@ fn parse_kind(raw: &str) -> CoreResult<NodeKind> {
     }
 }
 
-fn require_confirmation(controls: &Controls, message: String, details: Value) -> CoreResult<()> {
+pub(crate) fn require_confirmation(controls: &Controls, message: String, details: Value) -> CoreResult<()> {
     if controls.yes || controls.dry_run {
         return Ok(());
     }
@@ -177,11 +178,11 @@ fn require_confirmation(controls: &Controls, message: String, details: Value) ->
         .with_details(details))
 }
 
-fn idem_summary(resource: &Value) -> Value {
+pub(crate) fn idem_summary(resource: &Value) -> Value {
     resource.clone()
 }
 
-fn set_read_revision(meta: &mut Meta, domain: Domain, revision: u64) {
+pub(crate) fn set_read_revision(meta: &mut Meta, domain: Domain, revision: u64) {
     meta.revision_domain = Some(domain);
     meta.revision = Some(revision);
 }
@@ -195,7 +196,7 @@ fn warn_custom_startup(meta: &mut Meta, ctx: &ExecContext) {
     }
 }
 
-fn apply_write_outcome(
+pub(crate) fn apply_write_outcome(
     meta: &mut Meta,
     domain: Domain,
     outcome: &crate::repo::WriteOutcome,
@@ -1752,7 +1753,7 @@ fn apply_native_effects(
     Value::Array(results)
 }
 
-fn notify_host(ctx: &ExecContext, domain: Domain, revision: u64, ids: Vec<String>) {
+pub(crate) fn notify_host(ctx: &ExecContext, domain: Domain, revision: u64, ids: Vec<String>) {
     if let Some(host) = ctx.host {
         host.emit_domain_event(domain, revision, ids);
     }

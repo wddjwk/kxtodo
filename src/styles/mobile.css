@@ -65,6 +65,12 @@
   display: none;
 }
 
+/* 日记同样是整页一层（桌面也有；移动端由历史栈的 diary 层驱动）。 */
+.app-shell.mobile.view-diary .sidebar,
+.app-shell.mobile.view-diary .workspace {
+  display: none;
+}
+
 .app-shell.mobile .resize-handle {
   display: none;
 }
@@ -555,4 +561,104 @@
   font-size: 20px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 日记（移动端整页视图） ---------- */
+
+.app-shell.mobile .diary-view {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  padding:
+    calc(16px + env(safe-area-inset-top, 0px) * var(--safe-inv, 1))
+    18px
+    calc(16px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1))
+    18px;
+  border-radius: 0;
+}
+
+/* 视图切换是可点的目标，触屏要给到 32px 以上 */
+.app-shell.mobile .diary-view-switch button {
+  width: 34px;
+  height: 32px;
+}
+
+.app-shell.mobile .diary-scroll {
+  /* 底部再多留一点：浮动添加按钮 + 手势导航条 */
+  padding-bottom: 96px;
+}
+
+/* 卡片编辑走双击/长按菜单，笔形按钮连同它的位置一起让给正文（与任务卡片同一套规则） */
+.app-shell.mobile .diary-edit-button {
+  display: none;
+}
+
+.app-shell.mobile .diary-card {
+  gap: 11px;
+  padding: 12px 12px 12px 13px;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.app-shell.mobile .diary-date-block {
+  flex: 0 0 38px;
+  padding-right: 10px;
+}
+
+/* 日历在窄屏上必须整宽铺开，格子也要矮一点，否则一屏放不下六行 */
+.app-shell.mobile .diary-calendar {
+  max-width: none;
+  margin-bottom: 16px;
+  padding: 10px 10px 12px;
+}
+
+.app-shell.mobile .diary-calendar-grid {
+  gap: 3px;
+}
+
+.app-shell.mobile .diary-calendar-cell {
+  min-height: 44px;
+  gap: 1px;
+  padding: 4px 0;
+  border-radius: 8px;
+}
+
+.app-shell.mobile .diary-cell-count {
+  top: 2px;
+  right: 4px;
+}
+
+.app-shell.mobile .diary-group-month {
+  padding-left: 10px;
+}
+
+.app-shell.mobile .diary-fab-row {
+  right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
+}
+
+.app-shell.mobile .diary-fab {
+  width: 54px;
+  height: 54px;
+}
+
+/* 编辑器：元数据行贴边一点，浮层不许超出对话框（对话框是 overflow:hidden） */
+.app-shell.mobile .diary-editor-meta {
+  gap: 6px;
+  padding: 8px 12px;
+}
+
+.app-shell.mobile .diary-editor-title {
+  padding: 11px 14px 7px;
+}
+
+.app-shell.mobile .diary-meta-pop {
+  max-width: calc(100vw - 24px);
+}
+
+.app-shell.mobile .diary-emoji-grid-pop {
+  grid-template-columns: repeat(5, 34px);
 }

@@ -304,7 +304,7 @@ pub fn parse_tag_input(raw: &str) -> CoreResult<TagInput> {
     Ok(TagInput { color, text })
 }
 
-fn build_tag(input: &TagInput) -> Tag {
+pub(crate) fn build_tag(input: &TagInput) -> Tag {
     Tag {
         id: gen_id("tag"),
         color: input.color,

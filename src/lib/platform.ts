@@ -1,6 +1,6 @@
 import { get, writable } from "svelte/store";
 import { platform as tauriPlatform } from "@tauri-apps/plugin-os";
-import { editorTaskId, showSettings } from "./stores";
+import { diaryEditor, editorTaskId, showSettings } from "./stores";
 
 /**
  * Mobile detection is intentionally user-agent based so the Windows desktop
@@ -51,11 +51,11 @@ export const hostOs: HostOs = detectHostOs();
  * Microsoft To-Do style mobile navigation: the app opens on the category list
  * and tapping an entry pushes the content view. The back button returns here.
  */
-export type MobileView = "list" | "content" | "toolbox";
+export type MobileView = "list" | "content" | "toolbox" | "diary";
 
 export const mobileView = writable<MobileView>("list");
 
-type MobileLayer = "content" | "settings" | "editor" | "toolbox";
+type MobileLayer = "content" | "settings" | "editor" | "toolbox" | "diary" | "diary-editor";
 
 function currentLayer(): string | undefined {
   if (typeof history === "undefined") return undefined;
@@ -89,17 +89,30 @@ function handlePopState(event: PopStateEvent): void {
       mobileView.set("content");
       showSettings.set(false);
       editorTaskId.set(null);
+      diaryEditor.set(null);
       break;
     case "toolbox":
       mobileView.set("toolbox");
       showSettings.set(false);
       editorTaskId.set(null);
+      diaryEditor.set(null);
+      break;
+    case "diary":
+      // 也是「日记编辑器被返回键关掉」时落到的那一层
+      mobileView.set("diary");
+      showSettings.set(false);
+      editorTaskId.set(null);
+      diaryEditor.set(null);
+      break;
+    case "diary-editor":
+      // 编辑器仍在顶层，由 diaryEditor 订阅驱动，这里不回写 store
       break;
     case "settings":
       // 设置页覆盖在列表之上：底层固定回列表视图
       mobileView.set("list");
       showSettings.set(true);
       editorTaskId.set(null);
+      diaryEditor.set(null);
       break;
     case "editor":
       // 编辑器仍在顶层，由 editorTaskId 订阅驱动，这里不回写 store
@@ -109,6 +122,7 @@ function handlePopState(event: PopStateEvent): void {
       mobileView.set("list");
       showSettings.set(false);
       editorTaskId.set(null);
+      diaryEditor.set(null);
       break;
   }
   releaseGuardLater();
@@ -135,6 +149,16 @@ export function startMobileRouter(): void {
     if (id !== null) {
       if (currentLayer() !== "editor") pushLayer("editor");
     } else if (currentLayer() === "editor") {
+      history.back();
+    }
+  });
+
+  // 日记编辑器同一套路（与任务编辑器互斥，不会同时开着）
+  diaryEditor.subscribe((target) => {
+    if (!get(isMobile) || applyingHistory) return;
+    if (target !== null) {
+      if (currentLayer() !== "diary-editor") pushLayer("diary-editor");
+    } else if (currentLayer() === "diary-editor") {
       history.back();
     }
   });
@@ -167,10 +191,21 @@ export function showMobileToolbox(): void {
   }
 }
 
+export function showMobileDiary(): void {
+  if (!get(isMobile)) {
+    return;
+  }
+  mobileView.set("diary");
+  // 已在日记层时不重复压栈（硬件返回键经 popstate 回列表）。
+  if (currentLayer() !== "diary") {
+    pushLayer("diary");
+  }
+}
+
 export function showMobileList(): void {
   if (get(isMobile) && typeof history !== "undefined") {
     const layer = currentLayer();
-    if (layer === "content" || layer === "toolbox") {
+    if (layer === "content" || layer === "toolbox" || layer === "diary") {
       // Let popstate drive the state change so browser history stays in sync.
       history.back();
       return;

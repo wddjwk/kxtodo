@@ -35,7 +35,7 @@ pub struct DomainMeta {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Tombstone {
     pub id: String,
-    /// "node" | "task" | "schedule"
+    /// "node" | "task" | "diary" | "schedule"
     #[serde(rename = "type")]
     pub kind: String,
     #[serde(rename = "updatedAt")]
@@ -82,6 +82,9 @@ pub struct DataFile {
     pub nodes: Vec<Node>,
     #[serde(default)]
     pub tasks: Vec<Item>,
+    /// 日记条目（与 task 平行的一类内容，同属 data 域与「同步数据」范围）。
+    #[serde(default)]
+    pub diaries: Vec<DiaryEntry>,
     #[serde(rename = "selectedNodeId", default)]
     pub selected_node_id: String,
     #[serde(default)]
@@ -232,6 +235,41 @@ pub struct Item {
     pub extra: Map<String, Value>,
 }
 
+/// 日记条目：以「归属日期」为核心属性的 Markdown 记录。
+///
+/// 一天可以有多篇（按 `createdAt` 先后排列）；除 `date` 外全部可选，
+/// 一句话的日记不该被逼着填标题/心情/天气。
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DiaryEntry {
+    pub id: String,
+    /// 归属日期 YYYY-MM-DD（可以后补写别的日子，不等于 createdAt 的日期）
+    pub date: String,
+    /// 标题；空 = 卡片直接展示正文首行
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    /// 正文 Markdown
+    #[serde(default)]
+    pub markdown: String,
+    /// 心情（emoji；空 = 没记）
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub mood: String,
+    /// 天气（emoji；空 = 没记）
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub weather: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<Tag>,
+    /// 本机 UI 状态，不参与同步
+    #[serde(rename = "expanded", skip_serializing_if = "Option::is_none")]
+    pub expanded: Option<bool>,
+    #[serde(rename = "createdAt", default)]
+    pub created_at: String,
+    #[serde(rename = "updatedAt", skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
+}
+
 // ---------------------------------------------------------------------------
 // settings.json
 // ---------------------------------------------------------------------------
@@ -256,6 +294,8 @@ pub struct SettingsFile {
     pub updates: UpdateSettings,
     #[serde(default)]
     pub features: FeatureSettings,
+    #[serde(default)]
+    pub diary: DiarySettings,
     /// 设置同步实体的 LWW 时间戳（仅共享子集变化时刷新）。
     #[serde(rename = "syncUpdatedAt", default, skip_serializing_if = "Option::is_none")]
     pub sync_updated_at: Option<String>,
@@ -796,6 +836,59 @@ impl Default for FeatureSettings {
     fn default() -> Self {
         Self {
             show_category_badges: true,
+            extra: Map::new(),
+        }
+    }
+}
+
+/// 日记视图：列表（时间轴）/ 日历（月历 + 当日卡片）/ 分组（按年月折叠）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum DiaryView {
+    List,
+    Calendar,
+    Group,
+}
+
+impl Default for DiaryView {
+    fn default() -> Self {
+        DiaryView::List
+    }
+}
+
+impl DiaryView {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DiaryView::List => "list",
+            DiaryView::Calendar => "calendar",
+            DiaryView::Group => "group",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "list" => Some(DiaryView::List),
+            "calendar" => Some(DiaryView::Calendar),
+            "group" => Some(DiaryView::Group),
+            _ => None,
+        }
+    }
+}
+
+/// 日记偏好。**本机 UI 状态，不进设置同步的共享子集**（每台设备可以各看各的视图）。
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct DiarySettings {
+    #[serde(default)]
+    pub view: DiaryView,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
+}
+
+impl Default for DiarySettings {
+    fn default() -> Self {
+        Self {
+            view: DiaryView::default(),
             extra: Map::new(),
         }
     }

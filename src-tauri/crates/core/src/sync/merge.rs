@@ -30,7 +30,7 @@ impl Scopes {
 /// 解密后的同步实体（内存表示）。
 #[derive(Debug, Clone)]
 pub struct EntityRecord {
-    /// "node" | "task" | "schedule" | "settings"
+    /// "node" | "task" | "diary" | "schedule" | "settings"
     pub kind: String,
     pub id: String,
     pub updated_at: String,
@@ -97,7 +97,7 @@ impl EntityRecord {
     }
 }
 
-/// 本地实体的版本戳（数据域：node/task 活实体或墓碑）。
+/// 本地实体的版本戳（数据域：node/task/diary 活实体或墓碑）。
 pub fn data_entity_stamp(data: &DataFile, id: &str) -> Option<String> {
     if let Some(node) = data.nodes.iter().find(|node| node.id == id) {
         return Some(
@@ -111,6 +111,14 @@ pub fn data_entity_stamp(data: &DataFile, id: &str) -> Option<String> {
             item.updated_at
                 .clone()
                 .unwrap_or_else(|| item.created_at.clone()),
+        );
+    }
+    if let Some(entry) = data.diaries.iter().find(|entry| entry.id == id) {
+        return Some(
+            entry
+                .updated_at
+                .clone()
+                .unwrap_or_else(|| entry.created_at.clone()),
         );
     }
     data.meta
@@ -162,6 +170,15 @@ fn node_payload(data: &DataFile, node: &crate::model::Node) -> Value {
 
 fn task_payload(item: &crate::model::Item) -> Value {
     let mut payload = serde_json::to_value(item).unwrap_or(Value::Null);
+    if let Some(map) = payload.as_object_mut() {
+        // expanded 是本机 UI 状态，不参与同步
+        map.remove("expanded");
+    }
+    payload
+}
+
+fn diary_payload(entry: &crate::model::DiaryEntry) -> Value {
+    let mut payload = serde_json::to_value(entry).unwrap_or(Value::Null);
     if let Some(map) = payload.as_object_mut() {
         // expanded 是本机 UI 状态，不参与同步
         map.remove("expanded");
@@ -241,8 +258,22 @@ pub fn extract_entities(
                 seq: 0,
             });
         }
+        for entry in &data.diaries {
+            out.push(EntityRecord {
+                kind: "diary".to_string(),
+                id: entry.id.clone(),
+                updated_at: entry
+                    .updated_at
+                    .clone()
+                    .unwrap_or_else(|| entry.created_at.clone()),
+                updated_by: device_id.to_string(),
+                deleted: false,
+                data: diary_payload(entry),
+                seq: 0,
+            });
+        }
         for tomb in &data.meta.tombstones {
-            if tomb.kind == "node" || tomb.kind == "task" {
+            if tomb.kind == "node" || tomb.kind == "task" || tomb.kind == "diary" {
                 out.push(EntityRecord {
                     kind: tomb.kind.clone(),
                     id: tomb.id.clone(),
@@ -330,6 +361,17 @@ fn apply_task_record(record: &EntityRecord, data: &mut DataFile) -> Result<(), S
     }
     data.tasks.retain(|t| t.id != item.id);
     data.tasks.push(item);
+    Ok(())
+}
+
+fn apply_diary_record(record: &EntityRecord, data: &mut DataFile) -> Result<(), String> {
+    let mut entry: crate::model::DiaryEntry =
+        serde_json::from_value(record.data.clone()).map_err(|e| e.to_string())?;
+    if let Some(existing) = data.diaries.iter().find(|d| d.id == entry.id) {
+        entry.expanded = existing.expanded;
+    }
+    data.diaries.retain(|d| d.id != entry.id);
+    data.diaries.push(entry);
     Ok(())
 }
 
@@ -465,6 +507,11 @@ pub fn apply_data_record(
                 data.meta
                     .record_tombstone(&record.id, "task", &record.updated_at);
             }
+            "diary" => {
+                data.diaries.retain(|d| d.id != record.id);
+                data.meta
+                    .record_tombstone(&record.id, "diary", &record.updated_at);
+            }
             other => return Err(format!("未知数据域墓碑类型 `{other}`")),
         }
         return Ok(());
@@ -472,6 +519,7 @@ pub fn apply_data_record(
     match record.kind.as_str() {
         "node" => apply_node_record(record, data),
         "task" => apply_task_record(record, data),
+        "diary" => apply_diary_record(record, data),
         other => Err(format!("未知数据域实体类型 `{other}`")),
     }
 }
@@ -508,6 +556,12 @@ pub fn normalize_data_orders(data: &mut DataFile) {
             .cmp(kb.0)
             .then_with(|| cmp_f64(ka.1, kb.1))
             .then_with(|| ka.2.cmp(kb.2))
+    });
+    data.diaries.sort_by(|a, b| {
+        b.date
+            .cmp(&a.date)
+            .then_with(|| a.created_at.cmp(&b.created_at))
+            .then_with(|| a.id.cmp(&b.id))
     });
 }
 
@@ -565,6 +619,7 @@ mod tests {
             meta: Default::default(),
             nodes: Vec::new(),
             tasks: Vec::new(),
+            diaries: Vec::new(),
             selected_node_id: String::new(),
             backgrounds: Map::new(),
             extra: Map::new(),
@@ -747,5 +802,133 @@ mod tests {
         };
         apply_settings_record(&legacy_record, &mut legacy).unwrap();
         assert_eq!(legacy.sync.interval_seconds, 77);
+    }
+
+    fn diary(id: &str, date: &str, ts: &str) -> crate::model::DiaryEntry {
+        crate::model::DiaryEntry {
+            id: id.to_string(),
+            date: date.to_string(),
+            title: String::new(),
+            markdown: format!("正文 {id}"),
+            mood: String::new(),
+            weather: String::new(),
+            tags: Vec::new(),
+            expanded: None,
+            created_at: ts.to_string(),
+            updated_at: Some(ts.to_string()),
+            extra: Map::new(),
+        }
+    }
+
+    #[test]
+    fn diary_rides_the_data_scope_and_keeps_ui_state_local() {
+        let mut data = DataFile {
+            diaries: vec![diary("d1", "2026-09-08", "2026-09-08T00:00:00.000Z")],
+            ..empty_data()
+        };
+        data.diaries[0].expanded = Some(true);
+        let settings = SettingsFile::default();
+        let schedule = ScheduleFile::default();
+
+        let on = extract_entities(
+            &data,
+            &settings,
+            &schedule,
+            &Scopes {
+                data: true,
+                settings: false,
+                schedules: false,
+            },
+            "dev-a",
+        );
+        let entity = on
+            .iter()
+            .find(|e| e.kind == "diary")
+            .expect("日记在「同步数据」范围内");
+        assert_eq!(entity.id, "d1");
+        assert_eq!(entity.updated_at, "2026-09-08T00:00:00.000Z");
+        assert!(
+            entity.data.get("expanded").is_none(),
+            "expanded 是本机 UI 状态，不该出设备"
+        );
+        assert_eq!(entity.data["date"], json!("2026-09-08"));
+
+        let off = extract_entities(
+            &data,
+            &settings,
+            &schedule,
+            &Scopes::default(),
+            "dev-a",
+        );
+        assert!(off.iter().all(|e| e.kind != "diary"), "关掉数据范围就不推日记");
+
+        // 远端更新胜出：内容替换，但本机的展开状态留着
+        let remote = record(
+            "diary",
+            "d1",
+            "2026-09-09T00:00:00.000Z",
+            "dev-b",
+            serde_json::to_value(diary("d1", "2026-09-08", "2026-09-09T00:00:00.000Z")).unwrap(),
+        );
+        assert!(remote_wins(
+            &remote,
+            data_entity_stamp(&data, "d1").as_deref().map(|ts| (ts, "dev-a"))
+        ));
+        apply_data_record(&remote, &mut data).unwrap();
+        assert_eq!(data.diaries.len(), 1);
+        assert_eq!(
+            data.diaries[0].updated_at.as_deref(),
+            Some("2026-09-09T00:00:00.000Z")
+        );
+        assert_eq!(data.diaries[0].expanded, Some(true));
+        assert_eq!(
+            data_entity_stamp(&data, "d1").as_deref(),
+            Some("2026-09-09T00:00:00.000Z"),
+            "对账水位要能从日记上读到版本戳"
+        );
+
+        // 远端墓碑 → 删除 + 记 diary 墓碑
+        let tomb = EntityRecord {
+            kind: "diary".to_string(),
+            id: "d1".to_string(),
+            updated_at: "2026-09-10T00:00:00.000Z".to_string(),
+            updated_by: "dev-b".to_string(),
+            deleted: true,
+            data: Value::Null,
+            seq: 3,
+        };
+        apply_data_record(&tomb, &mut data).unwrap();
+        assert!(data.diaries.is_empty());
+        assert_eq!(data.meta.tombstones.len(), 1);
+        assert_eq!(data.meta.tombstones[0].kind, "diary");
+
+        // 旧的远端活实体（9 日）打不过墓碑（10 日）→ 不复活
+        let stale = record(
+            "diary",
+            "d1",
+            "2026-09-09T00:00:00.000Z",
+            "dev-b",
+            serde_json::to_value(diary("d1", "2026-09-08", "2026-09-09T00:00:00.000Z")).unwrap(),
+        );
+        assert!(!remote_wins(
+            &stale,
+            data_entity_stamp(&data, "d1").as_deref().map(|ts| (ts, "dev-b"))
+        ));
+    }
+
+    #[test]
+    fn diary_array_order_is_canonical_after_merge() {
+        let mut data = DataFile {
+            diaries: vec![
+                diary("d-old", "2026-09-01", "2026-09-01T00:00:00.000Z"),
+                diary("d-late", "2026-09-08", "2026-09-08T09:00:00.000Z"),
+                diary("d-early", "2026-09-08", "2026-09-08T07:00:00.000Z"),
+            ],
+            ..empty_data()
+        };
+        normalize_data_orders(&mut data);
+        let ids: Vec<&str> = data.diaries.iter().map(|e| e.id.as_str()).collect();
+        // 日期由近及远，同一天内按写作先后
+        assert_eq!(ids, vec!["d-early", "d-late", "d-old"]);
     }
 }
