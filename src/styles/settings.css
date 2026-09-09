@@ -58,6 +58,22 @@
   align-items: start;
 }
 
+/* 特性开关整块灰色卡片（与同步配置同一种观感）：里面是开关列表，行自身不再带灰底 */
+.settings-card {
+  display: grid;
+  gap: 4px;
+  border-radius: 10px;
+  background: #f7f7f7;
+  padding: 8px 12px;
+}
+
+.settings-card .toggle-row {
+  margin-bottom: 0;
+  border-radius: 8px;
+  background: transparent;
+  padding: 8px 2px;
+}
+
 .toggle-row {
   display: flex;
   align-items: center;

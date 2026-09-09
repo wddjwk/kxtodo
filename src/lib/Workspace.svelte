@@ -42,20 +42,62 @@
   import { caps } from "./capabilities";
   import type { AppNode, CardStyle, TagColor, Task } from "./types";
 
+  // 「已完成」区显隐偏好：默认折叠，用户配置过就按视图记住（本机 UI 状态，不进同步）
+  const COMPLETED_OPEN_KEY = "kxtodo-completed-open";
+  const COMPLETED_PLANNED_KEY = "planned";
+
+  function readCompletedOpen(key: string): boolean {
+    if (typeof localStorage === "undefined") return false;
+    try {
+      const raw = localStorage.getItem(COMPLETED_OPEN_KEY);
+      if (!raw) return false;
+      return (JSON.parse(raw) as Record<string, boolean>)[key] === true;
+    } catch {
+      return false;
+    }
+  }
+
+  function writeCompletedOpen(key: string, open: boolean): void {
+    if (typeof localStorage === "undefined") return;
+    try {
+      const raw = localStorage.getItem(COMPLETED_OPEN_KEY);
+      const map = raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
+      map[key] = open;
+      localStorage.setItem(COMPLETED_OPEN_KEY, JSON.stringify(map));
+    } catch {
+      // 写不进就算了，最坏退回每次默认折叠
+    }
+  }
+
   let newTaskDraft = "";
-  let showCompleted = true;
+  /** 「已完成」区默认折叠；用户展开/收起后按当前视图记住（见 COMPLETED_OPEN_KEY） */
+  let showCompleted = false;
   let showSuggestions = false;
   let showCalendar = false;
   let sortMode: SortMode = "created-desc";
   // 计划内视图：日期分组过滤 + 已完成显隐（默认隐藏，且不渲染折叠的已完成区）
   let plannedGroup: PlannedGroupKey = "all";
-  let plannedShowCompleted = false;
+  let plannedShowCompleted = readCompletedOpen(COMPLETED_PLANNED_KEY);
   let showPlannedGroups = false;
   /** 计划内「全部」的分区折叠状态（本地 UI 状态，不持久化） */
   let collapsedSections: Record<string, boolean> = {};
 
   function toggleSection(key: string): void {
     collapsedSections = { ...collapsedSections, [key]: !collapsedSections[key] };
+  }
+
+  /** 换视图时回读该视图的「已完成」显隐偏好（没配置过 = 折叠） */
+  $: completedKey = $selectedNode?.id ?? "list";
+  $: showCompleted = readCompletedOpen(completedKey);
+
+  function toggleCompletedSection(): void {
+    showCompleted = !showCompleted;
+    writeCompletedOpen(completedKey, showCompleted);
+  }
+
+  function togglePlannedCompleted(): void {
+    plannedShowCompleted = !plannedShowCompleted;
+    writeCompletedOpen(COMPLETED_PLANNED_KEY, plannedShowCompleted);
   }
   let taskMenu: { taskId: string; x: number; y: number } | null = null;
   /** 搜索结果里的日记卡片菜单（与 taskMenu 互斥） */
@@ -882,7 +924,7 @@
       {isScheduled}
       {isPlanned}
       showCompleted={plannedShowCompleted}
-      onToggleShowCompleted={() => (plannedShowCompleted = !plannedShowCompleted)}
+      onToggleShowCompleted={togglePlannedCompleted}
       {sortMode}
       onSortMode={(mode) => (sortMode = mode)}
       onRenameRequest={beginHeaderRename}
@@ -1011,7 +1053,7 @@
 
     {#if !$isSearching && completedTasks.length}
       <section class="completed-section">
-        <button class="completed-toggle" type="button" on:click|stopPropagation={() => (showCompleted = !showCompleted)}>
+        <button class="completed-toggle" type="button" on:click|stopPropagation={toggleCompletedSection}>
           <ChevronDown class={!showCompleted ? "collapsed" : ""} size={17} />
           已完成 {completedTasks.length}
         </button>

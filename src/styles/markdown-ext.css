@@ -367,6 +367,17 @@ body.kx-dragging * {
   -webkit-user-select: none !important;
 }
 
+/* ---------- 分割线 ----------
+   github-markdown-css 的 hr 是 0.25em 高的灰色实心带（height+background），又粗又突兀；
+   覆盖成一条 1px 的灰色细虚线。 */
+.markdown-body hr {
+  height: 0;
+  margin: 14px 0;
+  background: transparent;
+  border: 0;
+  border-top: 1px dashed #d5dae1;
+}
+
 /* ---------- 超链接图标（ksimple 同款：链接前一个小链环） ---------- */
 
 .markdown-body p a:not(:has(img))::before,

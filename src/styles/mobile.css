@@ -703,3 +703,9 @@
   color: #8b929e;
   font-size: 15px;
 }
+
+/* 移动端编辑器元数据行只留图标：占位文字（心情/天气/标签）隐藏，已选的值（表情/天气
+   图标本身、标签 chip）保留——窄屏上三个带字触发器太挤。桌面保持图标+文字现状。 */
+.app-shell.mobile .editor-meta-trigger .trigger-label {
+  display: none;
+}

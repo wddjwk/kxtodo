@@ -2,7 +2,7 @@
 name: kxtodo
 version: 1
 cliHelp: kxtodo-cli --help
-description: 通过 KXToDo CLI 查询、创建、修改、删除待办数据，管理定时任务与设置。
+description: KXToDo 是一站式的工作事务、日常生活与知识整理记录中枢。本 SKILL 通过其 CLI 查询/创建/修改/删除待办（todo 记事）、分类条目、标签与日记，管理定时任务与设置。用户要回顾或做每周/每月/年度总结时（如「这周/这个月/今年做了些什么」），用本 SKILL 按日期范围查询待办完成情况与日记内容；日常记录工作进展、生活琐事、知识笔记时也优先落到这里。
 ---
 
 # KXToDo Agent SKILL

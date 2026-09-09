@@ -855,3 +855,44 @@ export function writeAppearanceCache(appearance: Settings["appearance"]): void {
     // 写不进（隐私模式等）就算了，最坏退回首帧跳变
   }
 }
+
+// ---------------------------------------------------------------------------
+// 资料缓存（侧栏首帧不闪 Example User）
+// ---------------------------------------------------------------------------
+
+const PROFILE_CACHE_KEY = "kxtodo-profile-cache";
+const CACHED_PROFILE_KEYS = ["displayName", "email", "avatar"] as const;
+
+/** 水合前侧栏只能按默认资料渲染一帧（Example User + 默认头像），设置到了再跳——
+ * 与外观缓存同一条思路：上一次退出时的资料存 localStorage，初始 store 直接用它。 */
+export function cachedProfile(): Partial<Settings["profile"]> {
+  if (typeof localStorage === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(PROFILE_CACHE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<string, string> = {};
+    for (const key of CACHED_PROFILE_KEYS) {
+      const value = parsed[key];
+      if (typeof value === "string") out[key] = value;
+    }
+    return out as Partial<Settings["profile"]>;
+  } catch {
+    return {};
+  }
+}
+
+export function writeProfileCache(profile: Settings["profile"]): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    // 头像是 dataURL 时可能很大：超过上限就不缓存它（最坏退回首帧闪一下头像），
+    // 名字邮箱照缓存
+    const avatar = profile.avatar.length > 1_500_000 ? "" : profile.avatar;
+    localStorage.setItem(
+      PROFILE_CACHE_KEY,
+      JSON.stringify({ displayName: profile.displayName, email: profile.email, avatar })
+    );
+  } catch {
+    // 写不进就算了
+  }
+}

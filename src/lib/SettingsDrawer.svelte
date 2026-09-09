@@ -789,33 +789,32 @@
 
   <section>
     <h3>特性开关</h3>
-    <label class="toggle-row">
-      <span>显示分类角标</span>
-      <input
-        type="checkbox"
-        checked={$appSettings.features.showCategoryBadges}
-        on:change={(event) => updateFeature("showCategoryBadges", event.currentTarget.checked)}
-      />
-    </label>
-    <p class="muted">在左侧栏分类行显示该分类下未完成条目数。</p>
-    <label class="toggle-row">
-      <span>编辑器工具栏</span>
-      <input
-        type="checkbox"
-        checked={$appSettings.features.editorToolbar}
-        on:change={(event) => updateFeature("editorToolbar", event.currentTarget.checked)}
-      />
-    </label>
-    <p class="muted">桌面编辑器里显示一排 markdown 快捷按钮（加粗/标题/列表等）；移动端常显，不受它管。</p>
-    <label class="toggle-row">
-      <span>启动同步功能</span>
-      <input
-        type="checkbox"
-        checked={$appSettings.features.sync}
-        on:change={(event) => updateFeature("sync", event.currentTarget.checked)}
-      />
-    </label>
-    <p class="muted">关掉后停止自动同步、隐藏同步配置并停用同步的一切功能（配对信息保留）。</p>
+    <div class="settings-card">
+      <label class="toggle-row" title="在左侧栏分类行显示该分类下未完成条目数。">
+        <span>显示分类角标</span>
+        <input
+          type="checkbox"
+          checked={$appSettings.features.showCategoryBadges}
+          on:change={(event) => updateFeature("showCategoryBadges", event.currentTarget.checked)}
+        />
+      </label>
+      <label class="toggle-row" title="编辑器里显示一排 markdown 快捷按钮（加粗/标题/列表等），桌面与移动端一致。">
+        <span>编辑器工具栏</span>
+        <input
+          type="checkbox"
+          checked={$appSettings.features.editorToolbar}
+          on:change={(event) => updateFeature("editorToolbar", event.currentTarget.checked)}
+        />
+      </label>
+      <label class="toggle-row" title="关掉后停止自动同步、隐藏同步配置并停用同步的一切功能（配对信息保留）。">
+        <span>启动同步功能</span>
+        <input
+          type="checkbox"
+          checked={$appSettings.features.sync}
+          on:change={(event) => updateFeature("sync", event.currentTarget.checked)}
+        />
+      </label>
+    </div>
   </section>
 
   {#if caps.trayLifecycle}

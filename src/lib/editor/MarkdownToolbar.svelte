@@ -1,7 +1,8 @@
 <script lang="ts">
-  // 移动端编辑器的 markdown 快捷工具栏：贴在编辑器底部，输入法弹出时（adjustResize
-  // 把视口压矮）自然停在输入法上方。按钮 pointerdown 一律 preventDefault——一抢焦点
-  // 输入法就收下去了，「输入法上方的工具栏」就不成立。桌面端不渲染这个组件。
+  // 编辑器的 markdown 快捷工具栏（桌面/移动端都渲染，是否显示由特性开关
+  // features.editorToolbar 控制）。移动端输入法避让靠 imeInset action 给浮层垫底边距
+  // （adjustResize 实测不可靠）。按钮 pointerdown 一律 preventDefault——一抢焦点
+  // 输入法就收下去了，「输入法上方的工具栏」就不成立。
   import type { EditorView } from "@codemirror/view";
   import {
     Bold,
@@ -57,6 +58,9 @@
   <button type="button" title="超链接" on:pointerdown={keepFocus} on:click={() => run(insertLink)}>
     <Link2 size={18} />
   </button>
+  <button type="button" title="待办项" on:pointerdown={keepFocus} on:click={() => run((v) => toggleLinePrefix(v, "- [ ] "))}>
+    <SquareCheckBig size={18} />
+  </button>
   <button type="button" title="一级标题" on:pointerdown={keepFocus} on:click={() => run((v) => setHeading(v, 1))}>
     <Heading1 size={18} />
   </button>
@@ -74,9 +78,6 @@
   </button>
   <button type="button" title="六级标题" on:pointerdown={keepFocus} on:click={() => run((v) => setHeading(v, 6))}>
     <Heading6 size={18} />
-  </button>
-  <button type="button" title="待办项" on:pointerdown={keepFocus} on:click={() => run((v) => toggleLinePrefix(v, "- [ ] "))}>
-    <SquareCheckBig size={18} />
   </button>
   <button type="button" title="无序列表" on:pointerdown={keepFocus} on:click={() => run((v) => toggleLinePrefix(v, "- "))}>
     <List size={18} />

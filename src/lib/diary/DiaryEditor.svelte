@@ -367,7 +367,7 @@
 
       <div class="editor-meta-field" class:open={openPicker === "mood"}>
         <button class="editor-meta-trigger" type="button" class:filled={Boolean(mood)} title="心情" on:click={() => togglePicker("mood")}>
-          <Smile size={15} />{mood || "心情"}
+          <Smile size={15} />{mood}{#if !mood}<span class="trigger-label">心情</span>{/if}
         </button>
         {#if openPicker === "mood"}
           <div class="editor-meta-pop editor-emoji-grid-pop">
@@ -382,7 +382,7 @@
 
       <div class="editor-meta-field" class:open={openPicker === "weather"}>
         <button class="editor-meta-trigger" type="button" class:filled={Boolean(weather)} title="天气" on:click={() => togglePicker("weather")}>
-          <CloudSun size={15} />{weather || "天气"}
+          <CloudSun size={15} />{weather}{#if !weather}<span class="trigger-label">天气</span>{/if}
         </button>
         {#if openPicker === "weather"}
           <div class="editor-meta-pop editor-emoji-grid-pop">
@@ -421,7 +421,7 @@
           {/if}
         {/each}
         <button class="editor-meta-trigger editor-tag-add" type="button" title="标签" on:click={() => togglePicker("tag")}>
-          <TagIcon size={14} />{tags.length ? "" : "标签"}
+          <TagIcon size={14} />{#if !tags.length}<span class="trigger-label">标签</span>{/if}
         </button>
         {#if openPicker === "tag"}
           <div class="editor-meta-pop editor-tag-pop" on:click|stopPropagation>
@@ -453,7 +453,7 @@
       </div>
     </div>
 
-    {#if mode === "edit" && ($isMobile || $appSettings.features.editorToolbar)}
+    {#if mode === "edit" && $appSettings.features.editorToolbar}
       <MarkdownToolbar view={view} onImage={() => void insertImageFile()} />
     {/if}
 

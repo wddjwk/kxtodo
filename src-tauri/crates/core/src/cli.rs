@@ -1222,9 +1222,10 @@ pub struct SkillsPersistArgs {
     /// SKILL 名称（当前版本为 kxtodo）
     #[arg(value_name = "name")]
     pub name: String,
-    /// 目标目录；非 skills 目录会自动追加 skills
+    /// 目标目录；非 skills 目录会自动追加 skills。不指定时默认 ~/.agents
+    /// （最终写入 ~/.agents/skills/<name>/SKILL.md）
     #[arg(value_name = "path")]
-    pub path: PathBuf,
+    pub path: Option<PathBuf>,
 }
 
 #[derive(Debug, Args, Serialize)]
@@ -1660,11 +1661,14 @@ fn build_skills_output(
                 "pure",
             )
         }
-        SkillsAction::Persist(args) => (
-            "skills.persist",
-            crate::skills::cmd_persist(&args.name, &args.path, cwd, cli.globals.dry_run)?,
-            "pure",
-        ),
+        SkillsAction::Persist(args) => {
+            let target_root = args.path.clone().unwrap_or_else(crate::skills::default_persist_root);
+            (
+                "skills.persist",
+                crate::skills::cmd_persist(&args.name, &target_root, cwd, cli.globals.dry_run, cli.globals.yes)?,
+                "pure",
+            )
+        }
         SkillsAction::Echo(args) => (
             "skills.echo",
             Value::String(crate::skills::content(&args.name)?.to_string()),

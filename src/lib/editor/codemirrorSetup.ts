@@ -197,7 +197,8 @@ export function setHeading(view: EditorView, level: number): void {
   view.focus();
 }
 
-/** 整行前缀开关（checkbox / 无序 / 有序列表）。ordered 按选区内行序递增编号。 */
+/** 整行前缀开关（checkbox / 无序 / 有序列表）。ordered 按选区内行序递增编号。
+ *  光标落在光标所在行的前缀之后——与标题按钮同口径，留在行首接着打字会打进标记里。 */
 export function toggleLinePrefix(view: EditorView, prefix: string, ordered = false): void {
   const state = view.state;
   const range = state.selection.main;
@@ -206,25 +207,37 @@ export function toggleLinePrefix(view: EditorView, prefix: string, ordered = fal
     const match = ordered ? /^\s*\d+[.)]\s/.exec(text) : text.startsWith(prefix) ? [prefix] : null;
     return match ? match[0] : "";
   };
-  const lines: Array<{ from: number; text: string }> = [];
+  const headLine = state.doc.lineAt(range.head);
+  const lines: Array<{ number: number; from: number; text: string }> = [];
   for (let n = state.doc.lineAt(range.from).number; n <= state.doc.lineAt(range.to).number; n++) {
     const line = state.doc.line(n);
-    lines.push({ from: line.from, text: line.text });
+    lines.push({ number: n, from: line.from, text: line.text });
   }
   const allHave = lines.every((line) => has(line.text));
   const changes: Array<{ from: number; to: number; insert: string }> = [];
+  let headStripped = false;
+  let headInsertLen = 0;
   lines.forEach((line, index) => {
     const next = ordered ? index + 1 + ". " : prefix;
     const existing = strip(line.text);
     if (allHave) {
       changes.push({ from: line.from, to: line.from + existing.length, insert: "" });
+      if (line.number === headLine.number) headStripped = true;
     } else if (existing) {
       changes.push({ from: line.from, to: line.from + existing.length, insert: next });
     } else {
       changes.push({ from: line.from, to: line.from, insert: next });
     }
+    if (line.number === headLine.number && !allHave) headInsertLen = next.length;
   });
-  view.dispatch({ changes, scrollIntoView: true });
+  // 目标行行首在新文档里的位置 = 原位置 + 它之前各行的净位移
+  let delta = 0;
+  for (const change of changes) {
+    if (change.from >= headLine.from) break;
+    delta += change.insert.length - (change.to - change.from);
+  }
+  const anchor = headLine.from + delta + (headStripped ? 0 : headInsertLen);
+  view.dispatch({ changes, selection: { anchor }, scrollIntoView: true });
   view.focus();
 }
 

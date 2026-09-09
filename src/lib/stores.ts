@@ -1,6 +1,6 @@
 import { writable, derived, get } from "svelte/store";
 import type { AppNotification, AppState, AppNode, DiaryEditorTarget, DiaryEntry, EmojiPickerTarget, NotificationTone, SchedulerState, Settings, Task } from "./types";
-import { cachedAppearance, defaultSchedulerRuntimes, defaultSettings, emptyState, normalizeDiaryEntries, normalizeState, normalizeSettings, schedulerRuntimeKeys, writeAppearanceCache } from "./defaults";
+import { cachedAppearance, cachedProfile, defaultSchedulerRuntimes, defaultSettings, emptyState, normalizeDiaryEntries, normalizeState, normalizeSettings, schedulerRuntimeKeys, writeAppearanceCache, writeProfileCache } from "./defaults";
 import {
   loadState, saveState, loadSettings, saveSettings, loadScheduler, saveScheduler,
   loadDiary, saveDiary,
@@ -110,8 +110,12 @@ export const appState = writable<AppState>(emptyState());
 // 会先按默认缩放渲染一帧再跳变（安卓上观感是「卡卡的、不稳定」）
 const initialSettings = clone(defaultSettings);
 Object.assign(initialSettings.appearance, cachedAppearance());
+Object.assign(initialSettings.profile, cachedProfile());
 export const appSettings = writable<Settings>(initialSettings);
-appSettings.subscribe((settings) => writeAppearanceCache(settings.appearance));
+appSettings.subscribe((settings) => {
+  writeAppearanceCache(settings.appearance);
+  writeProfileCache(settings.profile);
+});
 /**
  * 日记（diary.json，独立的第四个领域）。跟 scheduleEntries 一样单独成 store：
  * 它有自己的 revision 与域事件，塞进 appState 会让「只刷新日记」变成刷新整个数据域。

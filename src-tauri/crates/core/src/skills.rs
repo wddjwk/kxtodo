@@ -1,5 +1,6 @@
 //! skills command: SKILL.md 编译期嵌入二进制，单文件分发无外挂依赖（§3.7）。
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
@@ -20,6 +21,16 @@ pub fn content(name: &str) -> CoreResult<&'static str> {
         ));
     }
     Ok(SKILL_CONTENT)
+}
+
+/// 不指定位置时的默认落地根：`~/.agents`（persist 会再追加 `skills/<name>/SKILL.md`，
+/// 即默认 `~/.agents/skills/kxtodo/SKILL.md`）。
+pub fn default_persist_root() -> PathBuf {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    home.join(".agents")
 }
 
 pub fn persist_path(name: &str, requested: &Path, cwd: &Path) -> CoreResult<PathBuf> {
@@ -47,9 +58,16 @@ pub fn persist_path(name: &str, requested: &Path, cwd: &Path) -> CoreResult<Path
     Ok(root.join(name).join("SKILL.md"))
 }
 
-pub fn cmd_persist(name: &str, requested: &Path, cwd: &Path, dry_run: bool) -> CoreResult<Value> {
+pub fn cmd_persist(
+    name: &str,
+    requested: &Path,
+    cwd: &Path,
+    dry_run: bool,
+    yes: bool,
+) -> CoreResult<Value> {
     let target = persist_path(name, requested, cwd)?;
     if !dry_run {
+        prepare_target(&target, yes)?;
         crate::repo::atomic_write(&target, content(name)?)?;
     }
     Ok(json!({
@@ -58,6 +76,43 @@ pub fn cmd_persist(name: &str, requested: &Path, cwd: &Path, dry_run: bool) -> C
         "source": "embedded",
         "dryRun": dry_run,
     }))
+}
+
+/// persist 的最终目的就是把 `<root>/<name>/SKILL.md` 写出来：已存在的 SKILL.md 直接
+/// 覆盖（atomic_write 自带替换）。挡路的只有两种怪情况——路径上某一级被同名**普通文件**
+/// 占着（典型：把 SKILL.md 本身当目录传进来，create_dir_all 会报 os error 183），或目标
+/// 位置是个目录。这两种都要动用户的东西，未加 --yes 时报 confirmation（退出码 10）让调用
+/// 方询问 y/N 后重试，加了才清掉。
+fn prepare_target(target: &Path, yes: bool) -> CoreResult<()> {
+    let mut current = target.parent();
+    while let Some(dir) = current {
+        if dir.exists() {
+            if !dir.is_dir() {
+                if !yes {
+                    return Err(CoreError::confirmation(format!(
+                        "路径 {} 被同名文件占用，替换后才能写入 SKILL.md（加 --yes 确认）",
+                        dir.display()
+                    )));
+                }
+                fs::remove_file(dir).map_err(|error| {
+                    CoreError::io(format!("无法移除 {}：{error}", dir.display()))
+                })?;
+            }
+            break;
+        }
+        current = dir.parent();
+    }
+    if target.exists() && !target.is_file() {
+        if !yes {
+            return Err(CoreError::confirmation(format!(
+                "{} 已存在且是目录，清空后才能写入 SKILL.md（加 --yes 确认）",
+                target.display()
+            )));
+        }
+        fs::remove_dir_all(target)
+            .map_err(|error| CoreError::io(format!("无法清空 {}：{error}", target.display())))?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]

@@ -478,7 +478,7 @@
         </button>
         <div class="editor-meta-field" class:open={metaOpen === "tag"}>
           <button class="editor-meta-trigger editor-tag-add" type="button" title="标签" on:click={() => toggleMeta("tag")}>
-            <TagIcon size={14} />{tags.length ? "" : "标签"}
+            <TagIcon size={14} />{#if !tags.length}<span class="trigger-label">标签</span>{/if}
           </button>
           {#if metaOpen === "tag"}
             <div class="editor-meta-pop editor-tag-pop" on:click|stopPropagation>
@@ -511,7 +511,7 @@
       </div>
     </div>
 
-    {#if mode === "edit" && ($isMobile || $appSettings.features.editorToolbar)}
+    {#if mode === "edit" && $appSettings.features.editorToolbar}
       <MarkdownToolbar view={view} onImage={() => void insertImageFile()} />
     {/if}
 

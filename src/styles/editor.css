@@ -332,8 +332,8 @@
 }
 
 /* ---------- markdown 快捷工具栏 ----------
-   桌面与移动端共用：贴在元数据行下方一行（桌面由特性开关 features.editorToolbar 控制
-   是否渲染，移动端常显）。移动端额外吃底部安全区；输入法避让靠 imeInset action 给
+   桌面与移动端共用：贴在元数据行下方一行，是否渲染由特性开关 features.editorToolbar
+   控制（两端一致）。移动端额外吃底部安全区；输入法避让靠 imeInset action 给
    浮层垫 padding-bottom，不在这条 CSS 里做。 */
 .editor-md-toolbar {
   display: flex;
