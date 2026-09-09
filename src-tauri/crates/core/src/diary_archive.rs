@@ -24,7 +24,7 @@ const MAX_FILE_BYTES: u64 = 20 * 1024 * 1024;
 /// 文件名里的标题上限（按字符数，中文标题 48 字已经很长）
 const TITLE_CHARS_IN_NAME: usize = 48;
 /// 压缩包内插图统一放这个目录（解压出来与 年/月 同级）
-const IMAGES_DIR: &str = "images";
+pub(crate) const IMAGES_DIR: &str = "images";
 
 fn image_ref_pattern() -> &'static Regex {
     static PATTERN: OnceLock<Regex> = OnceLock::new();
@@ -37,7 +37,7 @@ fn is_remote_src(src: &str) -> bool {
 
 /// 逐处改写 Markdown 里的图片引用。回调返回 None 表示这一处不动。
 /// 远程链接与 data: 内联图永远不碰。
-fn rewrite_image_refs(markdown: &str, mut map: impl FnMut(&str) -> Option<String>) -> String {
+pub(crate) fn rewrite_image_refs(markdown: &str, mut map: impl FnMut(&str) -> Option<String>) -> String {
     image_ref_pattern()
         .replace_all(markdown, |caps: &regex::Captures<'_>| {
             let alt = &caps[1];
@@ -54,7 +54,7 @@ fn rewrite_image_refs(markdown: &str, mut map: impl FnMut(&str) -> Option<String
 }
 
 /// 取引用里的最后一段文件名（容忍 `../../images/x.png` 与手写 md 的相对路径）。
-fn ref_basename(src: &str) -> &str {
+pub(crate) fn ref_basename(src: &str) -> &str {
     src.rsplit(['/', '\\']).next().unwrap_or(src)
 }
 
@@ -175,7 +175,7 @@ fn entry_path(entry: &DiaryEntry, index: usize, total: usize, used: &mut HashSet
 }
 
 /// 文件名安全化：去掉路径分隔符与 Windows 保留字符、前导点、控制字符，压掉连续空白。
-fn sanitize_for_filename(raw: &str) -> String {
+pub(crate) fn sanitize_for_filename(raw: &str) -> String {
     let cleaned: String = raw
         .chars()
         .map(|ch| {
@@ -377,12 +377,12 @@ pub fn parse_zip(bytes: &[u8]) -> CoreResult<ParsedArchive> {
     Ok(out)
 }
 
-fn is_markdown(name: &str) -> bool {
+pub(crate) fn is_markdown(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower.ends_with(".md") || lower.ends_with(".markdown") || lower.ends_with(".txt")
 }
 
-fn is_image_name(name: &str) -> bool {
+pub(crate) fn is_image_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower.ends_with(".png")
         || lower.ends_with(".jpg")

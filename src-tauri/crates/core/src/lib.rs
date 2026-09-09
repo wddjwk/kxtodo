@@ -1,6 +1,7 @@
 //! KXToDo Domain Core：数据模型、仓储、业务命令、CLI、Background Host。
 //! GUI（kxtodo）与 CLI（kxtodo-cli）共享的纯 Rust 层，不依赖 Tauri。
 
+pub mod cards_archive;
 pub mod cli;
 pub mod core;
 pub mod diary_archive;

@@ -156,6 +156,8 @@ export type Settings = {
   };
   features: {
     showCategoryBadges: boolean;
+    sync: boolean;
+    editorToolbar: boolean;
   };
   /** 日记偏好。view 是本机状态；主题色与背景跟着设置同步走（外观该多端一致）。 */
   diary: {

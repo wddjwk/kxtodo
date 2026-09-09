@@ -798,6 +798,24 @@
       />
     </label>
     <p class="muted">在左侧栏分类行显示该分类下未完成条目数。</p>
+    <label class="toggle-row">
+      <span>编辑器工具栏</span>
+      <input
+        type="checkbox"
+        checked={$appSettings.features.editorToolbar}
+        on:change={(event) => updateFeature("editorToolbar", event.currentTarget.checked)}
+      />
+    </label>
+    <p class="muted">桌面编辑器里显示一排 markdown 快捷按钮（加粗/标题/列表等）；移动端常显，不受它管。</p>
+    <label class="toggle-row">
+      <span>启动同步功能</span>
+      <input
+        type="checkbox"
+        checked={$appSettings.features.sync}
+        on:change={(event) => updateFeature("sync", event.currentTarget.checked)}
+      />
+    </label>
+    <p class="muted">关掉后停止自动同步、隐藏同步配置并停用同步的一切功能（配对信息保留）。</p>
   </section>
 
   {#if caps.trayLifecycle}
@@ -941,6 +959,7 @@
     </section>
   {/if}
 
+  {#if $appSettings.features.sync !== false}
   <section>
     <div class="section-head">
       <h3>数据同步</h3>
@@ -1290,6 +1309,12 @@
       {/if}
     </div>
   </section>
+{:else}
+  <section>
+    <h3>数据同步</h3>
+    <p class="muted">同步功能已在特性开关里停用：自动同步停止、同步配置隐藏、已有配对信息保留。勾回「启动同步功能」即恢复。</p>
+  </section>
+{/if}
 
   <section>
     <h3>关于与更新</h3>

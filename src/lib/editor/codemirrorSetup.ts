@@ -165,20 +165,35 @@ export function wrapSelection(view: EditorView, before: string, after: string, p
   view.focus();
 }
 
-/** 标题级别：已是该级别则取消，是别的级别则换掉，没有则加上（逐行处理选区）。 */
+/** 标题级别：已是该级别则取消，是别的级别则换掉，没有则加上（逐行处理选区）。
+ *  光标落在光标所在行的「# 」之后——留在行首的话用户接着打字会打进标记里。 */
 export function setHeading(view: EditorView, level: number): void {
   const state = view.state;
   const range = state.selection.main;
   const prefix = "#".repeat(level) + " ";
+  const headLine = state.doc.lineAt(range.head);
   const changes: Array<{ from: number; to: number; insert: string }> = [];
+  let headStripped = false;
   for (let n = state.doc.lineAt(range.from).number; n <= state.doc.lineAt(range.to).number; n++) {
     const line = state.doc.line(n);
     const match = /^#{1,6}\s/.exec(line.text);
-    if (match && match[0] === prefix) changes.push({ from: line.from, to: line.from + match[0].length, insert: "" });
-    else if (match) changes.push({ from: line.from, to: line.from + match[0].length, insert: prefix });
-    else changes.push({ from: line.from, to: line.from, insert: prefix });
+    if (match && match[0] === prefix) {
+      changes.push({ from: line.from, to: line.from + match[0].length, insert: "" });
+      if (n === headLine.number) headStripped = true;
+    } else if (match) {
+      changes.push({ from: line.from, to: line.from + match[0].length, insert: prefix });
+    } else {
+      changes.push({ from: line.from, to: line.from, insert: prefix });
+    }
   }
-  view.dispatch({ changes, scrollIntoView: true });
+  // 目标行行首在新文档里的位置 = 原位置 + 它之前各行的净位移
+  let delta = 0;
+  for (const change of changes) {
+    if (change.from >= headLine.from) break;
+    delta += change.insert.length - (change.to - change.from);
+  }
+  const anchor = headLine.from + delta + (headStripped ? 0 : prefix.length);
+  view.dispatch({ changes, selection: { anchor }, scrollIntoView: true });
   view.focus();
 }
 

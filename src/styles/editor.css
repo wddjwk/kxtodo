@@ -331,40 +331,52 @@
   font-weight: 500;
 }
 
-/* ---------- 移动端 markdown 快捷工具栏 ----------
-   桌面不渲染这个组件；移动端它贴在对话框底部，输入法弹出（adjustResize 压矮视口）
-   时自然停在输入法上方。横向可滚：13 个按钮在窄屏一行放不下。 */
+/* ---------- markdown 快捷工具栏 ----------
+   桌面与移动端共用：贴在元数据行下方一行（桌面由特性开关 features.editorToolbar 控制
+   是否渲染，移动端常显）。移动端额外吃底部安全区；输入法避让靠 imeInset action 给
+   浮层垫 padding-bottom，不在这条 CSS 里做。 */
 .editor-md-toolbar {
-  display: none;
-}
-
-.app-shell.mobile .editor-md-toolbar {
   display: flex;
   gap: 2px;
   align-items: center;
   flex: 0 0 auto;
-  padding: 5px 8px calc(5px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
+  padding: 4px 10px;
   border-top: 1px solid #eceff3;
   background: #fafbfc;
   overflow-x: auto;
   scrollbar-width: none;
 }
 
-.app-shell.mobile .editor-md-toolbar::-webkit-scrollbar {
+.editor-md-toolbar::-webkit-scrollbar {
   display: none;
 }
 
-.app-shell.mobile .editor-md-toolbar button {
+.editor-md-toolbar button {
   display: grid;
-  width: 38px;
-  height: 34px;
+  width: 30px;
+  height: 28px;
   place-items: center;
   flex: 0 0 auto;
   border: 0;
-  border-radius: 7px;
+  border-radius: 6px;
   padding: 0;
   background: transparent;
   color: #4b5563;
+  cursor: pointer;
+}
+
+.editor-md-toolbar button:hover {
+  background: #e5e9ef;
+  color: var(--accent, #2564cf);
+}
+
+.app-shell.mobile .editor-md-toolbar {
+  padding: 5px 8px calc(5px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
+}
+
+.app-shell.mobile .editor-md-toolbar button {
+  width: 38px;
+  height: 34px;
   -webkit-tap-highlight-color: transparent;
 }
 

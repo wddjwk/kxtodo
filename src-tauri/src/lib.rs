@@ -2123,7 +2123,9 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
             core_snapshot,
             core_ping,
             diary_export_zip,
-            diary_import_zip
+            diary_import_zip,
+            cards_export_zip,
+            cards_import_zip
         ])
         .setup(move |app| {
             let core =
@@ -2344,7 +2346,7 @@ async fn diary_export_zip(
         }
     };
     tauri::async_runtime::spawn_blocking(move || {
-        run_diary_core(
+        run_core_command(
             &host,
             "diary.export",
             serde_json::json!({
@@ -2384,7 +2386,7 @@ async fn diary_import_zip(
         };
         // 解析与插图落盘都在 core 的 diary.import 里（写入永远过命令层这条铁律不变）
         use base64::Engine as _;
-        run_diary_core(
+        run_core_command(
             &host,
             "diary.import",
             serde_json::json!({ "zipBase64": base64::engine::general_purpose::STANDARD.encode(&raw) }),
@@ -2394,8 +2396,80 @@ async fn diary_import_zip(
     .map_err(|error| error.to_string())?
 }
 
-/// 以 GUI 的身份跑一条日记命令（与 core_dispatch 同一套上下文与确认语义）。
-fn run_diary_core(
+/// 一般卡片条目导出为 Markdown 压缩包：桌面给保存路径，移动端落缓存目录再交分享桥。
+#[tauri::command]
+async fn cards_export_zip(
+    app: AppHandle,
+    core: State<'_, Arc<domain::host::HostCore>>,
+    path: Option<String>,
+    node_id: String,
+) -> Result<Value, String> {
+    let host = core.inner().clone();
+    let dest = match path {
+        Some(path) if !path.trim().is_empty() => PathBuf::from(path),
+        _ => {
+            use tauri::Manager as _;
+            let cache = app
+                .path()
+                .app_cache_dir()
+                .map_err(|error| error.to_string())?;
+            fs::create_dir_all(&cache).map_err(|error| error.to_string())?;
+            cache.join("kxtodo-cards.zip")
+        }
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        run_core_command(
+            &host,
+            "task.exportMarkdown",
+            serde_json::json!({
+                "out": dest.to_string_lossy(),
+                "nodeId": node_id,
+            }),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// 一般卡片条目导入 Markdown 压缩包：桌面给路径，移动端给 file input 读出的 base64。
+/// 解析与插图落盘在 core 的 task.importMarkdown 里完成（写入永远过命令层）。
+#[tauri::command]
+async fn cards_import_zip(
+    core: State<'_, Arc<domain::host::HostCore>>,
+    path: Option<String>,
+    base64: Option<String>,
+    node_id: String,
+) -> Result<Value, String> {
+    let host = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let raw = match (base64, path) {
+            (Some(encoded), _) => {
+                use base64::Engine as _;
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded.as_bytes())
+                    .map_err(|error| format!("压缩包内容解码失败：{error}"))?
+            }
+            (None, Some(path)) => {
+                fs::read(&path).map_err(|error| format!("无法读取 {path}：{error}"))?
+            }
+            (None, None) => return Err("缺少压缩包路径或内容".to_string()),
+        };
+        use base64::Engine as _;
+        run_core_command(
+            &host,
+            "task.importMarkdown",
+            serde_json::json!({
+                "zipBase64": base64::engine::general_purpose::STANDARD.encode(&raw),
+                "nodeId": node_id,
+            }),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// 以 GUI 的身份跑一条 core 命令（与 core_dispatch 同一套上下文与确认语义）。
+fn run_core_command(
     host: &Arc<domain::host::HostCore>,
     command: &str,
     params: Value,
@@ -2583,6 +2657,8 @@ pub fn run() {
                 core_ping,
                 diary_export_zip,
                 diary_import_zip,
+                cards_export_zip,
+                cards_import_zip,
                 app_version,
                 open_url,
                 save_background_image,

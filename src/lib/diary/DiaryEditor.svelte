@@ -21,6 +21,7 @@
   } from "../diary";
   import type { DiaryEditorTarget, Tag, TagColor } from "../types";
   import { isMobile, touchOnly } from "../platform";
+  import { imeInset } from "../imeInset";
 
   export let target: DiaryEditorTarget;
   export let onClose: () => void = () => {};
@@ -322,7 +323,7 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="editor-overlay" on:pointerdown={handleBackdropPointerDown} on:contextmenu|preventDefault|stopPropagation>
+<div class="editor-overlay" use:imeInset on:pointerdown={handleBackdropPointerDown} on:contextmenu|preventDefault|stopPropagation>
   <!-- --accent 内联：编辑器浮层挂在 App 层，拿不到 .diary-view 的主题色，跟着用户选的日记色走 -->
   <div class="editor-dialog diary-editor" style={`--accent: ${diaryAccent($appSettings.diary)}; ${editorSizeStyle}`} role="dialog" aria-label="编辑日记" tabindex="-1" on:pointerdown|stopPropagation on:click|stopPropagation>
     <header class="editor-header">
@@ -452,6 +453,10 @@
       </div>
     </div>
 
+    {#if mode === "edit" && ($isMobile || $appSettings.features.editorToolbar)}
+      <MarkdownToolbar view={view} onImage={() => void insertImageFile()} />
+    {/if}
+
     <input
       bind:this={titleInput}
       bind:value={title}
@@ -470,10 +475,6 @@
         </div>
       {/if}
     </div>
-
-    {#if $isMobile && mode === "edit"}
-      <MarkdownToolbar view={view} onImage={() => void insertImageFile()} />
-    {/if}
 
     <input bind:this={imageFileInput} class="hidden-file" type="file" accept="image/*" on:change={insertImageFromInput} />
   </div>

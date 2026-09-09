@@ -130,7 +130,9 @@ export const defaultSettings: Settings = {
     autoCheck: true
   },
   features: {
-    showCategoryBadges: true
+    showCategoryBadges: true,
+    sync: true,
+    editorToolbar: true
   },
   diary: {
     view: "list",
@@ -794,7 +796,12 @@ export function normalizeSettings(raw: unknown): Settings {
       showCategoryBadges:
         typeof source?.features?.showCategoryBadges === "boolean"
           ? source.features.showCategoryBadges
-          : defaultSettings.features.showCategoryBadges
+          : defaultSettings.features.showCategoryBadges,
+      sync: typeof source?.features?.sync === "boolean" ? source.features.sync : defaultSettings.features.sync,
+      editorToolbar:
+        typeof source?.features?.editorToolbar === "boolean"
+          ? source.features.editorToolbar
+          : defaultSettings.features.editorToolbar
     },
     diary: {
       view: normalizeDiaryView(source?.diary?.view),
@@ -807,4 +814,44 @@ export function normalizeSettings(raw: unknown): Settings {
           : defaultSettings.diary.backgroundOpacity
     }
   };
+}
+
+// ---------------------------------------------------------------------------
+// 外观缓存（首帧不跳变）
+// ---------------------------------------------------------------------------
+
+const APPEARANCE_CACHE_KEY = "kxtodo-appearance-cache";
+const CACHED_APPEARANCE_KEYS = ["uiScale", "uiFontSize", "markdownFontSize", "editorFontSize", "tagFontSize"] as const;
+
+/**
+ * 水合是异步的（安卓要等 core 把设置读出来），第一帧只能用默认外观渲染，设置到了再跳
+ * 到用户定制值——表现成「先渲染一次再缩放，卡卡的」。上一次退出时的外观缓存在
+ * localStorage 里，初始 store 直接用它，首帧即到位。
+ */
+export function cachedAppearance(): Partial<Settings["appearance"]> {
+  if (typeof localStorage === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(APPEARANCE_CACHE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<string, number> = {};
+    for (const key of CACHED_APPEARANCE_KEYS) {
+      const value = parsed[key];
+      if (typeof value === "number" && Number.isFinite(value)) out[key] = value;
+    }
+    return out as Partial<Settings["appearance"]>;
+  } catch {
+    return {};
+  }
+}
+
+export function writeAppearanceCache(appearance: Settings["appearance"]): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    const payload: Record<string, number> = {};
+    for (const key of CACHED_APPEARANCE_KEYS) payload[key] = appearance[key];
+    localStorage.setItem(APPEARANCE_CACHE_KEY, JSON.stringify(payload));
+  } catch {
+    // 写不进（隐私模式等）就算了，最坏退回首帧跳变
+  }
 }

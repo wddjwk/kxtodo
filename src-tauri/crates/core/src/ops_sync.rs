@@ -113,6 +113,17 @@ pub fn sync_dispatch(
     ctx: &ExecContext,
     meta: &mut Meta,
 ) -> CoreResult<Value> {
+    // 同步总开关（特性开关）：关掉后同步的一切功能停用，只留只读入口看状态/历史
+    if !matches!(action, "status" | "history" | "historyRemove") {
+        let settings = ctx.repo.load_settings()?;
+        if !settings.features.sync {
+            return Err(CoreError::validation(
+                "SYNC_FEATURE_DISABLED",
+                "同步功能已在「设置 → 特性开关」里停用",
+            )
+            .with_hint("勾选「启动同步功能」后再试"));
+        }
+    }
     match action {
         "pair" => sync_pair(inv, ctx),
         "status" => sync_status(inv, ctx),

@@ -17,6 +17,9 @@
     exportDiaryArchive as exportDiaryArchiveAction,
     importDiaryArchive as importDiaryArchiveAction,
     importDiaryArchiveFile as importDiaryArchiveFileAction,
+    exportCardsArchive as exportCardsArchiveAction,
+    importCardsArchive as importCardsArchiveAction,
+    importCardsArchiveFile as importCardsArchiveFileAction,
     syncNow as syncNowAction
   } from "../actions";
   import { moveTargetOptions, nodeAndDescendantIds, exportStateForNode } from "../nodes";
@@ -80,8 +83,9 @@
   $: linkCommitted = isLocalImageRef(bg.image) ? "" : (bg.image ?? "");
   $: if (!linkLive) linkValue = linkCommitted;
 
-  /** 同步已配对且没暂停才给「立即同步」入口（与设置页/下拉同一口径） */
+  /** 同步已配对且没暂停才给「立即同步」入口（与设置页/下拉同一口径，总开关关掉一律不给） */
   $: syncReady =
+    $appSettings.features?.sync !== false &&
     Boolean($appSettings.sync?.enabled) &&
     Boolean(($appSettings.sync?.username ?? "").trim()) &&
     Boolean(($appSettings.sync?.secret ?? "").trim());
@@ -449,6 +453,7 @@
 
   // ---- 日记导出/导入（zip：年/月/YYYYMMDD[_序号][_标题].md + YAML front-matter） ----
   let diaryZipInput: HTMLInputElement;
+  let cardsZipInput: HTMLInputElement;
   let exportFrom = "";
   let exportTo = "";
 
@@ -487,6 +492,42 @@
     if (!(target instanceof HTMLInputElement) || !target.files?.[0]) return;
     try {
       await importDiaryArchiveFileAction(target.files[0]);
+    } finally {
+      target.value = "";
+      window.clearTimeout(filePickerResetTimer);
+      filePickerOpen = false;
+      onClose();
+    }
+  }
+
+  // ---- 一般卡片条目的 Markdown 压缩包（一张卡片一个 md + images/） ----
+
+  async function exportCardsMd(): Promise<void> {
+    if (!node) return;
+    onClose();
+    await exportCardsArchiveAction(node.id);
+  }
+
+  async function importCardsMd(): Promise<void> {
+    if (!node) return;
+    if (!isTauriRuntime) {
+      showToast("浏览器预览不支持导入 Markdown 压缩包");
+      return;
+    }
+    if (!caps.nativeFileDialogs) {
+      markFilePickerOpen();
+      cardsZipInput.click();
+      return;
+    }
+    onClose();
+    await importCardsArchiveAction(node.id);
+  }
+
+  async function importCardsMdFromInput(event: Event): Promise<void> {
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLInputElement) || !target.files?.[0] || !node) return;
+    try {
+      await importCardsArchiveFileAction(node.id, target.files[0]);
     } finally {
       target.value = "";
       window.clearTimeout(filePickerResetTimer);
@@ -612,6 +653,10 @@
     <MenuItem icon={Upload} label="导出当前" onSelect={() => void exportCurrentList()} />
     <MenuItem icon={Upload} label="一键全部导出" onSelect={() => void exportAll()} />
     <MenuItem icon={Download} label="导入 JSON" onSelect={() => { markFilePickerOpen(); importInput.click(); }} />
+    {#if node?.cardStyle === "card"}
+      <MenuItem icon={FileArchive} label="导出为 Markdown" onSelect={() => void exportCardsMd()} />
+      <MenuItem icon={Download} label="导入 Markdown 压缩包" onSelect={() => void importCardsMd()} />
+    {/if}
   {/if}
 
   <MenuSeparator />
@@ -679,5 +724,6 @@
 
   <input bind:this={importInput} class="hidden-file" type="file" accept="application/json,.json" on:change={importFromFile} />
   <input bind:this={diaryZipInput} class="hidden-file" type="file" accept=".zip,application/zip" on:change={importDiaryFromInput} />
+  <input bind:this={cardsZipInput} class="hidden-file" type="file" accept=".zip,application/zip" on:change={importCardsMdFromInput} />
   <input bind:this={backgroundFileInput} class="hidden-file" type="file" accept="image/*" on:change={uploadBackgroundImage} />
 </ContextMenu>

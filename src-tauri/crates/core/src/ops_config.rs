@@ -306,6 +306,18 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         is_map: false,
     },
     FieldMeta {
+        path: "features.sync",
+        kind: "boolean",
+        description: "同步功能总开关：关掉后同步配置隐藏、自动同步与 sync 命令全部停用",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "features.editorToolbar",
+        kind: "boolean",
+        description: "桌面编辑器显示 markdown 工具栏（特性开关；移动端常显）",
+        is_map: false,
+    },
+    FieldMeta {
         path: "diary.view",
         kind: "enum(list|calendar|group)",
         description: "日记视图（本机偏好，不跨设备同步）",
@@ -419,6 +431,8 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "sync.reconnectSeconds" => json!(settings.sync.reconnect_seconds),
         "updates.autoCheck" => json!(settings.updates.auto_check),
         "features.showCategoryBadges" => json!(settings.features.show_category_badges),
+        "features.sync" => json!(settings.features.sync),
+        "features.editorToolbar" => json!(settings.features.editor_toolbar),
         "diary.view" => json!(settings.diary.view.as_str()),
         "diary.accent" => json!(settings.diary.accent),
         "diary.backgroundColor" => json!(settings.diary.background_color),
@@ -863,6 +877,12 @@ pub fn set_value(
         "features.showCategoryBadges" => {
             settings.features.show_category_badges = expect_bool(path, &value)?;
         }
+        "features.sync" => {
+            settings.features.sync = expect_bool(path, &value)?;
+        }
+        "features.editorToolbar" => {
+            settings.features.editor_toolbar = expect_bool(path, &value)?;
+        }
         "diary.view" => {
             let raw = expect_string(path, &value)?;
             settings.diary.view = DiaryView::parse(&raw)
@@ -1059,6 +1079,8 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "features.showCategoryBadges" => {
             target.features.show_category_badges = defaults.features.show_category_badges
         }
+        "features.sync" => target.features.sync = defaults.features.sync,
+        "features.editorToolbar" => target.features.editor_toolbar = defaults.features.editor_toolbar,
         "diary.view" => target.diary.view = defaults.diary.view,
         "diary.accent" => target.diary.accent = defaults.diary.accent.clone(),
         "diary.backgroundColor" => {

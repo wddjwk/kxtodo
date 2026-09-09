@@ -108,7 +108,7 @@ await m.locator(".custom-nav .tree-row").first().click();
 await m.waitForTimeout(700);
 await m.locator(".composer-plus").click();
 await m.waitForSelector(".editor-cm-host .cm-content", { timeout: 30000 });
-check("移动端编辑器有 markdown 工具栏", (await m.locator(".editor-md-toolbar button").count()) === 13);
+check("移动端编辑器有 markdown 工具栏", (await m.locator(".editor-md-toolbar button").count()) === 16);
 await m.locator(".editor-cm-host .cm-content").click();
 await m.keyboard.insertText("工具栏测试文字");
 await m.waitForTimeout(200);

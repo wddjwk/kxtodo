@@ -8,6 +8,9 @@
     Heading1,
     Heading2,
     Heading3,
+    Heading4,
+    Heading5,
+    Heading6,
     Highlighter,
     ImagePlus,
     Italic,
@@ -62,6 +65,15 @@
   </button>
   <button type="button" title="三级标题" on:pointerdown={keepFocus} on:click={() => run((v) => setHeading(v, 3))}>
     <Heading3 size={18} />
+  </button>
+  <button type="button" title="四级标题" on:pointerdown={keepFocus} on:click={() => run((v) => setHeading(v, 4))}>
+    <Heading4 size={18} />
+  </button>
+  <button type="button" title="五级标题" on:pointerdown={keepFocus} on:click={() => run((v) => setHeading(v, 5))}>
+    <Heading5 size={18} />
+  </button>
+  <button type="button" title="六级标题" on:pointerdown={keepFocus} on:click={() => run((v) => setHeading(v, 6))}>
+    <Heading6 size={18} />
   </button>
   <button type="button" title="待办项" on:pointerdown={keepFocus} on:click={() => run((v) => toggleLinePrefix(v, "- [ ] "))}>
     <SquareCheckBig size={18} />

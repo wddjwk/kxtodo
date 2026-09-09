@@ -13,6 +13,7 @@ import {
 } from "./stores";
 import {
   coreDispatch, CoreCommandError, exportDiaryZip, importDiaryZipFromDialog, importDiaryZipFromFile,
+  exportCardsZip, importCardsZipFromDialog, importCardsZipFromFile,
   type DiaryArchiveResult, type DiaryExportRange
 } from "./backend";
 import {
@@ -835,6 +836,53 @@ export async function importDiaryArchiveFile(file: File): Promise<boolean> {
     await report(error, "日记导入失败");
     return false;
   }
+}
+
+/** 一般卡片条目导出为 Markdown 压缩包；返回导出的卡片数（0 = 取消或空）。 */
+export async function exportCardsArchive(nodeId: string): Promise<number> {
+  try {
+    const count = await exportCardsZip(nodeId);
+    if (count > 0) {
+      showToast(`已导出 ${count} 张卡片`);
+    }
+    return count;
+  } catch (error) {
+    await report(error, "卡片导出失败");
+    return 0;
+  }
+}
+
+/** 桌面：原生对话框选 Markdown 压缩包导入进条目。null = 用户取消。 */
+export async function importCardsArchive(nodeId: string): Promise<boolean> {
+  try {
+    const result = await importCardsZipFromDialog(nodeId);
+    if (!result) return false;
+    await afterCardsImport(result);
+    return true;
+  } catch (error) {
+    await report(error, "卡片导入失败");
+    return false;
+  }
+}
+
+/** 移动端：隐藏 file input 拿到的 File 走这条。 */
+export async function importCardsArchiveFile(nodeId: string, file: File): Promise<boolean> {
+  try {
+    await afterCardsImport(await importCardsZipFromFile(nodeId, file));
+    return true;
+  } catch (error) {
+    await report(error, "卡片导入失败");
+    return false;
+  }
+}
+
+async function afterCardsImport(result: DiaryArchiveResult): Promise<void> {
+  const imported = result.imported ?? 0;
+  const images = result.images ?? 0;
+  // core 已经写过盘并发过域事件，这里兜底回刷一次，免得列表停在旧数据上
+  await refreshFromCore(["data"]);
+  const imageNote = images > 0 ? `，含 ${images} 张插图` : "";
+  showToast(`已导入 ${imported} 张卡片${imageNote}`);
 }
 
 async function afterDiaryImport(result: DiaryArchiveResult): Promise<void> {

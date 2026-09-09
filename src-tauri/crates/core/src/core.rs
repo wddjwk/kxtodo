@@ -273,11 +273,129 @@ fn task_dispatch(
         "modify" => task_modify(inv, ctx, meta),
         "remove" => task_remove(inv, ctx, meta),
         "tree" => task_tree(inv, ctx, meta),
+        "exportMarkdown" => task_export_markdown(inv, ctx, meta),
+        "importMarkdown" => task_import_markdown(inv, ctx, meta),
         other => Err(CoreError::validation(
             "UNKNOWN_ACTION",
             format!("未知 task 动作 `{other}`"),
         )),
     }
+}
+
+/// 一般卡片条目导出为 Markdown 压缩包：一张卡片一个 md（`日期_正文前10字` 命名），
+/// 正文里读得到的本地图随包带走（引用改写成 `images/<文件名>`）。
+fn task_export_markdown(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
+    let params = &inv.params;
+    let node_id = required_str(params, "nodeId")?;
+    let data = ctx.repo.load_data()?;
+    set_read_revision(meta, Domain::Data, data.meta.revision);
+    let node = task_ops::find_node(&data, &node_id)
+        .ok_or_else(|| CoreError::not_found("NODE_NOT_FOUND", format!("条目 `{node_id}` 不存在")))?;
+
+    let mut tasks: Vec<&crate::model::Item> = data
+        .tasks
+        .iter()
+        .filter(|item| item.node_id == node_id)
+        .collect();
+    // 导出顺序 = 阅读顺序：同级按 (order, id)，与列表渲染同一条排序口径
+    tasks.sort_by(|a, b| {
+        a.order
+            .partial_cmp(&b.order)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+
+    let image_dir = ctx.repo.layout.entry_img_dir(&node_id);
+    let archive = crate::cards_archive::build_zip(&tasks, &|name| {
+        if !crate::diary_archive::is_safe_image_name(name) {
+            return None;
+        }
+        std::fs::read(image_dir.join(name)).ok()
+    })?;
+    let name = crate::cards_archive::archive_name(&node.name);
+
+    if let Some(path) = param_str(params, "out") {
+        let target = std::path::Path::new(&path);
+        if let Some(parent) = target.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        std::fs::write(target, &archive)
+            .map_err(|error| CoreError::io(format!("无法写入 {}：{error}", target.display())))?;
+        return Ok(json!({
+            "path": target.display().to_string(),
+            "cards": tasks.len(),
+            "bytes": archive.len(),
+            "name": name,
+        }));
+    }
+    Ok(json!({ "cards": tasks.len(), "bytes": archive.len(), "name": name }))
+}
+
+/// 从 Markdown 压缩包导入卡片：一个 md 一张卡片；包内 `images/` 里读得到的插图落回
+/// 条目插图目录（**已存在的同名文件不覆盖**——图片是内容寻址的不可变 blob，重导必须幂等）。
+fn task_import_markdown(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
+    let params = &inv.params;
+    let node_id = required_str(params, "nodeId")?;
+    let encoded = required_str(params, "zipBase64")?;
+    use base64::Engine as _;
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(encoded.as_bytes())
+        .map_err(|error| {
+            CoreError::validation("CARDS_IMPORT_INVALID", format!("压缩包内容解码失败：{error}"))
+        })?;
+    let parsed = crate::cards_archive::parse_zip(&raw)?;
+
+    // 插图先落盘（事务外）：正文引用归一后就是裸文件名，卡片写进去即可直接渲染
+    let image_dir = ctx.repo.layout.entry_img_dir(&node_id);
+    std::fs::create_dir_all(&image_dir)?;
+    let mut images_written = 0usize;
+    for (name, bytes) in &parsed.images {
+        let target = image_dir.join(name);
+        if target.exists() {
+            continue;
+        }
+        std::fs::write(&target, bytes)
+            .map_err(|error| CoreError::io(format!("无法写入 {}：{error}", target.display())))?;
+        images_written += 1;
+    }
+
+    let cards = parsed.cards;
+    let mut imported = 0usize;
+    let mut skipped = 0usize;
+    let (_file, outcome) = ctx.repo.write_data(
+        inv.controls.if_revision,
+        inv.controls.idempotency_key.as_deref(),
+        &inv.command,
+        |file| {
+            for markdown in &cards {
+                let add = task_ops::AddItemParams {
+                    entry_id: node_id.clone(),
+                    markdown: markdown.clone(),
+                    completed: false,
+                    important: false,
+                    my_day: false,
+                    planned_date: None,
+                    due_date: None,
+                    tags: Vec::new(),
+                    emojis: Vec::new(),
+                };
+                match task_ops::add_item(file, add) {
+                    Ok(_) => imported += 1,
+                    Err(_) => skipped += 1,
+                }
+            }
+            Ok(json!({ "imported": imported, "skipped": skipped }))
+        },
+    )?;
+    apply_write_outcome(meta, Domain::Data, &outcome);
+    notify_host(ctx, Domain::Data, outcome.revision, vec![]);
+    Ok(json!({
+        "imported": imported,
+        "skipped": skipped,
+        "images": images_written,
+    }))
 }
 
 fn task_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {

@@ -19,6 +19,7 @@
   import IconPicker from "../IconPicker.svelte";
   import MarkdownToolbar from "./MarkdownToolbar.svelte";
   import { isMobile, touchOnly } from "../platform";
+  import { imeInset } from "../imeInset";
   import { clampPopoverToViewport } from "../popover";
   import { uiScaleValue } from "../styles";
   import type { Tag, TagColor } from "../types";
@@ -384,7 +385,7 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="editor-overlay" on:pointerdown={handleBackdropPointerDown} on:contextmenu|preventDefault|stopPropagation>
+<div class="editor-overlay" use:imeInset on:pointerdown={handleBackdropPointerDown} on:contextmenu|preventDefault|stopPropagation>
   <div class="editor-dialog" style={editorSizeStyle} role="dialog" aria-label={draftMode ? "新建事项" : "编辑任务"} tabindex="-1" on:pointerdown|stopPropagation on:click|stopPropagation>
     <header class="editor-header">
       <div class="editor-mode-switch" role="tablist">
@@ -510,6 +511,10 @@
       </div>
     </div>
 
+    {#if mode === "edit" && ($isMobile || $appSettings.features.editorToolbar)}
+      <MarkdownToolbar view={view} onImage={() => void insertImageFile()} />
+    {/if}
+
     <div class="editor-body">
       <div bind:this={host} class="editor-cm-host" class:hidden-host={mode !== "edit"}></div>
       {#if mode === "preview"}
@@ -518,10 +523,6 @@
         </div>
       {/if}
     </div>
-
-    {#if $isMobile && mode === "edit"}
-      <MarkdownToolbar view={view} onImage={() => void insertImageFile()} />
-    {/if}
 
     <input bind:this={imageFileInput} class="hidden-file" type="file" accept="image/*" on:change={insertImageFromInput} />
   </div>

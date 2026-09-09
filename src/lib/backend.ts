@@ -130,7 +130,7 @@ export async function exportData(payload: unknown, defaultName: string): Promise
   URL.revokeObjectURL(url);
 }
 
-export type DiaryArchiveResult = { imported?: number; skipped?: number; images?: number; entries?: number; path?: string; name?: string };
+export type DiaryArchiveResult = { imported?: number; skipped?: number; images?: number; entries?: number; cards?: number; path?: string; name?: string };
 
 /** 日记压缩包命令返回的是 core envelope，失败时是序列化后的错误串——与 coreDispatch 同一套解包。 */
 async function invokeDiaryArchive(command: string, args: Record<string, unknown>): Promise<DiaryArchiveResult> {
@@ -220,6 +220,69 @@ export async function importDiaryZipFromFile(file: File): Promise<DiaryArchiveRe
     binary += String.fromCharCode(...bytes.subarray(index, index + 32768));
   }
   return invokeDiaryArchive("diary_import_zip", { path: null, base64: btoa(binary) });
+}
+
+/**
+ * 导出一般卡片条目为 Markdown 压缩包，返回导出的卡片数（0 = 用户取消）。
+ * 与日记压缩包同一条路径：桌面「另存为」，移动端落缓存目录再交分享桥。
+ */
+export async function exportCardsZip(nodeId: string): Promise<number> {
+  if (!isTauriRuntime) {
+    throw new Error("浏览器预览不支持导出 Markdown 压缩包");
+  }
+  if (caps.nativeFileDialogs) {
+    const filePath = await save({
+      defaultPath: "kxtodo-cards.zip",
+      filters: [{ name: "Markdown 压缩包", extensions: ["zip"] }]
+    });
+    if (!filePath) {
+      return 0;
+    }
+    const result = await invokeDiaryArchive("cards_export_zip", { path: filePath, nodeId });
+    return result.cards ?? 0;
+  }
+  const result = await invokeDiaryArchive("cards_export_zip", { path: null, nodeId });
+  const bridge = window.kxtodoAndroid;
+  if (!bridge?.shareFile) {
+    throw new Error("当前 APK 不支持分享压缩包");
+  }
+  if (!result.path) {
+    throw new Error("导出没有产出文件");
+  }
+  const error = bridge.shareFile(result.path, "application/zip");
+  if (error) {
+    throw new Error(error);
+  }
+  return result.cards ?? 0;
+}
+
+/** 桌面：原生「打开」对话框选一个 Markdown 压缩包导入。null = 用户取消。 */
+export async function importCardsZipFromDialog(nodeId: string): Promise<DiaryArchiveResult | null> {
+  if (!isTauriRuntime) {
+    throw new Error("浏览器预览不支持导入 Markdown 压缩包");
+  }
+  const picked = await open({
+    multiple: false,
+    directory: false,
+    filters: [{ name: "Markdown 压缩包", extensions: ["zip"] }]
+  });
+  if (!picked || typeof picked !== "string") {
+    return null;
+  }
+  return invokeDiaryArchive("cards_import_zip", { path: picked, base64: null, nodeId });
+}
+
+/** 移动端：隐藏 file input 读字节后以 base64 交给 Rust。 */
+export async function importCardsZipFromFile(nodeId: string, file: File): Promise<DiaryArchiveResult> {
+  if (!isTauriRuntime) {
+    throw new Error("浏览器预览不支持导入 Markdown 压缩包");
+  }
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 32768) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + 32768));
+  }
+  return invokeDiaryArchive("cards_import_zip", { path: null, base64: btoa(binary), nodeId });
 }
 
 export async function deleteBackgroundImage(filename: string): Promise<void> {

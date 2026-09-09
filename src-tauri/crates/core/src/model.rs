@@ -862,6 +862,13 @@ pub struct FeatureSettings {
     /// 侧栏分类行显示未完成条目数角标（特性开关）
     #[serde(rename = "showCategoryBadges", default = "default_true")]
     pub show_category_badges: bool,
+    /// 同步功能总开关（特性开关）：关掉后同步配置隐藏、自动同步停、sync 命令拒执行、
+    /// 内置主机/P2P 运行时停。默认开——已有配对的用户不该升级后静默失去同步。
+    #[serde(rename = "sync", default = "default_true")]
+    pub sync: bool,
+    /// 编辑器 markdown 工具栏（特性开关，桌面；移动端常显不受它管）
+    #[serde(rename = "editorToolbar", default = "default_true")]
+    pub editor_toolbar: bool,
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
@@ -871,6 +878,8 @@ impl Default for FeatureSettings {
     fn default() -> Self {
         Self {
             show_category_badges: true,
+            sync: true,
+            editor_toolbar: true,
             extra: Map::new(),
         }
     }

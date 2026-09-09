@@ -90,6 +90,7 @@
       event.preventDefault();
       showSettings.update((v) => !v);
     } else if (matchesShortcut(event, $appSettings.shortcuts.syncNow)) {
+      if ($appSettings.features?.sync === false) return;
       event.preventDefault();
       void syncNowAction();
     }

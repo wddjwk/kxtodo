@@ -83,8 +83,9 @@
   let pullReady = false;
   let pullBusy = false;
 
-  /** 同步功能开着（已配对且没暂停）才给下拉手势与「立即同步」入口 */
+  /** 同步功能开着（总开关 + 已配对且没暂停）才给下拉手势与「立即同步」入口 */
   $: syncAvailable =
+    $appSettings.features?.sync !== false &&
     Boolean($appSettings.sync?.enabled) &&
     Boolean(($appSettings.sync?.username ?? "").trim()) &&
     Boolean(($appSettings.sync?.secret ?? "").trim());

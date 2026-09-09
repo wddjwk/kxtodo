@@ -38,6 +38,8 @@ type SyncConfig = {
   paired: boolean;
   /** false = 用户暂停同步（配置保留） */
   enabled: boolean;
+  /** false = 特性开关里关掉了同步总功能 */
+  featureOn: boolean;
   /**
    * 对端标识：自建服务是地址，局域网是主机名（本机作为主机时是 `@self`）。
    * 只用于「配置变了要不要立刻重排/补一轮」的签名比较。
@@ -76,6 +78,8 @@ function currentConfig(): SyncConfig {
   return {
     paired: username.length > 0 && secret.length > 0 && hasPeer,
     enabled: Boolean(sync?.enabled),
+    // 同步总开关（特性开关）：关掉 = 同步的一切功能停，自动循环也不例外
+    featureOn: get(appSettings)?.features?.sync !== false,
     target,
     intervalSeconds: clamp(sync?.intervalSeconds, DEFAULT_INTERVAL_SECONDS),
     reconnectSeconds: clamp(sync?.reconnectSeconds, DEFAULT_RECONNECT_SECONDS)
@@ -83,11 +87,11 @@ function currentConfig(): SyncConfig {
 }
 
 function shouldRun(config: SyncConfig): boolean {
-  return config.paired && config.enabled;
+  return config.featureOn && config.paired && config.enabled;
 }
 
 function signatureOf(config: SyncConfig): string {
-  return [config.paired, config.enabled, config.target, config.intervalSeconds, config.reconnectSeconds].join("|");
+  return [config.featureOn, config.paired, config.enabled, config.target, config.intervalSeconds, config.reconnectSeconds].join("|");
 }
 
 function clearTimer(): void {

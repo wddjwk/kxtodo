@@ -199,7 +199,8 @@ impl HostCore {
         let p2p_wanted = mode == crate::model::SyncMode::P2p && sync.is_paired();
         // 只有局域网方式下「本机作为服务器」才有意义
         let lan_wanted = sync.lan_host && mode == crate::model::SyncMode::Lan;
-        let wanted = lan_wanted || p2p_wanted;
+        // 同步总开关关掉 = 一切同步功能停：内置主机与 P2P 运行时一起停
+        let wanted = (lan_wanted || p2p_wanted) && settings.features.sync;
         // P2P 的内置库只给本机隧道用：绑回环、不应答发现（暴露到网卡上纯属风险）
         let loopback_only = p2p_wanted;
         let host_name = crate::sync::endpoint::desired_host_name(&sync.lan_name);
