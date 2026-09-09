@@ -2124,6 +2124,8 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
             core_ping,
             diary_export_zip,
             diary_import_zip,
+            ledger_export_zip,
+            ledger_import_zip,
             cards_export_zip,
             cards_import_zip
         ])
@@ -2303,16 +2305,19 @@ async fn core_snapshot(core: State<'_, Arc<domain::host::HostCore>>) -> Result<V
             .load_schedule()
             .map_err(|error| error.to_string())?;
         let diary = host.repo.load_diary().map_err(|error| error.to_string())?;
+        let ledger = host.repo.load_ledger().map_err(|error| error.to_string())?;
         Ok(serde_json::json!({
             "data": data,
             "settings": settings,
             "schedule": schedule,
             "diary": diary,
+            "ledger": ledger,
             "revisions": {
                 "data": data.meta.revision,
                 "settings": settings.meta.revision,
                 "schedule": schedule.meta.revision,
                 "diary": diary.meta.revision,
+                "ledger": ledger.meta.revision,
             }
         }))
     })
@@ -2390,6 +2395,78 @@ async fn diary_import_zip(
             &host,
             "diary.import",
             serde_json::json!({ "zipBase64": base64::engine::general_purpose::STANDARD.encode(&raw) }),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// 记账导出成 Excel 压缩包。给了 `path` 就写到那儿（桌面「另存为」对话框的结果）；
+/// 没给就落进应用缓存目录并返回路径——移动端拿这个路径交给系统分享面板。
+#[tauri::command]
+async fn ledger_export_zip(
+    app: AppHandle,
+    core: State<'_, Arc<domain::host::HostCore>>,
+    path: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
+) -> Result<Value, String> {
+    let host = core.inner().clone();
+    let dest = match path {
+        Some(path) if !path.trim().is_empty() => PathBuf::from(path),
+        _ => {
+            use tauri::Manager as _;
+            let name = domain::ledger_archive::archive_name(from.as_deref(), to.as_deref());
+            let cache = app
+                .path()
+                .app_cache_dir()
+                .map_err(|error| error.to_string())?;
+            fs::create_dir_all(&cache).map_err(|error| error.to_string())?;
+            cache.join(name)
+        }
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        run_core_command(
+            &host,
+            "ledger.export",
+            serde_json::json!({
+                "out": dest.to_string_lossy(),
+                "from": from,
+                "to": to,
+            }),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// 记账导入：桌面给 zip/xlsx 路径，移动端给 `<input type=file>` 读出来的字节（base64）。
+/// 解析在 core 的 ledger.import 里完成，**写入仍然走命令层**（铁律）。
+#[tauri::command]
+async fn ledger_import_zip(
+    core: State<'_, Arc<domain::host::HostCore>>,
+    path: Option<String>,
+    base64: Option<String>,
+) -> Result<Value, String> {
+    let host = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let raw = match (base64, path) {
+            (Some(encoded), _) => {
+                use base64::Engine as _;
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded.as_bytes())
+                    .map_err(|error| format!("导出包内容解码失败：{error}"))?
+            }
+            (None, Some(path)) => {
+                fs::read(&path).map_err(|error| format!("无法读取 {path}：{error}"))?
+            }
+            (None, None) => return Err("缺少导出包路径或内容".to_string()),
+        };
+        use base64::Engine as _;
+        run_core_command(
+            &host,
+            "ledger.import",
+            serde_json::json!({ "xlsxBase64": base64::engine::general_purpose::STANDARD.encode(&raw) }),
         )
     })
     .await
@@ -2657,6 +2734,8 @@ pub fn run() {
                 core_ping,
                 diary_export_zip,
                 diary_import_zip,
+                ledger_export_zip,
+                ledger_import_zip,
                 cards_export_zip,
                 cards_import_zip,
                 app_version,

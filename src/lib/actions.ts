@@ -5,15 +5,16 @@
 // ---------------------------------------------------------------------------
 
 import { get } from "svelte/store";
-import type { AppNode, AppState, CardStyle, DiaryEntry, ScheduledTask, SchedulerState, Settings, SyncMode, Tag, TagColor, Task } from "./types";
+import type { AppNode, AppState, CardStyle, DiaryEntry, LedgerAccount, LedgerAccountKind, LedgerBook, LedgerCategory, LedgerEntry, LedgerKind, LedgerSide, ScheduledTask, SchedulerState, Settings, SyncMode, Tag, TagColor, Task } from "./types";
 import {
-  appState, appSettings, commit, commitDiary, commitScheduler, commitSettings,
-  coreMode, createDiaryId, createTaskId, diaryEntries, editBaseUpdatedAt, markEditStart, clearEditBase, rebaseEditBase,
+  appState, appSettings, commit, commitDiary, commitLedger, commitScheduler, commitSettings,
+  coreMode, createDiaryId, createTaskId, diaryEntries, editBaseUpdatedAt, ledgerData, markEditStart, clearEditBase, rebaseEditBase,
   manualSyncAt, refreshFromCore, scheduleEntries, syncConnection, showToast, todayIso
 } from "./stores";
 import {
   coreDispatch, CoreCommandError, exportDiaryZip, importDiaryZipFromDialog, importDiaryZipFromFile,
   exportCardsZip, importCardsZipFromDialog, importCardsZipFromFile,
+  exportLedgerZip, importLedgerZipFromDialog, importLedgerZipFromFile,
   type DiaryArchiveResult, type DiaryExportRange
 } from "./backend";
 import {
@@ -900,6 +901,384 @@ async function afterDiaryImport(result: DiaryArchiveResult): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// 记账
+// ---------------------------------------------------------------------------
+
+export type LedgerEntryDraft = {
+  kind: LedgerKind;
+  amountCents: number;
+  accountId: string;
+  toAccountId?: string;
+  categoryId?: string;
+  date?: string;
+  time?: string;
+  note?: string;
+};
+
+export type LedgerEntryChanges = Partial<LedgerEntryDraft>;
+
+function ledgerLocalId(prefix: string): string {
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  return `${prefix}-${[...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function book(): LedgerBook {
+  return get(ledgerData);
+}
+
+/** core 写完会发域事件，这里再兜底回刷一次：记账面板对一致性比对手感更敏感。 */
+async function ledgerWritten(): Promise<void> {
+  await refreshFromCore(["ledger"]);
+}
+
+export async function addLedgerEntry(draft: LedgerEntryDraft): Promise<boolean> {
+  if (coreMode) {
+    try {
+      await coreDispatch("ledger.add", {
+        kind: draft.kind,
+        amountCents: draft.amountCents,
+        accountId: draft.accountId,
+        toAccountId: draft.toAccountId ?? null,
+        categoryId: draft.categoryId ?? null,
+        date: draft.date,
+        time: draft.time,
+        note: draft.note ?? ""
+      });
+    } catch (error) {
+      await report(error, "记账失败");
+      return false;
+    }
+    await ledgerWritten();
+    return true;
+  }
+  const createdAt = new Date().toISOString();
+  const entry: LedgerEntry = {
+    id: ledgerLocalId("ledger"),
+    kind: draft.kind,
+    amountCents: draft.amountCents,
+    accountId: draft.accountId,
+    toAccountId: draft.toAccountId,
+    categoryId: draft.categoryId,
+    date: draft.date ?? todayIso(),
+    time: draft.time ?? "",
+    note: draft.note ?? "",
+    createdAt,
+    updatedAt: createdAt
+  };
+  commitLedger({ ...book(), entries: [...book().entries, entry] });
+  return true;
+}
+
+export async function transferLedger(input: {
+  from: string;
+  to: string;
+  amountCents: number;
+  date?: string;
+  note?: string;
+}): Promise<boolean> {
+  if (coreMode) {
+    try {
+      await coreDispatch("ledger.transfer", {
+        accountId: input.from,
+        to: input.to,
+        amountCents: input.amountCents,
+        date: input.date,
+        note: input.note ?? ""
+      });
+    } catch (error) {
+      await report(error, "转账失败");
+      return false;
+    }
+    await ledgerWritten();
+    return true;
+  }
+  const createdAt = new Date().toISOString();
+  const entry: LedgerEntry = {
+    id: ledgerLocalId("ledger"),
+    kind: "transfer",
+    amountCents: input.amountCents,
+    accountId: input.from,
+    toAccountId: input.to,
+    date: input.date ?? todayIso(),
+    time: "",
+    note: input.note ?? "",
+    createdAt,
+    updatedAt: createdAt
+  };
+  commitLedger({ ...book(), entries: [...book().entries, entry] });
+  return true;
+}
+
+export async function updateLedgerEntry(id: string, changes: LedgerEntryChanges): Promise<boolean> {
+  if (coreMode) {
+    const params: Record<string, unknown> = { id };
+    if (changes.kind !== undefined) params.kind = changes.kind;
+    if (changes.amountCents !== undefined) params.amountCents = changes.amountCents;
+    if (changes.accountId !== undefined) params.accountId = changes.accountId;
+    if (changes.toAccountId !== undefined) params.to = changes.toAccountId;
+    if (changes.categoryId !== undefined) params.category = changes.categoryId;
+    if (changes.date !== undefined) params.date = changes.date;
+    if (changes.time !== undefined) params.time = changes.time;
+    if (changes.note !== undefined) params.note = changes.note;
+    try {
+      await coreDispatch("ledger.modify", params);
+    } catch (error) {
+      await report(error, "修改记账失败");
+      return false;
+    }
+    await ledgerWritten();
+    return true;
+  }
+  const next = book();
+  next.entries = next.entries.map((entry) =>
+    entry.id === id ? { ...entry, ...changes, updatedAt: new Date().toISOString() } : entry
+  );
+  commitLedger(next);
+  return true;
+}
+
+export async function deleteLedgerEntry(id: string): Promise<boolean> {
+  if (coreMode) {
+    try {
+      await coreDispatch("ledger.remove", { id });
+    } catch (error) {
+      await report(error, "删除记账失败");
+      return false;
+    }
+    await ledgerWritten();
+    return true;
+  }
+  const next = book();
+  next.entries = next.entries.filter((entry) => entry.id !== id);
+  commitLedger(next);
+  return true;
+}
+
+export type LedgerAccountDraft = {
+  name: string;
+  kind?: LedgerAccountKind;
+  icon?: string;
+  color?: string;
+  initialCents?: number;
+  note?: string;
+};
+
+export async function addLedgerAccount(draft: LedgerAccountDraft): Promise<boolean> {
+  if (coreMode) {
+    try {
+      await coreDispatch("ledger.accountAdd", {
+        name: draft.name,
+        kind: draft.kind ?? null,
+        icon: draft.icon ?? "",
+        color: draft.color ?? "",
+        initial: draft.initialCents !== undefined ? draft.initialCents / 100 : null,
+        note: draft.note ?? ""
+      });
+    } catch (error) {
+      await report(error, "添加账户失败");
+      return false;
+    }
+    await ledgerWritten();
+    return true;
+  }
+  const account: LedgerAccount = {
+    id: ledgerLocalId("lacc"),
+    name: draft.name,
+    icon: draft.icon ?? "",
+    color: draft.color ?? "",
+    kind: draft.kind ?? "cash",
+    initialCents: draft.initialCents ?? 0,
+    note: draft.note ?? "",
+    order: book().accounts.length + 1,
+    createdAt: new Date().toISOString()
+  };
+  commitLedger({ ...book(), accounts: [...book().accounts, account] });
+  return true;
+}
+
+export async function updateLedgerAccount(
+  id: string,
+  changes: Partial<LedgerAccountDraft>
+): Promise<boolean> {
+  if (coreMode) {
+    const params: Record<string, unknown> = { id };
+    if (changes.name !== undefined) params.name = changes.name;
+    if (changes.kind !== undefined) params.kind = changes.kind;
+    if (changes.icon !== undefined) params.icon = changes.icon;
+    if (changes.color !== undefined) params.color = changes.color;
+    if (changes.initialCents !== undefined) params.initial = changes.initialCents / 100;
+    if (changes.note !== undefined) params.note = changes.note;
+    try {
+      await coreDispatch("ledger.accountModify", params);
+    } catch (error) {
+      await report(error, "修改账户失败");
+      return false;
+    }
+    await ledgerWritten();
+    return true;
+  }
+  const next = book();
+  next.accounts = next.accounts.map((account) =>
+    account.id === id ? { ...account, ...changes, updatedAt: new Date().toISOString() } : account
+  );
+  commitLedger(next);
+  return true;
+}
+
+export async function deleteLedgerAccount(id: string): Promise<boolean> {
+  if (coreMode) {
+    try {
+      await coreDispatch("ledger.accountRemove", { id });
+    } catch (error) {
+      await report(error, "删除账户失败");
+      return false;
+    }
+    await ledgerWritten();
+    return true;
+  }
+  const next = book();
+  next.accounts = next.accounts.filter((account) => account.id !== id);
+  commitLedger(next);
+  return true;
+}
+
+export type LedgerCategoryDraft = {
+  name: string;
+  side?: LedgerSide;
+  parentId?: string;
+  icon?: string;
+  color?: string;
+};
+
+export async function addLedgerCategory(draft: LedgerCategoryDraft): Promise<boolean> {
+  if (coreMode) {
+    try {
+      await coreDispatch("ledger.categoryAdd", {
+        name: draft.name,
+        side: draft.side ?? "expense",
+        parent: draft.parentId ?? null,
+        icon: draft.icon ?? "",
+        color: draft.color ?? ""
+      });
+    } catch (error) {
+      await report(error, "添加分类失败");
+      return false;
+    }
+    await ledgerWritten();
+    return true;
+  }
+  const category: LedgerCategory = {
+    id: ledgerLocalId("lcat"),
+    name: draft.name,
+    side: draft.side ?? "expense",
+    parentId: draft.parentId,
+    icon: draft.icon ?? "",
+    color: draft.color ?? "",
+    order: book().categories.length + 1,
+    createdAt: new Date().toISOString()
+  };
+  commitLedger({ ...book(), categories: [...book().categories, category] });
+  return true;
+}
+
+export async function updateLedgerCategory(
+  id: string,
+  changes: Partial<LedgerCategoryDraft>
+): Promise<boolean> {
+  if (coreMode) {
+    const params: Record<string, unknown> = { id };
+    if (changes.name !== undefined) params.name = changes.name;
+    if (changes.parentId !== undefined) params.parent = changes.parentId;
+    if (changes.icon !== undefined) params.icon = changes.icon;
+    if (changes.color !== undefined) params.color = changes.color;
+    try {
+      await coreDispatch("ledger.categoryModify", params);
+    } catch (error) {
+      await report(error, "修改分类失败");
+      return false;
+    }
+    await ledgerWritten();
+    return true;
+  }
+  const next = book();
+  next.categories = next.categories.map((category) =>
+    category.id === id ? { ...category, ...changes, updatedAt: new Date().toISOString() } : category
+  );
+  commitLedger(next);
+  return true;
+}
+
+export async function deleteLedgerCategory(id: string): Promise<boolean> {
+  if (coreMode) {
+    try {
+      await coreDispatch("ledger.categoryRemove", { id });
+    } catch (error) {
+      await report(error, "删除分类失败");
+      return false;
+    }
+    await ledgerWritten();
+    return true;
+  }
+  const next = book();
+  const gone = new Set(
+    next.categories.filter((item) => item.id === id || item.parentId === id).map((item) => item.id)
+  );
+  next.categories = next.categories.filter((item) => !gone.has(item.id));
+  next.entries = next.entries.map((entry) =>
+    entry.categoryId && gone.has(entry.categoryId) ? { ...entry, categoryId: undefined } : entry
+  );
+  commitLedger(next);
+  return true;
+}
+
+export async function exportLedgerArchive(range: { from?: string; to?: string } = {}): Promise<boolean> {
+  try {
+    const count = await exportLedgerZip(range);
+    if (count === 0) return false;
+    showToast(`已导出 ${count} 笔账`);
+    return true;
+  } catch (error) {
+    await report(error, "导出账本失败");
+    return false;
+  }
+}
+
+export async function importLedgerArchive(): Promise<boolean> {
+  try {
+    const result = await importLedgerZipFromDialog();
+    if (!result) return false;
+    await afterLedgerImport(result);
+    return true;
+  } catch (error) {
+    await report(error, "导入账本失败");
+    return false;
+  }
+}
+
+/** 移动端：隐藏 file input 拿到的 File 走这条。 */
+export async function importLedgerArchiveFile(file: File): Promise<boolean> {
+  try {
+    await afterLedgerImport(await importLedgerZipFromFile(file));
+    return true;
+  } catch (error) {
+    await report(error, "导入账本失败");
+    return false;
+  }
+}
+
+async function afterLedgerImport(result: DiaryArchiveResult): Promise<void> {
+  const imported = result.imported ?? 0;
+  const skipped = result.skipped ?? 0;
+  await refreshFromCore(["ledger"]);
+  showToast(
+    skipped > 0
+      ? `已导入 ${imported} 笔账，跳过 ${skipped} 条无效记录`
+      : `已导入 ${imported} 笔账`
+  );
+}
+
+// ---------------------------------------------------------------------------
 // 定时任务
 // ---------------------------------------------------------------------------
 
@@ -1168,6 +1547,8 @@ export type SyncPairInput = {
   syncData?: boolean;
   syncSettings?: boolean;
   syncSchedules?: boolean;
+  syncDiary?: boolean;
+  syncLedger?: boolean;
 };
 
 /**
@@ -1508,6 +1889,8 @@ export async function setSyncScopes(scopes: {
   syncData?: boolean;
   syncSettings?: boolean;
   syncSchedules?: boolean;
+  syncDiary?: boolean;
+  syncLedger?: boolean;
   enabled?: boolean;
   intervalSeconds?: number;
   reconnectSeconds?: number;

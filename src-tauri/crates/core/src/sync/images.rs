@@ -532,6 +532,8 @@ mod tests {
             data: true,
             settings: true,
             schedules: false,
+            diary: true,
+            ledger: true,
         };
         let images = inventory(&layout, &all);
         assert_eq!(images.len(), 3, "临时文件不计入清单");
@@ -548,6 +550,8 @@ mod tests {
             data: true,
             settings: false,
             schedules: false,
+            diary: false,
+            ledger: false,
         };
         let data_images = inventory(&layout, &data_only);
         let kinds: Vec<&str> = data_images.iter().map(|image| image.kind.as_str()).collect();
@@ -556,6 +560,8 @@ mod tests {
             data: false,
             settings: true,
             schedules: false,
+            diary: false,
+            ledger: false,
         };
         let settings_images = inventory(&layout, &settings_only);
         let mut kinds: Vec<&str> = settings_images

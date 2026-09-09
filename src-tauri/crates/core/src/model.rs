@@ -10,6 +10,7 @@ pub const DATA_SCHEMA_VERSION: u32 = 6;
 pub const SETTINGS_SCHEMA_VERSION: u32 = 1;
 pub const SCHEDULE_SCHEMA_VERSION: u32 = 2;
 pub const DIARY_SCHEMA_VERSION: u32 = 1;
+pub const LEDGER_SCHEMA_VERSION: u32 = 1;
 
 /// 日记插图复用「按条目分目录」的图片通道（`img/data/<nodeId>/`），伪条目 id 固定为
 /// `diary`——与前端 `diary.ts` 的 DIARY_IMAGE_NODE 同名，图片存储与同步一行都不用改。
@@ -294,6 +295,495 @@ pub struct DiaryFile {
 }
 
 // ---------------------------------------------------------------------------
+// ledger.json
+// ---------------------------------------------------------------------------
+
+/// 记账条目类型：支出 / 收入 / 转账。
+///
+/// 转账不计入收支统计，只改两个账户的余额——这是记账软件的通用口径
+/// （把钱从左口袋挪到右口袋不是消费）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum LedgerKind {
+    Expense,
+    Income,
+    Transfer,
+}
+
+impl Default for LedgerKind {
+    fn default() -> Self {
+        LedgerKind::Expense
+    }
+}
+
+impl LedgerKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LedgerKind::Expense => "expense",
+            LedgerKind::Income => "income",
+            LedgerKind::Transfer => "transfer",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "expense" | "支出" => Some(LedgerKind::Expense),
+            "income" | "收入" => Some(LedgerKind::Income),
+            "transfer" | "转账" => Some(LedgerKind::Transfer),
+            _ => None,
+        }
+    }
+}
+
+/// 分类归属侧：支出分类与收入分类是两套（转账不配分类侧）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum LedgerSide {
+    Expense,
+    Income,
+}
+
+impl Default for LedgerSide {
+    fn default() -> Self {
+        LedgerSide::Expense
+    }
+}
+
+impl LedgerSide {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LedgerSide::Expense => "expense",
+            LedgerSide::Income => "income",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "expense" | "支出" => Some(LedgerSide::Expense),
+            "income" | "收入" => Some(LedgerSide::Income),
+            _ => None,
+        }
+    }
+}
+
+/// 资金账户类型：现金 / 储蓄卡 / 信用卡（负债）/ 投资 / 其他。
+///
+/// 类型只影响资产视图的分组与负债口径（信用卡的负余额计入总负债），
+/// 不影响记账动作本身。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum AccountKind {
+    Cash,
+    Debit,
+    Credit,
+    Investment,
+    Other,
+}
+
+impl Default for AccountKind {
+    fn default() -> Self {
+        AccountKind::Cash
+    }
+}
+
+impl AccountKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AccountKind::Cash => "cash",
+            AccountKind::Debit => "debit",
+            AccountKind::Credit => "credit",
+            AccountKind::Investment => "investment",
+            AccountKind::Other => "other",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "cash" | "现金" => Some(AccountKind::Cash),
+            "debit" | "储蓄卡" => Some(AccountKind::Debit),
+            "credit" | "信用卡" => Some(AccountKind::Credit),
+            "investment" | "投资" => Some(AccountKind::Investment),
+            "other" | "其他" => Some(AccountKind::Other),
+            _ => None,
+        }
+    }
+}
+
+/// 资金账户。余额不存现值——当前余额 = 期初 + 流水推导，
+/// 否则改一笔历史账目还要回头修余额，多端合并必然打架。
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LedgerAccount {
+    pub id: String,
+    pub name: String,
+    /// lucide 图标名（前端 ledgerIcons 白名单）；空 = 按类型取默认
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub icon: String,
+    /// #rrggbb；空 = 按类型取默认色
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub color: String,
+    #[serde(default)]
+    pub kind: AccountKind,
+    /// 期初余额（分）
+    #[serde(rename = "initialCents", default)]
+    pub initial_cents: i64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
+    #[serde(default)]
+    pub order: f64,
+    #[serde(rename = "createdAt", default)]
+    pub created_at: String,
+    #[serde(rename = "updatedAt", skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
+}
+
+/// 记账分类，两级：`parent_id = None` 的是大类，否则是它名下的子分类。
+/// 支出与收入各有一套（`side`），图标与颜色都落在分类上（子分类缺省继承大类颜色）。
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LedgerCategory {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub side: LedgerSide,
+    /// 大类 id；None = 自己就是大类
+    #[serde(rename = "parentId", default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub icon: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub color: String,
+    #[serde(default)]
+    pub order: f64,
+    #[serde(rename = "createdAt", default)]
+    pub created_at: String,
+    #[serde(rename = "updatedAt", skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
+}
+
+/// 一笔账。金额恒为正的**整数分**（i64）——浮点累加在统计里会 drift，
+/// 而分是记账的最小单位，整数加减永远精确。
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LedgerEntry {
+    pub id: String,
+    #[serde(default)]
+    pub kind: LedgerKind,
+    /// 金额（分），恒为正；方向由 `kind` 决定
+    #[serde(rename = "amountCents")]
+    pub amount_cents: i64,
+    /// 支出/转账 = 付款账户；收入 = 收款账户
+    #[serde(rename = "accountId")]
+    pub account_id: String,
+    /// 转账的转入账户（仅 transfer 有值）
+    #[serde(rename = "toAccountId", default, skip_serializing_if = "Option::is_none")]
+    pub to_account_id: Option<String>,
+    /// 子分类（或大类）id；转账可以为空
+    #[serde(rename = "categoryId", default, skip_serializing_if = "Option::is_none")]
+    pub category_id: Option<String>,
+    /// 归属日期 YYYY-MM-DD
+    pub date: String,
+    /// HH:MM:SS；空 = 只记到天
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub time: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
+    #[serde(rename = "createdAt", default)]
+    pub created_at: String,
+    #[serde(rename = "updatedAt", skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
+}
+
+/// ledger.json：记账是独立的第五个领域文件。
+///
+/// 与日记同一条理由：记一笔账不该抬高 data 域的 revision、也不该和任务写入抢
+/// 同一个文件锁与幂等台账。同步上它有自己的范围勾选（「账本」）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct LedgerFile {
+    #[serde(rename = "schemaVersion", default)]
+    pub schema_version: u32,
+    #[serde(rename = "_meta", default)]
+    pub meta: DomainMeta,
+    #[serde(default)]
+    pub accounts: Vec<LedgerAccount>,
+    #[serde(default)]
+    pub categories: Vec<LedgerCategory>,
+    #[serde(default)]
+    pub entries: Vec<LedgerEntry>,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
+}
+
+impl LedgerFile {
+    /// 首跑种子：一套覆盖日常收支场景的默认账户与两级分类。
+    ///
+    /// 只在 ledger.json 不存在时调用（`repo::ensure_initialized`）。子分类不存颜色——
+    /// 界面上继承大类的颜色，数据保持精简；改大类颜色整族跟着变正是用户想要的。
+    pub fn seed_defaults(&mut self) {
+        if !self.accounts.is_empty() || !self.categories.is_empty() {
+            return;
+        }
+        let now = crate::time::now_iso();
+        // 种子 id 必须**确定性**：账本没落盘时 load_ledger 会在内存里种一份，
+        // 记第一笔账按名字解析到的账户 id 要和随后落盘的那本一致，否则流水会指向
+        // 不存在的账户。随机 id 会让「加载两次 = 两本不同的账」。
+        let mut accounts = Vec::new();
+        for (index, (name, kind, icon, color)) in [
+            ("现金", AccountKind::Cash, "Wallet", "#e8a33d"),
+            ("微信", AccountKind::Other, "MessageCircle", "#2aae67"),
+            ("支付宝", AccountKind::Other, "Smartphone", "#1677ff"),
+            ("储蓄卡", AccountKind::Debit, "Landmark", "#b23a48"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            accounts.push(LedgerAccount {
+                id: format!("lacc-{:02}", index + 1),
+                name: (*name).to_string(),
+                icon: (*icon).to_string(),
+                color: (*color).to_string(),
+                kind: *kind,
+                initial_cents: 0,
+                note: String::new(),
+                order: index as f64 + 1.0,
+                created_at: now.clone(),
+                updated_at: None,
+                extra: Map::new(),
+            });
+        }
+        self.accounts = accounts;
+
+        let mut categories: Vec<LedgerCategory> = Vec::new();
+        let mut group = |side: LedgerSide,
+                         side_tag: &str,
+                         index: usize,
+                         name: &str,
+                         icon: &str,
+                         color: &str,
+                         kids: &[(&str, &str)]| {
+            let parent_id = format!("lcat-{side_tag}-{:02}", index);
+            categories.push(LedgerCategory {
+                id: parent_id.clone(),
+                name: name.to_string(),
+                side,
+                parent_id: None,
+                icon: icon.to_string(),
+                color: color.to_string(),
+                order: index as f64,
+                created_at: now.clone(),
+                updated_at: None,
+                extra: Map::new(),
+            });
+            for (kid_index, (kid, kid_icon)) in kids.iter().enumerate() {
+                categories.push(LedgerCategory {
+                    id: format!("{parent_id}-{:02}", kid_index + 1),
+                    name: (*kid).to_string(),
+                    side,
+                    parent_id: Some(parent_id.clone()),
+                    icon: (*kid_icon).to_string(),
+                    color: String::new(),
+                    order: (kid_index + 1) as f64,
+                    created_at: now.clone(),
+                    updated_at: None,
+                    extra: Map::new(),
+                });
+            }
+        };
+        group(
+            LedgerSide::Expense,
+            "exp",
+            1,
+            "餐饮",
+            "Utensils",
+            "#f0862c",
+            &[
+                ("早餐", "Coffee"),
+                ("午餐", "Utensils"),
+                ("晚餐", "UtensilsCrossed"),
+                ("零食", "Candy"),
+                ("饮料", "CupSoda"),
+                ("水果", "Apple"),
+                ("买菜", "Carrot"),
+            ],
+        );
+        group(
+            LedgerSide::Expense,
+            "exp",
+            2,
+            "交通",
+            "Bus",
+            "#4a90d9",
+            &[
+                ("公交地铁", "TrainFront"),
+                ("打车", "CarTaxiFront"),
+                ("火车飞机", "Plane"),
+                ("油费", "Fuel"),
+                ("停车", "SquareParking"),
+                ("单车", "Bike"),
+            ],
+        );
+        group(
+            LedgerSide::Expense,
+            "exp",
+            3,
+            "居住",
+            "House",
+            "#7f8fa6",
+            &[
+                ("房租", "KeyRound"),
+                ("水电", "Zap"),
+                ("燃气", "Flame"),
+                ("网费", "Wifi"),
+                ("物业维修", "Wrench"),
+            ],
+        );
+        group(
+            LedgerSide::Expense,
+            "exp",
+            4,
+            "购物",
+            "ShoppingBag",
+            "#e67e9c",
+            &[
+                ("日用百货", "ShoppingCart"),
+                ("服饰鞋包", "Shirt"),
+                ("数码电器", "Smartphone"),
+                ("美妆护肤", "Sparkles"),
+            ],
+        );
+        group(
+            LedgerSide::Expense,
+            "exp",
+            5,
+            "娱乐",
+            "Gamepad2",
+            "#9b59b6",
+            &[
+                ("游戏", "Gamepad2"),
+                ("电影演出", "Clapperboard"),
+                ("音乐会员", "Music"),
+                ("运动健身", "Dumbbell"),
+            ],
+        );
+        group(
+            LedgerSide::Expense,
+            "exp",
+            6,
+            "医疗",
+            "HeartPulse",
+            "#e74c3c",
+            &[("药品", "Pill"), ("门诊诊疗", "Stethoscope")],
+        );
+        group(
+            LedgerSide::Expense,
+            "exp",
+            7,
+            "学习",
+            "BookOpen",
+            "#16a085",
+            &[("书籍课程", "BookOpen"), ("学习办公", "PenLine")],
+        );
+        group(
+            LedgerSide::Expense,
+            "exp",
+            8,
+            "人情",
+            "Gift",
+            "#d35400",
+            &[
+                ("红包礼金", "Gift"),
+                ("请客吃饭", "PartyPopper"),
+                ("孝敬长辈", "HeartHandshake"),
+            ],
+        );
+        group(
+            LedgerSide::Expense,
+            "exp",
+            9,
+            "宠物",
+            "Dog",
+            "#8e6e53",
+            &[("宠物食品", "Bone"), ("宠物用品", "PawPrint")],
+        );
+        group(
+            LedgerSide::Expense,
+            "exp",
+            10,
+            "其他",
+            "Ellipsis",
+            "#95a5a6",
+            &[("杂项", "Package")],
+        );
+        group(
+            LedgerSide::Income,
+            "inc",
+            1,
+            "工资",
+            "Banknote",
+            "#27ae60",
+            &[
+                ("工资薪金", "Banknote"),
+                ("奖金", "Medal"),
+                ("补贴", "Coins"),
+            ],
+        );
+        group(
+            LedgerSide::Income,
+            "inc",
+            2,
+            "理财",
+            "TrendingUp",
+            "#2980b9",
+            &[("利息", "Percent"), ("基金股票", "ChartLine")],
+        );
+        group(
+            LedgerSide::Income,
+            "inc",
+            3,
+            "兼职",
+            "Briefcase",
+            "#8e44ad",
+            &[("外快", "Briefcase"), ("稿费", "FileText")],
+        );
+        group(
+            LedgerSide::Income,
+            "inc",
+            4,
+            "红包",
+            "Gift",
+            "#c0392b",
+            &[("红包礼金", "Gift")],
+        );
+        group(
+            LedgerSide::Income,
+            "inc",
+            5,
+            "退款",
+            "RotateCcw",
+            "#7f8c8d",
+            &[("退款报销", "ReceiptText")],
+        );
+        group(
+            LedgerSide::Income,
+            "inc",
+            6,
+            "其他",
+            "Ellipsis",
+            "#95a5a6",
+            &[("杂项", "CircleDot")],
+        );
+        self.categories = categories;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // settings.json
 // ---------------------------------------------------------------------------
 
@@ -319,6 +809,8 @@ pub struct SettingsFile {
     pub features: FeatureSettings,
     #[serde(default)]
     pub diary: DiarySettings,
+    #[serde(default)]
+    pub ledger: LedgerSettings,
     /// 设置同步实体的 LWW 时间戳（仅共享子集变化时刷新）。
     #[serde(rename = "syncUpdatedAt", default, skip_serializing_if = "Option::is_none")]
     pub sync_updated_at: Option<String>,
@@ -725,6 +1217,13 @@ pub struct SyncSettings {
     /// 同步定时任务 spec（默认关；spec 含各机器绝对路径，跨平台通常不可执行）
     #[serde(rename = "syncSchedules", default)]
     pub sync_schedules: bool,
+    /// 同步日记（默认开；v0.6.x 及以前搭「同步数据」的车，v0.7.0 起独立勾选，
+    /// 默认开是为了升级上来的用户行为不变）
+    #[serde(rename = "syncDiary", default = "default_true")]
+    pub sync_diary: bool,
+    /// 同步账本（账户/分类/记账流水，默认开）
+    #[serde(rename = "syncLedger", default = "default_true")]
+    pub sync_ledger: bool,
     /// 自动同步间隔（秒）
     #[serde(rename = "intervalSeconds", default = "default_sync_interval_seconds")]
     pub interval_seconds: u32,
@@ -831,6 +1330,8 @@ impl Default for SyncSettings {
             sync_data: default_true(),
             sync_settings: default_true(),
             sync_schedules: false,
+            sync_diary: default_true(),
+            sync_ledger: default_true(),
             interval_seconds: default_sync_interval_seconds(),
             reconnect_seconds: default_sync_reconnect_seconds(),
             extra: Map::new(),
@@ -960,6 +1461,86 @@ impl Default for DiarySettings {
             background_color: default_diary_background_color(),
             background_image: String::new(),
             background_opacity: default_diary_background_opacity(),
+            extra: Map::new(),
+        }
+    }
+}
+
+/// 记账视图：列表（按天卡片）/ 日历（热力图 + 当日明细）/ 统计（曲线 + 分类占比）/ 资产（账户与总额）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum LedgerView {
+    List,
+    Calendar,
+    Stats,
+    Assets,
+}
+
+impl Default for LedgerView {
+    fn default() -> Self {
+        LedgerView::List
+    }
+}
+
+impl LedgerView {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LedgerView::List => "list",
+            LedgerView::Calendar => "calendar",
+            LedgerView::Stats => "stats",
+            LedgerView::Assets => "assets",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "list" => Some(LedgerView::List),
+            "calendar" => Some(LedgerView::Calendar),
+            "stats" => Some(LedgerView::Stats),
+            "assets" => Some(LedgerView::Assets),
+            _ => None,
+        }
+    }
+}
+
+/// 记账偏好。与日记同一条口径：`view` 是**本机 UI 状态**不进同步共享子集，
+/// 主题色与背景是**外观**跟着共享子集走。
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LedgerSettings {
+    #[serde(default)]
+    pub view: LedgerView,
+    /// 主题色（#rrggbb）；空 = 用默认记账色
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub accent: String,
+    /// 背景色（#rrggbb）
+    #[serde(rename = "backgroundColor", default = "default_ledger_background_color")]
+    pub background_color: String,
+    /// 背景图片：`img:<文件名>` 或 http(s)/data URL；空 = 无图
+    #[serde(rename = "backgroundImage", default, skip_serializing_if = "String::is_empty")]
+    pub background_image: String,
+    #[serde(rename = "backgroundOpacity", default = "default_ledger_background_opacity")]
+    pub background_opacity: f64,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
+}
+
+fn default_ledger_background_color() -> String {
+    "#eef3ee".to_string()
+}
+
+fn default_ledger_background_opacity() -> f64 {
+    0.28
+}
+
+impl Default for LedgerSettings {
+    fn default() -> Self {
+        Self {
+            view: LedgerView::default(),
+            accent: String::new(),
+            background_color: default_ledger_background_color(),
+            background_image: String::new(),
+            background_opacity: default_ledger_background_opacity(),
             extra: Map::new(),
         }
     }

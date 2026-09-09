@@ -45,6 +45,26 @@ export function diaryBackground(diary: Settings["diary"]): ListBackground {
   };
 }
 
+/**
+ * 记账的主题色：账本绿。与日记的墨蓝、四个系统视图的主题色都错开，
+ * 也和「收入绿」同族——记账界面一眼就该是钱的颜色。
+ */
+export const LEDGER_ACCENT = "#2f8f6b";
+
+/** 记账的主题色：设置里空着就用默认记账色。 */
+export function ledgerAccent(ledger: Settings["ledger"]): string {
+  return isHexColor(ledger.accent) ? ledger.accent : LEDGER_ACCENT;
+}
+
+/** 记账的背景：与条目背景同一个 ListBackground 形状。 */
+export function ledgerBackground(ledger: Settings["ledger"]): ListBackground {
+  return {
+    color: isHexColor(ledger.backgroundColor) ? ledger.backgroundColor : defaultBackground.color,
+    image: ledger.backgroundImage || undefined,
+    imageOpacity: ledger.backgroundOpacity
+  };
+}
+
 export function avatarStyle(avatar: string): string {
   return avatar ? `background-image: url("${escapeCssUrl(avatar)}");` : "";
 }

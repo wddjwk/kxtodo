@@ -16,8 +16,9 @@ use crate::repo::Repository;
 use crate::sync::crypto::{derive_keys, open_entity, seal_entity, sha256_hex, SyncKeys};
 use crate::sync::endpoint;
 use crate::sync::merge::{
-    apply_data_record, apply_diary_record, apply_record_settings, apply_schedule_record,
-    data_entity_stamp, diary_entity_stamp, normalize_data_orders, normalize_diary_orders,
+    apply_data_record, apply_diary_record, apply_ledger_record, apply_record_settings,
+    apply_schedule_record, data_entity_stamp, diary_entity_stamp, ledger_entity_stamp,
+    normalize_data_orders, normalize_diary_orders, normalize_ledger_orders,
     normalize_schedule_orders, remote_wins, schedule_entity_stamp, EntityRecord, Scopes,
     SETTINGS_ENTITY_ID, SyncEnvelope,
 };
@@ -247,6 +248,42 @@ fn merge_diary_records(
     applied
 }
 
+/// 在 write_ledger 闭包内做 ledger 域的 LWW 应用；返回应用数。
+fn merge_ledger_records(
+    file: &mut crate::model::LedgerFile,
+    records: &[EntityRecord],
+    state: &SyncStateFile,
+    warnings: &mut Vec<String>,
+) -> usize {
+    let mut applied = 0;
+    for record in records {
+        let stamp = local_stamp(
+            state,
+            &record.id,
+            ledger_entity_stamp(file, &record.kind, &record.id),
+        );
+        debug_log(format!(
+            "merge {} {} remote=({},{}) local={:?} -> {}",
+            record.kind,
+            record.id,
+            record.updated_at,
+            record.updated_by,
+            stamp,
+            remote_wins(record, stamp_ref(&stamp))
+        ));
+        if remote_wins(record, stamp_ref(&stamp)) {
+            match apply_ledger_record(record, file) {
+                Ok(()) => applied += 1,
+                Err(error) => warnings.push(format!("记账 {} 应用失败：{error}", record.id)),
+            }
+        }
+    }
+    if applied > 0 {
+        normalize_ledger_orders(file);
+    }
+    applied
+}
+
 /// 完整同步：login（如需）→ pull → merge → push → 图片 → 推进水位。
 ///
 /// 外层负责把「与服务端能不能通」的结论缓存进 runtime/sync.json：
@@ -441,8 +478,8 @@ fn run_sync_inner(
     // 所以签名一变就把实体与图片水位归零全量重拉（LWW 合并，重拉是安全的）。
     // 放在这里而不是 sync configure 里，是为了让 config set 改范围也同样生效。
     let scope_signature = format!(
-        "{}|{}|{}",
-        scopes.data, scopes.settings, scopes.schedules
+        "{}|{}|{}|{}|{}",
+        scopes.data, scopes.settings, scopes.schedules, scopes.diary, scopes.ledger
     );
     if state.scope_signature != scope_signature {
         state.last_pulled_seq = 0;
@@ -490,10 +527,16 @@ fn run_sync_inner(
         .filter(|record| (record.kind == "node" || record.kind == "task") && scopes.data)
         .cloned()
         .collect();
-    // 日记是独立的领域文件（独立事务、独立 revision），但同步范围仍搭「同步数据」的车
+    // 日记是独立的领域文件（独立事务、独立 revision），v0.7.0 起有自己独立的范围勾选
     let diary_records: Vec<EntityRecord> = records
         .iter()
-        .filter(|record| record.kind == "diary" && scopes.data)
+        .filter(|record| record.kind == "diary" && scopes.diary)
+        .cloned()
+        .collect();
+    // 记账：流水/账户/分类三种实体一个事务、一个范围勾选
+    let ledger_records: Vec<EntityRecord> = records
+        .iter()
+        .filter(|record| crate::sync::merge::is_ledger_kind(&record.kind) && scopes.ledger)
         .cloned()
         .collect();
     let settings_records: Vec<EntityRecord> = records
@@ -572,6 +615,26 @@ fn run_sync_inner(
         report.warnings.extend(warnings);
     }
 
+    if !ledger_records.is_empty() {
+        let state_snapshot = state.clone();
+        let records_snapshot = ledger_records.clone();
+        let ledger_existed = repo.layout.ledger_file().exists();
+        let mut applied = 0usize;
+        let mut warnings: Vec<String> = Vec::new();
+        let (_file, _outcome) = repo.write_ledger(None, None, "sync.pull", |file| {
+            if !ledger_existed {
+                // 全新设备：丢掉内存里的种子账户/分类，直接落服务端内容
+                file.accounts.clear();
+                file.categories.clear();
+                file.entries.clear();
+            }
+            applied = merge_ledger_records(file, &records_snapshot, &state_snapshot, &mut warnings);
+            Ok(json!({ "applied": applied, "pulled": records_snapshot.len() }))
+        })?;
+        report.applied += applied;
+        report.warnings.extend(warnings);
+    }
+
     if !settings_records.is_empty() {
         let state_snapshot = state.clone();
         let record = settings_records[0].clone();
@@ -629,12 +692,16 @@ fn run_sync_inner(
     // - 本地版本更新（本地胜出）→ 保留本地 (u, by)，仅刷新 seq 作为 OCC 基线。
     let data_after = repo.load_data()?;
     let diary_after = repo.load_diary()?;
+    let ledger_after = repo.load_ledger()?;
     let settings_after = repo.load_settings()?;
     let schedule_after = repo.load_schedule()?;
     for record in &records {
         let local_ts = match record.kind.as_str() {
             "node" | "task" => data_entity_stamp(&data_after, &record.id),
             "diary" => diary_entity_stamp(&diary_after, &record.id),
+            "ledger" | "ledgerAccount" | "ledgerCategory" => {
+                ledger_entity_stamp(&ledger_after, &record.kind, &record.id)
+            }
             "schedule" => schedule_entity_stamp(&schedule_after, &record.id),
             "settings" => settings_after.sync_updated_at.clone(),
             _ => None,
@@ -665,13 +732,16 @@ fn run_sync_inner(
     // 4. PUSH：本地版本戳 != 已对账版本戳 → 推送
     let data_existed = repo.layout.data_file().exists();
     let diary_existed = repo.layout.diary_file().exists();
+    let ledger_existed = repo.layout.ledger_file().exists();
     let data = data_after;
     let diary = diary_after;
+    let ledger = ledger_after;
     let settings_now = settings_after;
     let schedule = schedule_after;
     let local_entities = crate::sync::merge::extract_entities(
         &data,
         &diary,
+        &ledger,
         &settings_now,
         &schedule,
         &scopes,
@@ -684,6 +754,9 @@ fn run_sync_inner(
             return false;
         }
         if !diary_existed && entity.kind == "diary" {
+            return false;
+        }
+        if !ledger_existed && crate::sync::merge::is_ledger_kind(&entity.kind) {
             return false;
         }
         true
@@ -827,6 +900,13 @@ fn resolve_conflict(
                 Ok(json!({}))
             });
         }
+        "ledger" | "ledgerAccount" | "ledgerCategory" => {
+            let records = vec![remote.clone()];
+            let _ = repo.write_ledger(None, None, "sync.conflict", |file| {
+                merge_ledger_records(file, &records, &state_snapshot, &mut warnings);
+                Ok(json!({}))
+            });
+        }
         "schedule" => {
             let record = remote.clone();
             let _ = repo.write_schedule(None, None, "sync.conflict", |file| {
@@ -862,11 +942,13 @@ fn resolve_conflict(
     // 重新提取该实体：远端胜出 → 以远端对账；本地仍胜 → 重推一次
     let data = repo.load_data()?;
     let diary = repo.load_diary()?;
+    let ledger = repo.load_ledger()?;
     let settings = repo.load_settings()?;
     let schedule = repo.load_schedule()?;
     let entities = crate::sync::merge::extract_entities(
         &data,
         &diary,
+        &ledger,
         &settings,
         &schedule,
         scopes,

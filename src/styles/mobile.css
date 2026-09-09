@@ -709,3 +709,111 @@
 .app-shell.mobile .editor-meta-trigger .trigger-label {
   display: none;
 }
+
+/* ---------- 记账（移动端整页视图） ---------- */
+
+/* 导航行变多（记账加入后六行）：极矮视口下系统导航也要能让位并自滚，
+   否则树区被压成 0 高，条目行永远在视口外点不到。桌面不受影响（高度足够）。 */
+.app-shell.mobile .system-nav {
+  flex-shrink: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.app-shell.mobile .system-nav::-webkit-scrollbar {
+  display: none;
+}
+
+/* 记账同日记：整页一层，由历史栈的 ledger 层驱动。 */
+.app-shell.mobile.view-ledger .sidebar,
+.app-shell.mobile.view-ledger .workspace {
+  display: none;
+}
+
+.app-shell.mobile .ledger-view {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  padding:
+    calc(16px + env(safe-area-inset-top, 0px) * var(--safe-inv, 1))
+    14px
+    calc(16px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1))
+    14px;
+  border-radius: 0;
+}
+
+.app-shell.mobile .ledger-view-switch button {
+  width: 34px;
+  height: 32px;
+}
+
+.app-shell.mobile .ledger-subtitle {
+  margin: -26px 0 10px 44px;
+}
+
+.app-shell.mobile .ledger-scroll {
+  padding-bottom: 96px;
+}
+
+.app-shell.mobile .ledger-row {
+  padding: 10px 10px;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 热力图窄屏整宽铺开、格子矮一点，一屏放下六行 */
+.app-shell.mobile .ledger-calendar {
+  max-width: none;
+  padding: 10px 8px 12px;
+}
+
+.app-shell.mobile .ledger-heat-grid {
+  gap: 3px;
+}
+
+.app-shell.mobile .ledger-heat-cell {
+  min-height: 44px;
+  padding: 4px 0;
+  border-radius: 8px;
+}
+
+.app-shell.mobile .ledger-heat-mark {
+  font-size: 9px;
+}
+
+.app-shell.mobile .ledger-fab-row {
+  right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
+}
+
+.app-shell.mobile .ledger-fab {
+  width: 54px;
+  height: 54px;
+}
+
+/* 记账面板/管理面板在窄屏上铺满宽度，键盘给到 46px 触控高度 */
+.app-shell.mobile .ledger-editor,
+.app-shell.mobile .ledger-manager {
+  max-width: none;
+  padding: 12px 12px calc(14px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
+}
+
+.app-shell.mobile .ledger-keypad button {
+  height: 46px;
+}
+
+.app-shell.mobile .ledger-editor-meta {
+  grid-template-columns: 1fr 1fr;
+}
+
+.app-shell.mobile .ledger-editor-note {
+  grid-column: 1 / -1;
+}
+
+.app-shell.mobile .ledger-editor-amount input {
+  font-size: 26px;
+}

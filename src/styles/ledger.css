@@ -1,0 +1,1184 @@
+/* ledger.css — 记账视图（列表 / 日历热力 / 统计 / 资产）、记账面板、分类与账户管理。
+   盒子与配色沿用 workspace.css / diary.css 的同一套视觉语言（白底 84%、圆角、极浅描边），
+   主题色由 LedgerView 内联的 --accent 给（styles.ts 的 LEDGER_ACCENT，账本绿）。
+   收支两色全文件统一：收入绿 #2f9e6e、支出红 #d9534f（与 ledgerIcons 的 SIDE_COLOR 同口径）。 */
+
+.ledger-view {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  padding: 44px 56px 54px 56px;
+  border-radius: 12px 0 0 0;
+  color: #292929;
+  transition: background 160ms ease;
+  overflow: hidden;
+}
+
+/* 记账占着主区域时把任务工作区藏起来——它仍然挂着（不销毁）。 */
+.app-shell.ledger-open .workspace {
+  display: none;
+}
+
+/* 全局搜索的混排结果只渲染在工作区里：搜索态把主区域让给工作区，清词即回记账。 */
+.app-shell.ledger-open.searching .workspace {
+  display: flex;
+}
+
+.app-shell.ledger-open.searching .ledger-view {
+  display: none;
+}
+
+/* ---------- 背景图层（与列表/日记同一套 --bg-image 机制） ---------- */
+
+.ledger-view::before {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-image: var(--bg-image);
+  background-position: center;
+  background-size: cover;
+  content: "";
+  opacity: var(--bg-opacity);
+  pointer-events: none;
+}
+
+/* 只抬正文流里的直接子元素。**绝不要写成 `.ledger-view > *`**（diary.css 有过事故postmortem）：
+   浮层菜单与浮动按钮自己的定位规则不能被这条兜底规则抢走。 */
+.ledger-view > .ledger-subtitle,
+.ledger-view > .ledger-scroll {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---------- 头部视图切换（与日记段控同形状） ---------- */
+
+.ledger-view-switch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding: 3px;
+  border: 1px solid rgb(0 0 0 / 7%);
+  border-radius: 9px;
+  background: rgb(255 255 255 / 62%);
+}
+
+.ledger-view-switch button {
+  display: grid;
+  width: 30px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  padding: 0;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+}
+
+.ledger-view-switch button:hover {
+  background: rgb(255 255 255 / 90%);
+  color: #374151;
+}
+
+.ledger-view-switch button.active {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.ledger-subtitle {
+  margin: -30px 0 12px 58px;
+  color: var(--accent);
+  font-size: 12.5px;
+}
+
+.ledger-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 92px;
+  scrollbar-gutter: stable;
+}
+
+/* ---------- 列表视图 ---------- */
+
+.ledger-month-nav {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 10px;
+}
+
+.ledger-month-nav button {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 1px solid rgb(0 0 0 / 8%);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 80%);
+  color: #4b5563;
+  cursor: pointer;
+}
+
+.ledger-month-nav strong {
+  min-width: 108px;
+  text-align: center;
+  font-size: 13px;
+}
+
+.ledger-month-head {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 18px 4px 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgb(0 0 0 / 6%);
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.ledger-month-head strong {
+  color: #374151;
+  font-size: 13px;
+}
+
+.ledger-month-head b,
+.ledger-day-head i {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-day {
+  margin-bottom: 12px;
+  border: 1px solid rgb(0 0 0 / 5%);
+  border-radius: 10px;
+  background: rgb(255 255 255 / 84%);
+  box-shadow: 0 1px 2px rgb(31 41 55 / 4%);
+  overflow: hidden;
+}
+
+.ledger-day-head,
+.ledger-day-detail-head {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: rgb(146 152 160 / 10%);
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.ledger-day-head strong {
+  color: #374151;
+  font-size: 12.5px;
+}
+
+.ledger-day-head i,
+.ledger-day-detail-head i {
+  font-style: normal;
+  margin-left: 8px;
+}
+
+.ledger-day-detail-head {
+  margin: 14px 0 8px;
+  border-radius: 8px;
+}
+
+.income {
+  color: #2f9e6e;
+}
+
+.expense {
+  color: #d9534f;
+}
+
+.ledger-empty-month,
+.ledger-day-empty {
+  padding: 18px 12px;
+  color: #9ca3af;
+  font-size: 12.5px;
+  text-align: center;
+}
+
+/* 一笔账的行：图标圆 + 名称/备注 + 带符号金额与账户 */
+.ledger-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-top: 1px solid rgb(0 0 0 / 4%);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ledger-row:hover {
+  background: rgb(255 255 255 / 70%);
+}
+
+.ledger-row-icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 50%;
+  color: #ffffff;
+}
+
+.ledger-row-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ledger-row-main strong {
+  overflow: hidden;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-row-main em {
+  overflow: hidden;
+  color: #9ca3af;
+  font-size: 12px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-row-side {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+
+.ledger-row-side b {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-row-side i {
+  color: #9ca3af;
+  font-size: 11px;
+  font-style: normal;
+}
+
+/* ---------- 日历热力图 ---------- */
+
+.ledger-calendar {
+  margin: 0 auto;
+  max-width: 760px;
+  padding: 14px 16px 16px;
+  border: 1px solid rgb(0 0 0 / 5%);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 78%);
+}
+
+.ledger-calendar-bar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 10px;
+}
+
+.ledger-calendar-bar button {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 1px solid rgb(0 0 0 / 8%);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 80%);
+  color: #4b5563;
+  cursor: pointer;
+}
+
+.ledger-calendar-bar strong {
+  min-width: 108px;
+  text-align: center;
+  font-size: 13.5px;
+}
+
+.ledger-heat-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.ledger-heat-head {
+  padding: 2px 0;
+  color: #9ca3af;
+  font-size: 11px;
+  text-align: center;
+}
+
+.ledger-heat-cell {
+  display: grid;
+  gap: 1px;
+  min-height: 52px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  padding: 5px 2px;
+  background: rgb(255 255 255 / 55%);
+  cursor: pointer;
+}
+
+.ledger-heat-cell:hover {
+  border-color: rgb(0 0 0 / 10%);
+}
+
+.ledger-heat-cell.other-month {
+  opacity: 0.38;
+}
+
+.ledger-heat-cell.today .ledger-heat-day {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.ledger-heat-cell.selected {
+  border-color: var(--accent);
+  box-shadow: 0 2px 8px rgb(31 41 55 / 10%);
+}
+
+.ledger-heat-day {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-heat-mark {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-heat-both {
+  color: #6b7280;
+  font-size: 10px;
+}
+
+/* ---------- 统计视图 ---------- */
+
+.ledger-stats {
+  display: grid;
+  gap: 12px;
+  margin: 0 auto;
+  max-width: 760px;
+}
+
+.ledger-stats-mode,
+.ledger-stats-side {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid rgb(0 0 0 / 7%);
+  border-radius: 9px;
+  background: rgb(255 255 255 / 62%);
+}
+
+.ledger-stats-mode {
+  justify-self: center;
+}
+
+.ledger-stats-mode button,
+.ledger-stats-side button {
+  border: 0;
+  border-radius: 7px;
+  padding: 4px 14px;
+  background: transparent;
+  color: #6b7280;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.ledger-stats-mode button.active,
+.ledger-stats-side button.active {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.ledger-stats-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid rgb(0 0 0 / 5%);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 84%);
+  text-align: center;
+}
+
+.ledger-stats-summary span {
+  display: block;
+  color: #9ca3af;
+  font-size: 11.5px;
+}
+
+.ledger-stats-summary strong {
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-chart-card {
+  padding: 12px 14px 14px;
+  border: 1px solid rgb(0 0 0 / 5%);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 84%);
+}
+
+.ledger-chart-card > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.ledger-chart-card > header strong {
+  font-size: 13px;
+}
+
+.ledger-chart-legend {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: #9ca3af;
+  font-size: 11.5px;
+}
+
+.ledger-chart-legend i {
+  width: 10px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+.ledger-chart-legend i.income {
+  background: #2f9e6e;
+}
+
+.ledger-chart-legend i.expense {
+  background: #d9534f;
+}
+
+.ledger-line-chart {
+  width: 100%;
+  height: auto;
+}
+
+.ledger-chart-grid {
+  stroke: rgb(0 0 0 / 6%);
+  stroke-dasharray: 3 4;
+}
+
+.ledger-chart-axis {
+  fill: #9ca3af;
+  font-size: 10px;
+}
+
+.ledger-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-dasharray: 1400;
+  stroke-dashoffset: 1400;
+  animation: ledger-draw 900ms ease-out forwards;
+}
+
+.ledger-line.income {
+  stroke: #2f9e6e;
+}
+
+.ledger-line.expense {
+  stroke: #d9534f;
+}
+
+.ledger-line-area {
+  opacity: 0.1;
+  animation: ledger-fade 900ms ease-out forwards;
+}
+
+.ledger-line-area.income {
+  fill: #2f9e6e;
+}
+
+.ledger-line-area.expense {
+  fill: #d9534f;
+}
+
+@keyframes ledger-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes ledger-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 0.1;
+  }
+}
+
+.ledger-donut-wrap {
+  display: grid;
+  place-items: center;
+  padding: 6px 0 10px;
+}
+
+.ledger-donut {
+  width: min(220px, 62vw);
+  height: auto;
+}
+
+.ledger-donut circle {
+  animation: ledger-donut-in 700ms ease-out;
+}
+
+@keyframes ledger-donut-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.ledger-donut-label {
+  fill: #9ca3af;
+  font-size: 10px;
+}
+
+.ledger-donut-value {
+  fill: #374151;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-rank {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ledger-rank > li {
+  display: grid;
+  gap: 4px;
+}
+
+.ledger-rank-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ledger-rank-head .ledger-row-icon {
+  width: 26px;
+  height: 26px;
+}
+
+.ledger-rank-head strong {
+  font-size: 13px;
+}
+
+.ledger-rank-head em {
+  flex: 1;
+  color: #9ca3af;
+  font-size: 11.5px;
+  font-style: normal;
+}
+
+.ledger-rank-head b {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-rank-bar {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 500ms ease-out;
+}
+
+.ledger-rank-children {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 2px 0 2px 34px;
+  list-style: none;
+}
+
+.ledger-rank-children li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.ledger-rank-children em {
+  flex: 1;
+  color: #9ca3af;
+  font-style: normal;
+}
+
+.ledger-rank-children b {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 资产视图 ---------- */
+
+.ledger-assets {
+  display: grid;
+  gap: 12px;
+  margin: 0 auto;
+  max-width: 760px;
+  align-content: start;
+}
+
+.ledger-net-card {
+  display: grid;
+  gap: 4px;
+  padding: 16px 18px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #35544a, #2f8f6b);
+  color: #ffffff;
+  box-shadow: 0 10px 26px rgb(31 41 55 / 20%);
+}
+
+.ledger-net-label {
+  color: rgb(255 255 255 / 78%);
+  font-size: 12px;
+}
+
+.ledger-net-value {
+  font-size: 28px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-net-split {
+  display: flex;
+  gap: 18px;
+  color: rgb(255 255 255 / 82%);
+  font-size: 12px;
+}
+
+.ledger-net-split i {
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-asset-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.ledger-account-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 9px 4px;
+  border: 0;
+  border-top: 1px solid rgb(0 0 0 / 4%);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ledger-account-row:hover {
+  background: rgb(255 255 255 / 70%);
+}
+
+.ledger-account-name {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ledger-account-name strong {
+  font-size: 13.5px;
+}
+
+.ledger-account-name em {
+  color: #9ca3af;
+  font-size: 11.5px;
+  font-style: normal;
+}
+
+.ledger-account-row > b {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 浮动按钮（与日记 FAB 同形状） ---------- */
+
+.ledger-fab-row {
+  position: absolute;
+  right: 30px;
+  bottom: 26px;
+  z-index: 40;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.ledger-fab {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  padding: 0;
+  background: var(--accent);
+  color: #ffffff;
+  cursor: pointer;
+  box-shadow: 0 10px 26px rgb(31 41 55 / 26%);
+  transition: filter 0.12s ease, transform 0.12s ease;
+}
+
+.ledger-fab:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+.ledger-fab:active {
+  transform: none;
+}
+
+.ledger-fab-today {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid rgb(0 0 0 / 8%);
+  border-radius: 50%;
+  padding: 0;
+  background: #ffffff;
+  color: #374151;
+  font-size: 13px;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgb(31 41 55 / 14%);
+}
+
+/* ---------- 齿轮面板（桌面） ---------- */
+
+.app-shell:not(.mobile) .ledger-gear-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 2200;
+  display: grid;
+  gap: 2px;
+  min-width: 176px;
+  padding: 6px;
+  border: 1px solid #e5e5e5;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 16px 50px rgb(0 0 0 / 16%), 0 2px 8px rgb(0 0 0 / 8%);
+  animation: menu-fade-in 0.1s ease-out;
+}
+
+/* ---------- 记账面板 / 分类与账户管理（共用一套浮层盒子） ---------- */
+
+.ledger-editor-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2600;
+  background: rgb(15 23 42 / 34%);
+}
+
+.ledger-editor,
+.ledger-manager {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2610;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 auto;
+  max-height: min(86vh, 720px);
+  max-width: 560px;
+  padding: 14px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+  border: 1px solid rgb(0 0 0 / 8%);
+  border-bottom: 0;
+  border-radius: 16px 16px 0 0;
+  background: #ffffff;
+  box-shadow: 0 -12px 40px rgb(15 23 42 / 18%);
+  overflow-y: auto;
+}
+
+.ledger-editor-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ledger-manager-title {
+  font-size: 14px;
+}
+
+.ledger-editor-tabs {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid rgb(0 0 0 / 7%);
+  border-radius: 9px;
+  background: rgb(146 152 160 / 10%);
+}
+
+.ledger-editor-tabs button {
+  border: 0;
+  border-radius: 7px;
+  padding: 5px 16px;
+  background: transparent;
+  color: #6b7280;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.ledger-editor-tabs button.active {
+  background: var(--accent, #2f8f6b);
+  color: #ffffff;
+}
+
+.ledger-editor-close {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: rgb(146 152 160 / 12%);
+  color: #4b5563;
+  cursor: pointer;
+}
+
+.ledger-editor-parents {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px;
+}
+
+.ledger-editor-parents button,
+.ledger-editor-children button {
+  display: grid;
+  gap: 4px;
+  place-items: center;
+  min-width: 58px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 6px 4px;
+  background: rgb(146 152 160 / 8%);
+  cursor: pointer;
+}
+
+.ledger-editor-parents button.active,
+.ledger-editor-children button.active {
+  border-color: var(--accent, #2f8f6b);
+  background: rgb(47 143 107 / 10%);
+}
+
+.ledger-editor-parents em,
+.ledger-editor-children em {
+  max-width: 64px;
+  overflow: hidden;
+  color: #4b5563;
+  font-size: 11px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-editor-children {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  gap: 6px;
+  padding: 8px;
+  border-radius: 12px;
+  background: rgb(146 152 160 / 8%);
+}
+
+.ledger-editor-accounts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.ledger-editor-amount {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  justify-content: flex-end;
+  padding: 4px 6px;
+}
+
+.ledger-editor-amount input {
+  width: 58%;
+  border: 0;
+  border-bottom: 2px solid var(--accent, #2f8f6b);
+  background: transparent;
+  color: #d9534f;
+  font-size: 30px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  outline: none;
+}
+
+.ledger-editor-amount-hint {
+  color: #9ca3af;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-keypad {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.ledger-keypad button {
+  height: 42px;
+  border: 1px solid rgb(0 0 0 / 6%);
+  border-radius: 10px;
+  background: rgb(255 255 255 / 92%);
+  color: #374151;
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.ledger-keypad button:active {
+  background: rgb(146 152 160 / 14%);
+}
+
+.ledger-key-clear {
+  color: #d9534f;
+}
+
+.ledger-editor-meta {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 8px;
+  align-items: center;
+}
+
+.ledger-editor-meta label {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.ledger-editor-meta input,
+.ledger-editor-meta select,
+.ledger-manager-field input,
+.ledger-manager-field select {
+  border: 1px solid rgb(0 0 0 / 10%);
+  border-radius: 8px;
+  padding: 5px 8px;
+  background: #ffffff;
+  color: #374151;
+  font-size: 12.5px;
+}
+
+.ledger-editor-note {
+  min-width: 0;
+}
+
+.ledger-editor-note input {
+  width: 100%;
+  min-width: 0;
+}
+
+.ledger-editor-foot {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.ledger-editor-foot .settings-button {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* 分类/账户管理：列表与表单 */
+
+.ledger-manager-list {
+  display: grid;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.ledger-manager-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 4px;
+  border-top: 1px solid rgb(0 0 0 / 4%);
+}
+
+.ledger-manager-row strong {
+  font-size: 13px;
+}
+
+.ledger-manager-row em {
+  flex: 1;
+  color: #9ca3af;
+  font-size: 11.5px;
+  font-style: normal;
+}
+
+.ledger-manager-row b {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-manager-child {
+  padding-left: 26px;
+}
+
+.ledger-manager-row-actions {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.ledger-manager-row-actions button {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: rgb(146 152 160 / 12%);
+  color: #4b5563;
+  cursor: pointer;
+}
+
+.ledger-manager-row-actions button.danger {
+  color: #d9534f;
+}
+
+.ledger-manager-form {
+  display: grid;
+  gap: 10px;
+}
+
+.ledger-manager-form > input[type="text"] {
+  border: 1px solid rgb(0 0 0 / 10%);
+  border-radius: 9px;
+  padding: 8px 10px;
+  font-size: 14px;
+}
+
+.ledger-manager-field {
+  display: grid;
+  grid-template-columns: 84px 1fr;
+  gap: 8px;
+  align-items: center;
+  color: #6b7280;
+  font-size: 12.5px;
+}
+
+.ledger-manager-swatches {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ledger-swatch {
+  width: 26px;
+  height: 26px;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  padding: 0;
+  cursor: pointer;
+}
+
+.ledger-swatch.active {
+  border-color: #374151;
+}
+
+.ledger-manager-icons {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(38px, 1fr));
+  gap: 6px;
+  max-height: 168px;
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 10px;
+  background: rgb(146 152 160 / 8%);
+}
+
+.ledger-manager-icons button {
+  display: grid;
+  height: 34px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: #ffffff;
+  color: #4b5563;
+  cursor: pointer;
+}
+
+.ledger-manager-icons button.active {
+  border-color: var(--accent, #2f8f6b);
+  color: var(--accent, #2f8f6b);
+}
+
+/* 菜单里的账户子面板 */
+.ledger-menu-accounts {
+  display: grid;
+  gap: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+/* ---------- 触屏：不要那层蓝色点按高亮 ---------- */
+
+.ledger-view button,
+.ledger-row,
+.ledger-heat-cell,
+.ledger-fab,
+.ledger-fab-today,
+.ledger-keypad button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ledger-row:focus,
+.ledger-row:focus-visible {
+  outline: none;
+}

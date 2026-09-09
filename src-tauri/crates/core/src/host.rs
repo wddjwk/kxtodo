@@ -280,6 +280,8 @@ impl HostCore {
             Domain::Data => {}
             // 日记没有宿主侧副作用：事件只是让 GUI 回刷快照
             Domain::Diary => {}
+            // 记账同日记：纯数据域，没有宿主侧副作用
+            Domain::Ledger => {}
         }
         if let Ok(backend) = self.backend.read() {
             if let Some(backend) = backend.as_ref() {

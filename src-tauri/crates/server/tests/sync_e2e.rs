@@ -294,6 +294,8 @@ fn two_devices_converge_with_edits_and_deletes() {
             data: true,
             settings: false,
             schedules: false,
+            diary: false,
+            ledger: false,
         }),
     )
     .expect("pair");
@@ -341,6 +343,8 @@ fn two_devices_converge_with_edits_and_deletes() {
             data: true,
             settings: false,
             schedules: false,
+            diary: false,
+            ledger: false,
         }),
     )
     .expect("B pair");

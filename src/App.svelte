@@ -5,7 +5,7 @@
   import {
     appSettings, appState, showSettings, searchQuery, isSearching,
     taskEmojiPicker, editorTaskId, appVersion, showToast,
-    isHydrated, diaryOpen, diaryEditor, editorDraftNode,
+    isHydrated, diaryOpen, diaryEditor, editorDraftNode, ledgerOpen, ledgerEditor,
     hydrate as hydrateStores
   } from "./lib/stores";
   import { replaceTaskEmojis, selectNode as selectNodeAction, syncNow as syncNowAction } from "./lib/actions";
@@ -18,6 +18,7 @@
   import Sidebar from "./lib/Sidebar.svelte";
   import Workspace from "./lib/Workspace.svelte";
   import DiaryView from "./lib/DiaryView.svelte";
+  import LedgerView from "./lib/LedgerView.svelte";
   import ToolboxView from "./lib/ToolboxView.svelte";
   import SettingsDrawer from "./lib/SettingsDrawer.svelte";
   import IconPicker from "./lib/IconPicker.svelte";
@@ -25,6 +26,7 @@
   let sidebarRef: Sidebar;
   let workspaceRef: Workspace;
   let diaryViewRef: DiaryView;
+  let ledgerViewRef: LedgerView;
 
   $: appShellStyle = $isMobile
     ? buildMobileShellStyle($appSettings.appearance)
@@ -32,6 +34,8 @@
 
   /** 日记占着主区域：桌面看 diaryOpen，移动端看历史栈驱动的 mobileView。 */
   $: diaryVisible = $isMobile ? $mobileView === "diary" : $diaryOpen;
+  /** 记账占着主区域：与日记同一条口径（移动端看历史栈，桌面看 ledgerOpen）。 */
+  $: ledgerVisible = $isMobile ? $mobileView === "ledger" : $ledgerOpen;
 
   $: emojiPickerTask = $taskEmojiPicker
     ? $appState.tasks.find((t) => t.id === $taskEmojiPicker?.taskId) ?? null
@@ -75,11 +79,12 @@
     }
     workspaceRef?.closeOverlays();
     diaryViewRef?.closeOverlays();
+    ledgerViewRef?.closeOverlays();
     showSettings.set(false);
   }
 
   function handleShortcut(event: KeyboardEvent): void {
-    if ($editorTaskId || $editorDraftNode || $diaryEditor) return;
+    if ($editorTaskId || $editorDraftNode || $diaryEditor || $ledgerEditor) return;
     if (matchesShortcut(event, $appSettings.shortcuts.focusSearch)) {
       event.preventDefault();
       sidebarRef?.focusSearch();
@@ -129,7 +134,9 @@
   class:view-content={$isMobile && $mobileView === "content"}
   class:view-toolbox={$isMobile && $mobileView === "toolbox"}
   class:view-diary={$isMobile && $mobileView === "diary"}
+  class:view-ledger={$isMobile && $mobileView === "ledger"}
   class:diary-open={!$isMobile && $diaryOpen}
+  class:ledger-open={!$isMobile && $ledgerOpen}
   class:searching={$isSearching}
   class:view-settings={$isMobile && $showSettings}
   style={appShellStyle}
@@ -146,6 +153,10 @@
 
     {#if diaryVisible}
       <DiaryView bind:this={diaryViewRef} onOpenLink={(url, title) => workspaceRef?.openLinkUrl(url, title)} />
+    {/if}
+
+    {#if ledgerVisible}
+      <LedgerView bind:this={ledgerViewRef} />
     {/if}
 
     {#if $isMobile && $mobileView === "toolbox"}

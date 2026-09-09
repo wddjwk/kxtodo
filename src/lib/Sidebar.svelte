@@ -1,12 +1,12 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
   import {
-    ChevronsDownUp, ChevronsUpDown, FilePlus2, FolderInput, FolderPlus, NotebookPen, Pencil, Search, Shapes, Toolbox, Trash2, Upload
+    ChevronsDownUp, ChevronsUpDown, FilePlus2, FolderInput, FolderPlus, NotebookPen, Pencil, Search, Shapes, Toolbox, Trash2, Upload, Wallet
   } from "@lucide/svelte";
   import {
     appState, appSettings, showToast, showSettings,
     searchQuery, listCounts, isSearching,
-    now, safeFileName, appVersion, diaryOpen, diaryEditor
+    now, safeFileName, appVersion, diaryOpen, diaryEditor, ledgerOpen, ledgerEditor
   } from "./stores";
   import {
     selectNode as selectNodeAction, toggleCategory as toggleCategoryAction,
@@ -25,7 +25,7 @@
   import ContextMenu from "./menu/ContextMenu.svelte";
   import MenuItem from "./menu/MenuItem.svelte";
   import MenuSeparator from "./menu/MenuSeparator.svelte";
-  import { isMobile, mobileView, showMobileContent, showMobileDiary, showMobileToolbox } from "./platform";
+  import { isMobile, mobileView, showMobileContent, showMobileDiary, showMobileLedger, showMobileToolbox } from "./platform";
   import { caps } from "./capabilities";
   import { longpress, isLongPressSuppressed } from "./longpress";
 
@@ -52,6 +52,8 @@
   $: systemNavNodes = $appState.nodes.filter((n) => n.kind === "system" && (caps.scheduler || n.id !== "scheduled"));
   // 日记不是节点：高亮跟着「谁占着主区域」走（移动端 mobileView，桌面 diaryOpen）
   $: diaryActive = $isMobile ? $mobileView === "diary" : $diaryOpen;
+  // 记账同日记：不是节点，高亮跟着「谁占着主区域」走
+  $: ledgerActive = $isMobile ? $mobileView === "ledger" : $ledgerOpen;
 
   export function closeOverlays(): void {
     if (ignoreOverlayCloseOnce) {
@@ -80,6 +82,8 @@
     searchQuery.set("");
     diaryEditor.set(null);
     diaryOpen.set(false);
+    ledgerEditor.set(null);
+    ledgerOpen.set(false);
     void selectNodeAction(id);
     treeMenu = null;
     emptyAreaMenu = null;
@@ -92,11 +96,27 @@
     treeMenu = null;
     emptyAreaMenu = null;
     iconPickerListId = null;
+    ledgerEditor.set(null);
+    ledgerOpen.set(false);
     if ($isMobile) {
       showMobileDiary();
       return;
     }
     diaryOpen.set(true);
+  }
+
+  function openLedger(): void {
+    searchQuery.set("");
+    treeMenu = null;
+    emptyAreaMenu = null;
+    iconPickerListId = null;
+    diaryEditor.set(null);
+    diaryOpen.set(false);
+    if ($isMobile) {
+      showMobileLedger();
+      return;
+    }
+    ledgerOpen.set(true);
   }
 
   function toggleCategory(id: string): void {
@@ -343,7 +363,7 @@
 
   <nav class="system-nav">
     {#each systemNavNodes as node (node.id)}
-      <button class:selected={!diaryActive && $appState.selectedNodeId === node.id && !$isSearching} class="nav-row" type="button" on:click={() => selectNode(node.id)}>
+      <button class:selected={!diaryActive && !ledgerActive && $appState.selectedNodeId === node.id && !$isSearching} class="nav-row" type="button" on:click={() => selectNode(node.id)}>
         <span class="active-rail"></span>
         <span class="system-icon"><IconGlyph icon={node.icon} size={19} /></span>
         <span class="list-name">{node.name}</span>
@@ -357,6 +377,12 @@
           <span class="active-rail"></span>
           <span class="system-icon"><NotebookPen size={19} /></span>
           <span class="list-name">日记</span>
+        </button>
+        <!-- 记账同日记：显式一行，排在日记下面 -->
+        <button class:selected={ledgerActive} class="nav-row" type="button" on:click={openLedger}>
+          <span class="active-rail"></span>
+          <span class="system-icon"><Wallet size={19} /></span>
+          <span class="list-name">记账</span>
         </button>
       {/if}
     {/each}
@@ -375,7 +401,7 @@
   <nav class="custom-nav" class:root-drop-active={draggingId !== null} use:longpress={handleEmptyAreaLongPress} on:contextmenu={openEmptyAreaMenu} on:click|stopPropagation>
     <ListTree
       nodes={$appState.nodes}
-      selectedNodeId={diaryActive ? "" : $appState.selectedNodeId}
+      selectedNodeId={diaryActive || ledgerActive ? "" : $appState.selectedNodeId}
       counts={$listCounts}
       showCategoryCounts={$appSettings.features.showCategoryBadges}
       {renamingId}

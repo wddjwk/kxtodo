@@ -8,8 +8,9 @@ use serde_json::{Map, Value};
 
 use crate::error::{CoreError, CoreResult};
 use crate::model::{
-    DataFile, DiaryFile, DomainMeta, IdempotencyRecord, ScheduleFile, SettingsFile,
-    DATA_SCHEMA_VERSION, DIARY_SCHEMA_VERSION, SCHEDULE_SCHEMA_VERSION, SETTINGS_SCHEMA_VERSION,
+    DataFile, DiaryFile, DomainMeta, IdempotencyRecord, LedgerFile, ScheduleFile, SettingsFile,
+    DATA_SCHEMA_VERSION, DIARY_SCHEMA_VERSION, LEDGER_SCHEMA_VERSION, SCHEDULE_SCHEMA_VERSION,
+    SETTINGS_SCHEMA_VERSION,
 };
 use crate::time::now_iso;
 
@@ -18,6 +19,7 @@ pub const DATA_FILE: &str = "data.json";
 pub const SETTINGS_FILE: &str = "settings.json";
 pub const SCHEDULE_FILE: &str = "tasks.json";
 pub const DIARY_FILE: &str = "diary.json";
+pub const LEDGER_FILE: &str = "ledger.json";
 pub const HISTORY_DIR: &str = "history";
 pub const SCHEDULE_HISTORY: &str = "schedule.ndjson";
 pub const AUDIT_HISTORY: &str = "audit.ndjson";
@@ -97,6 +99,7 @@ pub enum Domain {
     Settings,
     Schedule,
     Diary,
+    Ledger,
 }
 
 impl Domain {
@@ -106,6 +109,7 @@ impl Domain {
             Domain::Settings => "settings",
             Domain::Schedule => "schedule",
             Domain::Diary => "diary",
+            Domain::Ledger => "ledger",
         }
     }
 
@@ -115,6 +119,7 @@ impl Domain {
             Domain::Settings => SETTINGS_FILE,
             Domain::Schedule => SCHEDULE_FILE,
             Domain::Diary => DIARY_FILE,
+            Domain::Ledger => LEDGER_FILE,
         }
     }
 }
@@ -140,6 +145,9 @@ impl Layout {
     }
     pub fn diary_file(&self) -> PathBuf {
         self.root.join(DIARY_FILE)
+    }
+    pub fn ledger_file(&self) -> PathBuf {
+        self.root.join(LEDGER_FILE)
     }
     pub fn lock_file(&self) -> PathBuf {
         self.root.join(LOCK_FILE)
@@ -451,6 +459,12 @@ impl Repository {
                 Ok(serde_json::json!({ "initialized": true }))
             })?;
         }
+        if !self.layout.ledger_file().exists() {
+            self.write_ledger(None, None, "host.init", |file| {
+                file.seed_defaults();
+                Ok(serde_json::json!({ "initialized": true }))
+            })?;
+        }
         Ok(())
     }
 
@@ -537,6 +551,33 @@ impl Repository {
         })
     }
 
+    pub fn load_ledger(&self) -> CoreResult<LedgerFile> {
+        let value = read_json_value(&self.layout.ledger_file())?;
+        if value.is_null() {
+            // 账本还没落盘：内存里先给种子账户/分类（记第一笔账时要按名字解析账户/分类），
+            // 落盘发生在第一次写入时（write_ledger 的 !existed 分支与 ensure_initialized）。
+            let mut file = LedgerFile {
+                meta: DomainMeta {
+                    revision: 0,
+                    schema_version: Some(LEDGER_SCHEMA_VERSION),
+                    idempotency: Vec::new(),
+                    tombstones: Vec::new(),
+                    extra: Map::new(),
+                },
+                ..Default::default()
+            };
+            file.seed_defaults();
+            return Ok(file);
+        }
+        serde_json::from_value(value).map_err(|error| {
+            CoreError::new(
+                crate::error::ErrorKind::Io,
+                "DATA_CORRUPTED",
+                format!("ledger.json 结构无效：{error}"),
+            )
+        })
+    }
+
     pub fn lookup_schedule_idempotency(
         &self,
         command: &str,
@@ -605,6 +646,25 @@ impl Repository {
         let _lock = RepoLock::acquire(&self.layout)?;
         crate::migrate::migrate_if_needed(&self.layout)?;
         let file = self.load_diary()?;
+        Ok(file
+            .meta
+            .idempotency
+            .iter()
+            .find(|record| record.command == command && record.key == key)
+            .map(|record| (file.meta.revision, record.summary.clone())))
+    }
+
+    pub fn lookup_ledger_idempotency(
+        &self,
+        command: &str,
+        key: Option<&str>,
+    ) -> CoreResult<Option<(u64, Value)>> {
+        let Some(key) = key else {
+            return Ok(None);
+        };
+        let _lock = RepoLock::acquire(&self.layout)?;
+        crate::migrate::migrate_if_needed(&self.layout)?;
+        let file = self.load_ledger()?;
         Ok(file
             .meta
             .idempotency
@@ -887,6 +947,49 @@ impl Repository {
         let revision = file.meta.revision;
         let mut outcome = outcome.finish(revision);
         if let Err(error) = self.audit(command, Domain::Diary, revision, &summary) {
+            outcome.warnings.push(audit_warning(&error));
+        }
+        Ok((file, outcome))
+    }
+
+    pub fn write_ledger<F>(
+        &self,
+        expected_revision: Option<u64>,
+        idempotency_key: Option<&str>,
+        command: &str,
+        mutate: F,
+    ) -> CoreResult<(LedgerFile, WriteOutcome)>
+    where
+        F: FnOnce(&mut LedgerFile) -> CoreResult<Value>,
+    {
+        let _lock = RepoLock::acquire(&self.layout)?;
+        crate::migrate::migrate_if_needed(&self.layout)?;
+        let existed = self.layout.ledger_file().exists();
+        let mut file = self.load_ledger()?;
+        let outcome = self.prepare_write(
+            Domain::Ledger,
+            &file.meta,
+            expected_revision,
+            idempotency_key,
+            command,
+        )?;
+        if let Some(summary) = outcome.replay_summary.clone() {
+            return Ok((file, outcome.with_summary(summary)));
+        }
+        if !existed {
+            // 首跑种子：GUI 走 ensure_initialized，CLI 建的第一本账在这里补上同一套种子
+            file.seed_defaults();
+        }
+        let summary = mutate(&mut file)?;
+        file.schema_version = LEDGER_SCHEMA_VERSION;
+        file.meta.revision += 1;
+        file.meta.schema_version = Some(LEDGER_SCHEMA_VERSION);
+        finalize_meta(&mut file.meta, idempotency_key, command, summary.clone());
+        let raw = serde_json::to_string_pretty(&file)?;
+        atomic_write(&self.layout.ledger_file(), &raw)?;
+        let revision = file.meta.revision;
+        let mut outcome = outcome.finish(revision);
+        if let Err(error) = self.audit(command, Domain::Ledger, revision, &summary) {
             outcome.warnings.push(audit_warning(&error));
         }
         Ok((file, outcome))

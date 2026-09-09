@@ -17,6 +17,9 @@
     exportDiaryArchive as exportDiaryArchiveAction,
     importDiaryArchive as importDiaryArchiveAction,
     importDiaryArchiveFile as importDiaryArchiveFileAction,
+    exportLedgerArchive as exportLedgerArchiveAction,
+    importLedgerArchive as importLedgerArchiveAction,
+    importLedgerArchiveFile as importLedgerArchiveFileAction,
     exportCardsArchive as exportCardsArchiveAction,
     importCardsArchive as importCardsArchiveAction,
     importCardsArchiveFile as importCardsArchiveFileAction,
@@ -52,6 +55,8 @@
    * `background` / `accentColor` 覆盖进来），导出导入走 zip 而不是 JSON。
    */
   export let diaryMode = false;
+  /** 记账模式：与日记同一条套路——外观在 settings.ledger，导出导入走 Excel 压缩包。 */
+  export let ledgerMode = false;
   export let background: ListBackground | null = null;
   export let accentColor: string | null = null;
 
@@ -140,16 +145,18 @@
   /** 生效的背景与主题色：日记模式用传进来的覆盖值，否则跟着当前选中的条目 */
   $: bg = background ?? $selectedBackground;
   $: accentValue = accentColor ?? $accent;
+  /** 日记/记账模式的外观写在 settings 的扁平配置项上，前缀不同其余同构 */
+  $: settingsPrefix = diaryMode ? "diary" : ledgerMode ? "ledger" : "";
 
   function setBackground(patch: Partial<ListBackground>): void {
-    if (diaryMode) {
-      // 日记的外观是 settings.diary 上的几个扁平配置项，一个 patch 拆成多次 config.set
-      if (patch.color !== undefined) void setConfigAction("diary.backgroundColor", patch.color);
+    if (settingsPrefix) {
+      // 日记/记账的外观是 settings.<域> 上的几个扁平配置项，一个 patch 拆成多次 config.set
+      if (patch.color !== undefined) void setConfigAction(`${settingsPrefix}.backgroundColor`, patch.color);
       if (patch.image !== undefined) {
-        void setConfigAction("diary.backgroundImage", patch.image ?? "");
+        void setConfigAction(`${settingsPrefix}.backgroundImage`, patch.image ?? "");
       }
       if (patch.imageOpacity !== undefined) {
-        void setConfigAction("diary.backgroundOpacity", patch.imageOpacity);
+        void setConfigAction(`${settingsPrefix}.backgroundOpacity`, patch.imageOpacity);
       }
       return;
     }
@@ -253,12 +260,12 @@
   /** 清除背景 = 恢复默认：必须显式传 image: null（undefined 会被 actions.setBackground
    * 视为“不修改”，沿用旧图片导致清除无效），颜色与透明度一并回默认值。 */
   async function clearBackground(): Promise<void> {
-    if (diaryMode) {
+    if (settingsPrefix) {
       const previous = bg.image;
       await Promise.all([
-        setConfigAction("diary.backgroundColor", defaultBackground.color),
-        setConfigAction("diary.backgroundImage", ""),
-        setConfigAction("diary.backgroundOpacity", defaultBackground.imageOpacity ?? 0.28)
+        setConfigAction(`${settingsPrefix}.backgroundColor`, defaultBackground.color),
+        setConfigAction(`${settingsPrefix}.backgroundImage`, ""),
+        setConfigAction(`${settingsPrefix}.backgroundOpacity`, defaultBackground.imageOpacity ?? 0.28)
       ]);
       if (isLocalImageRef(previous)) {
         void deleteBackgroundImage(localImageFilename(previous));
@@ -279,8 +286,8 @@
   }
 
   function setUiColor(color: string): void {
-    if (diaryMode) {
-      void setConfigAction("diary.accent", color);
+    if (settingsPrefix) {
+      void setConfigAction(`${settingsPrefix}.accent`, color);
       return;
     }
     if (!node) return;
@@ -301,9 +308,9 @@
   }
 
   function resetUiColor(): void {
-    if (diaryMode) {
-      // 空串 = 用默认日记色（与 core 的 diary.accent 同口径）
-      void setConfigAction("diary.accent", "");
+    if (settingsPrefix) {
+      // 空串 = 用该域默认主题色（与 core 的 diary.accent / ledger.accent 同口径）
+      void setConfigAction(`${settingsPrefix}.accent`, "");
       return;
     }
     if (!node) return;
@@ -500,6 +507,50 @@
     }
   }
 
+  // ---- 记账导出/导入（zip 内含 kxtodo-ledger.xlsx：说明/账户/分类/账目） ----
+  let ledgerZipInput: HTMLInputElement;
+
+  async function exportAllLedger(): Promise<void> {
+    onClose();
+    await exportLedgerArchiveAction();
+  }
+
+  async function exportLedgerRange(): Promise<void> {
+    if (!exportFrom && !exportTo) {
+      showToast("先选一个起止日期");
+      return;
+    }
+    onClose();
+    await exportLedgerArchiveAction({ from: exportFrom || undefined, to: exportTo || undefined });
+  }
+
+  async function importLedger(): Promise<void> {
+    if (!isTauriRuntime) {
+      showToast("浏览器预览不支持导入记账压缩包");
+      return;
+    }
+    if (!caps.nativeFileDialogs) {
+      markFilePickerOpen();
+      ledgerZipInput.click();
+      return;
+    }
+    onClose();
+    await importLedgerArchiveAction();
+  }
+
+  async function importLedgerFromInput(event: Event): Promise<void> {
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLInputElement) || !target.files?.[0]) return;
+    try {
+      await importLedgerArchiveFileAction(target.files[0]);
+    } finally {
+      target.value = "";
+      window.clearTimeout(filePickerResetTimer);
+      filePickerOpen = false;
+      onClose();
+    }
+  }
+
   // ---- 一般卡片条目的 Markdown 压缩包（一张卡片一个 md + images/） ----
 
   async function exportCardsMd(): Promise<void> {
@@ -649,6 +700,25 @@
       </div>
     </MenuItem>
     <MenuItem icon={Download} label="导入日记压缩包" onSelect={() => void importDiary()} />
+  {:else if ledgerMode}
+    <MenuItem icon={FileArchive} label="导出全部账本" onSelect={() => void exportAllLedger()} />
+    <MenuItem icon={CalendarRange} label="按日期范围导出">
+      <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+      <div slot="submenu" class="diary-export-range" on:click|stopPropagation>
+        <label>
+          从
+          <input type="date" bind:value={exportFrom} on:keydown|stopPropagation />
+        </label>
+        <label>
+          到
+          <input type="date" bind:value={exportTo} on:keydown|stopPropagation />
+        </label>
+        <button class="menu-action-button" type="button" on:click|stopPropagation={() => void exportLedgerRange()}>
+          <Upload size={15} /> 导出这一段
+        </button>
+      </div>
+    </MenuItem>
+    <MenuItem icon={Download} label="导入记账压缩包" onSelect={() => void importLedger()} />
   {:else}
     <MenuItem icon={Upload} label="导出当前" onSelect={() => void exportCurrentList()} />
     <MenuItem icon={Upload} label="一键全部导出" onSelect={() => void exportAll()} />
@@ -725,5 +795,6 @@
   <input bind:this={importInput} class="hidden-file" type="file" accept="application/json,.json" on:change={importFromFile} />
   <input bind:this={diaryZipInput} class="hidden-file" type="file" accept=".zip,application/zip" on:change={importDiaryFromInput} />
   <input bind:this={cardsZipInput} class="hidden-file" type="file" accept=".zip,application/zip" on:change={importCardsMdFromInput} />
+  <input bind:this={ledgerZipInput} class="hidden-file" type="file" accept=".zip,.xlsx,application/zip,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" on:change={importLedgerFromInput} />
   <input bind:this={backgroundFileInput} class="hidden-file" type="file" accept="image/*" on:change={uploadBackgroundImage} />
 </ContextMenu>

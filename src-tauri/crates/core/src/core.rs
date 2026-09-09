@@ -112,6 +112,7 @@ fn run(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value
         ["notify"] => cmd_notify(inv, ctx, meta),
         ["task", action] => task_dispatch(action, inv, ctx, meta),
         ["diary", action] => crate::ops_diary::diary_dispatch(action, inv, ctx, meta),
+        ["ledger", action] => crate::ops_ledger::ledger_dispatch(action, inv, ctx, meta),
         ["schedule", action] => schedule_dispatch(action, inv, ctx, meta),
         ["schedule", "runtime", action] => schedule_runtime_dispatch(action, inv, ctx, meta),
         ["config", action] => config_dispatch(action, inv, ctx, meta),
@@ -133,6 +134,7 @@ fn cmd_version() -> CoreResult<Value> {
             "settings": crate::model::SETTINGS_SCHEMA_VERSION,
             "schedule": crate::model::SCHEDULE_SCHEMA_VERSION,
             "diary": crate::model::DIARY_SCHEMA_VERSION,
+            "ledger": crate::model::LEDGER_SCHEMA_VERSION,
         }
     }))
 }

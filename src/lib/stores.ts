@@ -1,9 +1,9 @@
 import { writable, derived, get } from "svelte/store";
-import type { AppNotification, AppState, AppNode, DiaryEditorTarget, DiaryEntry, EmojiPickerTarget, NotificationTone, SchedulerState, Settings, Task } from "./types";
-import { cachedAppearance, cachedProfile, defaultSchedulerRuntimes, defaultSettings, emptyState, normalizeDiaryEntries, normalizeState, normalizeSettings, schedulerRuntimeKeys, writeAppearanceCache, writeProfileCache } from "./defaults";
+import type { AppNotification, AppState, AppNode, DiaryEditorTarget, DiaryEntry, EmojiPickerTarget, LedgerBook, LedgerEditorTarget, NotificationTone, SchedulerState, Settings, Task } from "./types";
+import { cachedAppearance, cachedProfile, defaultSchedulerRuntimes, defaultSettings, emptyState, normalizeDiaryEntries, normalizeLedger, normalizeState, normalizeSettings, schedulerRuntimeKeys, seedLedgerBook, writeAppearanceCache, writeProfileCache } from "./defaults";
 import {
   loadState, saveState, loadSettings, saveSettings, loadScheduler, saveScheduler,
-  loadDiary, saveDiary,
+  loadDiary, saveDiary, loadLedger, saveLedger,
   registerGlobalShortcut, setCloseToTray, setAutostart,
   setWebviewZoom, isTauriRuntime, resolveExecutorPaths, sendNativeNotification,
   hasCoreDispatch, coreSnapshot, getAppVersion
@@ -144,6 +144,24 @@ export const diaryOpen = writable(false);
  */
 export const diaryEditor = writable<DiaryEditorTarget | null>(null);
 
+/**
+ * 记账（ledger.json，独立的第五个领域）。整本账一个 store：账户/分类/流水
+ * 总是一起变（记一笔只动流水，但余额与统计要立刻跟着算），拆三个 store 只会
+ * 让视图层自己拼一致性。
+ */
+export const ledgerData = writable<LedgerBook>({
+  accounts: [],
+  categories: [],
+  entries: []
+});
+/** 记账视图是否打开（桌面端）。移动端由 `mobileView === "ledger"` 驱动，见 platform.ts。 */
+export const ledgerOpen = writable(false);
+/**
+ * 正在记的那一笔：`{ id }` 改已有的一笔，`{ date, kind }` 新记一笔（保存时才落盘）。
+ * null = 面板关闭。
+ */
+export const ledgerEditor = writable<LedgerEditorTarget | null>(null);
+
 // ---------------------------------------------------------------------------
 // Toast
 // ---------------------------------------------------------------------------
@@ -256,6 +274,7 @@ let stateSaveTimer: number | undefined;
 let settingsSaveTimer: number | undefined;
 let schedulerSaveTimer: number | undefined;
 let diarySaveTimer: number | undefined;
+let ledgerSaveTimer: number | undefined;
 
 export function commit(next: AppState): void {
   appState.set(next);
@@ -272,6 +291,15 @@ export function commitDiary(next: DiaryEntry[]): void {
   window.clearTimeout(diarySaveTimer);
   diarySaveTimer = window.setTimeout(() => {
     saveDiary(next).catch((error) => showToast(`保存日记失败：${String(error)}`));
+  }, 180);
+}
+
+export function commitLedger(next: LedgerBook): void {
+  ledgerData.set(next);
+  if (!get(isHydrated)) return;
+  window.clearTimeout(ledgerSaveTimer);
+  ledgerSaveTimer = window.setTimeout(() => {
+    saveLedger(next).catch((error) => showToast(`保存账本失败：${String(error)}`));
   }, 180);
 }
 
@@ -371,6 +399,9 @@ function applySnapshot(snapshot: Awaited<ReturnType<typeof coreSnapshot>>, domai
   }
   if (wantAll || domains?.has("diary")) {
     diaryEntries.set(normalizeDiaryEntries(snapshot.diary));
+  }
+  if (wantAll || domains?.has("ledger")) {
+    ledgerData.set(normalizeLedger(snapshot.ledger));
   }
   if (wantAll || domains?.has("schedule")) {
     const current = get(appState);
@@ -488,14 +519,24 @@ export async function hydrate(): Promise<void> {
   // 浏览器预览路径（移动端已是 core 模式）
   let loadedSettings = clone(defaultSettings);
   try {
-    const [storedState, storedScheduler, storedSettings, storedDiary, resolvedExecutors] = await Promise.all([
+    const [storedState, storedScheduler, storedSettings, storedDiary, storedLedger, resolvedExecutors] = await Promise.all([
       loadState(),
       loadScheduler(),
       loadSettings(),
       loadDiary(),
+      loadLedger(),
       resolveExecutorPaths().catch(() => defaultSchedulerRuntimes)
     ]);
     diaryEntries.set(storedDiary);
+    const storedLedgerBook = normalizeLedger(storedLedger);
+    if (storedLedgerBook.accounts.length === 0 && storedLedgerBook.entries.length === 0) {
+      // 浏览器预览的首跑也要有种子账户/分类，与 core 的 ensure_initialized 同口径
+      const seeded = seedLedgerBook();
+      ledgerData.set(seeded);
+      saveLedger(seeded).catch(() => undefined);
+    } else {
+      ledgerData.set(storedLedgerBook);
+    }
     const scheduler: SchedulerState = {
       ...storedScheduler,
       runtimes: schedulerRuntimeKeys.reduce((acc, key) => {

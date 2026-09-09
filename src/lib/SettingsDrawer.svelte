@@ -511,7 +511,9 @@
         username: syncForm.username,
         secret: syncForm.secret,
         syncSettings: $appSettings.sync?.syncSettings ?? true,
-        syncSchedules: $appSettings.sync?.syncSchedules ?? false
+        syncSchedules: $appSettings.sync?.syncSchedules ?? false,
+        syncDiary: $appSettings.sync?.syncDiary ?? true,
+        syncLedger: $appSettings.sync?.syncLedger ?? true
       });
       if (ok) {
         syncFormPrefilled = false;
@@ -560,7 +562,7 @@
   }
 
   async function updateSyncScope(
-    field: "syncData" | "syncSettings" | "syncSchedules",
+    field: "syncData" | "syncSettings" | "syncSchedules" | "syncDiary" | "syncLedger",
     value: boolean
   ): Promise<void> {
     await setSyncScopes({ [field]: value });
@@ -1255,6 +1257,12 @@
         </label>
         <label class="sync-scope" title="定时任务：跨平台路径通常不可执行">
           <input type="checkbox" checked={$appSettings.sync.syncSchedules} on:change={(event) => updateSyncScope("syncSchedules", event.currentTarget.checked)} />任务
+        </label>
+        <label class="sync-scope" title="日记：条目与心情天气标签">
+          <input type="checkbox" checked={$appSettings.sync.syncDiary} on:change={(event) => updateSyncScope("syncDiary", event.currentTarget.checked)} />日记
+        </label>
+        <label class="sync-scope" title="账本：账户、分类与记账流水">
+          <input type="checkbox" checked={$appSettings.sync.syncLedger} on:change={(event) => updateSyncScope("syncLedger", event.currentTarget.checked)} />账本
         </label>
       </div>
       <div class="settings-row sync-rate-row">

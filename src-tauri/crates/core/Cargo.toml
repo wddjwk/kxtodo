@@ -24,6 +24,10 @@ encoding_rs = "0.8"
 # 日记导出/导入的压缩包（年/月/*.md + YAML front-matter）。关掉默认特性只留 deflate：
 # 走 flate2 的纯 Rust 后端，Android 交叉编译不会因此多出一个 C 依赖。
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# 记账导出/导入的 Excel（说明/账户/分类/账目 四张表）。两个都是纯 Rust：
+# rust_xlsxwriter 写 xlsx、calamine 读 xlsx，Android 交叉编译不会多出 C 依赖。
+rust_xlsxwriter = "0.99"
+calamine = "0.36"
 # 数据多端同步（v0.4.0）：E2E 加密 + HTTP 客户端，全部纯 Rust（Android 交叉零负担）
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 argon2 = "0.5"

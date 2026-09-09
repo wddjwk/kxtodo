@@ -233,7 +233,7 @@ pub fn command_schema(root: &clap::Command, path: &str) -> CoreResult<Value> {
 pub fn risk_for(command: &str) -> &'static str {
     match command {
         "task.remove" | "schedule.remove" | "schedule.enable" | "schedule.run" | "config.reset"
-        | "diary.remove" => {
+        | "diary.remove" | "ledger.remove" | "ledger.accountRemove" | "ledger.categoryRemove" => {
             "high-risk-write"
         }
         "task.add"
@@ -241,6 +241,14 @@ pub fn risk_for(command: &str) -> &'static str {
         | "diary.add"
         | "diary.modify"
         | "diary.import"
+        | "ledger.add"
+        | "ledger.transfer"
+        | "ledger.modify"
+        | "ledger.import"
+        | "ledger.accountAdd"
+        | "ledger.accountModify"
+        | "ledger.categoryAdd"
+        | "ledger.categoryModify"
         | "schedule.add"
         | "schedule.modify"
         | "schedule.disable"

@@ -121,5 +121,5 @@ await m.close();
 
 check("全程无 pageerror", errors.length === 0, errors.slice(0, 3).join(" | "));
 await browser.close();
-console.log(failures === 0 ? "V070 FIXES ALL PASS" : `V070 FIXES FAILURES: ${failures}`);
+console.log(failures === 0 ? "V0610 FIXES ALL PASS" : `V0610 FIXES FAILURES: ${failures}`);
 process.exit(failures === 0 ? 0 : 1);

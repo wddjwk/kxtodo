@@ -2,7 +2,7 @@
 name: kxtodo
 version: 1
 cliHelp: kxtodo-cli --help
-description: KXToDo 是一站式的工作事务、日常生活与知识整理记录中枢。本 SKILL 通过其 CLI 查询/创建/修改/删除待办（todo 记事）、分类条目、标签与日记，管理定时任务与设置。用户要回顾或做每周/每月/年度总结时（如「这周/这个月/今年做了些什么」），用本 SKILL 按日期范围查询待办完成情况与日记内容；日常记录工作进展、生活琐事、知识笔记时也优先落到这里。
+description: KXToDo 是一站式的工作事务、日常生活与知识整理记录中枢。本 SKILL 通过其 CLI 查询/创建/修改/删除待办（todo 记事）、分类条目、标签、日记与记账（收支流水、资金账户、分类、资产与消费统计），管理定时任务与设置。用户要回顾或做每周/每月/年度总结时（如「这周/这个月/今年做了些什么」「这个月花了多少」「钱都花在哪」），用本 SKILL 按日期范围查询待办完成情况、日记内容与账本收支；日常记录工作进展、生活琐事、知识笔记、记一笔账时也优先落到这里。
 ---
 
 # KXToDo Agent SKILL
@@ -24,6 +24,7 @@ KXToDo v9 提供脚本化 CLI。本 SKILL 说明**何时调用、按什么步骤
 - `entry`：左栏条目，位于根级或 category 下。
 - `item`：条目内的具体任务（Markdown 正文 + 状态），只能归属 entry。
 - `diary`：日记（按归属日期归档的 Markdown 记录），住自己的 `diary.json`，**不属于任何 entry/category**，一天可以有多篇。
+- `ledger`：记账（收支流水），住自己的 `ledger.json`。三张表：`entries` 流水（支出/收入/转账）、`accounts` 资金账户（余额 = 期初 + 流水推导）、`categories` 两级分类（大类→子分类，支出与收入各一套）。金额对外是**两位小数的元**（`amount`/`signed`），内部存整数分（`amountCents`）。
 - `system`：我的一天/计划内/收藏等内置视图，只读。
 - ID 全部不透明，**不得拼造或按前缀推断类型**；先通过 tree/list/find/get 获取。
 
@@ -51,6 +52,20 @@ KXToDo v9 提供脚本化 CLI。本 SKILL 说明**何时调用、按什么步骤
 - **导出**：`diary export --out <path.zip> [--from <起> --to <止>]`（不给范围就是一键全量）。压缩包是给人读的：`年/月/YYYYMMDD[_序号][_标题].md`，一天多篇才带序号，没标题就只用日期；每篇的 `title/date/time/tags/mood/weather/createdAt` 写在 YAML front-matter 里，解压出来任何编辑器都能直接看。**插图随包走**：正文里引用到的本地图进包内 `images/`，md 里的引用改写成相对路径，解压即可显示。
 - **导入**：`diary import --zip <path> --yes`（bulk 写，要确认；`--dry-run` 先看会进多少条）。解析很宽容：没有 front-matter 的手写 md 也能进（日期退回文件名 `YYYYMMDD` 或目录 `年/月`），非 UTF-8 按 lossy 解码，日期非法或标题正文全空的条目跳过并计入 `skipped`；包内 `images/` 的图落回 `img/data/diary/`（已存在的同名文件不覆盖），落盘张数在返回值 `images` 里。**同一天已有日记不算冲突**：导入进来的直接追加成另一篇，不合并正文也不去重——所以同一个包导两遍就会得到两份，别重试。
 - 视图偏好 `config get|set diary.view list|calendar|group` 是**本机 UI 状态**，不跨设备同步；日记的主题色与背景（`diary.accent` / `diary.backgroundColor` / `diary.backgroundImage` / `diary.backgroundOpacity`）**是**同步的（外观该多端一致）。这几项都不影响任何命令的输出。
+
+## 记账
+
+- **什么时候用 ledger**：用户要「记一笔账」「今天花了多少」「这个月开销」「钱花在哪」「资产/余额」→ `ledger`；要「待办/提醒」→ `task`；要「叙事记录」→ `diary`。三者互不替代。
+- 写：`ledger add --amount <元> --account <账户名|ID> [--kind expense|income] [--category <分类名|ID>] [--date <YYYY-MM-DD>] [--time <HH:MM>] [--note <备注>]`。`--amount` 是元（两位小数，第三位四舍五入到分）；`--account`/`--category` **认名字也认 ID**（名字对人类与 Agent 更友好）。`--date` 缺省为本地今天。返回体带 `accountName`/`categoryName`/`categoryParentName`/`signed`，不必二次查表。
+- 转账：`ledger transfer --from <账户> --to <账户> --amount <元>`。**转账不计入收支统计**，只改两个账户余额；转出转入相同报 `LEDGER_TRANSFER_SAME_ACCOUNT`。
+- 读：`ledger list [--date | --from --to] [--kind] [--account] [--category] [--limit N]`（按日期由近及远）；`ledger get --id`；`ledger accounts`（各账户余额 + 净资产）；`ledger categories [--side expense|income]`（两级分类，`parentId` 空 = 大类）；`ledger balance`（净资产/总资产/总负债，信用卡负余额计入负债）。
+- **统计（周/月/年总结的首选）**：`ledger stats --month 2026-09` / `--year 2026` / `--from <起> --to <止>`。返回 `totals`（收入/支出/结余/转账）、`series`（月视图逐天、年视图逐月，空档补齐，画趋势用）、`categories`（**子分类金额并进大类**的大类占比：笔数/金额/百分比/子分类明细）。回答「钱花在哪」直接读 `categories`，别自己逐笔加。
+- 改：`ledger modify --id ... --amount/--account/--category/--date/--note`，字段缺省 = 不变。删：`ledger remove --id ... --yes`（high-risk-write，写同步墓碑）。
+- 账户管理：`ledger account-add --name <名> [--kind cash|debit|credit|investment|other] [--initial <元>]`、`account-modify --id`、`account-remove --id --yes`。**名下还有账目的账户删不掉**（`LEDGER_ACCOUNT_IN_USE`）——先改账或删账，别绕。
+- 分类管理：`ledger category-add --name <名> [--side expense|income] [--parent <大类名|ID>] [--icon <lucide 名>]`、`category-modify --id`、`category-remove --id --yes`。**分类只有两级**（子分类下不能再挂，报 `LEDGER_CATEGORY_DEPTH`）；删大类会连带它的子分类，名下账目保留但变「未分类」。首跑自带一套覆盖日常场景的种子账户与两级分类（餐饮/交通/居住/购物/娱乐/医疗/学习/人情/宠物/其他 + 工资/理财/兼职/红包/退款/其他），**先 `ledger categories` 看现成的，别重复建同名分类**（同名同侧同父会报 `LEDGER_CATEGORY_EXISTS`）。
+- **导出**：`ledger export --out <path.zip> [--from <起> --to <止>]`。包内一张 `kxtodo-ledger.xlsx`，四张表：说明（格式标记与合计）/ 账户 / 分类 / 账目（日期|时间|类型|账户|转入账户|大类|分类|金额|备注，金额带符号的元）。不给范围就是全量。
+- **导入**：`ledger import --file <path.zip|.xlsx> --yes`（bulk 写，要确认；**重复导入会产生重复账目**，别重试）。只认这套表头；账户/分类按名字合并、缺的自动创建；日期非法或金额为 0 的行跳过并计入 `skipped`。想搬家就「全量导出 → 新目录导入」，账户与分类会跟着走。
+- 视图偏好 `config get|set ledger.view list|calendar|stats|assets` 是**本机 UI 状态**不跨设备同步；记账的主题色与背景（`ledger.accent` 等四项）**是**同步的。
 
 ## 定时任务工作流
 
@@ -82,7 +97,7 @@ KXToDo v9 提供脚本化 CLI。本 SKILL 说明**何时调用、按什么步骤
 - 找主机：`sync discover [--timeout-ms N]`（局域网 UDP 广播查询，返回 name/host/port/url/instanceId）。局域网方式把 `name` 当 `--lan-peer` 的值；自建服务方式把 `url` 当 `--server` 的值。该命令**不需要数据目录已存在**，是配对前的第一步。
 - 配对：`sync pair --username --secret`（自建服务加 `--server <url>`，局域网加 `--lan-peer <名字>` 或先 `--lan-host true`，P2P 只要账户凭据）。**不再区分注册与登录**：账户不存在就当场创建，存在就登录；密码不符报 `AUTH_FAILED`，用户名撞车只在并发注册时出现报 `ACCOUNT_EXISTS`。账户 = 用户名 + 密码，密码派生认证/加密密钥，丢失=数据不可恢复，别替用户编密码。该命令不需要数据目录已存在（内部会初始化）。
 - 日常：`sync now` 立即同步；`sync status` 是**纯本地读**（配对信息 + 通信方式 + 主机状态 + P2P 概览 + 最近同步结果 + 缓存的在线状态，不联网，可随时调用）；`sync probe` 才真的联网（解析端点 + 短超时 /healthz + /me；P2P 方式只解析目录不拨号）并刷新在线状态。判断通不通看 status 的 `online`（`null` = 还没探测过），要最新结论先 probe。凭据默认不输出，`sync status --show-secrets` 才带出同步密码与内置主机的管理后台密码（应用设置页的「打开」按钮会把凭据拼在 URL 片段里自动登录，片段不发往服务器）。
-- 配置：`sync configure --interval-seconds N`（自动同步间隔，低于 5 按 5 生效）、`--reconnect-seconds N`（掉线后静默重连间隔）、`--lan-port N`（内置服务器监听端口）、范围三选 `--sync-data`（节点/任务/插图图片，默认开）/`--sync-settings`（配置/配色/背景与头像图片，默认开）/`--sync-schedules`（默认关）。**同步节奏是共享的**：interval/reconnect 属于 settings 实体的共享子集，一端改了会随设置同步推到其它设备（LWW，最后改的赢），多端节奏因此保持一致；手动 `sync now` 之后自动循环从这一刻重排一个完整间隔。图片文件本体没有独立开关：插图跟数据走，背景与头像跟设置走；改范围会自动全量重拉一次。
+- 配置：`sync configure --interval-seconds N`（自动同步间隔，低于 5 按 5 生效）、`--reconnect-seconds N`（掉线后静默重连间隔）、`--lan-port N`（内置服务器监听端口）、范围五选 `--sync-data`（节点/任务/插图图片，默认开）/`--sync-settings`（配置/配色/背景与头像图片，默认开）/`--sync-schedules`（默认关）/`--sync-diary`（日记，默认开）/`--sync-ledger`（账本：账户/分类/流水，默认开）。**同步节奏是共享的**：interval/reconnect 属于 settings 实体的共享子集，一端改了会随设置同步推到其它设备（LWW，最后改的赢），多端节奏因此保持一致；手动 `sync now` 之后自动循环从这一刻重排一个完整间隔。图片文件本体没有独立开关：插图跟数据走，背景与头像跟设置走；改范围会自动全量重拉一次。
 - 暂停与恢复：`sync configure --enabled false` 暂停同步（方式/地址/主机名/用户名/密码全部保留，此时 `sync now` 报 `SYNC_PAUSED`，status 的 `paused` 为 true），`--enabled true` 恢复。`sync unpair` 才是解除配对（清 token 与密码，对端数据保留）。
 - **主机是可替换的**：换了一台主机/主设备、或它的库被重建（`/healthz` 的 `instanceId` 变了），客户端会自动把拉取水位与推送台账清零、全量重新对账，并在报告里留一条 warning。所以看到某轮 `pushed` 突然等于本机全部实体数，是预期的重新播种，不是故障；此时账户若在新库里不存在也会自动重建。对账状态是**逐主机库**存的（`runtime/sync.json` 的 `peers`），换回旧主机时旧水位原样恢复，不会重复全量。
 - 找不到的错误码：`SYNC_LAN_HOST_NOT_SELECTED`（局域网方式还没选定主机，也没勾本机作为服务器）、`SYNC_LAN_HOST_NOT_FOUND`（选定的名字在局域网里没应答）、`SYNC_HOST_NOT_RUNNING`（本机该当主机但内置服务器没起）、`SYNC_P2P_NOT_RUNNING`（P2P 运行时启动失败，极少见；原因在 sync-debug 日志里）、`SYNC_P2P_NO_PEER`（目录里没有可拨的在线设备）、`SYNC_MODE_INVALID`。
@@ -104,6 +119,11 @@ KXToDo v9 提供脚本化 CLI。本 SKILL 说明**何时调用、按什么步骤
 1. `task list --type category --parent-id root` / `task find` 查找目标分类与条目。
 2. 不存在则依次 `task add --type category`、`task add --type entry`（记录返回 ID）。
 3. `task add --type item --entry-id <id> --markdown "..." --idempotency-key <键>`。
+
+**“这个月花了多少 / 钱花在哪”**：
+1. `ledger stats --month <YYYY-MM>` 拿 `totals` 与大类占比 `categories`（要趋势就看 `series`）。
+2. 需要明细再 `ledger list --from <月初> --to <月末>`（或加 `--category <名>` 只看一类）。
+3. 年度总结用 `ledger stats --year <YYYY>`；跨自定义区间用 `--from --to`。
 
 ## 错误处理
 

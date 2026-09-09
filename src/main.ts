@@ -12,6 +12,7 @@ import "./styles/menu.css";
 import "./styles/shared.css";
 import "./styles/editor.css";
 import "./styles/diary.css";
+import "./styles/ledger.css";
 import "./styles/markdown-ext.css";
 import "./styles/mobile.css";
 

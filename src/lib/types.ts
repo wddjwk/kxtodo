@@ -70,6 +70,75 @@ export type DiaryEntry = {
 /** 日记编辑器的目标：改已有的一篇（id），或新建一篇归到某天（date）。 */
 export type DiaryEditorTarget = { id: string } | { date: string };
 
+/** 记账条目类型：转账不计入收支统计，只改两个账户的余额。 */
+export type LedgerKind = "expense" | "income" | "transfer";
+/** 分类归属侧：支出与收入各有一套分类。 */
+export type LedgerSide = "expense" | "income";
+export type LedgerAccountKind = "cash" | "debit" | "credit" | "investment" | "other";
+
+export type LedgerAccount = {
+  id: string;
+  name: string;
+  /** lucide 图标名（ledgerIcons 白名单）；空 = 按类型取默认 */
+  icon: string;
+  color: string;
+  kind: LedgerAccountKind;
+  /** 期初余额（分）；当前余额 = 期初 + 流水推导 */
+  initialCents: number;
+  note: string;
+  order: number;
+  createdAt: string;
+  updatedAt?: string;
+};
+
+export type LedgerCategory = {
+  id: string;
+  name: string;
+  side: LedgerSide;
+  /** 大类 id；空 = 自己就是大类 */
+  parentId?: string;
+  icon: string;
+  /** 空 = 继承大类颜色 */
+  color: string;
+  order: number;
+  createdAt: string;
+  updatedAt?: string;
+};
+
+export type LedgerEntry = {
+  id: string;
+  kind: LedgerKind;
+  /** 金额（分），恒为正；方向由 kind 决定 */
+  amountCents: number;
+  /** 支出/转账 = 付款账户；收入 = 收款账户 */
+  accountId: string;
+  /** 转账的转入账户 */
+  toAccountId?: string;
+  categoryId?: string;
+  /** 归属日期 YYYY-MM-DD */
+  date: string;
+  /** HH:MM:SS；空 = 只记到天 */
+  time: string;
+  note: string;
+  createdAt: string;
+  updatedAt?: string;
+};
+
+/** 记账视图：列表（按天卡片）/ 日历（热力图）/ 统计（曲线+占比）/ 资产（账户） */
+export type LedgerViewMode = "list" | "calendar" | "stats" | "assets";
+
+/** 记账面板的目标：改已有的一笔（id），或新建一笔归到某天某种类型（date+kind）。 */
+export type LedgerEditorTarget =
+  | { id: string }
+  | { date: string; kind: LedgerKind };
+
+/** 整本账：账户 / 分类 / 流水三张表（ledger.json 的前端形态）。 */
+export type LedgerBook = {
+  accounts: LedgerAccount[];
+  categories: LedgerCategory[];
+  entries: LedgerEntry[];
+};
+
 /**
  * 全局搜索的一条命中：任务卡片（todo / 一般卡片按所属条目的 cardStyle）或日记卡片。
  * 结果界面按这个 union 混排，两种卡片各走各的组件。
@@ -147,6 +216,8 @@ export type Settings = {
     syncData: boolean;
     syncSettings: boolean;
     syncSchedules: boolean;
+    syncDiary: boolean;
+    syncLedger: boolean;
     intervalSeconds: number;
     reconnectSeconds: number;
   };
@@ -166,6 +237,14 @@ export type Settings = {
     accent: string;
     backgroundColor: string;
     /** `img:<文件名>` 或 http(s)/data URL；空 = 无图 */
+    backgroundImage: string;
+    backgroundOpacity: number;
+  };
+  /** 记账偏好。与日记同一条口径：view 本机状态，外观跟着设置同步走。 */
+  ledger: {
+    view: LedgerViewMode;
+    accent: string;
+    backgroundColor: string;
     backgroundImage: string;
     backgroundOpacity: number;
   };

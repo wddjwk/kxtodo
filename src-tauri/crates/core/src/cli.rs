@@ -156,6 +156,14 @@ pub enum Commands {
         #[command(subcommand)]
         action: DiaryAction,
     },
+    /// 记账：收支流水、资金账户、两级分类、统计与 Excel 导入导出
+    #[command(
+        long_about = "记账与 diary 平行但自成一域：账本住在自己的 ledger.json 里（第五个领域文件）。\n金额一律按「元」输入（CLI 与 Excel 都是两位小数的元），core 内部存整数分。\n转账（transfer）不计入收支统计，只改两个账户的余额。\n\n动作：\n  add            记一笔（--kind expense|income，--amount 元，--account 账户名或 ID）\n  transfer       账户间转账（--from --to --amount）\n  get / list     读取 / 列出（--date 某天、--from --to 区间、--kind、--account、--category）\n  modify         修改一笔\n  remove         删除一笔（high-risk-write）\n  accounts       列出账户与各自余额、净资产\n  account-add / account-modify / account-remove   账户管理（名下有账的账户不让删）\n  categories     列出两级分类（--side expense|income）\n  category-add / category-modify / category-remove 分类管理（删大类连带子分类）\n  stats          统计：--month 2026-09 或 --year 2026 或 --from --to；输出合计、逐日/逐月序列、大类占比\n  balance        资产：各账户余额 + 净资产/总资产/总负债\n  export         导出 zip（内含 kxtodo-ledger.xlsx：说明/账户/分类/账目 四张表）\n  import         从导出的 zip 或裸 xlsx 导入（账户/分类按名字合并，缺的自动建）\n\n示例：\n  kxtodo-cli ledger add --amount 30 --account 微信 --category 午餐 --note 小面\n  kxtodo-cli ledger add --kind income --amount 18155 --account 储蓄卡 --category 工资薪金\n  kxtodo-cli ledger transfer --from 储蓄卡 --to 微信 --amount 2000\n  kxtodo-cli ledger list --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli ledger stats --month 2026-09\n  kxtodo-cli ledger balance\n  kxtodo-cli ledger export --out kxtodo-ledger.zip\n  kxtodo-cli ledger export --out 2026-09.zip --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli ledger import --file kxtodo-ledger.zip --yes"
+    )]
+    Ledger {
+        #[command(subcommand)]
+        action: LedgerAction,
+    },
     /// 管理和运行定时任务
     #[command(
         long_about = "定时任务的完整定义只能通过 --spec/--patch JSON 输入（结构见 kxtodo-cli schema schedule.spec）。\n\n动作：\n  add/validate/get/list/find/modify/remove  定义管理\n  enable/disable/run/stop/logs/status       运行控制\n  runtime list/detect/set                   脚本运行时\n\n示例流程见 kxtodo-cli skills read kxtodo。"
@@ -728,6 +736,361 @@ pub struct DiaryImportArgs {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum LedgerAction {
+    /// 记一笔收支（Risk: write）
+    #[command(
+        visible_alias = "create",
+        long_about = "Risk: write\n\n记一笔。--kind 缺省 expense；--amount 是元（两位小数，第三位四舍五入到分）；\n--account 给账户名或 ID；--category 给分类名或 ID（支出/收入各有一套）。\n--date 缺省为本地今天，--time 缺省为当前时刻。\n\n输出：创建后的完整资源（含账户/分类名字与带符号金额）。\n\n示例：\n  kxtodo-cli ledger add --amount 30 --account 微信 --category 午餐 --note 小面\n  kxtodo-cli ledger add --kind income --amount 18155 --account 储蓄卡 --category 工资薪金"
+    )]
+    Add(LedgerAddArgs),
+    /// 账户间转账（Risk: write）
+    #[command(
+        long_about = "Risk: write\n\n把钱从一个账户挪到另一个账户：不计入收支统计，只改两个账户的余额。\n\n示例：kxtodo-cli ledger transfer --from 储蓄卡 --to 微信 --amount 2000"
+    )]
+    Transfer(LedgerTransferArgs),
+    /// 按稳定 ID 读取一笔（Risk: read）
+    #[command(long_about = "Risk: read\n\n按 --id 精确读取一笔账。")]
+    Get(LedgerIdArgs),
+    /// 列出账目（Risk: read）
+    #[command(
+        long_about = "Risk: read\n\n按日期由近及远输出。\n--date 只看某天；--from/--to 限定区间；--kind 只看一类；--account/--category 按名字或 ID 过滤；--limit 截断。\n\n示例：\n  kxtodo-cli ledger list --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli ledger list --kind income --limit 10"
+    )]
+    List(LedgerListArgs),
+    /// 修改一笔（Risk: write）
+    #[command(
+        visible_alias = "update",
+        long_about = "Risk: write\n\n按稳定 ID 修改；只动给了的字段。\n\n示例：kxtodo-cli ledger modify --id ledger-xxxx --amount 35 --note 加了一份小菜"
+    )]
+    Modify(LedgerModifyArgs),
+    /// 删除一笔（Risk: high-risk-write）
+    #[command(
+        visible_alias = "delete",
+        long_about = "Risk: high-risk-write\n\n删除一笔并写同步墓碑（删除会传播到其它设备）。未带 --yes 返回退出码 10。\n\n示例：kxtodo-cli ledger remove --id ledger-xxxx --yes"
+    )]
+    Remove(LedgerIdArgs),
+    /// 列出资金账户与余额（Risk: read）
+    #[command(
+        long_about = "Risk: read\n\n余额 = 期初 + 流水推导；同时给出净资产合计。\n\n示例：kxtodo-cli ledger accounts"
+    )]
+    Accounts,
+    /// 新增资金账户（Risk: write）
+    #[command(
+        long_about = "Risk: write\n\n--kind 可选 cash|debit|credit|investment|other（信用卡的负余额计入总负债）。\n--initial 是期初余额（元，可为负）。\n\n示例：kxtodo-cli ledger account-add --name 招商储蓄卡 --kind debit --initial 1234.56"
+    )]
+    #[command(name = "account-add")]
+    AccountAdd(LedgerAccountAddArgs),
+    /// 修改资金账户（Risk: write）
+    #[command(
+        long_about = "Risk: write\n\n改名/改类型/改图标颜色/改期初余额；改期初会整体平移该账户余额。\n\n示例：kxtodo-cli ledger accountModify --id lacc-xxxx --name 工资卡"
+    )]
+    #[command(name = "account-modify")]
+    AccountModify(LedgerAccountModifyArgs),
+    /// 删除资金账户（Risk: high-risk-write）
+    #[command(
+        long_about = "Risk: high-risk-write\n\n名下还有账目的账户不允许删除（先删账或改到别的账户）。未带 --yes 返回退出码 10。\n\n示例：kxtodo-cli ledger accountRemove --id lacc-xxxx --yes"
+    )]
+    #[command(name = "account-remove")]
+    AccountRemove(LedgerIdArgs),
+    /// 列出两级分类（Risk: read）
+    #[command(
+        long_about = "Risk: read\n\n--side expense|income 只看一侧；输出含 parentId（空 = 大类）。\n\n示例：kxtodo-cli ledger categories --side expense"
+    )]
+    Categories(LedgerCategoriesArgs),
+    /// 新增分类（Risk: write）
+    #[command(
+        long_about = "Risk: write\n\n--side 缺省 expense；--parent 给大类名或 ID（不给就是新建大类）。分类只有两级。\n\n示例：\n  kxtodo-cli ledger category-add --name 咖啡 --parent 餐饮 --icon Coffee\n  kxtodo-cli ledger category-add --name 副业 --side income"
+    )]
+    #[command(name = "category-add")]
+    CategoryAdd(LedgerCategoryAddArgs),
+    /// 修改分类（Risk: write）
+    #[command(
+        long_about = "Risk: write\n\n改名/换父级/改图标颜色。--parent 传空串即提升为大类。\n\n示例：kxtodo-cli ledger categoryModify --id lcat-xxxx --name 下午茶"
+    )]
+    #[command(name = "category-modify")]
+    CategoryModify(LedgerCategoryModifyArgs),
+    /// 删除分类（Risk: high-risk-write）
+    #[command(
+        long_about = "Risk: high-risk-write\n\n删大类会连带它的子分类一起删；名下账目保留但变为「未分类」。未带 --yes 返回退出码 10。\n\n示例：kxtodo-cli ledger categoryRemove --id lcat-xxxx --yes"
+    )]
+    #[command(name = "category-remove")]
+    CategoryRemove(LedgerIdArgs),
+    /// 收支统计（Risk: read）
+    #[command(
+        long_about = "Risk: read\n\n--month 2026-09 / --year 2026 / --from --to 三选一（都不给 = 全量）。\n输出：合计（收入/支出/结余/转账）、逐日或逐月序列、大类占比（含笔数与百分比）。\n--side 只统计一侧的占比。\n\n示例：\n  kxtodo-cli ledger stats --month 2026-09\n  kxtodo-cli ledger stats --year 2026 --side expense"
+    )]
+    Stats(LedgerStatsArgs),
+    /// 资产总览（Risk: read）
+    #[command(
+        long_about = "Risk: read\n\n各账户余额 + 净资产 / 总资产 / 总负债（信用卡负余额计入负债）。\n\n示例：kxtodo-cli ledger balance"
+    )]
+    Balance,
+    /// 导出 Excel 压缩包（Risk: read）
+    #[command(
+        long_about = "Risk: read\n\n导出 zip，内含一张 kxtodo-ledger.xlsx（说明/账户/分类/账目 四张表）。\n不给 --from/--to 就是全量导出；给了就按日期范围导出（账户与分类仍是全量）。\n\n示例：\n  kxtodo-cli ledger export --out kxtodo-ledger.zip\n  kxtodo-cli ledger export --out 2026-09.zip --from 2026-09-01 --to 2026-09-30"
+    )]
+    Export(LedgerExportArgs),
+    /// 从导出的 Excel 导入（Risk: write）
+    #[command(
+        long_about = "Risk: write\n\n接受 ledger export 的 zip，也接受裸 xlsx（只认这套表头）。\n账户/分类按名字合并，缺的自动创建；日期非法或金额为 0 的行跳过（skipped）。\n**重复导入会产生重复账目**，未带 --yes 返回退出码 10。\n\n示例：kxtodo-cli ledger import --file kxtodo-ledger.zip --yes"
+    )]
+    Import(LedgerImportArgs),
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerIdArgs {
+    /// 稳定 ID
+    #[arg(long, value_name = "id")]
+    pub id: String,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerAddArgs {
+    /// 类型 expense|income（缺省 expense；转账用 ledger transfer）
+    #[arg(long, value_name = "kind")]
+    pub kind: Option<String>,
+    /// 金额（元）
+    #[arg(long, value_name = "yuan")]
+    pub amount: String,
+    /// 账户名或 ID（支出 = 付款账户，收入 = 收款账户）
+    #[arg(long, value_name = "name|id")]
+    pub account: String,
+    /// 分类名或 ID
+    #[arg(long, value_name = "name|id")]
+    pub category: Option<String>,
+    /// 归属日期 YYYY-MM-DD 或相对写法 +Nd（缺省为本地今天）
+    #[arg(long, value_name = "date")]
+    pub date: Option<String>,
+    /// 时间 HH:MM[:SS]（缺省为当前时刻）
+    #[arg(long, value_name = "time")]
+    pub time: Option<String>,
+    /// 备注
+    #[arg(long, value_name = "text")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerTransferArgs {
+    /// 转出账户名或 ID
+    #[arg(long, value_name = "name|id")]
+    pub from: String,
+    /// 转入账户名或 ID
+    #[arg(long, value_name = "name|id")]
+    pub to: String,
+    /// 金额（元）
+    #[arg(long, value_name = "yuan")]
+    pub amount: String,
+    /// 归属日期（缺省为本地今天）
+    #[arg(long, value_name = "date")]
+    pub date: Option<String>,
+    /// 时间 HH:MM[:SS]（缺省为当前时刻）
+    #[arg(long, value_name = "time")]
+    pub time: Option<String>,
+    /// 备注
+    #[arg(long, value_name = "text")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerListArgs {
+    /// 只看某一天
+    #[arg(long, value_name = "date")]
+    pub date: Option<String>,
+    /// 起始日期（含）
+    #[arg(long, value_name = "date")]
+    pub from: Option<String>,
+    /// 结束日期（含）
+    #[arg(long, value_name = "date")]
+    pub to: Option<String>,
+    /// 只看一类 expense|income|transfer
+    #[arg(long, value_name = "kind")]
+    pub kind: Option<String>,
+    /// 按账户过滤（名或 ID；转账任一侧命中都算）
+    #[arg(long, value_name = "name|id")]
+    pub account: Option<String>,
+    /// 按分类过滤（名或 ID）
+    #[arg(long, value_name = "name|id")]
+    pub category: Option<String>,
+    /// 最多返回条数
+    #[arg(long, value_name = "n")]
+    pub limit: Option<u64>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerModifyArgs {
+    /// 稳定 ID
+    #[arg(long, value_name = "id")]
+    pub id: String,
+    /// 新类型 expense|income|transfer
+    #[arg(long, value_name = "kind")]
+    pub kind: Option<String>,
+    /// 新金额（元）
+    #[arg(long, value_name = "yuan")]
+    pub amount: Option<String>,
+    /// 新账户（名或 ID）
+    #[arg(long, value_name = "name|id")]
+    pub account: Option<String>,
+    /// 新转入账户（仅转账；传空串清除）
+    #[arg(long, value_name = "name|id")]
+    pub to: Option<String>,
+    /// 新分类（名或 ID；传空串清除）
+    #[arg(long, value_name = "name|id")]
+    pub category: Option<String>,
+    /// 新归属日期
+    #[arg(long, value_name = "date")]
+    pub date: Option<String>,
+    /// 新时间
+    #[arg(long, value_name = "time")]
+    pub time: Option<String>,
+    /// 新备注
+    #[arg(long, value_name = "text")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerAccountAddArgs {
+    /// 账户名（唯一）
+    #[arg(long, value_name = "name")]
+    pub name: String,
+    /// 类型 cash|debit|credit|investment|other
+    #[arg(long, value_name = "kind")]
+    pub kind: Option<String>,
+    /// 图标名（前端白名单内的 lucide 名）
+    #[arg(long, value_name = "icon")]
+    pub icon: Option<String>,
+    /// 颜色 #rrggbb
+    #[arg(long, value_name = "color")]
+    pub color: Option<String>,
+    /// 期初余额（元，可为负）
+    #[arg(long, value_name = "yuan")]
+    pub initial: Option<String>,
+    /// 备注
+    #[arg(long, value_name = "text")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerAccountModifyArgs {
+    /// 稳定 ID
+    #[arg(long, value_name = "id")]
+    pub id: String,
+    /// 新名字（唯一）
+    #[arg(long, value_name = "name")]
+    pub name: Option<String>,
+    /// 新类型
+    #[arg(long, value_name = "kind")]
+    pub kind: Option<String>,
+    /// 新图标
+    #[arg(long, value_name = "icon")]
+    pub icon: Option<String>,
+    /// 新颜色
+    #[arg(long, value_name = "color")]
+    pub color: Option<String>,
+    /// 新期初余额（元）
+    #[arg(long, value_name = "yuan")]
+    pub initial: Option<String>,
+    /// 新备注
+    #[arg(long, value_name = "text")]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerCategoriesArgs {
+    /// 只看一侧 expense|income
+    #[arg(long, value_name = "side")]
+    pub side: Option<String>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerCategoryAddArgs {
+    /// 分类名
+    #[arg(long, value_name = "name")]
+    pub name: String,
+    /// 归属侧 expense|income（缺省 expense）
+    #[arg(long, value_name = "side")]
+    pub side: Option<String>,
+    /// 父级大类（名或 ID）；不给就是新建大类
+    #[arg(long, value_name = "name|id")]
+    pub parent: Option<String>,
+    /// 图标名
+    #[arg(long, value_name = "icon")]
+    pub icon: Option<String>,
+    /// 颜色 #rrggbb（子分类留空 = 继承大类）
+    #[arg(long, value_name = "color")]
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerCategoryModifyArgs {
+    /// 稳定 ID
+    #[arg(long, value_name = "id")]
+    pub id: String,
+    /// 新名字
+    #[arg(long, value_name = "name")]
+    pub name: Option<String>,
+    /// 新父级（名或 ID；空串提升为大类）
+    #[arg(long, value_name = "name|id")]
+    pub parent: Option<String>,
+    /// 新图标
+    #[arg(long, value_name = "icon")]
+    pub icon: Option<String>,
+    /// 新颜色
+    #[arg(long, value_name = "color")]
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerStatsArgs {
+    /// 统计某月 YYYY-MM
+    #[arg(long, value_name = "month")]
+    pub month: Option<String>,
+    /// 统计某年 YYYY
+    #[arg(long, value_name = "year")]
+    pub year: Option<String>,
+    /// 自定义起始日期（含）
+    #[arg(long, value_name = "date")]
+    pub from: Option<String>,
+    /// 自定义结束日期（含）
+    #[arg(long, value_name = "date")]
+    pub to: Option<String>,
+    /// 占比只统计一侧 expense|income
+    #[arg(long, value_name = "side")]
+    pub side: Option<String>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerExportArgs {
+    /// 输出压缩包路径
+    #[arg(long, value_name = "path")]
+    pub out: String,
+    /// 起始日期（含）；不给就是全量
+    #[arg(long, value_name = "date")]
+    pub from: Option<String>,
+    /// 结束日期（含）；不给就是全量
+    #[arg(long, value_name = "date")]
+    pub to: Option<String>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerImportArgs {
+    /// 要导入的 zip 或 xlsx 路径
+    #[arg(long, value_name = "path")]
+    pub file: String,
+}
+
+#[derive(Debug, Subcommand)]
 pub enum ScheduleAction {
     /// 使用完整 ScheduleSpec 新增定时任务（Risk: write；enabled+代码执行为 high-risk-write）
     #[command(
@@ -1042,6 +1405,12 @@ pub struct SyncPairArgs {
     /// 同步定时任务 spec（跨平台路径通常不可执行，慎开）
     #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
     pub sync_schedules: Option<bool>,
+    /// 同步日记（默认开）
+    #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
+    pub sync_diary: Option<bool>,
+    /// 同步账本（账户/分类/记账流水，默认开）
+    #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
+    pub sync_ledger: Option<bool>,
 }
 
 #[derive(Debug, Args, Serialize)]
@@ -1088,6 +1457,12 @@ pub struct SyncConfigureArgs {
     /// 同步定时任务 spec
     #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
     pub sync_schedules: Option<bool>,
+    /// 同步日记
+    #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
+    pub sync_diary: Option<bool>,
+    /// 同步账本（账户/分类/记账流水）
+    #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
+    pub sync_ledger: Option<bool>,
     /// 自动同步间隔（秒）
     #[arg(long, value_name = "5-86400")]
     pub interval_seconds: Option<u64>,
@@ -1382,6 +1757,11 @@ fn supports_idempotency(command: &str) -> bool {
             | "diary.modify"
             | "diary.remove"
             | "diary.import"
+            | "ledger.add"
+            | "ledger.transfer"
+            | "ledger.modify"
+            | "ledger.remove"
+            | "ledger.import"
             | "schedule.add"
             | "schedule.modify"
             | "schedule.remove"
@@ -1522,6 +1902,7 @@ fn version_data() -> Value {
             "settings": crate::model::SETTINGS_SCHEMA_VERSION,
             "schedule": crate::model::SCHEDULE_SCHEMA_VERSION,
             "diary": crate::model::DIARY_SCHEMA_VERSION,
+            "ledger": crate::model::LEDGER_SCHEMA_VERSION,
         }
     })
 }
@@ -1555,6 +1936,7 @@ fn build_invocation(cli: &Cli, cwd: &Path) -> CoreResult<Option<(Invocation, Opt
         }
         Commands::Task { action } => build_task_invocation(action)?,
         Commands::Diary { action } => build_diary_invocation(action)?,
+        Commands::Ledger { action } => build_ledger_invocation(action)?,
         Commands::Schedule { action } => build_schedule_invocation(action)?,
         Commands::Config { action } => build_config_invocation(action)?,
         Commands::Sync { action } => build_sync_invocation(action)?,
@@ -1802,6 +2184,55 @@ fn build_diary_invocation(action: &DiaryAction) -> CoreResult<Invocation> {
                 serde_json::json!({
                     "zipBase64": base64::engine::general_purpose::STANDARD.encode(&bytes),
                     "source": args.zip,
+                }),
+            )
+        }
+    };
+    Ok(Invocation::new(name, params))
+}
+
+fn build_ledger_invocation(action: &LedgerAction) -> CoreResult<Invocation> {
+    let (name, params) = match action {
+        LedgerAction::Add(args) => ("ledger.add", serialize_args(args)),
+        LedgerAction::Transfer(args) => {
+            let mut params = serialize_args(args);
+            if let Some(map) = params.as_object_mut() {
+                // --from 就是转账的付款账户；执行器认 accountId/to 这一对
+                if let Some(from) = map.remove("from") {
+                    map.insert("accountId".to_string(), from);
+                }
+            }
+            ("ledger.transfer", params)
+        }
+        LedgerAction::Get(args) => ("ledger.get", serialize_args(args)),
+        LedgerAction::List(args) => ("ledger.list", serialize_args(args)),
+        LedgerAction::Modify(args) => ("ledger.modify", serialize_args(args)),
+        LedgerAction::Remove(args) => ("ledger.remove", serialize_args(args)),
+        LedgerAction::Accounts => ("ledger.accounts", serde_json::json!({})),
+        LedgerAction::AccountAdd(args) => ("ledger.accountAdd", serialize_args(args)),
+        LedgerAction::AccountModify(args) => ("ledger.accountModify", serialize_args(args)),
+        LedgerAction::AccountRemove(args) => ("ledger.accountRemove", serialize_args(args)),
+        LedgerAction::Categories(args) => ("ledger.categories", serialize_args(args)),
+        LedgerAction::CategoryAdd(args) => ("ledger.categoryAdd", serialize_args(args)),
+        LedgerAction::CategoryModify(args) => ("ledger.categoryModify", serialize_args(args)),
+        LedgerAction::CategoryRemove(args) => ("ledger.categoryRemove", serialize_args(args)),
+        LedgerAction::Stats(args) => ("ledger.stats", serialize_args(args)),
+        LedgerAction::Balance => ("ledger.balance", serde_json::json!({})),
+        LedgerAction::Export(args) => ("ledger.export", serialize_args(args)),
+        LedgerAction::Import(args) => {
+            // 与 diary import 同一套路：字节在 CLI 侧读，解析与落盘都在 core 的业务层
+            let bytes = std::fs::read(&args.file).map_err(|error| {
+                CoreError::validation(
+                    "PAYLOAD_FILE_ERROR",
+                    format!("无法读取 {}：{error}", args.file),
+                )
+            })?;
+            use base64::Engine as _;
+            (
+                "ledger.import",
+                serde_json::json!({
+                    "xlsxBase64": base64::engine::general_purpose::STANDARD.encode(&bytes),
+                    "source": args.file,
                 }),
             )
         }

@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use crate::model::{DataFile, DiaryFile, ScheduleFile, SettingsFile};
+use crate::model::{DataFile, DiaryFile, LedgerFile, ScheduleFile, SettingsFile};
 
 pub const SETTINGS_ENTITY_ID: &str = "settings";
 
@@ -15,6 +15,8 @@ pub struct Scopes {
     pub data: bool,
     pub settings: bool,
     pub schedules: bool,
+    pub diary: bool,
+    pub ledger: bool,
 }
 
 impl Scopes {
@@ -23,6 +25,8 @@ impl Scopes {
             data: settings.sync.sync_data,
             settings: settings.sync.sync_settings,
             schedules: settings.sync.sync_schedules,
+            diary: settings.sync.sync_diary,
+            ledger: settings.sync.sync_ledger,
         }
     }
 }
@@ -138,6 +142,45 @@ pub fn diary_entity_stamp(diary: &DiaryFile, id: &str) -> Option<String> {
         .map(|tomb| tomb.updated_at.clone())
 }
 
+/// 记账域的三种实体_kind_（流水 / 账户 / 分类）走同一套同步机制。
+pub fn is_ledger_kind(kind: &str) -> bool {
+    matches!(kind, "ledger" | "ledgerAccount" | "ledgerCategory")
+}
+
+/// 本地实体的版本戳（ledger 域：三种实体各自的活实体或墓碑）。
+pub fn ledger_entity_stamp(ledger: &LedgerFile, kind: &str, id: &str) -> Option<String> {
+    let updated = |created: &str, updated: &Option<String>| {
+        updated.clone().unwrap_or_else(|| created.to_string())
+    };
+    let stamp = match kind {
+        "ledger" => ledger
+            .entries
+            .iter()
+            .find(|item| item.id == id)
+            .map(|item| updated(&item.created_at, &item.updated_at)),
+        "ledgerAccount" => ledger
+            .accounts
+            .iter()
+            .find(|item| item.id == id)
+            .map(|item| updated(&item.created_at, &item.updated_at)),
+        "ledgerCategory" => ledger
+            .categories
+            .iter()
+            .find(|item| item.id == id)
+            .map(|item| updated(&item.created_at, &item.updated_at)),
+        _ => None,
+    };
+    if stamp.is_some() {
+        return stamp;
+    }
+    ledger
+        .meta
+        .tombstones
+        .iter()
+        .find(|tomb| tomb.id == id && tomb.kind == kind)
+        .map(|tomb| tomb.updated_at.clone())
+}
+
 /// 本地实体的版本戳（schedule 域）。
 pub fn schedule_entity_stamp(schedule: &ScheduleFile, id: &str) -> Option<String> {
     if let Some(entry) = schedule.tasks.iter().find(|entry| entry.id == id) {
@@ -196,6 +239,18 @@ fn diary_payload(entry: &crate::model::DiaryEntry) -> Value {
     payload
 }
 
+fn ledger_entry_payload(entry: &crate::model::LedgerEntry) -> Value {
+    serde_json::to_value(entry).unwrap_or(Value::Null)
+}
+
+fn ledger_account_payload(account: &crate::model::LedgerAccount) -> Value {
+    serde_json::to_value(account).unwrap_or(Value::Null)
+}
+
+fn ledger_category_payload(category: &crate::model::LedgerCategory) -> Value {
+    serde_json::to_value(category).unwrap_or(Value::Null)
+}
+
 fn schedule_payload(entry: &crate::model::ScheduleEntry) -> Value {
     json!({
         "spec": serde_json::to_value(&entry.spec).unwrap_or(Value::Null),
@@ -234,6 +289,13 @@ pub fn settings_payload(settings: &SettingsFile) -> Value {
             "backgroundImage": settings.diary.background_image,
             "backgroundOpacity": settings.diary.background_opacity,
         },
+        // 记账同日记：外观跟着走，view 是本机偏好
+        "ledger": {
+            "accent": settings.ledger.accent,
+            "backgroundColor": settings.ledger.background_color,
+            "backgroundImage": settings.ledger.background_image,
+            "backgroundOpacity": settings.ledger.background_opacity,
+        },
     })
 }
 
@@ -241,6 +303,7 @@ pub fn settings_payload(settings: &SettingsFile) -> Value {
 pub fn extract_entities(
     data: &DataFile,
     diary: &DiaryFile,
+    ledger: &LedgerFile,
     settings: &SettingsFile,
     schedule: &ScheduleFile,
     scopes: &Scopes,
@@ -290,8 +353,8 @@ pub fn extract_entities(
             }
         }
     }
-    // 日记是独立的领域文件，但同步范围仍搭「同步数据」的车（不新增第四个勾选框）
-    if scopes.data {
+    // 日记是独立的领域文件，v0.7.0 起也有自己独立的范围勾选（此前搭「同步数据」的车）
+    if scopes.diary {
         for entry in &diary.entries {
             out.push(EntityRecord {
                 kind: "diary".to_string(),
@@ -310,6 +373,64 @@ pub fn extract_entities(
             if tomb.kind == "diary" {
                 out.push(EntityRecord {
                     kind: "diary".to_string(),
+                    id: tomb.id.clone(),
+                    updated_at: tomb.updated_at.clone(),
+                    updated_by: device_id.to_string(),
+                    deleted: true,
+                    data: Value::Null,
+                    seq: 0,
+                });
+            }
+        }
+    }
+    // 记账：流水/账户/分类三种实体共用「账本」一个勾选框
+    if scopes.ledger {
+        for entry in &ledger.entries {
+            out.push(EntityRecord {
+                kind: "ledger".to_string(),
+                id: entry.id.clone(),
+                updated_at: entry
+                    .updated_at
+                    .clone()
+                    .unwrap_or_else(|| entry.created_at.clone()),
+                updated_by: device_id.to_string(),
+                deleted: false,
+                data: ledger_entry_payload(entry),
+                seq: 0,
+            });
+        }
+        for account in &ledger.accounts {
+            out.push(EntityRecord {
+                kind: "ledgerAccount".to_string(),
+                id: account.id.clone(),
+                updated_at: account
+                    .updated_at
+                    .clone()
+                    .unwrap_or_else(|| account.created_at.clone()),
+                updated_by: device_id.to_string(),
+                deleted: false,
+                data: ledger_account_payload(account),
+                seq: 0,
+            });
+        }
+        for category in &ledger.categories {
+            out.push(EntityRecord {
+                kind: "ledgerCategory".to_string(),
+                id: category.id.clone(),
+                updated_at: category
+                    .updated_at
+                    .clone()
+                    .unwrap_or_else(|| category.created_at.clone()),
+                updated_by: device_id.to_string(),
+                deleted: false,
+                data: ledger_category_payload(category),
+                seq: 0,
+            });
+        }
+        for tomb in &ledger.meta.tombstones {
+            if is_ledger_kind(&tomb.kind) {
+                out.push(EntityRecord {
+                    kind: tomb.kind.clone(),
                     id: tomb.id.clone(),
                     updated_at: tomb.updated_at.clone(),
                     updated_by: device_id.to_string(),
@@ -417,6 +538,43 @@ pub fn apply_diary_record(record: &EntityRecord, diary: &mut DiaryFile) -> Resul
     Ok(())
 }
 
+pub fn apply_ledger_record(record: &EntityRecord, ledger: &mut LedgerFile) -> Result<(), String> {
+    if record.deleted {
+        match record.kind.as_str() {
+            "ledger" => ledger.entries.retain(|item| item.id != record.id),
+            "ledgerAccount" => ledger.accounts.retain(|item| item.id != record.id),
+            "ledgerCategory" => ledger.categories.retain(|item| item.id != record.id),
+            _ => return Err(format!("未知 ledger 实体类型 {}", record.kind)),
+        }
+        ledger
+            .meta
+            .record_tombstone(&record.id, &record.kind, &record.updated_at);
+        return Ok(());
+    }
+    match record.kind.as_str() {
+        "ledger" => {
+            let entry: crate::model::LedgerEntry =
+                serde_json::from_value(record.data.clone()).map_err(|e| e.to_string())?;
+            ledger.entries.retain(|item| item.id != entry.id);
+            ledger.entries.push(entry);
+        }
+        "ledgerAccount" => {
+            let account: crate::model::LedgerAccount =
+                serde_json::from_value(record.data.clone()).map_err(|e| e.to_string())?;
+            ledger.accounts.retain(|item| item.id != account.id);
+            ledger.accounts.push(account);
+        }
+        "ledgerCategory" => {
+            let category: crate::model::LedgerCategory =
+                serde_json::from_value(record.data.clone()).map_err(|e| e.to_string())?;
+            ledger.categories.retain(|item| item.id != category.id);
+            ledger.categories.push(category);
+        }
+        other => return Err(format!("未知 ledger 实体类型 {other}")),
+    }
+    Ok(())
+}
+
 pub fn apply_schedule_record(record: &EntityRecord, schedule: &mut ScheduleFile) -> Result<(), String> {
     #[derive(Deserialize)]
     struct SchedulePayload {
@@ -476,6 +634,8 @@ fn apply_settings_record(record: &EntityRecord, settings: &mut SettingsFile) -> 
         sync: Option<Value>,
         #[serde(default)]
         diary: Option<Value>,
+        #[serde(default)]
+        ledger: Option<Value>,
     }
     let payload: SharedSettings =
         serde_json::from_value(record.data.clone()).map_err(|e| e.to_string())?;
@@ -542,6 +702,22 @@ fn apply_settings_record(record: &EntityRecord, settings: &mut SettingsFile) -> 
             }
             if let Some(value) = map.get("backgroundOpacity").and_then(Value::as_f64) {
                 settings.diary.background_opacity = value.clamp(0.0, 1.0);
+            }
+        }
+    }
+    if let Some(ledger) = payload.ledger {
+        if let Some(map) = ledger.as_object() {
+            if let Some(value) = map.get("accent").and_then(Value::as_str) {
+                settings.ledger.accent = value.to_string();
+            }
+            if let Some(value) = map.get("backgroundColor").and_then(Value::as_str) {
+                settings.ledger.background_color = value.to_string();
+            }
+            if let Some(value) = map.get("backgroundImage").and_then(Value::as_str) {
+                settings.ledger.background_image = value.to_string();
+            }
+            if let Some(value) = map.get("backgroundOpacity").and_then(Value::as_f64) {
+                settings.ledger.background_opacity = value.clamp(0.0, 1.0);
             }
         }
     }
@@ -620,6 +796,27 @@ pub fn normalize_diary_orders(diary: &mut DiaryFile) {
         b.date
             .cmp(&a.date)
             .then_with(|| a.created_at.cmp(&b.created_at))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+}
+
+/// 记账的规范数组序：流水与列表视图同序（日期新→旧），账户/分类按 order。
+pub fn normalize_ledger_orders(ledger: &mut LedgerFile) {
+    ledger.entries.sort_by(|a, b| {
+        b.date
+            .cmp(&a.date)
+            .then_with(|| b.time.cmp(&a.time))
+            .then_with(|| b.created_at.cmp(&a.created_at))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    ledger.accounts.sort_by(|a, b| {
+        cmp_f64(a.order, b.order).then_with(|| a.id.cmp(&b.id))
+    });
+    ledger.categories.sort_by(|a, b| {
+        a.side
+            .as_str()
+            .cmp(b.side.as_str())
+            .then_with(|| cmp_f64(a.order, b.order))
             .then_with(|| a.id.cmp(&b.id))
     });
 }
@@ -803,12 +1000,15 @@ mod tests {
         let entities = extract_entities(
             &data,
             &DiaryFile::default(),
+            &LedgerFile::default(),
             &settings,
             &schedule,
             &Scopes {
                 data: true,
                 settings: false,
                 schedules: false,
+                diary: false,
+                ledger: false,
             },
             "dev-a",
         );
@@ -885,7 +1085,7 @@ mod tests {
     }
 
     #[test]
-    fn diary_rides_the_data_scope_and_keeps_ui_state_local() {
+    fn diary_has_its_own_scope_and_keeps_ui_state_local() {
         let mut local = DiaryFile {
             entries: vec![diary("d1", "2026-09-08", "2026-09-08T00:00:00.000Z")],
             ..empty_diary()
@@ -898,19 +1098,22 @@ mod tests {
         let on = extract_entities(
             &data,
             &local,
+            &LedgerFile::default(),
             &settings,
             &schedule,
             &Scopes {
                 data: true,
                 settings: false,
                 schedules: false,
+                diary: true,
+                ledger: false,
             },
             "dev-a",
         );
         let entity = on
             .iter()
             .find(|e| e.kind == "diary")
-            .expect("日记在「同步数据」范围内");
+            .expect("日记在「日记」范围内");
         assert_eq!(entity.id, "d1");
         assert_eq!(entity.updated_at, "2026-09-08T00:00:00.000Z");
         assert!(
@@ -919,10 +1122,24 @@ mod tests {
         );
         assert_eq!(entity.data["date"], json!("2026-09-08"));
 
-        let off = extract_entities(&data, &local, &settings, &schedule, &Scopes::default(), "dev-a");
+        let off = extract_entities(
+            &data,
+            &local,
+            &LedgerFile::default(),
+            &settings,
+            &schedule,
+            &Scopes {
+                data: true,
+                settings: false,
+                schedules: false,
+                diary: false,
+                ledger: false,
+            },
+            "dev-a",
+        );
         assert!(
             off.iter().all(|e| e.kind != "diary"),
-            "关掉数据范围就不推日记"
+            "关掉日记范围就不推日记"
         );
 
         // 远端更新胜出：内容替换，但本机的展开状态留着

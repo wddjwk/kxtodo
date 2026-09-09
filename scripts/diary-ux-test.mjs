@@ -271,7 +271,13 @@ await mpage.goto(URL, { waitUntil: "networkidle" });
 await mpage.waitForTimeout(800);
 
 const mNav = await mpage.locator(".system-nav .nav-row").allInnerTexts();
-check("移动端日记在工具箱上面", mNav.findIndex((t) => t.includes("工具箱")) === mNav.findIndex((t) => t.includes("日记")) + 1, JSON.stringify(mNav));
+check(
+  "移动端导航顺序：收藏 < 日记 < 记账 < 工具箱",
+  mNav.findIndex((t) => t.includes("收藏")) < mNav.findIndex((t) => t.includes("日记")) &&
+    mNav.findIndex((t) => t.includes("日记")) === mNav.findIndex((t) => t.includes("记账")) - 1 &&
+    mNav.findIndex((t) => t.includes("记账")) === mNav.findIndex((t) => t.includes("工具箱")) - 1,
+  JSON.stringify(mNav)
+);
 
 // 需求 8：移动端全局搜索要有结果面板
 await mpage.locator(".add-task-bar").waitFor({ state: "detached" }).catch(() => {});

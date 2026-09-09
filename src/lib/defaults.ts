@@ -4,6 +4,14 @@ import type {
   AppState,
   DiaryEntry,
   DiaryViewMode,
+  LedgerAccount,
+  LedgerAccountKind,
+  LedgerBook,
+  LedgerCategory,
+  LedgerEntry,
+  LedgerKind,
+  LedgerSide,
+  LedgerViewMode,
   ListBackground,
   AppNotification,
   NotificationPosition,
@@ -123,6 +131,8 @@ export const defaultSettings: Settings = {
     syncData: true,
     syncSettings: true,
     syncSchedules: false,
+    syncDiary: true,
+    syncLedger: true,
     intervalSeconds: 30,
     reconnectSeconds: 300
   },
@@ -138,6 +148,13 @@ export const defaultSettings: Settings = {
     view: "list",
     accent: "",
     backgroundColor: "#f4f1ea",
+    backgroundImage: "",
+    backgroundOpacity: 0.28
+  },
+  ledger: {
+    view: "list",
+    accent: "",
+    backgroundColor: "#eef3ee",
     backgroundImage: "",
     backgroundOpacity: 0.28
   }
@@ -632,6 +649,259 @@ export function normalizeDiaryEntries(raw: unknown): DiaryEntry[] {
   return list.map(normalizeDiaryEntry).filter((entry): entry is DiaryEntry => entry !== null);
 }
 
+function normalizeLedgerView(raw: unknown): LedgerViewMode {
+  if (raw === "list" || raw === "calendar" || raw === "stats" || raw === "assets") {
+    return raw;
+  }
+  return "list";
+}
+
+function normalizeLedgerKind(raw: unknown): LedgerKind {
+  if (raw === "income" || raw === "transfer") return raw;
+  return "expense";
+}
+
+function normalizeLedgerSide(raw: unknown): LedgerSide {
+  return raw === "income" ? "income" : "expense";
+}
+
+function normalizeAccountKind(raw: unknown): LedgerAccountKind {
+  if (raw === "debit" || raw === "credit" || raw === "investment" || raw === "other") return raw;
+  return "cash";
+}
+
+function toCents(raw: unknown): number {
+  if (typeof raw === "number" && Number.isFinite(raw)) return Math.round(raw);
+  if (typeof raw === "string" && raw.trim() !== "") {
+    const parsed = Number.parseFloat(raw);
+    if (Number.isFinite(parsed)) return Math.round(parsed);
+  }
+  return 0;
+}
+
+function normalizeLedgerAccount(raw: unknown): LedgerAccount | null {
+  const item = raw as Record<string, unknown> | undefined;
+  if (!item || typeof item.id !== "string" || item.id === "") return null;
+  const name = typeof item.name === "string" ? item.name.trim() : "";
+  if (name === "") return null;
+  return {
+    id: item.id,
+    name,
+    icon: typeof item.icon === "string" ? item.icon : "",
+    color: typeof item.color === "string" ? item.color : "",
+    kind: normalizeAccountKind(item.kind),
+    initialCents: toCents(item.initialCents),
+    note: typeof item.note === "string" ? item.note : "",
+    order: typeof item.order === "number" && Number.isFinite(item.order) ? item.order : 0,
+    createdAt: typeof item.createdAt === "string" ? item.createdAt : now(),
+    updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : undefined
+  };
+}
+
+function normalizeLedgerCategory(raw: unknown): LedgerCategory | null {
+  const item = raw as Record<string, unknown> | undefined;
+  if (!item || typeof item.id !== "string" || item.id === "") return null;
+  const name = typeof item.name === "string" ? item.name.trim() : "";
+  if (name === "") return null;
+  return {
+    id: item.id,
+    name,
+    side: normalizeLedgerSide(item.side),
+    parentId: typeof item.parentId === "string" && item.parentId !== "" ? item.parentId : undefined,
+    icon: typeof item.icon === "string" ? item.icon : "",
+    color: typeof item.color === "string" ? item.color : "",
+    order: typeof item.order === "number" && Number.isFinite(item.order) ? item.order : 0,
+    createdAt: typeof item.createdAt === "string" ? item.createdAt : now(),
+    updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : undefined
+  };
+}
+
+function normalizeLedgerEntry(raw: unknown): LedgerEntry | null {
+  const item = raw as Record<string, unknown> | undefined;
+  if (!item || typeof item.id !== "string" || item.id === "") return null;
+  const amountCents = toCents(item.amountCents);
+  if (amountCents <= 0) return null;
+  const accountId = typeof item.accountId === "string" ? item.accountId : "";
+  if (accountId === "") return null;
+  const kind = normalizeLedgerKind(item.kind);
+  const date =
+    typeof item.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(item.date)
+      ? item.date
+      : localDateOf(typeof item.createdAt === "string" ? item.createdAt : "");
+  return {
+    id: item.id,
+    kind,
+    amountCents,
+    accountId,
+    toAccountId:
+      kind === "transfer" && typeof item.toAccountId === "string" && item.toAccountId !== ""
+        ? item.toAccountId
+        : undefined,
+    categoryId: typeof item.categoryId === "string" && item.categoryId !== "" ? item.categoryId : undefined,
+    date,
+    time: typeof item.time === "string" ? item.time : "",
+    note: typeof item.note === "string" ? item.note : "",
+    createdAt: typeof item.createdAt === "string" ? item.createdAt : now(),
+    updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : undefined
+  };
+}
+
+/**
+ * 规范化 ledger.json（独立的第五个领域文件）。
+ * 返回整本账：账户 / 分类 / 流水三张表一起给 store，视图层不再各自解析。
+ */
+export function normalizeLedger(raw: unknown): {
+  accounts: LedgerAccount[];
+  categories: LedgerCategory[];
+  entries: LedgerEntry[];
+} {
+  const source = raw as Record<string, unknown> | undefined;
+  const accounts = Array.isArray(source?.accounts) ? source?.accounts : [];
+  const categories = Array.isArray(source?.categories) ? source?.categories : [];
+  const entries = Array.isArray(source?.entries) ? source?.entries : [];
+  return {
+    accounts: accounts
+      .map(normalizeLedgerAccount)
+      .filter((item): item is LedgerAccount => item !== null),
+    categories: categories
+      .map(normalizeLedgerCategory)
+      .filter((item): item is LedgerCategory => item !== null),
+    entries: entries.map(normalizeLedgerEntry).filter((item): item is LedgerEntry => item !== null)
+  };
+}
+
+/**
+ * 浏览器预览首跑的种子账本：与 core 的 `LedgerFile::seed_defaults` 同一套
+ * 账户/两级分类（名字、图标、颜色都对齐），只是 id 用前端生成。
+ */
+export function seedLedgerBook(): LedgerBook {
+  const nowIso = now();
+  // 种子 id 与 core 的 LedgerFile::seed_defaults 完全一致（确定性，不能随机）：
+  // 浏览器预览与桌面 core 模式切换时，同一本账的 id 必须对得上。
+  const accounts: LedgerAccount[] = [
+    ["lacc-01", "现金", "cash", "Wallet", "#e8a33d"],
+    ["lacc-02", "微信", "other", "MessageCircle", "#2aae67"],
+    ["lacc-03", "支付宝", "other", "Smartphone", "#1677ff"],
+    ["lacc-04", "储蓄卡", "debit", "Landmark", "#b23a48"]
+  ].map(([id, name, kind, icon, color], index) => ({
+    id,
+    name,
+    icon,
+    color,
+    kind: kind as LedgerAccountKind,
+    initialCents: 0,
+    note: "",
+    order: index + 1,
+    createdAt: nowIso
+  }));
+
+  const categories: LedgerCategory[] = [];
+  const group = (
+    side: LedgerSide,
+    sideTag: string,
+    index: number,
+    name: string,
+    icon: string,
+    color: string,
+    kids: [string, string][]
+  ) => {
+    const parentId = `lcat-${sideTag}-${index.toString().padStart(2, "0")}`;
+    categories.push({
+      id: parentId,
+      name,
+      side,
+      icon,
+      color,
+      order: index,
+      createdAt: nowIso
+    });
+    kids.forEach(([kid, kidIcon], kidIndex) => {
+      categories.push({
+        id: `${parentId}-${(kidIndex + 1).toString().padStart(2, "0")}`,
+        name: kid,
+        side,
+        parentId,
+        icon: kidIcon,
+        color: "",
+        order: kidIndex + 1,
+        createdAt: nowIso
+      });
+    });
+  };
+  group("expense", "exp", 1, "餐饮", "Utensils", "#f0862c", [
+    ["早餐", "Coffee"],
+    ["午餐", "Utensils"],
+    ["晚餐", "UtensilsCrossed"],
+    ["零食", "Candy"],
+    ["饮料", "CupSoda"],
+    ["水果", "Apple"],
+    ["买菜", "Carrot"]
+  ]);
+  group("expense", "exp", 2, "交通", "Bus", "#4a90d9", [
+    ["公交地铁", "TrainFront"],
+    ["打车", "CarTaxiFront"],
+    ["火车飞机", "Plane"],
+    ["油费", "Fuel"],
+    ["停车", "SquareParking"],
+    ["单车", "Bike"]
+  ]);
+  group("expense", "exp", 3, "居住", "House", "#7f8fa6", [
+    ["房租", "KeyRound"],
+    ["水电", "Zap"],
+    ["燃气", "Flame"],
+    ["网费", "Wifi"],
+    ["物业维修", "Wrench"]
+  ]);
+  group("expense", "exp", 4, "购物", "ShoppingBag", "#e67e9c", [
+    ["日用百货", "ShoppingCart"],
+    ["服饰鞋包", "Shirt"],
+    ["数码电器", "Smartphone"],
+    ["美妆护肤", "Sparkles"]
+  ]);
+  group("expense", "exp", 5, "娱乐", "Gamepad2", "#9b59b6", [
+    ["游戏", "Gamepad2"],
+    ["电影演出", "Clapperboard"],
+    ["音乐会员", "Music"],
+    ["运动健身", "Dumbbell"]
+  ]);
+  group("expense", "exp", 6, "医疗", "HeartPulse", "#e74c3c", [
+    ["药品", "Pill"],
+    ["门诊诊疗", "Stethoscope"]
+  ]);
+  group("expense", "exp", 7, "学习", "BookOpen", "#16a085", [
+    ["书籍课程", "BookOpen"],
+    ["学习办公", "PenLine"]
+  ]);
+  group("expense", "exp", 8, "人情", "Gift", "#d35400", [
+    ["红包礼金", "Gift"],
+    ["请客吃饭", "PartyPopper"],
+    ["孝敬长辈", "HeartHandshake"]
+  ]);
+  group("expense", "exp", 9, "宠物", "Dog", "#8e6e53", [
+    ["宠物食品", "Bone"],
+    ["宠物用品", "PawPrint"]
+  ]);
+  group("expense", "exp", 10, "其他", "Ellipsis", "#95a5a6", [["杂项", "Package"]]);
+  group("income", "inc", 1, "工资", "Banknote", "#27ae60", [
+    ["工资薪金", "Banknote"],
+    ["奖金", "Medal"],
+    ["补贴", "Coins"]
+  ]);
+  group("income", "inc", 2, "理财", "TrendingUp", "#2980b9", [
+    ["利息", "Percent"],
+    ["基金股票", "ChartLine"]
+  ]);
+  group("income", "inc", 3, "兼职", "Briefcase", "#8e44ad", [
+    ["外快", "Briefcase"],
+    ["稿费", "FileText"]
+  ]);
+  group("income", "inc", 4, "红包", "Gift", "#c0392b", [["红包礼金", "Gift"]]);
+  group("income", "inc", 5, "退款", "RotateCcw", "#7f8c8d", [["退款报销", "ReceiptText"]]);
+  group("income", "inc", 6, "其他", "Ellipsis", "#95a5a6", [["杂项", "CircleDot"]]);
+
+  return { accounts, categories, entries: [] };
+}
+
 export function normalizeSettings(raw: unknown): Settings {
   const source = raw as Partial<Settings> & {
     profile?: Partial<Settings["profile"]> & { name?: string };
@@ -779,6 +1049,8 @@ export function normalizeSettings(raw: unknown): Settings {
       syncData: typeof source?.sync?.syncData === "boolean" ? source.sync.syncData : true,
       syncSettings: typeof source?.sync?.syncSettings === "boolean" ? source.sync.syncSettings : true,
       syncSchedules: Boolean(source?.sync?.syncSchedules),
+      syncDiary: typeof source?.sync?.syncDiary === "boolean" ? source.sync.syncDiary : true,
+      syncLedger: typeof source?.sync?.syncLedger === "boolean" ? source.sync.syncLedger : true,
       // 低于下限的间隔按下限生效（用户要的是「至少 5 秒」）
       intervalSeconds:
         typeof source?.sync?.intervalSeconds === "number" && Number.isFinite(source.sync.intervalSeconds)
@@ -812,6 +1084,16 @@ export function normalizeSettings(raw: unknown): Settings {
         typeof source?.diary?.backgroundOpacity === "number" && Number.isFinite(source.diary.backgroundOpacity)
           ? Math.min(1, Math.max(0, source.diary.backgroundOpacity))
           : defaultSettings.diary.backgroundOpacity
+    },
+    ledger: {
+      view: normalizeLedgerView(source?.ledger?.view),
+      accent: normalizeHexColor(source?.ledger?.accent ?? "", ""),
+      backgroundColor: normalizeHexColor(source?.ledger?.backgroundColor, defaultSettings.ledger.backgroundColor),
+      backgroundImage: typeof source?.ledger?.backgroundImage === "string" ? source.ledger.backgroundImage : "",
+      backgroundOpacity:
+        typeof source?.ledger?.backgroundOpacity === "number" && Number.isFinite(source.ledger.backgroundOpacity)
+          ? Math.min(1, Math.max(0, source.ledger.backgroundOpacity))
+          : defaultSettings.ledger.backgroundOpacity
     }
   };
 }

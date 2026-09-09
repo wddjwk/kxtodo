@@ -3,7 +3,9 @@
 use serde_json::{json, Map, Value};
 
 use crate::error::{CoreError, CoreResult};
-use crate::model::{DiaryView, LinkOpenMode, NotificationPosition, SettingsFile, SyncMode, ThemePreset};
+use crate::model::{
+    DiaryView, LedgerView, LinkOpenMode, NotificationPosition, SettingsFile, SyncMode, ThemePreset,
+};
 use crate::time::now_iso;
 
 /// 这些配置项属于跨设备共享子集：值变化时刷新设置实体的 LWW 时间戳。
@@ -25,6 +27,11 @@ pub fn is_shared_settings_path(path: &str) -> bool {
             | "diary.backgroundColor"
             | "diary.backgroundImage"
             | "diary.backgroundOpacity"
+            // 记账同日记：外观共享，view 本机偏好
+            | "ledger.accent"
+            | "ledger.backgroundColor"
+            | "ledger.backgroundImage"
+            | "ledger.backgroundOpacity"
     )
 }
 
@@ -347,6 +354,36 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         description: "日记界面背景图透明度（0-1）",
         is_map: false,
     },
+    FieldMeta {
+        path: "ledger.view",
+        kind: "enum(list|calendar|stats|assets)",
+        description: "记账视图（本机偏好，不跨设备同步）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "ledger.accent",
+        kind: "color",
+        description: "记账界面主题色（空串 = 默认记账色）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "ledger.backgroundColor",
+        kind: "color",
+        description: "记账界面背景色",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "ledger.backgroundImage",
+        kind: "string",
+        description: "记账界面背景图（img:<文件名> 或 http(s)/data URL；空串 = 无图）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "ledger.backgroundOpacity",
+        kind: "number",
+        description: "记账界面背景图透明度（0-1）",
+        is_map: false,
+    },
 ];
 
 pub fn field_meta(path: &str) -> Option<&'static FieldMeta> {
@@ -438,6 +475,11 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "diary.backgroundColor" => json!(settings.diary.background_color),
         "diary.backgroundImage" => json!(settings.diary.background_image),
         "diary.backgroundOpacity" => json!(settings.diary.background_opacity),
+        "ledger.view" => json!(settings.ledger.view.as_str()),
+        "ledger.accent" => json!(settings.ledger.accent),
+        "ledger.backgroundColor" => json!(settings.ledger.background_color),
+        "ledger.backgroundImage" => json!(settings.ledger.background_image),
+        "ledger.backgroundOpacity" => json!(settings.ledger.background_opacity),
         _ => return Err(unknown_field(path)),
     };
     Ok(value)
@@ -908,6 +950,30 @@ pub fn set_value(
                 .ok_or_else(|| invalid_value(path, "应为 0-1 的数字"))?;
             settings.diary.background_opacity = raw.clamp(0.0, 1.0);
         }
+        "ledger.view" => {
+            let raw = expect_string(path, &value)?;
+            settings.ledger.view = LedgerView::parse(&raw)
+                .ok_or_else(|| invalid_value(path, "应为 list/calendar/stats/assets"))?;
+        }
+        "ledger.accent" => {
+            let raw = expect_string(path, &value)?.trim().to_string();
+            if !raw.is_empty() && !is_hex_color(&raw) {
+                return Err(invalid_value(path, "应为 #rrggbb 颜色或空串"));
+            }
+            settings.ledger.accent = raw;
+        }
+        "ledger.backgroundColor" => {
+            settings.ledger.background_color = expect_color(path, &value)?;
+        }
+        "ledger.backgroundImage" => {
+            settings.ledger.background_image = expect_string(path, &value)?.trim().to_string();
+        }
+        "ledger.backgroundOpacity" => {
+            let raw = value
+                .as_f64()
+                .ok_or_else(|| invalid_value(path, "应为 0-1 的数字"))?;
+            settings.ledger.background_opacity = raw.clamp(0.0, 1.0);
+        }
         _ => return Err(unknown_field(path)),
     }
     outcome.value = get_typed(settings, path)?;
@@ -1091,6 +1157,17 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         }
         "diary.backgroundOpacity" => {
             target.diary.background_opacity = defaults.diary.background_opacity
+        }
+        "ledger.view" => target.ledger.view = defaults.ledger.view,
+        "ledger.accent" => target.ledger.accent = defaults.ledger.accent.clone(),
+        "ledger.backgroundColor" => {
+            target.ledger.background_color = defaults.ledger.background_color.clone()
+        }
+        "ledger.backgroundImage" => {
+            target.ledger.background_image = defaults.ledger.background_image.clone()
+        }
+        "ledger.backgroundOpacity" => {
+            target.ledger.background_opacity = defaults.ledger.background_opacity
         }
         _ => return Err(unknown_field(path)),
     }
