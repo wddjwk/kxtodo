@@ -90,6 +90,18 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         is_map: false,
     },
     FieldMeta {
+        path: "appearance.editorWidthPercent",
+        kind: "integer(30-100)",
+        description: "桌面编辑器宽度占窗口宽度的百分比",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "appearance.editorHeightPercent",
+        kind: "integer(30-100)",
+        description: "桌面编辑器高度占窗口高度的百分比",
+        is_map: false,
+    },
+    FieldMeta {
         path: "appearance.tagFontSize",
         kind: "integer(11-30)",
         description: "标签字号",
@@ -370,6 +382,8 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "appearance.uiFontSize" => json!(settings.appearance.ui_font_size),
         "appearance.markdownFontSize" => json!(settings.appearance.markdown_font_size),
         "appearance.editorFontSize" => json!(settings.appearance.editor_font_size),
+        "appearance.editorWidthPercent" => json!(settings.appearance.editor_width_percent),
+        "appearance.editorHeightPercent" => json!(settings.appearance.editor_height_percent),
         "appearance.tagFontSize" => json!(settings.appearance.tag_font_size),
         "appearance.themePresets" => json!(settings.appearance.theme_presets),
         "appearance.uiColors" => json!(settings.appearance.ui_colors),
@@ -681,6 +695,12 @@ pub fn set_value(
         "appearance.editorFontSize" => {
             settings.appearance.editor_font_size = expect_int(path, &value, 14, 26)? as u32;
         }
+        "appearance.editorWidthPercent" => {
+            settings.appearance.editor_width_percent = expect_int(path, &value, 30, 100)? as u32;
+        }
+        "appearance.editorHeightPercent" => {
+            settings.appearance.editor_height_percent = expect_int(path, &value, 30, 100)? as u32;
+        }
         "appearance.tagFontSize" => {
             settings.appearance.tag_font_size = expect_int(path, &value, 11, 30)? as u32;
         }
@@ -972,6 +992,12 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         }
         "appearance.editorFontSize" => {
             target.appearance.editor_font_size = defaults.appearance.editor_font_size
+        }
+        "appearance.editorWidthPercent" => {
+            target.appearance.editor_width_percent = defaults.appearance.editor_width_percent
+        }
+        "appearance.editorHeightPercent" => {
+            target.appearance.editor_height_percent = defaults.appearance.editor_height_percent
         }
         "appearance.tagFontSize" => {
             target.appearance.tag_font_size = defaults.appearance.tag_font_size

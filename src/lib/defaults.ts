@@ -83,6 +83,8 @@ export const defaultSettings: Settings = {
     uiFontSize: 18,
     markdownFontSize: 20,
     editorFontSize: 20,
+    editorWidthPercent: 72,
+    editorHeightPercent: 86,
     tagFontSize: 14,
     themePresets: themePresets.map((preset) => ({ ...preset })),
     uiColors: {}
@@ -702,6 +704,18 @@ export function normalizeSettings(raw: unknown): Settings {
       uiFontSize: normalizeFontSize(source?.appearance?.uiFontSize, defaultSettings.appearance.uiFontSize, 14, 22),
       markdownFontSize: normalizeFontSize(source?.appearance?.markdownFontSize, defaultSettings.appearance.markdownFontSize, 14, 26),
       editorFontSize: normalizeFontSize(source?.appearance?.editorFontSize, defaultSettings.appearance.editorFontSize, 14, 26),
+      editorWidthPercent: normalizeFontSize(
+        source?.appearance?.editorWidthPercent,
+        defaultSettings.appearance.editorWidthPercent,
+        30,
+        100
+      ),
+      editorHeightPercent: normalizeFontSize(
+        source?.appearance?.editorHeightPercent,
+        defaultSettings.appearance.editorHeightPercent,
+        30,
+        100
+      ),
       tagFontSize: normalizeFontSize(source?.appearance?.tagFontSize, defaultSettings.appearance.tagFontSize, 11, 30),
       themePresets: normalizeThemePresets(source?.appearance?.themePresets),
       uiColors: normalizeUiColors(source?.appearance?.uiColors)

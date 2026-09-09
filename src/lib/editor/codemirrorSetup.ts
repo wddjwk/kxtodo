@@ -130,3 +130,100 @@ export function insertAtCursor(view: EditorView, text: string): void {
   });
   view.focus();
 }
+
+/**
+ * 用前后标记包裹选区（加粗/斜体/高亮…）。无选区时插入占位文本并选中它；
+ * 选区外侧已经是同样的标记时拆掉（再点一次 = 取消）。光标/选区始终落在标记内部。
+ */
+export function wrapSelection(view: EditorView, before: string, after: string, placeholder: string): void {
+  const state = view.state;
+  const range = state.selection.main;
+  const selected = state.sliceDoc(range.from, range.to);
+  const wrapped =
+    range.from >= before.length &&
+    range.to + after.length <= state.doc.length &&
+    state.sliceDoc(range.from - before.length, range.from) === before &&
+    state.sliceDoc(range.to, range.to + after.length) === after;
+  if (wrapped && selected) {
+    view.dispatch({
+      changes: [
+        { from: range.from - before.length, to: range.from },
+        { from: range.to, to: range.to + after.length }
+      ],
+      selection: { anchor: range.from - before.length, head: range.to - before.length },
+      scrollIntoView: true
+    });
+    view.focus();
+    return;
+  }
+  const inner = selected || placeholder;
+  view.dispatch({
+    changes: { from: range.from, to: range.to, insert: before + inner + after },
+    selection: { anchor: range.from + before.length, head: range.from + before.length + inner.length },
+    scrollIntoView: true
+  });
+  view.focus();
+}
+
+/** 标题级别：已是该级别则取消，是别的级别则换掉，没有则加上（逐行处理选区）。 */
+export function setHeading(view: EditorView, level: number): void {
+  const state = view.state;
+  const range = state.selection.main;
+  const prefix = "#".repeat(level) + " ";
+  const changes: Array<{ from: number; to: number; insert: string }> = [];
+  for (let n = state.doc.lineAt(range.from).number; n <= state.doc.lineAt(range.to).number; n++) {
+    const line = state.doc.line(n);
+    const match = /^#{1,6}\s/.exec(line.text);
+    if (match && match[0] === prefix) changes.push({ from: line.from, to: line.from + match[0].length, insert: "" });
+    else if (match) changes.push({ from: line.from, to: line.from + match[0].length, insert: prefix });
+    else changes.push({ from: line.from, to: line.from, insert: prefix });
+  }
+  view.dispatch({ changes, scrollIntoView: true });
+  view.focus();
+}
+
+/** 整行前缀开关（checkbox / 无序 / 有序列表）。ordered 按选区内行序递增编号。 */
+export function toggleLinePrefix(view: EditorView, prefix: string, ordered = false): void {
+  const state = view.state;
+  const range = state.selection.main;
+  const has = (text: string): boolean => (ordered ? /^\s*\d+[.)]\s/.test(text) : text.startsWith(prefix));
+  const strip = (text: string): string => {
+    const match = ordered ? /^\s*\d+[.)]\s/.exec(text) : text.startsWith(prefix) ? [prefix] : null;
+    return match ? match[0] : "";
+  };
+  const lines: Array<{ from: number; text: string }> = [];
+  for (let n = state.doc.lineAt(range.from).number; n <= state.doc.lineAt(range.to).number; n++) {
+    const line = state.doc.line(n);
+    lines.push({ from: line.from, text: line.text });
+  }
+  const allHave = lines.every((line) => has(line.text));
+  const changes: Array<{ from: number; to: number; insert: string }> = [];
+  lines.forEach((line, index) => {
+    const next = ordered ? index + 1 + ". " : prefix;
+    const existing = strip(line.text);
+    if (allHave) {
+      changes.push({ from: line.from, to: line.from + existing.length, insert: "" });
+    } else if (existing) {
+      changes.push({ from: line.from, to: line.from + existing.length, insert: next });
+    } else {
+      changes.push({ from: line.from, to: line.from, insert: next });
+    }
+  });
+  view.dispatch({ changes, scrollIntoView: true });
+  view.focus();
+}
+
+/** 超链接：`[选区](url)`，选区落在 url 上方便直接输入地址。 */
+export function insertLink(view: EditorView): void {
+  const state = view.state;
+  const range = state.selection.main;
+  const label = state.sliceDoc(range.from, range.to) || "链接文字";
+  const insert = "[" + label + "](url)";
+  const urlFrom = range.from + label.length + 3;
+  view.dispatch({
+    changes: { from: range.from, to: range.to, insert },
+    selection: { anchor: urlFrom, head: urlFrom + 3 },
+    scrollIntoView: true
+  });
+  view.focus();
+}

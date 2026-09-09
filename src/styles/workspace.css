@@ -1785,13 +1785,18 @@ h1 {
   color: white;
   cursor: pointer;
   opacity: 0;
+  /* 隐藏态不许接点击：它缩在标签右上角，触屏第一下往往就落在它上面，
+     表现成「点一下标签直接删除」。露出（hover / reveal-delete）后才可点。 */
+  pointer-events: none;
   z-index: 10;
   transition: opacity 0.12s;
   line-height: 0;
 }
 
-.task-tag:hover .tag-delete {
+.task-tag:hover .tag-delete,
+.reveal-delete .tag-delete {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .task-tag .tag-delete:hover {
@@ -1929,7 +1934,9 @@ h1 {
   padding: 0;
   border: 0;
   border-radius: 6px;
-  background: var(--accent);
+  /* 必须有回退色：任务编辑器浮层没有 --accent（日记编辑器才内联），裸 var 会失效成
+     透明底，白图标落在白浮层上就是「加号按钮渲染丢了但功能还在」 */
+  background: var(--accent, #2564cf);
   color: white;
   cursor: pointer;
   line-height: 0;
@@ -2010,13 +2017,16 @@ h1 {
   color: white;
   cursor: pointer;
   opacity: 0;
+  pointer-events: none;
   transition: opacity 0.12s;
   line-height: 0;
   padding: 0;
 }
 
-.task-emoji-badge:hover .tag-delete {
+.task-emoji-badge:hover .tag-delete,
+.reveal-delete .tag-delete {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .task-emoji-badge .tag-delete:hover {

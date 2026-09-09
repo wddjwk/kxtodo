@@ -40,6 +40,7 @@ import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import katex from "katex";
 import { marked, type Tokens, type TokenizerAndRendererExtension } from "marked";
+import { nameToEmoji } from "gemoji";
 import { ADMONITION_ICONS, ADMONITION_ICON_BY_TYPE } from "./admonitionIcons";
 
 marked.use({
@@ -203,15 +204,30 @@ const MATH_TOKEN = (kind: "b" | "i", index: number): string => `@@KXMath${kind}$
 function extractMath(markdown: string): { text: string; blocks: string[]; inlines: string[] } {
   const blocks: string[] = [];
   const inlines: string[] = [];
-  // 块级 $$...$$（可跨行）
+  // 块级 $$...$$ / \[...\]（可跨行）
   let text = markdown.replace(/\$\$([\s\S]+?)\$\$/g, (_m, body: string) => {
     blocks.push(body.trim());
     return MATH_TOKEN("b", blocks.length - 1);
   });
-  // 内联 $...$：两边不贴空白、内部不含换行，避免吃掉「$100 到 $200」这类普通文字
-  text = text.replace(/\$([^$\n]+?)\$/g, (m, body: string) => {
-    if (body.trim().length === 0 || /^\s|\s$/.test(body)) return m;
-    inlines.push(body.trim());
+  text = text.replace(/\\\[([\s\S]+?)\\\]/g, (_m, body: string) => {
+    blocks.push(body.trim());
+    return MATH_TOKEN("b", blocks.length - 1);
+  });
+  // 内联 $...$：货币写法（`$5 和 $10`）只有一侧贴空白，LaTeX 习惯（`$ x^2 $`）两侧都贴，
+  // 所以「两侧空白状态不一致」才拒；`\$` 是转义的美元符号，闭合 `$` 后紧跟数字也是金额。
+  text = text.replace(/\\?\$([^$\n]+?)\$(?!\d)/g, (m, body: string) => {
+    if (m.startsWith("\\")) return m;
+    const trimmed = body.trim();
+    if (trimmed.length === 0) return m;
+    if (/^\s/.test(body) !== /\s$/.test(body)) return m;
+    inlines.push(trimmed);
+    return MATH_TOKEN("i", inlines.length - 1);
+  });
+  // 内联 \(...\)（不跨行）
+  text = text.replace(/\\\(([^()\n]+?)\\\)/g, (_m, body: string) => {
+    const trimmed = body.trim();
+    if (trimmed.length === 0) return _m;
+    inlines.push(trimmed);
     return MATH_TOKEN("i", inlines.length - 1);
   });
   return { text, blocks, inlines };
@@ -220,7 +236,9 @@ function extractMath(markdown: string): { text: string; blocks: string[]; inline
 function renderMathToken(src: string, displayMode: boolean): string {
   try {
     const html = katex.renderToString(src, { displayMode, throwOnError: false, strict: false });
-    return displayMode ? `<div class="kx-math-block">${html}</div>` : html;
+    // 块级也用 span：$$..$$ 写在段落中间时 div 会把 <p> 提前截断（restoreMath 在
+    // sanitize 之后回填，DOMPurify 管不到这里的标签合法性）
+    return displayMode ? `<span class="kx-math-block">${html}</span>` : html;
   } catch {
     return escapeHtml(src);
   }
@@ -285,8 +303,13 @@ function highlightCodeBlocks(html: string): string {
   return template.innerHTML;
 }
 
-const DIAGRAM_LANGS = ["mermaid", "markmap"];
+const DIAGRAM_LANGS = ["mermaid", "markmap", "mindmap"];
 const CODE_COLLAPSE_LINES = 18;
+
+/** markmap / mindmap 两种围栏都渲染成 markmap 脑图（mermaid 自带的 mindmap 类型让位）。 */
+export function isMarkmapLang(lang: string): boolean {
+  return lang === "markmap" || lang === "mindmap";
+}
 
 /**
  * diagram 源码进 data-source 前必须 base64：DOMPurify 会剥掉值里含 `-->` 的属性
@@ -304,11 +327,13 @@ export function decodeDiagramSource(encoded: string): string {
   }
 }
 
-/** ```mermaid / ```markmap 代码块 → 图框（源码进 data-source，异步渲染见 markdownControls）。 */
+/** ```mermaid / ```markmap / ```mindmap 代码块 → 图框（源码进 data-source，异步渲染见 markdownControls）。 */
 function transformDiagrams(html: string): string {
-  return html.replace(
-    /<pre><code class="language-(mermaid|markmap)[^"]*">([\s\S]*?)<\/code><\/pre>/g,
-    (_m, lang: string, escaped: string) => {
+  const pattern = new RegExp(
+    `<pre><code class="language-(${DIAGRAM_LANGS.join("|")})[^"]*">([\\s\\S]*?)</code></pre>`,
+    "g"
+  );
+  return html.replace(pattern, (_m, lang: string, escaped: string) => {
       const source = unescapeHtml(escaped).replace(/\n$/, "");
       const encoded = encodeDiagramSource(source);
       return (
@@ -334,7 +359,7 @@ function transformDiagrams(html: string): string {
 /** 其余代码块加语言条 + 复制 + 折叠（超过阈值默认折起）。 */
 function transformCodeBlocks(html: string): string {
   return html.replace(/<pre><code class="([^"]*)">([\s\S]*?)<\/code><\/pre>/g, (m, classes: string, body: string) => {
-    if (classes.includes("language-mermaid") || classes.includes("language-markmap")) return m;
+    if (DIAGRAM_LANGS.some((lang) => classes.includes("language-" + lang))) return m;
     const language = classes
       .split(/\s+/)
       .find((className) => className.startsWith("language-"))
@@ -364,13 +389,22 @@ function applyHighlights(markdown: string): string {
   return markdown.replace(/==([^=\n][\s\S]*?[^=\n])==/g, "<mark>$1</mark>");
 }
 
+/** `:smile:` → 😄。只认真表里的短码（gemoji 本地数据，不联网），其余原样保留，
+ *  免得吃掉 `12:30:45`、路径里的 `:x:` 这类普通文字。代码与公式此时已被摘走，不会误伤。 */
+function replaceEmojiShortcodes(text: string): string {
+  return text.replace(/:([a-zA-Z0-9_+\-]+):/g, (match, name: string) => {
+    return (nameToEmoji as Record<string, string>)[name.toLowerCase()] ?? match;
+  });
+}
+
 /** 完整渲染：front-matter / callout / 公式 / 代码折叠 / 图框占位。 */
 export function renderMarkdown(markdown: string): string {
   const normalized = markdown.trim().length > 0 ? markdown : "添加任务";
   const { fields, rest } = splitFrontMatter(normalized);
   const protectedCode = protectCode(rest);
   const math = extractMath(protectedCode.text);
-  const withCodeBack = restoreCode(math.text, protectedCode.pieces);
+  const withEmoji = replaceEmojiShortcodes(math.text);
+  const withCodeBack = restoreCode(withEmoji, protectedCode.pieces);
   const raw = marked.parse(applyHighlights(withCodeBack), { async: false }) as string;
   const diagrammed = transformDiagrams(raw);
   const highlighted = highlightCodeBlocks(diagrammed);
@@ -382,7 +416,8 @@ export function renderMarkdown(markdown: string): string {
 export function renderInlineMarkdown(markdown: string): string {
   const protectedCode = protectCode(markdown || "未命名任务");
   const math = extractMath(protectedCode.text);
-  const withCodeBack = restoreCode(math.text, protectedCode.pieces);
+  const withEmoji = replaceEmojiShortcodes(math.text);
+  const withCodeBack = restoreCode(withEmoji, protectedCode.pieces);
   const raw = marked.parseInline(applyHighlights(withCodeBack)) as string;
   const clean = DOMPurify.sanitize(raw, SANITIZE_OPTIONS);
   return restoreMath(clean, math.blocks, math.inlines);

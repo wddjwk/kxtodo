@@ -95,6 +95,8 @@ button,
   display: none;
 }
 
-.collapsed {
+/* 折叠箭头的旋转。必须限定 svg：`collapsed` 是全局类名，代码块折叠态
+   （.code-collapsible.collapsed）也叫这个，不限定的话整块代码会被转 90°「竖起来」。 */
+svg.collapsed {
   transform: rotate(-90deg);
 }

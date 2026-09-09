@@ -14,12 +14,13 @@
   import { clampPopoverToViewport } from "../popover";
   import { addDiaryEntry, updateDiaryEntry, type DiaryChanges } from "../actions";
   import DatePicker from "../DatePicker.svelte";
+  import MarkdownToolbar from "../editor/MarkdownToolbar.svelte";
   import {
     DIARY_IMAGE_NODE, MOOD_PRESETS, WEATHER_PRESETS,
     fullDayLabel, relativeDayLabel, todayDate
   } from "../diary";
   import type { DiaryEditorTarget, Tag, TagColor } from "../types";
-  import { touchOnly } from "../platform";
+  import { isMobile, touchOnly } from "../platform";
 
   export let target: DiaryEditorTarget;
   export let onClose: () => void = () => {};
@@ -59,10 +60,31 @@
   let tagColor: TagColor = "yellow";
   /** 触屏上被点了一下、露出删除叉的标签（桌面靠 hover，不用它） */
   let revealedTagId = "";
+  let editingTagId = "";
+  let editingTagText = "";
+  let tagEditEl: HTMLInputElement;
 
-  function toggleTagReveal(tagId: string): void {
-    if (!touchOnly) return;
-    revealedTagId = revealedTagId === tagId ? "" : tagId;
+  /**
+   * 标签点按：触屏第一下只露出删除叉，第二下点文字进内联编辑；桌面 hover 已露叉，
+   * 点文字直接编辑。红叉隐藏态不可点（CSS pointer-events），不会再「点一下就没」。
+   */
+  function handleTagTap(tagId: string, currentText: string): void {
+    if (touchOnly && revealedTagId !== tagId) {
+      revealedTagId = tagId;
+      return;
+    }
+    revealedTagId = "";
+    editingTagId = tagId;
+    editingTagText = currentText;
+    void Promise.resolve().then(() => tagEditEl?.focus());
+  }
+
+  function commitTagEdit(): void {
+    if (!editingTagId) return;
+    const id = editingTagId;
+    const text = editingTagText.trim();
+    tags = tags.map((tag) => (tag.id === id ? { ...tag, text: text || undefined } : tag));
+    editingTagId = "";
   }
 
   // 预览惰性渲染：编辑态不做全量 markdown + 高亮（长文档逐键全量渲染会卡死主线程）
@@ -72,6 +94,10 @@
   }
   $: today = todayDate();
   $: dateLabel = date === today ? `今天 · ${fullDayLabel(date)}` : relativeDayLabel(date, today);
+  // 桌面编辑器尺寸按窗口比例（设置项）；移动端固定铺满不给内联值
+  $: editorSizeStyle = $isMobile
+    ? ""
+    : `width: ${$appSettings.appearance.editorWidthPercent}%; height: ${$appSettings.appearance.editorHeightPercent}%;`;
 
   onMount(() => {
     // 捕获阶段：对话框对 pointerdown/click 做了 stopPropagation，冒泡阶段收不到里面的交互
@@ -298,7 +324,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="editor-overlay" on:pointerdown={handleBackdropPointerDown} on:contextmenu|preventDefault|stopPropagation>
   <!-- --accent 内联：编辑器浮层挂在 App 层，拿不到 .diary-view 的主题色，跟着用户选的日记色走 -->
-  <div class="editor-dialog diary-editor" style={`--accent: ${diaryAccent($appSettings.diary)}`} role="dialog" aria-label="编辑日记" tabindex="-1" on:pointerdown|stopPropagation on:click|stopPropagation>
+  <div class="editor-dialog diary-editor" style={`--accent: ${diaryAccent($appSettings.diary)}; ${editorSizeStyle}`} role="dialog" aria-label="编辑日记" tabindex="-1" on:pointerdown|stopPropagation on:click|stopPropagation>
     <header class="editor-header">
       <div class="editor-mode-switch" role="tablist">
         <button type="button" role="tab" class:active={mode === "edit"} aria-selected={mode === "edit"} on:click={() => toggleMode("edit")}>
@@ -370,16 +396,28 @@
 
       <div class="editor-meta-field editor-meta-tags" class:open={openPicker === "tag"}>
         {#each tags as tag (tag.id)}
-          <span
-            class={`task-tag tag-${tag.color}`}
-            class:reveal-delete={revealedTagId === tag.id}
-            on:click|stopPropagation={() => toggleTagReveal(tag.id)}
-          >
-            {tag.text || ""}
-            <button class="tag-delete" type="button" aria-label="删除标签" on:click|stopPropagation={() => removeTag(tag.id)}>
-              <X size={10} strokeWidth={3} />
-            </button>
-          </span>
+          {#if editingTagId === tag.id}
+            <input
+              bind:this={tagEditEl}
+              bind:value={editingTagText}
+              class="tag-edit-input"
+              maxlength="20"
+              on:blur={commitTagEdit}
+              on:click|stopPropagation
+              on:keydown|stopPropagation={(e) => { if (e.key === "Enter") commitTagEdit(); }}
+            />
+          {:else}
+            <span
+              class={`task-tag tag-${tag.color}`}
+              class:reveal-delete={revealedTagId === tag.id}
+              on:click|stopPropagation={() => handleTagTap(tag.id, tag.text || "")}
+            >
+              {tag.text || ""}
+              <button class="tag-delete" type="button" aria-label="删除标签" on:click|stopPropagation={() => removeTag(tag.id)}>
+                <X size={10} strokeWidth={3} />
+              </button>
+            </span>
+          {/if}
         {/each}
         <button class="editor-meta-trigger editor-tag-add" type="button" title="标签" on:click={() => togglePicker("tag")}>
           <TagIcon size={14} />{tags.length ? "" : "标签"}
@@ -432,6 +470,10 @@
         </div>
       {/if}
     </div>
+
+    {#if $isMobile && mode === "edit"}
+      <MarkdownToolbar view={view} onImage={() => void insertImageFile()} />
+    {/if}
 
     <input bind:this={imageFileInput} class="hidden-file" type="file" accept="image/*" on:change={insertImageFromInput} />
   </div>

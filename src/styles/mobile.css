@@ -351,6 +351,18 @@
   padding-top: calc(env(safe-area-inset-top, 0px) * var(--safe-inv, 1));
 }
 
+/* 全屏图预览的工具栏同样要避状态栏。全屏浮层是 JS 建出来挂进 .app-shell 的
+   （markdownControls 的 ensureOverlay），所以拿得到 --safe-inv；这条规则漏了的表现
+   是工具栏整条钻到状态栏底下（v0.6.8 的链接预览、v0.6.9 的全屏预览各踩过一次）。 */
+.app-shell.mobile .md-fullscreen-bar {
+  padding: calc(8px + env(safe-area-inset-top, 0px) * var(--safe-inv, 1)) 14px 8px;
+}
+
+.app-shell.mobile .md-fullscreen-close {
+  padding: 8px 14px;
+  font-size: 13px;
+}
+
 /* Insert image button on mobile */
 .app-shell.mobile .insert-image-button {
   display: grid;

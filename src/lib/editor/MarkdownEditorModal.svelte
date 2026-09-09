@@ -17,7 +17,8 @@
   } from "../actions";
   import DatePicker from "../DatePicker.svelte";
   import IconPicker from "../IconPicker.svelte";
-  import { touchOnly } from "../platform";
+  import MarkdownToolbar from "./MarkdownToolbar.svelte";
+  import { isMobile, touchOnly } from "../platform";
   import { clampPopoverToViewport } from "../popover";
   import { uiScaleValue } from "../styles";
   import type { Tag, TagColor } from "../types";
@@ -69,11 +70,32 @@
   /** 触屏上点了一下、露出删除叉的标签/表情（桌面靠 hover，不用它） */
   let revealedTagId = "";
   let revealedEmojiIndex = -1;
+  let editingTagId = "";
+  let editingTagText = "";
+  let tagEditEl: HTMLInputElement;
 
-  function toggleTagReveal(tagId: string): void {
-    if (!touchOnly) return;
-    revealedTagId = revealedTagId === tagId ? "" : tagId;
-    revealedEmojiIndex = -1;
+  /**
+   * 标签点按：触屏第一下只露出删除叉，第二下点文字进内联编辑；桌面 hover 已露叉，
+   * 点文字直接编辑。红叉隐藏态不可点（CSS pointer-events），不会再「点一下就没」。
+   */
+  function handleTagTap(tagId: string, currentText: string): void {
+    if (touchOnly && revealedTagId !== tagId) {
+      revealedTagId = tagId;
+      revealedEmojiIndex = -1;
+      return;
+    }
+    revealedTagId = "";
+    editingTagId = tagId;
+    editingTagText = currentText;
+    void Promise.resolve().then(() => tagEditEl?.focus());
+  }
+
+  function commitTagEdit(): void {
+    if (!editingTagId) return;
+    const id = editingTagId;
+    const text = editingTagText.trim();
+    tags = tags.map((tag) => (tag.id === id ? { ...tag, text: text || undefined } : tag));
+    editingTagId = "";
   }
 
   function toggleEmojiReveal(index: number): void {
@@ -92,6 +114,11 @@
       ? "今天"
       : `${Number.parseInt(dueDate.slice(5, 7), 10)}月${Number.parseInt(dueDate.slice(8, 10), 10)}日`
     : "";
+  // 桌面编辑器尺寸按窗口比例（设置项 appearance.editorWidthPercent/HeightPercent）：
+  // 百分比相对 app-shell，全屏/改窗口时比例不变、尺寸跟着变。移动端固定铺满，不给内联值。
+  $: editorSizeStyle = $isMobile
+    ? ""
+    : `width: ${$appSettings.appearance.editorWidthPercent}%; height: ${$appSettings.appearance.editorHeightPercent}%;`;
 
   onMount(() => {
     // 捕获阶段：对话框对 pointerdown/click 做了 stopPropagation，冒泡阶段收不到里面的交互
@@ -358,7 +385,7 @@
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="editor-overlay" on:pointerdown={handleBackdropPointerDown} on:contextmenu|preventDefault|stopPropagation>
-  <div class="editor-dialog" role="dialog" aria-label={draftMode ? "新建事项" : "编辑任务"} tabindex="-1" on:pointerdown|stopPropagation on:click|stopPropagation>
+  <div class="editor-dialog" style={editorSizeStyle} role="dialog" aria-label={draftMode ? "新建事项" : "编辑任务"} tabindex="-1" on:pointerdown|stopPropagation on:click|stopPropagation>
     <header class="editor-header">
       <div class="editor-mode-switch" role="tablist">
         <button
@@ -422,16 +449,28 @@
           </span>
         {/each}
         {#each tags as tag (tag.id)}
-          <span
-            class={`task-tag tag-${tag.color}`}
-            class:reveal-delete={revealedTagId === tag.id}
-            on:click|stopPropagation={() => toggleTagReveal(tag.id)}
-          >
-            {tag.text || ""}
-            <button class="tag-delete" type="button" aria-label="删除标签" on:click|stopPropagation={() => removeTag(tag.id)}>
-              <X size={10} strokeWidth={3} />
-            </button>
-          </span>
+          {#if editingTagId === tag.id}
+            <input
+              bind:this={tagEditEl}
+              bind:value={editingTagText}
+              class="tag-edit-input"
+              maxlength="20"
+              on:blur={commitTagEdit}
+              on:click|stopPropagation
+              on:keydown|stopPropagation={(e) => { if (e.key === "Enter") commitTagEdit(); }}
+            />
+          {:else}
+            <span
+              class={`task-tag tag-${tag.color}`}
+              class:reveal-delete={revealedTagId === tag.id}
+              on:click|stopPropagation={() => handleTagTap(tag.id, tag.text || "")}
+            >
+              {tag.text || ""}
+              <button class="tag-delete" type="button" aria-label="删除标签" on:click|stopPropagation={() => removeTag(tag.id)}>
+                <X size={10} strokeWidth={3} />
+              </button>
+            </span>
+          {/if}
         {/each}
         <button class="editor-meta-trigger" type="button" title="添加表情" on:click={() => { emojiPickerOpen = true; metaOpen = ""; }}>
           <SmilePlus size={15} />
@@ -479,6 +518,10 @@
         </div>
       {/if}
     </div>
+
+    {#if $isMobile && mode === "edit"}
+      <MarkdownToolbar view={view} onImage={() => void insertImageFile()} />
+    {/if}
 
     <input bind:this={imageFileInput} class="hidden-file" type="file" accept="image/*" on:change={insertImageFromInput} />
   </div>

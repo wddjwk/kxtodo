@@ -1,11 +1,12 @@
-//! markdown 渲染结果的交互接线：mermaid/markmap 异步填图、图的缩放/平移/全屏、
+//! markdown 渲染结果的交互接线：mermaid/markmap 异步填图、图的缩放/平移/捏合/全屏、
 //! 代码块复制与折叠。组件只要在自己渲染 markdown 的容器上 `use:markdownWire`。
 //!
 //! 全部本地渲染：mermaid / markmap 走动态 import（只在真的出现对应代码块时才加载 chunk），
 //! 不请求任何 CDN。
 
 import type { Mermaid } from "mermaid";
-import { decodeDiagramSource } from "./markdown";
+import { decodeDiagramSource, isMarkmapLang } from "./markdown";
+import { addBackInterceptor } from "./platform";
 
 const diagramCache = new Map<string, string>();
 let diagramSeq = 0;
@@ -25,7 +26,7 @@ function mermaidInstance(): Promise<Mermaid> {
 async function renderMermaid(source: string): Promise<string> {
   const mermaid = await mermaidInstance();
   diagramSeq += 1;
-  const { svg } = await mermaid.render(`kx-diagram-${diagramSeq}`, source);
+  const { svg } = await mermaid.render("kx-diagram-" + diagramSeq, source);
   return svg;
 }
 
@@ -35,6 +36,8 @@ async function renderMarkmap(canvas: HTMLElement, source: string): Promise<void>
   canvas.innerHTML = '<svg class="markmap-svg"></svg>';
   const svg = canvas.querySelector("svg");
   if (!(svg instanceof SVGSVGElement)) return;
+  // Markmap.create 把 d3 的缩放/平移/捏合挂在 svg 上——全屏不能克隆 DOM
+  // （cloneNode 不带事件监听，克隆出来的脑图既拖不动也缩不了），必须拿源码重建 view。
   const view = Markmap.create(svg, { duration: 0, maxWidth: 240 }, root);
   view.fit();
 }
@@ -45,11 +48,11 @@ async function fillDiagram(canvas: HTMLElement): Promise<void> {
   if (canvas.dataset.rendered === "1") return;
   canvas.dataset.rendered = "1";
   try {
-    if (lang === "markmap") {
+    if (isMarkmapLang(lang)) {
       await renderMarkmap(canvas, source);
       return;
     }
-    const key = `${lang}\u0001${source}`;
+    const key = lang + "::" + source;
     let html = diagramCache.get(key);
     if (html === undefined) {
       html = await renderMermaid(source);
@@ -62,7 +65,7 @@ async function fillDiagram(canvas: HTMLElement): Promise<void> {
     canvas.textContent = "";
     const box = document.createElement("div");
     box.className = "diagram-error";
-    box.textContent = `图渲染失败：${String(error)}`;
+    box.textContent = "图渲染失败：" + String(error);
     canvas.appendChild(box);
   }
 }
@@ -74,7 +77,7 @@ export function renderDiagramsIn(container: HTMLElement): void {
 }
 
 // ---------------------------------------------------------------------------
-// 缩放 / 平移 / 全屏
+// 缩放 / 平移 / 捏合
 // ---------------------------------------------------------------------------
 
 interface ViewState {
@@ -98,20 +101,34 @@ function applyView(canvas: HTMLElement): void {
   const target = canvas.firstElementChild;
   if (!(target instanceof HTMLElement) && !(target instanceof SVGElement)) return;
   const state = viewState(canvas);
-  (target as HTMLElement).style.transform = `translate(${state.tx}px, ${state.ty}px) scale(${state.scale})`;
+  (target as HTMLElement).style.transform =
+    "translate(" + state.tx + "px, " + state.ty + "px) scale(" + state.scale + ")";
   (target as HTMLElement).style.transformOrigin = "center center";
 }
 
-function zoom(canvas: HTMLElement, factor: number): void {
+function setScale(canvas: HTMLElement, scale: number): void {
   const state = viewState(canvas);
-  state.scale = Math.min(5, Math.max(0.25, state.scale * factor));
+  state.scale = Math.min(5, Math.max(0.25, scale));
   applyView(canvas);
+}
+
+function zoom(canvas: HTMLElement, factor: number): void {
+  setScale(canvas, viewState(canvas).scale * factor);
 }
 
 function resetView(canvas: HTMLElement): void {
   viewStates.set(canvas, { scale: 1, tx: 0, ty: 0 });
   applyView(canvas);
 }
+
+/** 拖拽/捏合期间禁止选中文本：指针在图上滑动时浏览器会顺手框选周围的字。 */
+function setDragging(on: boolean): void {
+  document.body.classList.toggle("kx-dragging", on);
+}
+
+// ---------------------------------------------------------------------------
+// 全屏查看
+// ---------------------------------------------------------------------------
 
 let overlay: HTMLDivElement | null = null;
 
@@ -122,7 +139,7 @@ function ensureOverlay(): HTMLDivElement {
   const bar = document.createElement("div");
   bar.className = "md-fullscreen-bar";
   const hint = document.createElement("span");
-  hint.textContent = "滚轮缩放 · 拖拽平移 · 双击或 Esc 退出";
+  hint.textContent = "滚轮或捏合缩放 · 拖拽平移 · Esc 退出";
   const close = document.createElement("button");
   close.type = "button";
   close.className = "md-fullscreen-close";
@@ -132,18 +149,32 @@ function ensureOverlay(): HTMLDivElement {
   const stage = document.createElement("div");
   stage.className = "md-fullscreen-stage";
   overlay.append(bar, stage);
-  overlay.addEventListener("dblclick", (event) => {
-    if (event.target === overlay || event.target === stage) closeFullscreen();
-  });
+  // 挂进 app-shell（而不是 body）：移动端的安全区变量 --safe-inv 定义在它上面，
+  // 工具栏才能避让状态栏；app-shell 不在（SSR/测试）才退回 body。
+  const shell = document.querySelector(".app-shell");
+  (shell ?? document.body).appendChild(overlay);
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && overlay?.classList.contains("active")) closeFullscreen();
+    if (event.key !== "Escape" || !overlay?.classList.contains("active")) return;
+    // 这记 Esc 只属于全屏：不拦的话编辑器的 window keydown 会接着把编辑器也关掉
+    event.preventDefault();
+    event.stopPropagation();
+    closeFullscreen();
   });
-  document.body.appendChild(overlay);
+  // 移动端返回键/返回手势：全屏开着时先收全屏，不把它漏给历史栈（漏了会连编辑器一起弹掉，
+  // 全屏罩子却还留在原地，界面看起来就是「卡住」）。
+  addBackInterceptor(() => {
+    if (overlay?.classList.contains("active")) {
+      closeFullscreen();
+      return true;
+    }
+    return false;
+  });
   return overlay;
 }
 
 function closeFullscreen(): void {
   overlay?.classList.remove("active");
+  setDragging(false);
 }
 
 function openFullscreen(canvas: HTMLElement): void {
@@ -151,10 +182,21 @@ function openFullscreen(canvas: HTMLElement): void {
   const stage = box.querySelector(".md-fullscreen-stage");
   if (!stage) return;
   stage.innerHTML = "";
-  const clone = canvas.cloneNode(true) as HTMLElement;
-  clone.removeAttribute("data-rendered");
-  clone.dataset.rendered = "1";
-  stage.appendChild(clone);
+  const lang = canvas.dataset.diagram ?? "";
+  if (isMarkmapLang(lang)) {
+    // markmap 的交互是 d3 挂在 svg 上的监听，克隆 DOM 不带监听——全屏里拿源码重建
+    const fresh = document.createElement("div");
+    fresh.className = "diagram-canvas";
+    fresh.dataset.diagram = lang;
+    fresh.dataset.source = canvas.dataset.source ?? "";
+    stage.appendChild(fresh);
+    void fillDiagram(fresh);
+  } else {
+    const clone = canvas.cloneNode(true) as HTMLElement;
+    clone.removeAttribute("data-rendered");
+    clone.dataset.rendered = "1";
+    stage.appendChild(clone);
+  }
   box.classList.add("active");
   wireInteractions(box);
 }
@@ -164,6 +206,20 @@ function openFullscreen(canvas: HTMLElement): void {
 // ---------------------------------------------------------------------------
 
 const panSessions = new WeakMap<HTMLElement, { x: number; y: number }>();
+const touchPoints = new WeakMap<HTMLElement, Map<number, { x: number; y: number }>>;
+const pinchSessions = new WeakMap<
+  HTMLElement,
+  { dist: number; cx: number; cy: number; scale: number; tx: number; ty: number }
+>();
+
+function pointMap(canvas: HTMLElement): Map<number, { x: number; y: number }> {
+  let map = touchPoints.get(canvas);
+  if (!map) {
+    map = new Map();
+    touchPoints.set(canvas, map);
+  }
+  return map;
+}
 
 function canvasOf(target: EventTarget | null): HTMLElement | null {
   if (!(target instanceof Element)) return null;
@@ -238,24 +294,77 @@ async function copyText(text: string): Promise<boolean> {
 function handleWheel(event: WheelEvent, root: HTMLElement): void {
   const canvas = canvasOf(event.target);
   if (!canvas || !root.contains(canvas)) return;
-  if (canvas.dataset.diagram === "markmap") return; // markmap 自带缩放
+  if (isMarkmapLang(canvas.dataset.diagram ?? "")) return; // markmap 自带缩放
   event.preventDefault();
   event.stopPropagation();
   zoom(canvas, Math.exp(-event.deltaY * 0.0012));
 }
 
 function handlePointerDown(event: PointerEvent, root: HTMLElement): void {
-  const canvas = canvasOf(event.target);
-  if (!canvas || !root.contains(canvas)) return;
-  if (canvas.dataset.diagram === "markmap") return;
-  if (event.button !== 0) return;
-  panSessions.set(canvas, { x: event.clientX, y: event.clientY });
+  const target = event.target;
+  // 拖图片（渲染出来的插图）时同样不许框选文本
+  const image = target instanceof Element ? target.closest("img") : null;
+  const canvas = canvasOf(target);
+  if (!canvas || !root.contains(canvas)) {
+    if (image && root.contains(image)) {
+      event.preventDefault();
+      setDragging(true);
+      const stop = (): void => {
+        setDragging(false);
+        window.removeEventListener("pointerup", stop);
+        window.removeEventListener("pointercancel", stop);
+      };
+      window.addEventListener("pointerup", stop);
+      window.addEventListener("pointercancel", stop);
+    }
+    return;
+  }
+  if (isMarkmapLang(canvas.dataset.diagram ?? "")) return; // markmap 自带拖拽/捏合
+  if (event.button !== 0 && event.pointerType === "mouse") return;
+  // 接管这次指针：阻止浏览器起文本选区 / 原生图片拖影
+  event.preventDefault();
+  setDragging(true);
+  const points = pointMap(canvas);
+  points.set(event.pointerId, { x: event.clientX, y: event.clientY });
   canvas.setPointerCapture?.(event.pointerId);
+  if (points.size === 2) {
+    const [a, b] = [...points.values()];
+    const state = viewState(canvas);
+    pinchSessions.set(canvas, {
+      dist: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+      cx: (a.x + b.x) / 2,
+      cy: (a.y + b.y) / 2,
+      scale: state.scale,
+      tx: state.tx,
+      ty: state.ty
+    });
+    panSessions.delete(canvas);
+    return;
+  }
+  panSessions.set(canvas, { x: event.clientX, y: event.clientY });
 }
 
 function handlePointerMove(event: PointerEvent, root: HTMLElement): void {
   const canvas = canvasOf(event.target);
   if (!canvas || !root.contains(canvas)) return;
+  const points = pointMap(canvas);
+  if (!points.has(event.pointerId)) return;
+  points.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  const pinch = pinchSessions.get(canvas);
+  if (pinch && points.size >= 2) {
+    // 移动端捏合：两指距离比 = 缩放比，质心位移 = 平移
+    const [a, b] = [...points.values()];
+    const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+    const cx = (a.x + b.x) / 2;
+    const cy = (a.y + b.y) / 2;
+    const state = viewState(canvas);
+    state.scale = Math.min(5, Math.max(0.25, pinch.scale * (dist / pinch.dist)));
+    state.tx = pinch.tx + (cx - pinch.cx);
+    state.ty = pinch.ty + (cy - pinch.cy);
+    applyView(canvas);
+    event.preventDefault();
+    return;
+  }
   const start = panSessions.get(canvas);
   if (!start) return;
   event.preventDefault();
@@ -269,7 +378,16 @@ function handlePointerMove(event: PointerEvent, root: HTMLElement): void {
 function handlePointerUp(event: PointerEvent, root: HTMLElement): void {
   const canvas = canvasOf(event.target);
   if (!canvas || !root.contains(canvas)) return;
-  panSessions.delete(canvas);
+  const points = pointMap(canvas);
+  points.delete(event.pointerId);
+  if (points.size < 2) pinchSessions.delete(canvas);
+  if (points.size === 0) {
+    panSessions.delete(canvas);
+    setDragging(false);
+  } else if (points.size === 1) {
+    const [left] = [...points.values()];
+    panSessions.set(canvas, { x: left.x, y: left.y });
+  }
 }
 
 const wired = new WeakSet<HTMLElement>();

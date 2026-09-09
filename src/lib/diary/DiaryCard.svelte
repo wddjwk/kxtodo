@@ -32,6 +32,10 @@
 
   let tapTimer: number | undefined;
   let lastTapAt = 0;
+  /** 折叠态摘要是否两行放不下（单行但特别长的正文）——是的话这张卡片也可以展开 */
+  let excerptOverflow = false;
+  /** 折叠态标题是否单行显示不全 */
+  let titleOverflow = false;
 
   // isMobile 是 store：当布尔直接用会永远为真，桌面端就会误走移动端手势
   $: mobile = $isMobileStore;
@@ -41,10 +45,18 @@
   $: excerptSource = explicitTitle ? entry.markdown : withoutFirstLine(entry.markdown);
   $: excerpt = diaryExcerpt(excerptSource, EXCERPT_LIMIT);
   $: images = diaryImageCount(entry.markdown);
+  // 与 todo 卡片同一条口径：多行/带图/摘要被截断/摘要两行放不下/标题显示不全，都算可展开。
+  // 「单行但特别长」靠量（excerptOverflow/titleOverflow），字符数阈值识别不了它。
   $: canExpand =
     Boolean(entry.markdown.trim()) &&
-    (excerpt.length >= EXCERPT_LIMIT || excerptSource.trim().split(/\r?\n/).filter((line) => line.trim()).length > 1 || images > 0);
-  $: isExpanded = Boolean(entry.expanded) && canExpand;
+    (excerpt.length >= EXCERPT_LIMIT ||
+      excerptSource.trim().split(/\r?\n/).filter((line) => line.trim()).length > 1 ||
+      images > 0 ||
+      excerptOverflow ||
+      titleOverflow);
+  // 展开态只认存储值：canExpand 是量出来的易失值（滚动条出现/消失、宽度变化都会翻转），
+  // 拿它门控渲染会出现「动了别的卡片这张自己展开/收起」（v0.6.8 在 todo 卡片修过同一病）。
+  $: isExpanded = entry.expanded === true;
   $: fullHtml = renderMarkdown(resolveMarkdownImages(entry.markdown, DIARY_IMAGE_NODE, $mdImageCache));
   $: dayNumber = entry.date.slice(8, 10);
   $: monthLabel = `${Number.parseInt(entry.date.slice(5, 7), 10)}月`;
@@ -57,8 +69,60 @@
     if (tapTimer !== undefined) window.clearTimeout(tapTimer);
   });
 
+  /** 标题是单行 nowrap + 省略号：比宽度就知道显示全不全。 */
+  function measureTitle(node: HTMLElement, text: string): { update: (next: string) => void; destroy: () => void } {
+    const check = (): void => {
+      titleOverflow = node.scrollWidth > node.clientWidth + 1;
+    };
+    check();
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => check()) : null;
+    observer?.observe(node);
+    window.addEventListener("resize", check);
+    let last = text;
+    return {
+      update(next: string): void {
+        if (next === last) return;
+        last = next;
+        check();
+      },
+      destroy(): void {
+        observer?.disconnect();
+        window.removeEventListener("resize", check);
+      }
+    };
+  }
+
+  /** 摘要固定夹两行：「单行但特别长」的正文要量**自然高度**才知道两行放不放得下，
+   *  量之前临时摘掉夹行（同步完成，中间不会重绘），量完恢复。 */
+  function measureExcerpt(node: HTMLElement, text: string): { update: (next: string) => void; destroy: () => void } {
+    const check = (): void => {
+      const lineHeight = parseFloat(getComputedStyle(node).lineHeight) || 0;
+      node.style.setProperty("-webkit-line-clamp", "unset");
+      const natural = node.scrollHeight;
+      node.style.setProperty("-webkit-line-clamp", "");
+      excerptOverflow = lineHeight > 0 && natural > lineHeight * 2 + 1;
+    };
+    check();
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => check()) : null;
+    observer?.observe(node);
+    window.addEventListener("resize", check);
+    let last = text;
+    return {
+      update(next: string): void {
+        if (next === last) return;
+        last = next;
+        check();
+      },
+      destroy(): void {
+        observer?.disconnect();
+        window.removeEventListener("resize", check);
+      }
+    };
+  }
+
   function toggleExpand(): void {
-    if (!canExpand) return;
+    // 量不出可展开内容但存储态是展开的（宽度又放得下了）也要能收起
+    if (!canExpand && !isExpanded) return;
     dispatch("expand", { id: entry.id, expanded: !isExpanded });
   }
 
@@ -100,7 +164,7 @@
 
   function handleDblClick(event: MouseEvent): void {
     // 移动端的双击语义在 handleMobileTap（进编辑器），这里再跑一遍会既开编辑器又改展开态
-    if (mobile || isInteractiveTarget(event) || !canExpand) return;
+    if (mobile || isInteractiveTarget(event)) return;
     event.preventDefault();
     window.getSelection()?.removeAllRanges();
     toggleExpand();
@@ -167,7 +231,7 @@
 
   <div class="diary-card-main">
     <header class="diary-card-head">
-      <h3 class="diary-card-title">{heading}</h3>
+      <h3 class="diary-card-title" use:measureTitle={heading}>{heading}</h3>
       <span class="diary-card-meta">
         {#if entry.mood}<span class="diary-meta-chip" title={moodText || "心情"}>{entry.mood}</span>{/if}
         {#if entry.weather}<span class="diary-meta-chip" title={weatherText || "天气"}>{entry.weather}</span>{/if}
@@ -181,7 +245,7 @@
         {@html fullHtml}
       </div>
     {:else if excerpt}
-      <p class="diary-card-excerpt">{excerpt}</p>
+      <p class="diary-card-excerpt" use:measureExcerpt={excerpt}>{excerpt}</p>
     {/if}
 
     {#if entry.tags.length}

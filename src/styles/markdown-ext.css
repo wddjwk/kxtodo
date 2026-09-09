@@ -323,7 +323,9 @@ pre.diagram-source {
 
 /* ---------- 数学公式 ---------- */
 
+/* 块级公式是 span（渲染管线刻意不用 div：写在段落中间时 div 会把 <p> 截断） */
 .kx-math-block {
+  display: block;
   margin: 10px 0;
   overflow-x: auto;
   text-align: center;
@@ -335,6 +337,34 @@ pre.diagram-source {
 
 .markdown-body .katex {
   font-size: 1.02em;
+}
+
+/* ---------- GFM 任务列表（- [ ] / - [x]）：只留 checkbox，不要列表圆点 ---------- */
+
+.markdown-body li:has(> input[type="checkbox"]) {
+  list-style: none;
+  margin-left: -1.4em;
+}
+
+.markdown-body li > input[type="checkbox"] {
+  width: 0.95em;
+  height: 0.95em;
+  margin: 0 0.5em 0 0;
+  vertical-align: -0.12em;
+  accent-color: var(--accent, #0969da);
+}
+
+/* ---------- 拖拽图/插图时禁止框选文本 ---------- */
+
+.markdown-body img {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body.kx-dragging,
+body.kx-dragging * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
 }
 
 /* ---------- 超链接图标（ksimple 同款：链接前一个小链环） ---------- */

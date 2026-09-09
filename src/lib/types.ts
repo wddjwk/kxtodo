@@ -99,6 +99,8 @@ export type Settings = {
     uiFontSize: number;
     markdownFontSize: number;
     editorFontSize: number;
+    editorWidthPercent: number;
+    editorHeightPercent: number;
     tagFontSize: number;
     themePresets: ThemePreset[];
     uiColors: Record<string, string>;

@@ -189,6 +189,21 @@ export function startMobileRouter(): void {
 }
 
 /**
+ * 返回键拦截器：覆盖层（全屏图预览这类不占历史栈的浮层）注册一个回调，
+ * 返回 true = 消费掉这记返回。后注册的先问（栈语义）。返回注销函数。
+ */
+type BackInterceptor = () => boolean;
+const backInterceptors: BackInterceptor[] = [];
+
+export function addBackInterceptor(interceptor: BackInterceptor): () => void {
+  backInterceptors.push(interceptor);
+  return () => {
+    const at = backInterceptors.indexOf(interceptor);
+    if (at >= 0) backInterceptors.splice(at, 1);
+  };
+}
+
+/**
  * 安卓硬件返回键的前端消费口。MainActivity 的 OnBackPressedCallback 会
  * evaluateJavascript 调它：返回 true = 这一记返回被覆盖层吃掉，不再 goBack/finish。
  * 桌面/浏览器没有这条回调链，注册了也无害。
@@ -197,6 +212,9 @@ function registerBackHandler(): void {
   const w = window as Window & { kxtodoBackHandler?: () => boolean };
   w.kxtodoBackHandler = () => {
     if (!get(isMobile)) return false;
+    for (let i = backInterceptors.length - 1; i >= 0; i--) {
+      if (backInterceptors[i]()) return true;
+    }
     if (get(searchQuery).trim()) {
       searchQuery.set("");
       return true;

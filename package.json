@@ -29,6 +29,7 @@
     "codemirror": "^6.0.2",
     "dompurify": "^3.2.4",
     "emoji-picker-element": "^1.29.1",
+    "gemoji": "^8.1.0",
     "github-markdown-css": "^5.9.0",
     "highlight.js": "^11.11.1",
     "katex": "^0.18.7",

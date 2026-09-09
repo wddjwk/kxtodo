@@ -4,7 +4,7 @@
   import { collapsedMarkdownLine, hasMultipleMarkdownLines, renderInlineMarkdown, renderMarkdown } from "./markdown";
   import { mdImageCache, resolveMarkdownImages } from "./images";
   import { appSettings } from "./stores";
-  import { isMobile as isMobileStore } from "./platform";
+  import { isMobile as isMobileStore, touchOnly } from "./platform";
   import { uiScaleValue } from "./styles";
   import { longpress, isLongPressSuppressed } from "./longpress";
   import { markdownWire } from "./markdownControls";
@@ -45,6 +45,9 @@
   let lastTapAt = 0;
   /** 折叠态标题是否显示不全（单行但很长）——是的话这张卡片也可以展开 */
   let titleOverflow = false;
+  /** 触屏上被点了一下、露出删除叉的标签/表情（桌面靠 hover，不用它） */
+  let revealedTagId = "";
+  let revealedEmojiIndex = -1;
   // isMobile 是 store：当布尔直接用会永远为真，桌面端就会误走移动端手势
   $: mobile = $isMobileStore;
 
@@ -247,6 +250,40 @@
     void Promise.resolve().then(() => tagEditEl?.focus());
   }
 
+  /**
+   * 标签点按：触屏第一下只露出删除叉（红叉缩在角上，不挡着的话第一下就直接删了），
+   * 第二下点文字才进编辑；桌面 hover 已经露叉，点文字直接编辑。
+   */
+  function handleTagTap(tagId: string, currentText: string): void {
+    if (touchOnly && revealedTagId !== tagId) {
+      revealedTagId = tagId;
+      revealedEmojiIndex = -1;
+      return;
+    }
+    revealedTagId = "";
+    startTagEdit(tagId, currentText);
+  }
+
+  /** 表情同标签：触屏第一下露叉，第二下才换表情。 */
+  function handleEmojiTap(index: number): void {
+    if (touchOnly && revealedEmojiIndex !== index) {
+      revealedEmojiIndex = index;
+      revealedTagId = "";
+      return;
+    }
+    revealedEmojiIndex = -1;
+    dispatch("pickEmoji", { id: task.id, index });
+  }
+
+  /** 点到别处收回露出的删除叉 */
+  function handleWindowPointerDown(event: PointerEvent): void {
+    if (!revealedTagId && revealedEmojiIndex < 0) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest(".task-tag, .task-emoji-badge")) return;
+    revealedTagId = "";
+    revealedEmojiIndex = -1;
+  }
+
   function commitTagEdit(): void {
     if (editingTagId) {
       dispatch("editTag", { id: task.id, tagId: editingTagId, text: editingTagText.trim() });
@@ -259,7 +296,7 @@
   }
 </script>
 
-<svelte:window on:click={() => (showPicker = false)} />
+<svelte:window on:click={() => (showPicker = false)} on:pointerdown={handleWindowPointerDown} />
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -304,7 +341,8 @@
           <span
             class="task-emoji-badge"
             title="点击更换表情"
-            on:click|stopPropagation={() => dispatch("pickEmoji", { id: task.id, index })}
+            class:reveal-delete={revealedEmojiIndex === index}
+            on:click|stopPropagation={() => handleEmojiTap(index)}
           >
             {emoji}
             <button class="tag-delete" type="button" aria-label="移除表情" on:click|stopPropagation={() => dispatch("removeEmoji", { id: task.id, index })}>
@@ -327,7 +365,8 @@
             <span
               class={`task-tag tag-${tag.color}`}
               title={tag.text || "点击编辑标签"}
-              on:click|stopPropagation={() => startTagEdit(tag.id, tag.text || "")}
+              class:reveal-delete={revealedTagId === tag.id}
+              on:click|stopPropagation={() => handleTagTap(tag.id, tag.text || "")}
             >
               {#if tag.text}{tag.text}{/if}
               <button class="tag-delete" type="button" aria-label="删除标签" on:click|stopPropagation={() => removeTag(tag.id)}>

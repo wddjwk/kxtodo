@@ -735,6 +735,32 @@
         onCommit={(v) => updateAppearance("editorFontSize", v)}
       />
     </div>
+    {#if !$isMobile}
+      <div class="settings-row number-row">
+        <span>编辑器宽度</span>
+        <NumberField
+          ariaLabel="编辑器宽度占比"
+          suffix="%"
+          min={30}
+          max={100}
+          live={true}
+          value={$appSettings.appearance.editorWidthPercent}
+          onCommit={(v) => updateAppearance("editorWidthPercent", v)}
+        />
+      </div>
+      <div class="settings-row number-row">
+        <span>编辑器高度</span>
+        <NumberField
+          ariaLabel="编辑器高度占比"
+          suffix="%"
+          min={30}
+          max={100}
+          live={true}
+          value={$appSettings.appearance.editorHeightPercent}
+          onCommit={(v) => updateAppearance("editorHeightPercent", v)}
+        />
+      </div>
+    {/if}
     <div class="settings-row number-row">
       <span>标签字号</span>
       <NumberField

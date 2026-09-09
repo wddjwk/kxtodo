@@ -405,6 +405,10 @@ pub struct AppearanceSettings {
     pub markdown_font_size: u32,
     #[serde(rename = "editorFontSize", default = "default_editor_font_size")]
     pub editor_font_size: u32,
+    #[serde(rename = "editorWidthPercent", default = "default_editor_width_percent")]
+    pub editor_width_percent: u32,
+    #[serde(rename = "editorHeightPercent", default = "default_editor_height_percent")]
+    pub editor_height_percent: u32,
     #[serde(rename = "tagFontSize", default = "default_tag_font_size")]
     pub tag_font_size: u32,
     #[serde(rename = "themePresets", default = "default_theme_presets")]
@@ -431,6 +435,12 @@ fn default_markdown_font_size() -> u32 {
 fn default_editor_font_size() -> u32 {
     20
 }
+fn default_editor_width_percent() -> u32 {
+    72
+}
+fn default_editor_height_percent() -> u32 {
+    86
+}
 fn default_tag_font_size() -> u32 {
     14
 }
@@ -443,6 +453,8 @@ impl Default for AppearanceSettings {
             ui_font_size: default_ui_font_size(),
             markdown_font_size: default_markdown_font_size(),
             editor_font_size: default_editor_font_size(),
+            editor_width_percent: default_editor_width_percent(),
+            editor_height_percent: default_editor_height_percent(),
             tag_font_size: default_tag_font_size(),
             theme_presets: default_theme_presets(),
             ui_colors: Map::new(),
