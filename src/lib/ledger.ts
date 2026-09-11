@@ -82,6 +82,19 @@ export function monthDayGroups(entries: LedgerEntry[], cursor: MonthCursor): Led
   return groups;
 }
 
+/** 某一天的一组账（没有就 null）。日历选中日可能是补格里的上/下个月，不能走按月分组。 */
+export function dayGroup(entries: LedgerEntry[], date: string): LedgerDayGroup | null {
+  const dayEntries = sortEntries(entries.filter((entry) => entry.date === date));
+  if (dayEntries.length === 0) return null;
+  let income = 0;
+  let expense = 0;
+  for (const entry of dayEntries) {
+    if (entry.kind === "income") income += entry.amountCents;
+    if (entry.kind === "expense") expense += entry.amountCents;
+  }
+  return { date, income, expense, entries: dayEntries };
+}
+
 /** 某个月的收/支合计（转账不计）。 */
 export function monthTotals(entries: LedgerEntry[], cursor: MonthCursor): { income: number; expense: number } {
   const prefix = `${cursor.year}-${(cursor.month + 1).toString().padStart(2, "0")}`;
@@ -95,55 +108,61 @@ export function monthTotals(entries: LedgerEntry[], cursor: MonthCursor): { inco
   return { income, expense };
 }
 
-export type LedgerHeatCell = {
+/** 日历格的紧凑金额：整元不带小数（1,200），有零头才带（328.5 / 3.05）。 */
+export function compactCents(cents: number): string {
+  const abs = Math.abs(Math.round(cents));
+  if (abs % 100 === 0) return formatCents(cents).replace(/\.00$/, "");
+  return formatCents(cents).replace(/0$/, "");
+}
+
+export type LedgerCalendarCell = {
   date: string;
   day: number;
   /** 非本月（补格） */
   otherMonth: boolean;
   income: number;
   expense: number;
-  /** 热力等级 0-4：按本月最大单日金额分档 */
-  level: number;
-  /** 主导方向：决定红还是绿 */
-  side: LedgerSide | null;
+  count: number;
 };
 
 /**
- * 月历热力图：收入绿、支出红，金额越大颜色越深。
- * 同一天既有收又有支时按金额大的一侧着色（净额口径会和「越多越深」打架）。
+ * 月历格：每格带上当天的收/支数额（不做热力着色，数额本身就是最直白的信息）。
+ * 格子只有 62px 高，金额用 compactCents 省掉无意义的 .00。
  */
-export function heatCells(cursor: MonthCursor, entries: LedgerEntry[]): LedgerHeatCell[] {
+export function ledgerCalendarCells(cursor: MonthCursor, entries: LedgerEntry[]): LedgerCalendarCell[] {
   const first = new Date(cursor.year, cursor.month, 1);
   const startWeekday = first.getDay();
   const start = shiftDays(isoOf(cursor.year, cursor.month, 1), -startWeekday);
-  const totals = new Map<string, { income: number; expense: number }>();
+  const totals = new Map<string, LedgerCalendarCell>();
   for (const entry of entries) {
-    const slot = totals.get(entry.date) ?? { income: 0, expense: 0 };
-    if (entry.kind === "income") slot.income += entry.amountCents;
-    if (entry.kind === "expense") slot.expense += entry.amountCents;
-    totals.set(entry.date, slot);
+    const slot = totals.get(entry.date);
+    if (slot) {
+      if (entry.kind === "income") slot.income += entry.amountCents;
+      if (entry.kind === "expense") slot.expense += entry.amountCents;
+      slot.count += 1;
+    } else {
+      totals.set(entry.date, {
+        date: entry.date,
+        day: Number.parseInt(entry.date.slice(8, 10), 10),
+        otherMonth: false,
+        income: entry.kind === "income" ? entry.amountCents : 0,
+        expense: entry.kind === "expense" ? entry.amountCents : 0,
+        count: 1
+      });
+    }
   }
   const prefix = `${cursor.year}-${(cursor.month + 1).toString().padStart(2, "0")}`;
-  let peak = 0;
-  for (const [date, slot] of totals) {
-    if (!date.startsWith(prefix)) continue;
-    peak = Math.max(peak, slot.income, slot.expense);
-  }
-  const cells: LedgerHeatCell[] = [];
+  const cells: LedgerCalendarCell[] = [];
   for (let index = 0; index < 42; index += 1) {
     const date = shiftDays(start, index);
-    const slot = totals.get(date) ?? { income: 0, expense: 0 };
-    const inMonth = date.startsWith(prefix);
-    const magnitude = Math.max(slot.income, slot.expense);
-    const level = peak > 0 && magnitude > 0 ? 1 + Math.min(3, Math.floor((magnitude / peak) * 4)) : 0;
+    const slot = totals.get(date);
     cells.push({
       date,
       day: Number.parseInt(date.slice(8, 10), 10),
-      otherMonth: !inMonth,
-      income: slot.income,
-      expense: slot.expense,
-      level: inMonth ? level : 0,
-      side: magnitude === 0 ? null : slot.expense > slot.income ? "expense" : "income"
+      otherMonth: !date.startsWith(prefix),
+      income: slot?.income ?? 0,
+      expense: slot?.expense ?? 0,
+      count: slot?.count ?? 0
     });
   }
   // 末尾整周全是下个月就收掉，月历不留空行
@@ -151,6 +170,23 @@ export function heatCells(cursor: MonthCursor, entries: LedgerEntry[]): LedgerHe
     cells.length = 35;
   }
   return cells;
+}
+
+/** 统计窗口判定：与 statsSeries 同一口径，占比环/排行不能拿全量数据配当期汇总。 */
+export function inStatsRange(date: string, mode: "month" | "year", cursor: MonthCursor): boolean {
+  if (mode === "month") {
+    const prefix = `${cursor.year}-${(cursor.month + 1).toString().padStart(2, "0")}`;
+    return date.startsWith(prefix);
+  }
+  return date.startsWith(`${cursor.year}-`);
+}
+
+export function statsEntries(
+  entries: LedgerEntry[],
+  mode: "month" | "year",
+  cursor: MonthCursor
+): LedgerEntry[] {
+  return entries.filter((entry) => inStatsRange(entry.date, mode, cursor));
 }
 
 export type LedgerSeriesPoint = { key: string; income: number; expense: number };

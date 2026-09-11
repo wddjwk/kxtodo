@@ -750,41 +750,6 @@
   height: 32px;
 }
 
-.app-shell.mobile .ledger-subtitle {
-  margin: -26px 0 10px 44px;
-}
-
-.app-shell.mobile .ledger-scroll {
-  padding-bottom: 96px;
-}
-
-.app-shell.mobile .ledger-row {
-  padding: 10px 10px;
-  -webkit-touch-callout: none;
-  -webkit-user-select: none;
-  user-select: none;
-}
-
-/* 热力图窄屏整宽铺开、格子矮一点，一屏放下六行 */
-.app-shell.mobile .ledger-calendar {
-  max-width: none;
-  padding: 10px 8px 12px;
-}
-
-.app-shell.mobile .ledger-heat-grid {
-  gap: 3px;
-}
-
-.app-shell.mobile .ledger-heat-cell {
-  min-height: 44px;
-  padding: 4px 0;
-  border-radius: 8px;
-}
-
-.app-shell.mobile .ledger-heat-mark {
-  font-size: 9px;
-}
-
 .app-shell.mobile .ledger-fab-row {
   right: 16px;
   bottom: calc(16px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
@@ -795,25 +760,221 @@
   height: 54px;
 }
 
-/* 记账面板/管理面板在窄屏上铺满宽度，键盘给到 46px 触控高度 */
-.app-shell.mobile .ledger-editor,
-.app-shell.mobile .ledger-manager {
-  max-width: none;
-  padding: 12px 12px calc(14px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
+/* 卡片里的一笔：整行可点（单击即编辑），长按出菜单，所以禁掉长按选字与放大镜 */
+.app-shell.mobile .ledger-entry {
+  padding: 10px 6px;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
-.app-shell.mobile .ledger-keypad button {
+.app-shell.mobile .ledger-card {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 桌面靠 hover 露出来的小按钮，触屏没有 hover：一律常显（管理类动作不能藏） */
+.app-shell.mobile .ledger-card-add,
+.app-shell.mobile .ledger-row-actions,
+.app-shell.mobile .ledger-cat-group-actions {
+  opacity: 0.6;
+}
+
+.app-shell.mobile .ledger-card-add:active,
+.app-shell.mobile .ledger-row-actions:active {
+  opacity: 1;
+}
+
+.app-shell.mobile .ledger-subtitle {
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: -26px 0 10px 44px;
+}
+
+.app-shell.mobile .ledger-subtitle-net {
+  display: none;
+}
+
+.app-shell.mobile .ledger-scroll {
+  padding-bottom: 96px;
+}
+
+/* 日历：窄屏整宽铺开、格子矮一点，一屏放下六行；格子里是数额不是热力块 */
+.app-shell.mobile .ledger-calendar {
+  max-width: none;
+  padding: 10px 8px 12px;
+}
+
+.app-shell.mobile .ledger-calendar-grid {
+  gap: 3px;
+}
+
+.app-shell.mobile .ledger-calendar-cell {
+  min-height: 54px;
+  padding: 4px 1px;
+  border-radius: 8px;
+}
+
+.app-shell.mobile .ledger-cell-day {
+  font-size: calc(var(--font-control) - 5px);
+}
+
+.app-shell.mobile .ledger-cell-amounts em {
+  font-size: calc(var(--font-control) - 8px);
+}
+
+.app-shell.mobile .ledger-day-head,
+.app-shell.mobile .ledger-day-head + .ledger-card {
+  max-width: none;
+}
+
+/* 统计：环与排行上下排，汇总卡数字小一档（三张卡在窄屏上并排） */
+.app-shell.mobile .ledger-panel {
+  padding: 13px 13px;
+}
+
+.app-shell.mobile .ledger-summary > div {
+  padding: 11px 13px;
+}
+
+.app-shell.mobile .ledger-summary strong {
+  font-size: calc(var(--font-control) + 2px);
+}
+
+.app-shell.mobile .ledger-proportion {
+  flex-direction: column;
+  gap: 14px;
+  align-items: center;
+}
+
+.app-shell.mobile .ledger-donut-wrap {
+  flex: 0 0 auto;
+}
+
+.app-shell.mobile .ledger-rank {
+  width: 100%;
+}
+
+.app-shell.mobile .ledger-rank-children {
+  padding-left: 41px;
+}
+
+/* 资产：净资产字号收一档，三段汇总允许换行 */
+.app-shell.mobile .ledger-net-card {
+  padding: 16px 18px;
+}
+
+.app-shell.mobile .ledger-net-value {
+  font-size: calc(var(--font-control) + 13px);
+}
+
+.app-shell.mobile .ledger-net-split {
+  flex-wrap: wrap;
+  gap: 14px 24px;
+}
+
+/* ---------- 记账面板 / 分类管理 / 账户管理：底部抽屉 ----------
+   遮罩底对齐，抽屉贴底、只圆上面两个角，底部安全区垫在抽屉自己身上
+   （垫在遮罩上会让抽屉浮起来，露出底下的一条缝）。 */
+.app-shell.mobile .ledger-overlay {
+  align-items: end;
+  justify-items: stretch;
+  padding: calc(env(safe-area-inset-top, 0px) * var(--safe-inv, 1)) 0 0;
+}
+
+.app-shell.mobile .ledger-sheet {
+  overflow: hidden;
+  width: 100%;
+  max-width: none;
+  height: auto;
+  max-height: 94%;
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
+  border-width: 1px 0 0;
+  border-radius: 18px 18px 0 0;
+  animation: ledger-sheet-up 0.2s ease-out;
+}
+
+@keyframes ledger-sheet-up {
+  from { transform: translateY(14%); opacity: 0.4; }
+  to { transform: none; opacity: 1; }
+}
+
+.app-shell.mobile .ledger-sheet-head {
+  padding: 10px 10px 10px 14px;
+}
+
+.app-shell.mobile .ledger-kind-tabs button {
+  padding: 6px 13px;
+}
+
+.app-shell.mobile .ledger-amount-row {
+  padding: 10px 14px;
+}
+
+.app-shell.mobile .ledger-amount-value,
+.app-shell.mobile .ledger-amount-field input {
+  font-size: calc(var(--font-control) + 12px);
+}
+
+.app-shell.mobile .ledger-sheet-body {
+  padding: 11px 12px;
+}
+
+.app-shell.mobile .ledger-tile-grid {
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+}
+
+.app-shell.mobile .ledger-tile-icon {
+  width: 46px;
   height: 46px;
 }
 
-.app-shell.mobile .ledger-editor-meta {
-  grid-template-columns: 1fr 1fr;
+/* 日期/账户一行，备注独占第二行（窄屏上三个挤一行会互相吃字） */
+.app-shell.mobile .ledger-meta-row {
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 9px 12px;
 }
 
-.app-shell.mobile .ledger-editor-note {
-  grid-column: 1 / -1;
+.app-shell.mobile .ledger-note-field {
+  flex: 1 1 100%;
 }
 
-.app-shell.mobile .ledger-editor-amount input {
-  font-size: 26px;
+.app-shell.mobile .ledger-keypad {
+  gap: 5px;
+  padding: 7px 8px 8px;
+}
+
+.app-shell.mobile .ledger-key {
+  height: 48px;
+}
+
+.app-shell.mobile .ledger-sheet-foot {
+  padding: 10px 12px;
+}
+
+.app-shell.mobile .ledger-field-row > span {
+  flex: 0 0 4.5em;
+}
+
+/* 竖排的字段行里 flex-basis 是高度：标签必须收回 auto，否则一行标签占 4.5em 高 */
+.app-shell.mobile .ledger-field-column > span {
+  flex: 0 0 auto;
+}
+
+.app-shell.mobile .ledger-manager-summary {
+  flex-wrap: wrap;
+}
+
+.app-shell.mobile .ledger-manager-summary div {
+  flex: 1 1 42%;
+}
+
+.app-shell.mobile .ledger-transfer-row {
+  flex-direction: column;
+}
+
+.app-shell.mobile .ledger-transfer-arrow {
+  align-self: center;
+  transform: rotate(90deg);
 }

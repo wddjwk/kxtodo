@@ -5,7 +5,7 @@
   import {
     appSettings, appState, showSettings, searchQuery, isSearching,
     taskEmojiPicker, editorTaskId, appVersion, showToast,
-    isHydrated, diaryOpen, diaryEditor, editorDraftNode, ledgerOpen, ledgerEditor,
+    isHydrated, diaryOpen, diaryEditor, editorDraftNode, ledgerOpen, ledgerEditor, ledgerData,
     hydrate as hydrateStores
   } from "./lib/stores";
   import { replaceTaskEmojis, selectNode as selectNodeAction, syncNow as syncNowAction } from "./lib/actions";
@@ -191,6 +191,17 @@
         target={$diaryEditor}
         onClose={() => diaryEditor.set(null)}
         onOpenLink={(url, title) => workspaceRef?.openLinkUrl(url, title)}
+      />
+    {/await}
+  {/if}
+
+  {#if $ledgerEditor}
+    {#await import("./lib/ledger/LedgerEditor.svelte") then module}
+      <svelte:component
+        this={module.default}
+        target={$ledgerEditor}
+        book={$ledgerData}
+        onClose={() => ledgerEditor.set(null)}
       />
     {/await}
   {/if}

@@ -23,3 +23,13 @@ export function matchesShortcut(event: KeyboardEvent, shortcut: string): boolean
   );
 }
 
+/**
+ * 浮层里输入框的 keydown：吞掉全局快捷键（F5 同步、Ctrl+, 设置、数字键…），
+ * 但**放行 Escape**——两段式关闭（先收浮层/表单，再关面板）靠 window 上那个
+ * Escape 处理器。写 `on:keydown|stopPropagation` 会把 Escape 一起吃掉，
+ * 表现是「在输入框里按 Esc 毫无反应」。
+ */
+export function fieldKeydown(event: KeyboardEvent): void {
+  if (event.key !== "Escape") event.stopPropagation();
+}
+

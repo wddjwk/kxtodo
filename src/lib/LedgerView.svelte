@@ -1,19 +1,14 @@
 <script lang="ts">
   /**
-   * 记账整页：四个视图（列表/日历/统计/资产）+ 齿轮面板 + 记账 FAB。
-   * 与 DiaryView 同一条骨架：桌面 diary-open 式互斥、移动端历史栈一层；
-   * 主题色与背景走 settings.ledger（外观同步、view 本机偏好）。
+   * 记账整页：四个视图（列表 / 日历 / 统计 / 资产）+ 齿轮面板 + 记一笔 FAB。
+   * 与 DiaryView 同一条骨架（头部结构、字号、卡片组织、浮层开合规则都对齐日记）：
+   * 桌面 ledger-open 式互斥、移动端历史栈一层；外观走 settings.ledger。
+   * 列表视图的组织单位是**天**——一天一张卡片，卡片里是当天每一笔（不折叠）。
    */
   import { onMount } from "svelte";
   import {
-    ArrowLeft,
-    CalendarDays,
-    ChartPie,
-    List as ListIcon,
-    Plus,
-    Settings as SettingsIcon,
-    Tags,
-    Wallet
+    ArrowLeft, CalendarDays, ChartPie, ChevronLeft, ChevronRight,
+    List as ListIcon, MoreHorizontal, Plus, Settings as SettingsIcon, Tags, Wallet
   } from "@lucide/svelte";
   import { appSettings, ledgerData, ledgerEditor, ledgerOpen } from "./stores";
   import { setConfig } from "./actions";
@@ -21,18 +16,17 @@
   import { isMobile, showMobileList } from "./platform";
   import { imageCache, resolveImageSrc } from "./images";
   import { monthOf, shiftMonth, todayDate, type MonthCursor } from "./diary";
-  import { assetsOverview, formatCents, monthTotals } from "./ledger";
-  import type { LedgerViewMode } from "./types";
+  import { assetsOverview, compactCents, formatCents, monthDayGroups, monthTotals } from "./ledger";
   import MenuItem from "./menu/MenuItem.svelte";
   import ListMenu from "./workspace/ListMenu.svelte";
-  import LedgerList from "./ledger/LedgerList.svelte";
+  import LedgerDayCard from "./ledger/LedgerDayCard.svelte";
   import LedgerCalendar from "./ledger/LedgerCalendar.svelte";
   import LedgerStats from "./ledger/LedgerStats.svelte";
   import LedgerAssets from "./ledger/LedgerAssets.svelte";
-  import LedgerEditor from "./ledger/LedgerEditor.svelte";
   import LedgerEntryMenu from "./ledger/LedgerEntryMenu.svelte";
   import CategoryManager from "./ledger/CategoryManager.svelte";
   import AccountManager from "./ledger/AccountManager.svelte";
+  import type { LedgerViewMode } from "./types";
 
   const VIEWS: Array<{ mode: LedgerViewMode; label: string; icon: typeof ListIcon }> = [
     { mode: "list", label: "列表视图", icon: ListIcon },
@@ -47,15 +41,16 @@
   let entryMenu: { id: string; x: number; y: number } | null = null;
   let showCategories = false;
   let showAccounts = false;
-  let startWithTransfer = false;
+  let accountStart: "list" | "transfer" | "add" = "list";
   let accountEditId = "";
   let scrollEl: HTMLElement;
   let paging = false;
 
   let cursor: MonthCursor = monthOf(todayDate());
   let selectedDate = todayDate();
-  /** 列表视图已加载的月份栈（新→旧）；滚到底接上一个月、滚到顶接回下一个月 */
+  /** 列表视图已加载的月份栈（新→旧）：滚到底接上一个月，滚到顶接回下一个月 */
   let months: MonthCursor[] = [monthOf(todayDate())];
+  // 分钟级 tick：记账页常常一直开着，跨天后「今天」必须自己跟上（与日记同一套路）
   let dayTick = 0;
 
   onMount(() => {
@@ -71,18 +66,28 @@
   $: thisMonth = monthOf(today);
   $: monthTotal = monthTotals(book.entries, cursor);
   $: assets = assetsOverview(book);
+  $: monthLabel = `${cursor.year}年${cursor.month + 1}月`;
   $: ledgerBg = ledgerBackground($appSettings.ledger);
   $: resolvedBgImage = resolveImageSrc(ledgerBg.image, $imageCache);
   $: mainStyle = buildMainStyle(ledgerBg, ledgerAccent($appSettings.ledger), resolvedBgImage);
-  $: menuEntry = entryMenu
-    ? book.entries.find((entry) => entry.id === entryMenu?.id) ?? null
-    : null;
-  $: awayFromToday =
-    view === "calendar" &&
-    (selectedDate !== today || cursor.year !== thisMonth.year || cursor.month !== thisMonth.month);
-  $: showTodayButton = view === "calendar" && awayFromToday;
+  $: menuEntry = entryMenu ? book.entries.find((entry) => entry.id === entryMenu?.id) ?? null : null;
+
+  /** 列表视图的月份分区：每段带上自己的按天分组与合计（滚进来的旧月份要有自己的段头） */
+  $: sections = months.map((month, index) => ({
+    key: `${month.year}-${month.month}`,
+    month,
+    index,
+    groups: monthDayGroups(book.entries, month),
+    totals: monthTotals(book.entries, month)
+  }));
+
   /** 记账按钮落在哪一天：日历视图跟着选中的日期，其余视图永远是今天 */
   $: focusDate = view === "calendar" ? selectedDate : today;
+  $: awayFromToday =
+    view === "calendar"
+      ? selectedDate !== today || cursor.year !== thisMonth.year || cursor.month !== thisMonth.month
+      : months[0].year !== thisMonth.year || months[0].month !== thisMonth.month;
+  $: showTodayButton = awayFromToday;
 
   export function closeOverlays(): void {
     showGear = false;
@@ -97,38 +102,45 @@
   }
 
   function switchView(mode: LedgerViewMode): void {
+    closeOverlays();
     if (mode === view) return;
     if (mode === "calendar") cursor = monthOf(selectedDate);
+    if (mode === "list") months = [cursor];
     void setConfig("ledger.view", mode);
   }
 
+  /** 齿轮面板与其它头部浮层互斥（与日记/工作区同一套开合规则）。 */
   function toggleGear(): void {
     showGear = !showGear;
     listMenuAt = null;
+    entryMenu = null;
   }
 
+  /** 齿轮面板 → 记账菜单：锚在齿轮按钮右下角（视口像素，ContextMenu 内部除以缩放）。 */
   function openListMenuFromGear(): void {
-    const rect = gearButtonEl?.getBoundingClientRect();
     showGear = false;
+    const rect = gearButtonEl?.getBoundingClientRect();
     if (!rect) return;
     listMenuAt = { x: rect.right, y: rect.bottom + 6 };
+    entryMenu = null;
+  }
+
+  function handlePanelKeydown(event: KeyboardEvent): void {
+    if (!showGear) return;
+    if (event.key === "Escape" && !event.isComposing && event.keyCode !== 229) showGear = false;
   }
 
   function changeMonth(next: MonthCursor): void {
     cursor = next;
-    // 列表视图的月份栈跟着导航走：导航到哪儿就从哪儿开始往下接，
-    // 否则段控/箭头指的月份和栈里渲染的月份会对不上
-    if (view === "list") {
-      months = [next];
-    }
+    selectedDate = `${next.year}-${(next.month + 1).toString().padStart(2, "0")}-01`;
+    if (view === "list") months = [next];
   }
 
   function pickDay(date: string): void {
     selectedDate = date;
-    const cursorOfMonth = monthOf(date);
-    if (cursorOfMonth.year !== cursor.year || cursorOfMonth.month !== cursor.month) {
-      cursor = cursorOfMonth;
-    }
+    const month = monthOf(date);
+    if (month.year !== cursor.year || month.month !== cursor.month) cursor = month;
+    entryMenu = null;
   }
 
   function jumpToToday(): void {
@@ -137,8 +149,9 @@
     if (view === "list") months = [monthOf(today)];
   }
 
-  function createEntry(): void {
-    ledgerEditor.set({ date: focusDate, kind: "expense" });
+  function createEntry(date = focusDate): void {
+    entryMenu = null;
+    ledgerEditor.set({ date, kind: "expense" });
   }
 
   function openEditor(id: string): void {
@@ -151,16 +164,16 @@
     showCategories = true;
   }
 
-  function openAccounts(transfer: boolean): void {
+  function openAccounts(mode: "list" | "transfer" | "add"): void {
     closeOverlays();
-    startWithTransfer = transfer;
+    accountStart = mode;
     accountEditId = "";
     showAccounts = true;
   }
 
   function openAccountEdit(id: string): void {
     closeOverlays();
-    startWithTransfer = false;
+    accountStart = "list";
     accountEditId = id;
     showAccounts = true;
   }
@@ -178,115 +191,156 @@
       const first = months[0];
       if (first.year === thisMonth.year && first.month === thisMonth.month) return;
       paging = true;
-      months = [shiftMonth(first, 1), ...months];
+      const next = shiftMonth(first, 1);
+      months = [next, ...months];
+      cursor = next;
       window.setTimeout(() => (paging = false), 120);
     }
   }
 </script>
 
+<svelte:window on:keydown={handlePanelKeydown} />
+
 <main class="ledger-view" style={mainStyle}>
   <section class="list-header">
-    {#if $isMobile}
-      <button type="button" class="mobile-back" on:click={closeLedger} aria-label="返回">
-        <ArrowLeft size={19} />
+    <div>
+      <button class="mobile-back" type="button" aria-label="返回列表" on:click|stopPropagation={closeLedger}>
+        <ArrowLeft size={26} />
       </button>
-    {/if}
-    <span class="header-icon"><Wallet size={19} /></span>
-    <h1>记账</h1>
-    <div class="header-actions">
+      <span class="header-icon"><Wallet size={34} /></span>
+      <h1>记账</h1>
+    </div>
+    <div class="header-actions" on:click|stopPropagation>
       <div class="ledger-view-switch" role="tablist" aria-label="记账视图">
         {#each VIEWS as item (item.mode)}
           <button
             type="button"
             role="tab"
+            title={item.label}
+            aria-label={item.label}
             aria-selected={view === item.mode}
             class:active={view === item.mode}
-            title={item.label}
-            on:click={() => switchView(item.mode)}
-          >
-            <svelte:component this={item.icon} size={16} />
-          </button>
+            on:click|stopPropagation={() => switchView(item.mode)}
+          ><svelte:component this={item.icon} size={18} /></button>
         {/each}
       </div>
       <button
-        type="button"
-        class="header-menu-button"
-        title="记账菜单"
         bind:this={gearButtonEl}
+        type="button"
+        title="更多操作"
+        aria-label="更多操作"
+        aria-expanded={showGear}
         on:click|stopPropagation={toggleGear}
-      >
-        <SettingsIcon size={17} />
-      </button>
+      ><SettingsIcon size={21} /></button>
+
+      {#if showGear}
+        <div class="header-menu-panel ledger-gear-panel" role="menu" tabindex="-1">
+          <MenuItem icon={Tags} label="分类管理" onSelect={openCategories} />
+          <MenuItem icon={Wallet} label="账户与转账" onSelect={() => openAccounts("list")} />
+          <MenuItem icon={MoreHorizontal} label="记账菜单" onSelect={openListMenuFromGear} />
+        </div>
+      {/if}
     </div>
-    {#if showGear}
-      <div class="header-menu-panel ledger-gear-panel">
-        <MenuItem icon={Tags} label="分类管理" onSelect={openCategories} />
-        <MenuItem icon={Wallet} label="账户与转账" onSelect={() => openAccounts(false)} />
-        <MenuItem icon={SettingsIcon} label="记账菜单" onSelect={openListMenuFromGear} />
-      </div>
-    {/if}
   </section>
 
-  {#if view === "list" || view === "calendar"}
-    <p class="ledger-subtitle">
-      {cursor.year} 年 {cursor.month + 1} 月 · 收 {formatCents(monthTotal.income)} · 支
-      {formatCents(monthTotal.expense)} · 结余 {formatCents(monthTotal.income - monthTotal.expense)}
-    </p>
-  {:else if view === "assets"}
-    <p class="ledger-subtitle">
-      净资产 {formatCents(assets.net)} · {book.accounts.length} 个账户
-    </p>
-  {:else}
-    <p class="ledger-subtitle">共 {book.entries.length} 笔账</p>
-  {/if}
+  <p class="ledger-subtitle">
+    {#if view === "list"}
+      <span class="ledger-month-step">
+        <button type="button" aria-label="上个月" on:click|stopPropagation={() => changeMonth(shiftMonth(cursor, -1))}>
+          <ChevronLeft size={15} />
+        </button>
+        <strong>{monthLabel}</strong>
+        <button type="button" aria-label="下个月" on:click|stopPropagation={() => changeMonth(shiftMonth(cursor, 1))}>
+          <ChevronRight size={15} />
+        </button>
+      </span>
+      <span class="ledger-stat-dot"></span>
+      <span class="in">收 {compactCents(monthTotal.income)}</span>
+      <span class="ledger-stat-dot"></span>
+      <span class="out">支 {compactCents(monthTotal.expense)}</span>
+      <span class="ledger-subtitle-net">
+        <i class="ledger-stat-dot"></i>结余 {compactCents(monthTotal.income - monthTotal.expense)}
+      </span>
+    {:else if view === "assets"}
+      <span>净资产 {formatCents(assets.net)}</span>
+      <span class="ledger-stat-dot"></span>
+      <span>{book.accounts.length} 个账户</span>
+      <span class="ledger-stat-dot"></span>
+      <span>本月支出 {compactCents(monthTotals(book.entries, thisMonth).expense)}</span>
+    {:else if view === "stats"}
+      <span>共 {book.entries.length} 笔账</span>
+      <span class="ledger-stat-dot"></span>
+      <span>净资产 {formatCents(assets.net)}</span>
+    {:else}
+      <span>净资产 {formatCents(assets.net)}</span>
+      <span class="ledger-stat-dot"></span>
+      <span>共 {book.entries.length} 笔账</span>
+    {/if}
+  </p>
 
   <section class="ledger-scroll" bind:this={scrollEl} on:scroll={handleScroll}>
     {#if view === "list"}
-      <div class="ledger-month-nav">
-        <button type="button" on:click={() => changeMonth(shiftMonth(cursor, -1))}>‹</button>
-        <strong>{cursor.year} 年 {cursor.month + 1} 月</strong>
-        <button type="button" on:click={() => changeMonth(shiftMonth(cursor, 1))}>›</button>
-      </div>
-      <LedgerList
-        {book}
-        entries={book.entries}
-        {months}
-        {today}
-        on:edit={(event) => openEditor(event.detail)}
-        on:context={(event) => (entryMenu = event.detail)}
-      />
+      {#if book.entries.length === 0}
+        <div class="empty-state">
+          <strong>还没有记账</strong>
+          <span>点右下角的 + 记下第一笔。</span>
+        </div>
+      {:else}
+        {#each sections as section (section.key)}
+          {#if section.index > 0}
+            <div class="ledger-month-divider">
+              <span>{section.month.year}年{section.month.month + 1}月</span>
+              <em>收 {compactCents(section.totals.income)} · 支 {compactCents(section.totals.expense)}</em>
+            </div>
+          {/if}
+          {#each section.groups as group (group.date)}
+            <LedgerDayCard
+              {book}
+              {group}
+              {today}
+              selectedId={entryMenu?.id ?? ""}
+              on:edit={(event) => openEditor(event.detail)}
+              on:add={(event) => createEntry(event.detail)}
+              on:context={(event) => {
+                entryMenu = event.detail;
+                showGear = false;
+                listMenuAt = null;
+              }}
+            />
+          {:else}
+            {#if section.index === 0}
+              <div class="ledger-day-empty">{monthLabel}还没有记账。</div>
+            {/if}
+          {/each}
+        {/each}
+      {/if}
+
     {:else if view === "calendar"}
       <LedgerCalendar
         {book}
-        entries={book.entries}
         {cursor}
         {selectedDate}
         {today}
+        selectedId={entryMenu?.id ?? ""}
         on:month={(event) => changeMonth(event.detail)}
         on:day={(event) => pickDay(event.detail)}
         on:edit={(event) => openEditor(event.detail)}
+        on:add={(event) => createEntry(event.detail)}
         on:context={(event) => (entryMenu = event.detail)}
       />
+
     {:else if view === "stats"}
-      <LedgerStats {book} entries={book.entries} {cursor} />
+      <LedgerStats {book} entries={book.entries} {cursor} on:month={(event) => changeMonth(event.detail)} />
+
     {:else}
       <LedgerAssets
         {book}
         on:editAccount={(event) => openAccountEdit(event.detail)}
-        on:addAccount={() => openAccounts(false)}
-        on:transfer={() => openAccounts(true)}
+        on:addAccount={() => openAccounts("add")}
+        on:transfer={() => openAccounts("transfer")}
       />
     {/if}
   </section>
-
-  <div class="ledger-fab-row">
-    {#if showTodayButton}
-      <button type="button" class="ledger-fab-today" on:click={jumpToToday}>今</button>
-    {/if}
-    <button type="button" class="ledger-fab" title="记一笔" on:click={createEntry}>
-      <Plus size={24} />
-    </button>
-  </div>
 
   {#if listMenuAt}
     <ListMenu
@@ -300,19 +354,15 @@
     />
   {/if}
 
-  {#if menuEntry}
+  {#if entryMenu && menuEntry}
     <LedgerEntryMenu
-      x={entryMenu?.x ?? 0}
-      y={entryMenu?.y ?? 0}
+      x={entryMenu.x}
+      y={entryMenu.y}
       entry={menuEntry}
       {book}
       on:edit={(event) => openEditor(event.detail)}
       on:close={() => (entryMenu = null)}
     />
-  {/if}
-
-  {#if $ledgerEditor}
-    <LedgerEditor target={$ledgerEditor} {book} onClose={() => ledgerEditor.set(null)} />
   {/if}
 
   {#if showCategories}
@@ -322,9 +372,19 @@
   {#if showAccounts}
     <AccountManager
       {book}
-      startWithTransfer={startWithTransfer}
+      startWithTransfer={accountStart === "transfer"}
+      startWithAdd={accountStart === "add"}
       editId={accountEditId}
       onClose={() => (showAccounts = false)}
     />
   {/if}
+
+  <div class="ledger-fab-row">
+    {#if showTodayButton}
+      <button class="ledger-fab-today" type="button" title="回到本月" on:click|stopPropagation={jumpToToday}>今</button>
+    {/if}
+    <button class="ledger-fab" type="button" title="记一笔" aria-label="记一笔" on:click|stopPropagation={() => createEntry()}>
+      <Plus size={24} />
+    </button>
+  </div>
 </main>

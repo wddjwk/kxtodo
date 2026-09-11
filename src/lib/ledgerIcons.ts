@@ -226,6 +226,36 @@ export function accountIconName(icon: string, kind: LedgerAccountKind): string {
   return icon && LEDGER_ICONS[icon] ? icon : ACCOUNT_KIND_ICON[kind];
 }
 
+function hexToRgb(color: string): [number, number, number] {
+  const text = color.trim().replace("#", "");
+  const full =
+    text.length === 3
+      ? text
+          .split("")
+          .map((part) => part + part)
+          .join("")
+      : text;
+  if (!/^[0-9a-fA-F]{6}$/.test(full)) return [148, 163, 184];
+  return [
+    Number.parseInt(full.slice(0, 2), 16),
+    Number.parseInt(full.slice(2, 4), 16),
+    Number.parseInt(full.slice(4, 6), 16)
+  ];
+}
+
+/**
+ * 分类色的淡底（图标圆片的背景）：与白色混一下，饱和色不会在卡片上喧宾夺主。
+ * 手写混色而不是 CSS `color-mix()`——Linux 上的旧 WebKitGTK 没有它。
+ */
+export function softColor(color: string, ratio = 0.15): string {
+  const [r, g, b] = hexToRgb(color);
+  const mix = (channel: number): string =>
+    Math.round(channel * ratio + 255 * (1 - ratio))
+      .toString(16)
+      .padStart(2, "0");
+  return `#${mix(r)}${mix(g)}${mix(b)}`;
+}
+
 /** 收支两侧的默认强调色：支出红、收入绿（热力图与统计图同口径）。 */
 export const SIDE_COLOR: Record<LedgerSide, string> = {
   expense: "#d9534f",

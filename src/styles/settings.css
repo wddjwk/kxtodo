@@ -617,6 +617,20 @@
   filter: brightness(1.07);
 }
 
+/* 危险动作：同一个按钮形状，只换配色（不许再发明第三种按钮样式） */
+.settings-button.danger {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  border-color: #f0d2cc;
+  color: #c0392b;
+}
+
+.settings-button.danger:hover {
+  border-color: #e6b8b0;
+  background: #fdecea;
+}
+
 .update-available .settings-button {
   margin-top: 2px;
 }
