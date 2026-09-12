@@ -19,6 +19,11 @@ pub fn is_shared_settings_path(path: &str) -> bool {
             | "appearance.linkOpenMode"
             | "appearance.themePresets"
             | "appearance.uiColors"
+            // 新建分组/条目的默认外观同 uiColors 一个待遇：换台设备建出来的条目不该变脸
+            | "appearance.newNodeDefaults.accent"
+            | "appearance.newNodeDefaults.backgroundColor"
+            | "appearance.newNodeDefaults.backgroundImage"
+            | "appearance.newNodeDefaults.backgroundOpacity"
             | "updates.autoCheck"
             | "features.showCategoryBadges"
             // 日记的主题色与背景是外观，跟条目背景/uiColors 一个待遇；
@@ -125,6 +130,30 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         kind: "map<entryId,color>",
         description: "条目自定义颜色（需 --map-key）",
         is_map: true,
+    },
+    FieldMeta {
+        path: "appearance.newNodeDefaults.accent",
+        kind: "color",
+        description: "新建分组/条目的默认主题色（空串 = 跟随应用默认）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "appearance.newNodeDefaults.backgroundColor",
+        kind: "color",
+        description: "新建分组/条目的默认背景色（空串 = 跟随应用默认）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "appearance.newNodeDefaults.backgroundImage",
+        kind: "string",
+        description: "新建分组/条目的默认背景图（img:<文件名> 或 http(s)/data URL；空串 = 无图）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "appearance.newNodeDefaults.backgroundOpacity",
+        kind: "number",
+        description: "新建分组/条目的默认背景图透明度（0-1）",
+        is_map: false,
     },
     FieldMeta {
         path: "lifecycle.closeToTray",
@@ -436,6 +465,16 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "appearance.tagFontSize" => json!(settings.appearance.tag_font_size),
         "appearance.themePresets" => json!(settings.appearance.theme_presets),
         "appearance.uiColors" => json!(settings.appearance.ui_colors),
+        "appearance.newNodeDefaults.accent" => json!(settings.appearance.new_node_defaults.accent),
+        "appearance.newNodeDefaults.backgroundColor" => {
+            json!(settings.appearance.new_node_defaults.background_color)
+        }
+        "appearance.newNodeDefaults.backgroundImage" => {
+            json!(settings.appearance.new_node_defaults.background_image)
+        }
+        "appearance.newNodeDefaults.backgroundOpacity" => {
+            json!(settings.appearance.new_node_defaults.background_opacity)
+        }
         "lifecycle.closeToTray" => json!(settings.lifecycle.close_to_tray),
         "lifecycle.launchAtStartup" => json!(settings.lifecycle.launch_at_startup),
         "notifications.durationMs" => json!(settings.notifications.duration_ms),
@@ -762,6 +801,30 @@ pub fn set_value(
         }
         "appearance.themePresets" => {
             settings.appearance.theme_presets = expect_theme_presets(path, &value)?;
+        }
+        "appearance.newNodeDefaults.accent" => {
+            let raw = expect_string(path, &value)?.trim().to_string();
+            if !raw.is_empty() && !is_hex_color(&raw) {
+                return Err(invalid_value(path, "应为 #rrggbb 颜色或空串"));
+            }
+            settings.appearance.new_node_defaults.accent = raw;
+        }
+        "appearance.newNodeDefaults.backgroundColor" => {
+            let raw = expect_string(path, &value)?.trim().to_string();
+            if !raw.is_empty() && !is_hex_color(&raw) {
+                return Err(invalid_value(path, "应为 #rrggbb 颜色或空串"));
+            }
+            settings.appearance.new_node_defaults.background_color = raw;
+        }
+        "appearance.newNodeDefaults.backgroundImage" => {
+            settings.appearance.new_node_defaults.background_image =
+                expect_string(path, &value)?.trim().to_string();
+        }
+        "appearance.newNodeDefaults.backgroundOpacity" => {
+            let raw = value
+                .as_f64()
+                .ok_or_else(|| invalid_value(path, "应为 0-1 的数字"))?;
+            settings.appearance.new_node_defaults.background_opacity = raw.clamp(0.0, 1.0);
         }
         "lifecycle.closeToTray" => {
             settings.lifecycle.close_to_tray = expect_bool(path, &value)?;
@@ -1092,6 +1155,21 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
             target.appearance.theme_presets = defaults.appearance.theme_presets.clone()
         }
         "appearance.uiColors" => target.appearance.ui_colors = Map::new(),
+        "appearance.newNodeDefaults.accent" => {
+            target.appearance.new_node_defaults.accent = defaults.appearance.new_node_defaults.accent.clone()
+        }
+        "appearance.newNodeDefaults.backgroundColor" => {
+            target.appearance.new_node_defaults.background_color =
+                defaults.appearance.new_node_defaults.background_color.clone()
+        }
+        "appearance.newNodeDefaults.backgroundImage" => {
+            target.appearance.new_node_defaults.background_image =
+                defaults.appearance.new_node_defaults.background_image.clone()
+        }
+        "appearance.newNodeDefaults.backgroundOpacity" => {
+            target.appearance.new_node_defaults.background_opacity =
+                defaults.appearance.new_node_defaults.background_opacity
+        }
         "lifecycle.closeToTray" => {
             target.lifecycle.close_to_tray = defaults.lifecycle.close_to_tray
         }

@@ -13,6 +13,20 @@
   box-shadow: 0 14px 34px rgb(0 0 0 / 18%);
 }
 
+/* 标题下面那行小字（我的一天的日期、日记的篇数统计…）：与标题文字左对齐——
+   缩进 = 头部图标 38px + 图标与标题的间距 20px。桌面 .list-header 的 margin-bottom
+   是 28px，这里用 -18px 收成 10px 的呼吸距离（移动端那一份在 mobile.css）。 */
+.list-subtitle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: -18px 0 18px;
+  padding-left: 58px;
+  color: var(--accent);
+  font-size: calc(var(--font-control) - 3px);
+  opacity: 0.82;
+}
+
 /* 严格数字输入（NumberField）：设置抽屉与定时任务编辑共用 */
 .number-field {
   display: inline-flex;

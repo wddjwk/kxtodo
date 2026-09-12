@@ -49,7 +49,7 @@
 
 /* 只抬正文流里的直接子元素。**绝不要写成 `.ledger-view > *`**（diary.css 有过事故记录）：
    那条规则会把 `.context-menu` 的 fixed 与 `.ledger-fab-row` 的 absolute 全压成 relative。 */
-.ledger-view > .ledger-subtitle,
+.ledger-view > .ledger-month-bar,
 .ledger-view > .ledger-scroll {
   position: relative;
   z-index: 1;
@@ -110,64 +110,39 @@
   animation: menu-fade-in 0.1s ease-out;
 }
 
-/* ---------- 副标题（兼月份导航） ---------- */
-
-.ledger-subtitle {
+/* ---------- 月份标题行（只有列表视图渲染；其余三个视图有自己的顶栏） ----------
+   这一行是标题不是小字：月份比正文大一号、加粗、走主题色，收/支/结余跟在后面。
+   左对齐到标题文字（缩进 = 头部图标 38 + 图标与标题的间距 20）。 */
+.ledger-month-bar {
   display: flex;
-  align-items: center;
-  gap: 9px;
-  margin: -20px 0 18px;
+  align-items: baseline;
+  gap: 18px;
+  margin: -14px 0 18px;
   padding-left: 58px;
-  color: var(--accent);
-  font-size: calc(var(--font-control) - 4px);
   font-variant-numeric: tabular-nums;
-  opacity: 0.9;
-}
-
-.ledger-subtitle .in {
-  color: var(--ledger-in);
-}
-
-.ledger-subtitle .out {
-  color: var(--ledger-out);
-}
-
-.ledger-stat-dot {
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background: currentcolor;
-  opacity: 0.45;
-}
-
-/* 「结余」一段自带分隔点：窄屏整段隐藏时不会留下一个孤零零的点 */
-.ledger-subtitle-net {
-  display: inline-flex;
-  gap: 9px;
-  align-items: center;
 }
 
 .ledger-month-step {
   display: inline-flex;
-  gap: 2px;
+  gap: 4px;
   align-items: center;
 }
 
 .ledger-month-step strong {
-  min-width: 6.5em;
+  min-width: 5.5em;
   color: var(--accent);
-  font-size: calc(var(--font-control) - 1px);
+  font-size: calc(var(--font-control) + 4px);
   font-weight: 800;
   text-align: center;
 }
 
 .ledger-month-step button {
   display: grid;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   place-items: center;
   border: 0;
-  border-radius: 7px;
+  border-radius: 8px;
   padding: 0;
   background: transparent;
   color: var(--accent);
@@ -176,6 +151,30 @@
 
 .ledger-month-step button:hover {
   background: rgb(0 0 0 / 6%);
+}
+
+.ledger-month-sums {
+  display: inline-flex;
+  gap: 14px;
+  align-items: baseline;
+  font-size: calc(var(--font-control) - 3px);
+}
+
+.ledger-month-sums em {
+  color: #8b929e;
+  font-style: normal;
+}
+
+.ledger-month-sums em.in {
+  color: var(--ledger-in);
+}
+
+.ledger-month-sums em.out {
+  color: var(--ledger-out);
+}
+
+.ledger-month-sums em.net {
+  color: #5c6470;
 }
 
 /* ---------- 滚动区 ---------- */
@@ -228,12 +227,9 @@
 
 .ledger-card {
   position: relative;
-  display: flex;
-  gap: 14px;
-  align-items: flex-start;
   max-width: 100%;
   margin-bottom: 8px;
-  padding: 13px 12px 13px 14px;
+  padding: 12px 12px 10px 14px;
   border: 1px solid rgb(0 0 0 / 3%);
   border-radius: 8px;
   background: rgb(255 255 255 / 84%);
@@ -246,15 +242,12 @@
   box-shadow: 0 8px 24px rgb(31 41 55 / 8%);
 }
 
-/* 左侧日期栏：日 / 周几，与正文之间一条极浅的竖线（与日记卡片同一套） */
-.ledger-date-block {
-  display: grid;
-  justify-items: center;
-  gap: 2px;
-  flex: 0 0 44px;
-  align-self: stretch;
-  padding-right: 12px;
-  border-right: 1px solid rgb(0 0 0 / 6%);
+/* 标题行：主题色的日期号 + 日期 + 周几，右侧是当天收/支与「在这天记一笔」 */
+.ledger-card-head {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  min-width: 0;
 }
 
 .ledger-date-day {
@@ -262,25 +255,13 @@
   font-size: calc(var(--font-control) + 7px);
   font-variant-numeric: tabular-nums;
   font-weight: 800;
-  line-height: 1.06;
+  line-height: 1;
 }
 
 .ledger-date-week {
   color: #93989f;
   font-size: calc(var(--font-control) - 5px);
   letter-spacing: 0.02em;
-}
-
-.ledger-card-main {
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.ledger-card-head {
-  display: flex;
-  gap: 10px;
-  align-items: baseline;
-  min-width: 0;
 }
 
 .ledger-card-title {
@@ -300,8 +281,7 @@
   display: inline-flex;
   gap: 10px;
   align-items: baseline;
-  flex: 1 1 auto;
-  justify-content: flex-end;
+  margin-left: auto;
   font-size: calc(var(--font-control) - 4px);
   font-variant-numeric: tabular-nums;
 }
@@ -347,7 +327,9 @@
 }
 
 .ledger-entry-list {
-  margin-top: 6px;
+  margin-top: 8px;
+  padding-top: 3px;
+  border-top: 1px solid rgb(0 0 0 / 5%);
 }
 
 .ledger-entry {
@@ -586,8 +568,7 @@
   display: flex;
   gap: 10px;
   align-items: baseline;
-  max-width: 780px;
-  margin: 0 auto 11px;
+  margin: 0 0 11px;
 }
 
 .ledger-day-head strong {
@@ -602,18 +583,9 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 日历下方的当天卡片与月历同宽，读起来是一栏 */
-.ledger-calendar + .ledger-day-head + .ledger-card,
-.ledger-day-head + .ledger-card {
-  max-width: 780px;
-  margin-right: auto;
-  margin-left: auto;
-}
-
 /* ---------- 统计与资产：通用面板 ---------- */
 
 .ledger-panel {
-  max-width: 900px;
   margin-bottom: 14px;
   padding: 16px 18px;
   border: 1px solid rgb(0 0 0 / 4%);
@@ -689,10 +661,6 @@
 }
 
 /* ---------- 统计视图 ---------- */
-
-.ledger-stats {
-  max-width: 900px;
-}
 
 .ledger-stats-bar {
   display: flex;
@@ -882,28 +850,75 @@
 .ledger-donut-wrap {
   display: grid;
   place-items: center;
-  flex: 0 0 190px;
+  flex: 0 0 460px;
 }
 
 .ledger-donut {
-  width: 190px;
-  height: 190px;
+  width: 100%;
+  max-width: 460px;
+  height: auto;
+}
+
+.ledger-donut-track,
+.ledger-donut-leader,
+.ledger-donut-tag,
+.ledger-donut-label,
+.ledger-donut-value,
+.ledger-donut-note {
+  pointer-events: none;
 }
 
 .ledger-donut-track {
   stroke: #f1f3f6;
 }
 
+/* 点中的那一片沿自己的中角被"拉出来"（--dx/--dy 由组件按中角算好），环同时加粗。
+   用 CSS transform 而不是 SVG 的 transform 属性——属性值变化不做过渡。 */
+.ledger-donut-slice {
+  transition: transform 0.18s ease;
+}
+
+.ledger-donut-slice.focus {
+  transform: translate(var(--dx), var(--dy));
+}
+
+.ledger-donut-slice circle {
+  cursor: pointer;
+  outline: none;
+  transition: stroke-width 0.18s ease;
+}
+
+.ledger-donut-slice.focus circle {
+  stroke-width: 32;
+}
+
+.ledger-donut-leader {
+  fill: none;
+  stroke: #c9ced6;
+  stroke-width: 1;
+}
+
+.ledger-donut-tag {
+  fill: #6b7280;
+  font-size: 13px;
+}
+
 .ledger-donut-label {
   fill: #8b929e;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .ledger-donut-value {
   fill: #2b3038;
-  font-size: 20px;
+  font-size: 24px;
   font-variant-numeric: tabular-nums;
   font-weight: 700;
+}
+
+.ledger-donut-note {
+  fill: #9aa1ac;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .ledger-rank {
@@ -1029,7 +1044,6 @@
 .ledger-net-card {
   display: grid;
   gap: 6px;
-  max-width: 900px;
   margin-bottom: 14px;
   padding: 20px 24px;
   border: 1px solid rgb(0 0 0 / 4%);
@@ -1252,10 +1266,23 @@
   height: auto;
   max-height: min(86vh, 780px);
   border-radius: 16px;
+  /* .editor-dialog 的 overflow:hidden 会把整块日期日历裁掉（它比浮层可用高度高），
+     这里放开裁剪，圆角改由首尾两块自己带（下面的 head / foot / keypad 规则）。
+     min-width:0 必须留：放开裁剪后本盒子不再是滚动容器，作为遮罩 grid 的子项它的
+     「自动最小尺寸」= 内容的 min-content（分类 chips 那一排很宽），会把整个抽屉
+     撑出视口——min-width:0 把自动最小尺寸关掉。 */
+  min-width: 0;
+  overflow: visible;
 }
 
 .ledger-sheet.ledger-manager {
   width: min(620px, 92%);
+}
+
+/* 放开裁剪后，圆角得由首尾两块自己带（否则头尾的方角会盖出对话框的圆角外） */
+.ledger-sheet-foot,
+.ledger-keypad {
+  border-radius: 0 0 16px 16px;
 }
 
 .ledger-sheet-head {
@@ -1265,6 +1292,7 @@
   flex: 0 0 auto;
   padding: 11px 12px 11px 16px;
   border-bottom: 1px solid #eceff3;
+  border-radius: 16px 16px 0 0;
   background: #fafbfc;
 }
 
@@ -1728,6 +1756,18 @@
 
 .ledger-pop::-webkit-scrollbar {
   display: none;
+}
+
+/* 日期浮层里放的是完整的 DatePicker（自带边框、阴影与内边距）：外层不再限高、
+   也不再画第二层壳。264px 的上限会把「清除 / 今天」那一行裁掉，只能滚动才看得到。 */
+.ledger-pop.date {
+  overflow: visible;
+  min-width: 0;
+  max-height: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .ledger-pick-row {

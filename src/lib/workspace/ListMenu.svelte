@@ -23,6 +23,7 @@
     exportCardsArchive as exportCardsArchiveAction,
     importCardsArchive as importCardsArchiveAction,
     importCardsArchiveFile as importCardsArchiveFileAction,
+    importCardsFolder as importCardsFolderAction,
     syncNow as syncNowAction
   } from "../actions";
   import { moveTargetOptions, nodeAndDescendantIds, exportStateForNode } from "../nodes";
@@ -574,6 +575,13 @@
     await importCardsArchiveAction(node.id);
   }
 
+  /** 桌面专属：选一个文件夹导入（Android 没有目录选择器，仍走压缩包那条）。 */
+  async function importCardsMdFolder(): Promise<void> {
+    if (!node) return;
+    onClose();
+    await importCardsFolderAction(node.id);
+  }
+
   async function importCardsMdFromInput(event: Event): Promise<void> {
     const target = event.currentTarget;
     if (!(target instanceof HTMLInputElement) || !target.files?.[0] || !node) return;
@@ -726,6 +734,9 @@
     {#if node?.cardStyle === "card"}
       <MenuItem icon={FileArchive} label="导出为 Markdown" onSelect={() => void exportCardsMd()} />
       <MenuItem icon={Download} label="导入 Markdown 压缩包" onSelect={() => void importCardsMd()} />
+      {#if caps.nativeFileDialogs}
+        <MenuItem icon={FolderInput} label="导入 Markdown 文件夹" onSelect={() => void importCardsMdFolder()} />
+      {/if}
     {/if}
   {/if}
 

@@ -1233,15 +1233,6 @@ h1 {
   padding: 8px 0 0;
 }
 
-/* My Day subtitle */
-.my-day-subtitle {
-  margin: -20px 0 18px;
-  padding-left: 58px;
-  color: var(--accent);
-  font-size: 14px;
-  opacity: 0.72;
-}
-
 /* 计划内视图：日期分组筛选 chip + 下拉面板。
    视觉语言与「已完成」标签一致：左对齐、圆角 7、白底 70%、accent 色。
    注意：.workspace > * 统一 z-index:1，bar 与 task-list 是同级层叠上下文，

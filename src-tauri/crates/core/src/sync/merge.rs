@@ -269,6 +269,7 @@ pub fn settings_payload(settings: &SettingsFile) -> Value {
             "linkOpenMode": settings.appearance.link_open_mode,
             "themePresets": settings.appearance.theme_presets,
             "uiColors": settings.appearance.ui_colors,
+            "newNodeDefaults": settings.appearance.new_node_defaults,
         },
         "features": {
             "showCategoryBadges": settings.features.show_category_badges,
@@ -663,6 +664,14 @@ fn apply_settings_record(record: &EntityRecord, settings: &mut SettingsFile) -> 
             if let Some(colors) = map.get("uiColors") {
                 if let Some(parsed) = colors.as_object() {
                     settings.appearance.ui_colors = parsed.clone();
+                }
+            }
+            // 老设备的载荷没有这个键：本机配置一动不动
+            if let Some(defaults) = map.get("newNodeDefaults") {
+                if let Ok(parsed) =
+                    serde_json::from_value::<crate::model::NewNodeDefaults>(defaults.clone())
+                {
+                    settings.appearance.new_node_defaults = parsed;
                 }
             }
         }

@@ -56,6 +56,11 @@ export function tasksForNode(node: AppNode, tasks: Task[], nodes: AppNode[]): Ta
 
 export function buildListCounts(state: AppState): Record<string, number> {
   const counts: Record<string, number> = {};
+  // 一般卡片（cardStyle === "card"）不是待办清单：没有"未完成"语义，角标不该统计它，
+  // 也不该往上滚进它所属的分组。四个系统视图照旧统计全部任务。
+  const plainEntryIds = new Set(
+    state.nodes.filter((node) => node.kind === "entry" && node.cardStyle === "card").map((node) => node.id)
+  );
   for (const node of state.nodes) {
     if (node.id === "my-day") {
       counts[node.id] = state.tasks.filter((task) => !task.completed && task.myDay).length;
@@ -66,10 +71,14 @@ export function buildListCounts(state: AppState): Record<string, number> {
     } else if (node.id === "scheduled") {
       counts[node.id] = state.scheduler.tasks.length;
     } else if (node.kind === "entry") {
-      counts[node.id] = state.tasks.filter((task) => !task.completed && task.nodeId === node.id).length;
+      counts[node.id] = plainEntryIds.has(node.id)
+        ? 0
+        : state.tasks.filter((task) => !task.completed && task.nodeId === node.id).length;
     } else if (node.kind === "category") {
       const ids = descendantEntryIds(node.id, state.nodes);
-      counts[node.id] = state.tasks.filter((task) => !task.completed && ids.has(task.nodeId)).length;
+      counts[node.id] = state.tasks.filter(
+        (task) => !task.completed && ids.has(task.nodeId) && !plainEntryIds.has(task.nodeId)
+      ).length;
     }
   }
   return counts;

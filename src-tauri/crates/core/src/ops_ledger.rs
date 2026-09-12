@@ -27,6 +27,9 @@ pub fn ledger_dispatch(
     ctx: &ExecContext,
     meta: &mut Meta,
 ) -> CoreResult<Value> {
+    // 金融数据敏感（v0.7.2）：一切改账本的动作都必须先拿到用户的明确同意。
+    // 门收在分发层，GUI/Android 桥恒带 controls.yes = true（GUI 操作即用户确认），不受影响。
+    ledger_write_confirmation(action, inv)?;
     match action {
         "add" => ledger_add(inv, ctx, meta),
         "get" => ledger_get(inv, ctx, meta),
@@ -51,6 +54,61 @@ pub fn ledger_dispatch(
             format!("未知 ledger 动作 `{other}`"),
         )),
     }
+}
+
+/// 记账写动作的确认门（v0.7.2）：金融数据敏感，Agent 改账本前必须先向用户说明这次
+/// 增删改的内容并得到明确同意，同意后追加 --yes 再执行；只读动作永远不设门。
+///
+/// 为什么 remove / accountRemove / categoryRemove / import **不在这里设卡**：这四个处理器
+/// 内部已各有一道更具体的确认门（它们先读账本，说得出要删的那笔金额、账户名、连带笔数、
+/// 导入条数），保留信息量更大的那一道；两层门只会用两条不一样的文案各拦一次，反而混乱。
+/// 其余写动作没有内部门，统一收在这条分发层的门上——一个动作只有一道门。
+fn ledger_write_confirmation(action: &str, inv: &Invocation) -> CoreResult<()> {
+    let label = match action {
+        "add" => "在账本里记一笔",
+        "transfer" => "在账户间转账",
+        "modify" => "修改账本里的一笔",
+        "accountAdd" => "新增资金账户",
+        "accountModify" => "修改资金账户",
+        "categoryAdd" => "新增记账分类",
+        "categoryModify" => "修改记账分类",
+        // 只读动作与内部已有确认门的动作（remove/accountRemove/categoryRemove/import）直接放行
+        _ => return Ok(()),
+    };
+    const WHY: &str = "记账数据敏感，改动账本前必须先向用户说明这次增删改的内容并得到明确同意；用户同意后追加 --yes 再执行";
+    let params = &inv.params;
+    let text = |key: &str| -> String {
+        match params.get(key) {
+            Some(Value::String(raw)) => raw.trim().to_string(),
+            Some(Value::Number(raw)) => raw.to_string(),
+            _ => String::new(),
+        }
+    };
+    // 关键字段顺手带上（金额/账户/日期/名称），说明更具体；缺了就空着，不值得为文案翻账本
+    let mut bits: Vec<String> = Vec::new();
+    for (key, name) in [
+        ("amount", "金额"),
+        ("account", "账户"),
+        ("from", "转出"),
+        ("to", "转入"),
+        ("date", "日期"),
+        ("name", "名称"),
+    ] {
+        let value = text(key);
+        if !value.is_empty() {
+            bits.push(format!("{name} {value}"));
+        }
+    }
+    let detail = if bits.is_empty() {
+        String::new()
+    } else {
+        format!("（{}）", bits.join("，"))
+    };
+    require_confirmation(
+        &inv.controls,
+        format!("将{label}{detail}。{WHY}"),
+        json!({ "type": "ledger", "action": action }),
+    )
 }
 
 // ---------------------------------------------------------------------------

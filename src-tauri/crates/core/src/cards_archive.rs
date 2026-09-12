@@ -149,7 +149,7 @@ pub fn parse_zip(bytes: &[u8]) -> CoreResult<ParsedCards> {
         ));
     }
 
-    let mut out = ParsedCards::default();
+    let mut images: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     let mut total_bytes: u64 = 0;
 
     // 第一遍只收插图：导出包里 images/ 排在所有 md 之后，
@@ -176,11 +176,12 @@ pub fn parse_zip(bytes: &[u8]) -> CoreResult<ParsedCards> {
         }
         let base = ref_basename(&name).to_string();
         if is_safe_image_name(&base) {
-            out.images.entry(base).or_insert(raw);
+            images.entry(base).or_insert(raw);
         }
     }
 
-    // 第二遍读 md，一个文件一张卡片；包里有对应插图才把引用归一回裸文件名
+    // 第二遍读 md，一个文件一张卡片；正文交给共用的 finalize_cards 做引用归一 + 修剪
+    let mut texts: Vec<String> = Vec::new();
     for index in 0..archive.len() {
         let Ok(mut file) = archive.by_index(index) else { continue };
         if file.is_dir() || file.size() > MAX_FILE_BYTES {
@@ -202,15 +203,105 @@ pub fn parse_zip(bytes: &[u8]) -> CoreResult<ParsedCards> {
             ));
         }
         // 用户可能在别的编辑器里存成 GBK：lossy 解码保住能读的部分，别整篇丢掉
-        let text = String::from_utf8_lossy(&raw);
-        let markdown = rewrite_image_refs(text.trim(), |src| {
-            let base = ref_basename(src);
-            // 包里有这张图才归一回裸文件名；没有就原样保留（网络图片不必理会）
-            out.images.contains_key(base).then(|| base.to_string())
-        });
-        if !markdown.trim().is_empty() {
-            out.cards.push(markdown);
+        texts.push(String::from_utf8_lossy(&raw).into_owned());
+    }
+    Ok(finalize_cards(images, &texts))
+}
+
+/// 解析一个**普通文件夹**（v0.7.2）：桌面用户想直接指着一个装满 markdown 和图片的目录导入，
+/// zip 不是必须的——反正都是索引 markdown 和图片。递归收集 `.md`/`.markdown` 与图片文件，
+/// 护栏（文件数 / 单文件体积 / 总体积 / 文件名穿越 / lossy 解码）与 zip 路径完全同一套口径，
+/// 产出同样的 `ParsedCards`，后续落盘逻辑不必区分来源。
+pub fn parse_folder(root: &std::path::Path) -> CoreResult<ParsedCards> {
+    if !root.is_dir() {
+        return Err(CoreError::validation(
+            "CARDS_IMPORT_INVALID",
+            format!("`{}` 不是一个文件夹", root.display()),
+        ));
+    }
+
+    // 先收全文件路径再分类读（与 zip 的两遍扫描同一条顺序语义：图片先于 md 可见）
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else { continue };
+            let path = entry.path();
+            if file_type.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            if files.len() >= MAX_FILES {
+                return Err(CoreError::validation(
+                    "CARDS_IMPORT_TOO_LARGE",
+                    format!("文件夹内文件数超过 {MAX_FILES} 上限"),
+                ));
+            }
+            files.push(path);
         }
     }
-    Ok(out)
+    // 字典序 = 确定性顺序（zip 里是包内顺序），同一目录导两遍结果一致
+    files.sort();
+
+    let mut images: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    let mut texts: Vec<String> = Vec::new();
+    let mut total_bytes: u64 = 0;
+    for path in &files {
+        let Some(name) = path.file_name().and_then(|raw| raw.to_str()) else { continue };
+        let is_img = is_image_name(name);
+        let is_md = is_markdown(name);
+        if !is_img && !is_md {
+            continue;
+        }
+        let Ok(raw) = std::fs::read(path) else { continue };
+        if raw.len() as u64 > MAX_FILE_BYTES {
+            continue;
+        }
+        total_bytes += raw.len() as u64;
+        if total_bytes > MAX_ARCHIVE_BYTES as u64 {
+            return Err(CoreError::validation(
+                "CARDS_IMPORT_TOO_LARGE",
+                "文件夹内容总体积超过上限",
+            ));
+        }
+        if is_img {
+            // 递归收集后 name 已是裸文件名；落盘护栏照样过一道
+            if is_safe_image_name(name) {
+                images.entry(name.to_string()).or_insert(raw);
+            }
+        } else {
+            // 与 zip 同口径：别的编辑器存的 GBK 也按 lossy 解码，保住能读的部分
+            texts.push(String::from_utf8_lossy(&raw).into_owned());
+        }
+    }
+    Ok(finalize_cards(images, &texts))
+}
+
+/// md pass + 引用图片修剪（v0.7.2），zip 与文件夹两条路径共用：
+/// 一个 md 一张卡片，包/目录里有对应插图才把引用归一回裸文件名；同时记下**被引用**的图片集合，
+/// 最后把没人引用的图片从结果里剔掉——它们若跟着落盘，就是条目插图目录里的孤儿图。
+fn finalize_cards(mut images: BTreeMap<String, Vec<u8>>, texts: &[String]) -> ParsedCards {
+    let mut cards: Vec<String> = Vec::new();
+    let mut referenced: HashSet<String> = HashSet::new();
+    for text in texts {
+        let markdown = rewrite_image_refs(text.trim(), |src| {
+            let base = ref_basename(src);
+            // 有这张图才归一回裸文件名；没有就原样保留（网络图片不必理会）
+            if images.contains_key(base) {
+                referenced.insert(base.to_string());
+                Some(base.to_string())
+            } else {
+                None
+            }
+        });
+        if !markdown.trim().is_empty() {
+            cards.push(markdown);
+        }
+    }
+    images.retain(|name, _| referenced.contains(name));
+    ParsedCards { cards, images }
 }

@@ -1,11 +1,12 @@
 //! 一般卡片 Markdown 压缩包（cards_archive）往返测试：命名、插图随包、引用归一、
 //! 网络图片不碰、护栏。
 
-use std::io::{Cursor, Read};
+use std::io::{Cursor, Read, Write};
 
 use kxtodo_core::cards_archive;
 use kxtodo_core::model::Item;
-use zip::ZipArchive;
+use zip::write::SimpleFileOptions;
+use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 fn item(id: &str, markdown: &str, created_at: &str) -> Item {
     serde_json::from_value(serde_json::json!({
@@ -103,4 +104,37 @@ fn image_bytes_survive_verbatim() {
     let mut raw = Vec::new();
     file.read_to_end(&mut raw).expect("read");
     assert_eq!(raw, payload);
+}
+
+#[test]
+fn parse_returns_only_referenced_images() {
+    // 手工搭一个包：两张 md（一张引用 used.png，一张不带图）+ 两张图（另一张没人引用）。
+    // 没人引用的图不该进解析结果——否则跟着落盘就是条目插图目录里的孤儿图（v0.7.2）。
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    writer.start_file("20260905_带图.md", options).expect("start md");
+    writer
+        .write_all("第一张卡片\n\n![](images/used.png)".as_bytes())
+        .expect("write md");
+    writer.start_file("20260905_无图.md", options).expect("start md2");
+    writer
+        .write_all("第二张卡片，没有图".as_bytes())
+        .expect("write md2");
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    writer.start_file("images/used.png", stored).expect("start img");
+    writer.write_all(&[1, 2, 3]).expect("write img");
+    writer.start_file("images/orphan.png", stored).expect("start orphan");
+    writer.write_all(&[4, 5, 6]).expect("write orphan");
+    let zip = writer.finish().expect("finish").into_inner();
+
+    let parsed = cards_archive::parse_zip(&zip).expect("parse");
+    assert_eq!(parsed.cards.len(), 2, "一个 md 一张卡片");
+    assert!(
+        parsed.cards[0].contains("![](used.png)"),
+        "引用归一回裸文件名：{}",
+        parsed.cards[0]
+    );
+    assert_eq!(parsed.images.len(), 1, "只带被引用的图");
+    assert_eq!(parsed.images.get("used.png").map(Vec::len), Some(3));
+    assert!(!parsed.images.contains_key("orphan.png"), "没人引用的图不进结果");
 }

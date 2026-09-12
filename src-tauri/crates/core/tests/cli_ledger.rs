@@ -7,8 +7,10 @@ use common::TestEnv;
 use serde_json::Value;
 
 fn add(env: &TestEnv, args: &[&str]) -> Value {
+    // 记账写操作全部有确认门（v0.7.2）：测试里的写都视为已获用户同意
     let mut full = vec!["ledger", "add"];
     full.extend_from_slice(args);
+    full.push("--yes");
     env.ok(&full)
 }
 
@@ -66,7 +68,7 @@ fn add_list_modify_remove_round_trip() {
 
     // 修改只动给了的字段
     let id = entry["id"].as_str().unwrap();
-    let modified = env.ok(&["ledger", "modify", "--id", id, "--amount", "35", "--note", "加了一份小菜"]);
+    let modified = env.ok(&["ledger", "modify", "--id", id, "--amount", "35", "--note", "加了一份小菜", "--yes"]);
     assert_eq!(modified["amountCents"], 3500);
     assert_eq!(modified["note"], "加了一份小菜");
     assert_eq!(modified["categoryId"], entry["categoryId"], "没给的字段不动");
@@ -85,7 +87,7 @@ fn transfer_moves_balance_without_touching_income_expense() {
 
     // 用名字转账（CLI 认名字也认 id）
     env.ok(&[
-        "ledger", "account-add", "--name", "零钱", "--kind", "cash", "--initial", "100",
+        "ledger", "account-add", "--name", "零钱", "--kind", "cash", "--initial", "100", "--yes",
     ]);
     env.ok(&[
         "ledger",
@@ -98,6 +100,7 @@ fn transfer_moves_balance_without_touching_income_expense() {
         "40",
         "--date",
         "2026-09-08",
+        "--yes",
     ]);
 
     let balance = env.ok(&["ledger", "balance"]);
@@ -123,10 +126,10 @@ fn transfer_moves_balance_without_touching_income_expense() {
     assert_eq!(stats["totals"]["expenseCents"], 0, "转账不计支出");
     assert_eq!(stats["totals"]["transferCents"], 4000);
 
-    // 转出转入不能是同一个账户
+    // 转出转入不能是同一个账户（带上 --yes 才走到校验，确认门先于一切拦截）
     env.err(
         &[
-            "ledger", "transfer", "--from", "零钱", "--to", "零钱", "--amount", "1",
+            "ledger", "transfer", "--from", "零钱", "--to", "零钱", "--amount", "1", "--yes",
         ],
         2,
     );
@@ -178,15 +181,15 @@ fn accounts_and_categories_management_rules() {
 
     // 加子分类挂到大类下
     let added = env.ok(&[
-        "ledger", "category-add", "--name", "咖啡", "--parent", "餐饮", "--icon", "Coffee",
+        "ledger", "category-add", "--name", "咖啡", "--parent", "餐饮", "--icon", "Coffee", "--yes",
     ]);
     assert!(added["parentId"].as_str().is_some());
 
-    // 两级封顶：子分类不能再挂子分类
+    // 两级封顶：子分类不能再挂子分类（带 --yes 才走到校验）
     let child_id = added["id"].as_str().unwrap();
     env.err(
         &[
-            "ledger", "category-add", "--name", "手冲", "--parent", child_id,
+            "ledger", "category-add", "--name", "手冲", "--parent", child_id, "--yes",
         ],
         2,
     );
@@ -234,8 +237,8 @@ fn excel_export_import_round_trip() {
 
     add(&env, &["--amount", "30.50", "--account", "微信", "--category", "午餐", "--date", "2026-09-08", "--note", "小面"]);
     add(&env, &["--kind", "income", "--amount", "18155", "--account", "储蓄卡", "--category", "工资薪金", "--date", "2026-09-08"]);
-    env.ok(&["ledger", "account-add", "--name", "零钱", "--kind", "cash", "--initial", "100"]);
-    env.ok(&["ledger", "transfer", "--from", "零钱", "--to", "微信", "--amount", "40", "--date", "2026-09-09"]);
+    env.ok(&["ledger", "account-add", "--name", "零钱", "--kind", "cash", "--initial", "100", "--yes"]);
+    env.ok(&["ledger", "transfer", "--from", "零钱", "--to", "微信", "--amount", "40", "--date", "2026-09-09", "--yes"]);
 
     let out = env.path().join("ledger.zip");
     let exported = env.ok(&["ledger", "export", "--out", &out.to_string_lossy()]);
@@ -270,4 +273,40 @@ fn excel_export_import_round_trip() {
 
     // 导入要确认门（重复导入会产生重复账目）
     env.err(&["ledger", "import", "--file", &out.to_string_lossy()], 10);
+}
+
+#[test]
+fn ledger_writes_without_yes_are_gated_and_touch_nothing() {
+    let env = TestEnv::fresh();
+
+    // 记一笔不带 --yes：确认门拦下（退出码 10 / CONFIRMATION_REQUIRED），账本分毫未动
+    let error = env.err(&["ledger", "add", "--amount", "12", "--account", "现金"], 10);
+    assert_eq!(error["code"], "CONFIRMATION_REQUIRED");
+    let message = error["message"].as_str().unwrap();
+    assert!(message.contains("记账数据敏感"), "确认文案要告诉 Agent 先经用户同意：{message}");
+    assert!(message.contains("--yes"), "确认文案要指路 --yes：{message}");
+    let listed = env.ok(&["ledger", "list"]);
+    assert_eq!(listed["total"], 0, "被拦下的写不落账");
+
+    // 其余写动作同样被拦
+    env.err(&["ledger", "account-add", "--name", "零钱"], 10);
+    env.err(&["ledger", "category-add", "--name", "咖啡"], 10);
+    env.err(&["ledger", "transfer", "--from", "现金", "--to", "微信", "--amount", "1"], 10);
+
+    // 带上 --yes 才落账
+    add(&env, &["--amount", "12", "--account", "现金"]);
+    let listed = env.ok(&["ledger", "list"]);
+    assert_eq!(listed["total"], 1);
+
+    // modify 也被拦；拦下的修改不生效
+    let id = listed["items"].as_array().unwrap()[0]["id"].as_str().unwrap();
+    env.err(&["ledger", "modify", "--id", id, "--amount", "99"], 10);
+    let got = env.ok(&["ledger", "get", "--id", id]);
+    assert_eq!(got["amountCents"], 1200, "被拦下的修改不动数据");
+
+    // 读操作永远不需要确认
+    env.ok(&["ledger", "accounts"]);
+    env.ok(&["ledger", "categories"]);
+    env.ok(&["ledger", "stats"]);
+    env.ok(&["ledger", "balance"]);
 }

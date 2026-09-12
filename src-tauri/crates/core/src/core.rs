@@ -335,19 +335,39 @@ fn task_export_markdown(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) ->
     Ok(json!({ "cards": tasks.len(), "bytes": archive.len(), "name": name }))
 }
 
-/// 从 Markdown 压缩包导入卡片：一个 md 一张卡片；包内 `images/` 里读得到的插图落回
-/// 条目插图目录（**已存在的同名文件不覆盖**——图片是内容寻址的不可变 blob，重导必须幂等）。
+/// 从 Markdown 压缩包（`zipBase64`）或**普通文件夹**（`folderPath`，v0.7.2，二选一）导入卡片：
+/// 一个 md 一张卡片；读得到的插图落回条目插图目录（**已存在的同名文件不覆盖**——图片是
+/// 内容寻址的不可变 blob，重导必须幂等），且只落**被引用**的图（无人引用的会在解析层被剔掉，
+/// 不然就是孤儿图）。
 fn task_import_markdown(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
     let params = &inv.params;
     let node_id = required_str(params, "nodeId")?;
-    let encoded = required_str(params, "zipBase64")?;
-    use base64::Engine as _;
-    let raw = base64::engine::general_purpose::STANDARD
-        .decode(encoded.as_bytes())
-        .map_err(|error| {
-            CoreError::validation("CARDS_IMPORT_INVALID", format!("压缩包内容解码失败：{error}"))
-        })?;
-    let parsed = crate::cards_archive::parse_zip(&raw)?;
+    let encoded = param_str(params, "zipBase64").filter(|raw| !raw.trim().is_empty());
+    let folder = param_str(params, "folderPath").filter(|raw| !raw.trim().is_empty());
+    let parsed = match (encoded, folder) {
+        (Some(encoded), None) => {
+            use base64::Engine as _;
+            let raw = base64::engine::general_purpose::STANDARD
+                .decode(encoded.as_bytes())
+                .map_err(|error| {
+                    CoreError::validation("CARDS_IMPORT_INVALID", format!("压缩包内容解码失败：{error}"))
+                })?;
+            crate::cards_archive::parse_zip(&raw)?
+        }
+        (None, Some(path)) => crate::cards_archive::parse_folder(std::path::Path::new(&path))?,
+        (Some(_), Some(_)) => {
+            return Err(CoreError::validation(
+                "CARDS_IMPORT_INVALID",
+                "--zipBase64 与 --folderPath 互斥，只能给其中一个",
+            ))
+        }
+        (None, None) => {
+            return Err(CoreError::validation(
+                "MISSING_PARAM",
+                "缺少导入内容：需要 --zipBase64（压缩包）或 --folderPath（文件夹）其中之一",
+            ))
+        }
+    };
 
     // 插图先落盘（事务外）：正文引用归一后就是裸文件名，卡片写进去即可直接渲染
     let image_dir = ctx.repo.layout.entry_img_dir(&node_id);
@@ -398,6 +418,30 @@ fn task_import_markdown(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) ->
         "skipped": skipped,
         "images": images_written,
     }))
+}
+
+/// 任务侧保存后的插图清理（v0.7.2）：对着**写入后**的文件内容扫给定条目的插图目录，
+/// 删掉没有任何卡片再引用的图片（宽限窗保护在途图片，见 `image_gc`）。
+/// 清理失败一律吞掉——绝不让保存本身因为清理而失败。
+fn sweep_entry_images(
+    ctx: &ExecContext,
+    data: &crate::model::DataFile,
+    entry_ids: impl IntoIterator<Item = String>,
+) {
+    let mut seen = std::collections::HashSet::new();
+    for entry_id in entry_ids {
+        if entry_id.is_empty() || !seen.insert(entry_id.clone()) {
+            continue;
+        }
+        let dir = ctx.repo.layout.entry_img_dir(&entry_id);
+        let markdowns: Vec<&str> = data
+            .tasks
+            .iter()
+            .filter(|item| item.node_id == entry_id)
+            .map(|item| item.markdown.as_str())
+            .collect();
+        crate::image_gc::sweep_unreferenced(&dir, markdowns, crate::image_gc::GRACE);
+    }
 }
 
 fn task_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
@@ -493,6 +537,8 @@ fn task_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<
                 }));
             }
             let mut created = Value::Null;
+            // `add` 会被移进写闭包，先留一份条目 id 供保存后的插图清理
+            let sweep_entry = add.entry_id.clone();
             let (file, outcome) = ctx.repo.write_data(
                 inv.controls.if_revision,
                 inv.controls.idempotency_key.as_deref(),
@@ -506,7 +552,7 @@ fn task_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<
             )?;
             apply_write_outcome(meta, Domain::Data, &outcome);
             notify_host(ctx, Domain::Data, outcome.revision, vec![]);
-            let _ = file;
+            sweep_entry_images(ctx, &file, [sweep_entry]);
             if outcome.replayed {
                 return Ok(outcome.replay_summary.unwrap_or(created));
             }
@@ -861,6 +907,10 @@ fn task_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResu
                 );
             }
             let expected_updated_at = param_str(params, "expectedUpdatedAt");
+            // `mutate` 会移走 id/changes，先留一份 id；条目可能因 --entry-id 移动前后不同，
+            // 两边的插图都可能因此变成孤儿图，所以前后各记一次
+            let sweep_id = id.clone();
+            let mut sweep_entries: Vec<String> = Vec::new();
             let mutate = move |file: &mut crate::model::DataFile| -> CoreResult<Value> {
                 if let Some(expected) = &expected_updated_at {
                     let current = task_ops::get_item_typed(file, &id)?;
@@ -884,12 +934,18 @@ fn task_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResu
                 return Ok(json!({ "dryRun": true, "action": "modify", "resource": view }));
             }
             let mut updated = Value::Null;
-            let (_file, outcome) = ctx.repo.write_data(
+            let (file, outcome) = ctx.repo.write_data(
                 inv.controls.if_revision,
                 inv.controls.idempotency_key.as_deref(),
                 &inv.command,
                 |file| {
+                    if let Ok(current) = task_ops::get_item_typed(file, &sweep_id) {
+                        sweep_entries.push(current.node_id.clone());
+                    }
                     let view = mutate(file)?;
+                    if let Ok(current) = task_ops::get_item_typed(file, &sweep_id) {
+                        sweep_entries.push(current.node_id.clone());
+                    }
                     updated = view.clone();
                     Ok(idem_summary(&view))
                 },
@@ -901,6 +957,7 @@ fn task_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResu
                 outcome.revision,
                 vec![required_str(params, "id")?],
             );
+            sweep_entry_images(ctx, &file, sweep_entries);
             if outcome.replayed {
                 return Ok(outcome.replay_summary.unwrap_or(updated));
             }
@@ -937,6 +994,8 @@ fn task_remove(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResu
     match kind_raw.as_str() {
         "item" => {
             let item = task_ops::get_item_typed(&data, &id)?;
+            // 删掉卡片后它引用的插图可能变成孤儿图：记住条目，保存后清理
+            let sweep_entry = item.node_id.clone();
             let plan = json!({
                 "type": "item",
                 "id": id,
@@ -950,7 +1009,7 @@ fn task_remove(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResu
             if inv.controls.dry_run {
                 return Ok(json!({ "dryRun": true, "action": "remove", "plan": plan }));
             }
-            let (_file, outcome) = ctx.repo.write_data(
+            let (file, outcome) = ctx.repo.write_data(
                 inv.controls.if_revision,
                 inv.controls.idempotency_key.as_deref(),
                 &inv.command,
@@ -961,6 +1020,7 @@ fn task_remove(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResu
             )?;
             apply_write_outcome(meta, Domain::Data, &outcome);
             notify_host(ctx, Domain::Data, outcome.revision, vec![id.clone()]);
+            sweep_entry_images(ctx, &file, [sweep_entry]);
             return Ok(json!({
                 "removed": plan,
                 "revision": outcome.revision,

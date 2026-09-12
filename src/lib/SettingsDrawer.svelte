@@ -29,16 +29,19 @@
   import { checkForUpdate, startUpdate, updateProgress, type UpdateInfo } from "./updater";
   import { isMobile } from "./platform";
   import { caps } from "./capabilities";
-  import { ArrowLeft, Eye, EyeOff, History, X } from "@lucide/svelte";
+  import { ArrowLeft, Eraser, Eye, EyeOff, History, Image as ImageIcon, RotateCcw, X } from "@lucide/svelte";
   import {
     scalePercentValue, buildSettingsDrawerStyle, avatarStyle, avatarInitial
   } from "./styles";
   import {
-    isTauriRuntime, pickImageFile, saveAvatarImage, avatarImageUrl, openExternalUrl, trayAvailable
+    isTauriRuntime, pickImageFile, saveAvatarImage, avatarImageUrl, openExternalUrl, trayAvailable,
+    importBackgroundImage, backgroundImageUrl, saveBackgroundImageFromDataUrl
   } from "./backend";
-  import { avatarCache, resolveAvatarSrc } from "./images";
+  import { avatarCache, resolveAvatarSrc, primeImageCache, localImageRef, isLocalImageRef } from "./images";
+  import { themePresets } from "./defaults";
   import Dropdown from "./Dropdown.svelte";
   import NumberField from "./NumberField.svelte";
+  import SettingsSection from "./SettingsSection.svelte";
   import type { Settings, SyncMode } from "./types";
 
   let avatarFileInput: HTMLInputElement;
@@ -67,6 +70,78 @@
 
   function updateNotifications<K extends keyof Settings["notifications"]>(field: K, value: Settings["notifications"][K]): void {
     void setConfigAction(`notifications.${field}`, value);
+  }
+
+  // ---- 新建分组默认外观（appearance.newNodeDefaults）----
+
+  let newNodeImageInput: HTMLInputElement;
+  let newNodeColorInput: HTMLInputElement;
+  /** 透明度条拖动期间用本地草稿：每格都写一次设置文件太吵，change 时才提交 */
+  let newNodeOpacityLive = false;
+  let newNodeOpacityValue = 28;
+
+  $: newNodeDefaults = $appSettings.appearance.newNodeDefaults;
+  $: if (!newNodeOpacityLive) {
+    newNodeOpacityValue = Math.round((newNodeDefaults.backgroundOpacity || 0.28) * 100);
+  }
+  $: newNodePresets = $appSettings.appearance.themePresets.length
+    ? $appSettings.appearance.themePresets
+    : themePresets;
+
+  function updateNewNode<K extends keyof Settings["appearance"]["newNodeDefaults"]>(
+    field: K,
+    value: Settings["appearance"]["newNodeDefaults"][K]
+  ): void {
+    void setConfigAction(`appearance.newNodeDefaults.${field}`, value);
+  }
+
+  function commitNewNodeOpacity(): void {
+    newNodeOpacityLive = false;
+    updateNewNode("backgroundOpacity", newNodeOpacityValue / 100);
+  }
+
+  /**
+   * 换默认背景图时**不删旧文件**：此前按旧默认建出来的条目还指着它，
+   * 删了它们的背景就空了（条目自己换图时才删，那是它独有的文件）。
+   */
+  async function pickNewNodeImage(): Promise<void> {
+    if (!isTauriRuntime || !caps.nativeFileDialogs) {
+      newNodeImageInput.click();
+      return;
+    }
+    try {
+      const path = await pickImageFile();
+      if (!path) return;
+      const filename = await importBackgroundImage(path);
+      primeImageCache(filename, await backgroundImageUrl(filename));
+      updateNewNode("backgroundImage", localImageRef(filename));
+    } catch (error) {
+      showToast(`背景图片读取失败：${String(error)}`);
+    }
+  }
+
+  async function uploadNewNodeImage(event: Event): Promise<void> {
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLInputElement) || !target.files?.[0]) return;
+    try {
+      const dataUrl = await fileToDataUrl(target.files[0]);
+      if (isTauriRuntime) {
+        const filename = await saveBackgroundImageFromDataUrl(dataUrl);
+        primeImageCache(filename, await backgroundImageUrl(filename));
+        updateNewNode("backgroundImage", localImageRef(filename));
+      } else {
+        updateNewNode("backgroundImage", dataUrl);
+      }
+    } catch (error) {
+      showToast(`背景图片读取失败：${String(error)}`);
+    } finally {
+      target.value = "";
+    }
+  }
+
+  function clearNewNodeBackground(): void {
+    updateNewNode("backgroundColor", "");
+    updateNewNode("backgroundImage", "");
   }
 
   function testNotification(): void {
@@ -668,8 +743,7 @@
     {/if}
   </div>
 
-  <section>
-    <h3>个人资料</h3>
+  <SettingsSection title="个人资料" storageKey="profile">
     <div class="avatar-setting">
       <span class="avatar large" style={avStyle}>{$appSettings.profile.avatar ? "" : avInitial}</span>
       <button class="settings-button" type="button" on:click={uploadAvatar}>上传头像</button>
@@ -683,10 +757,9 @@
       邮箱
       <input value={$appSettings.profile.email} on:input={(event) => updateProfile("email", event.currentTarget.value)} />
     </label>
-  </section>
+  </SettingsSection>
 
-  <section>
-    <h3>显示与链接</h3>
+  <SettingsSection title="显示与链接" storageKey="appearance">
     <!-- 界面缩放对移动端同样生效（CSS transform 缩放）；原生 setWebviewZoom
          仍由 backend.ts 的 caps.desktop 门控在移动端 no-op。 -->
     <div class="settings-row number-row">
@@ -787,10 +860,96 @@
         on:change={(event) => updateAppearance("linkOpenMode", event.detail as Settings["appearance"]["linkOpenMode"])}
       />
     </div>
-  </section>
+  </SettingsSection>
 
-  <section>
-    <h3>特性开关</h3>
+  <SettingsSection title="新建分组默认外观" storageKey="new-node">
+    <p class="muted">新建的分组与条目直接带上这套外观；留空就是跟随应用默认。</p>
+
+    <div class="settings-row">
+      <span>主题色</span>
+      <div class="new-node-color">
+        <label class="ui-color-picker" title="新建分组的标题与控件颜色">
+          <span style={`--swatch: ${newNodeDefaults.accent || "#2564cf"}`}></span>
+          <input
+            type="color"
+            value={newNodeDefaults.accent || "#2564cf"}
+            on:change={(event) => updateNewNode("accent", event.currentTarget.value)}
+          />
+        </label>
+        <span class="ui-color-value">{newNodeDefaults.accent || "默认"}</span>
+        {#if newNodeDefaults.accent}
+          <button class="settings-button" type="button" on:click={() => updateNewNode("accent", "")}>清除</button>
+        {/if}
+      </div>
+    </div>
+
+    <div class="settings-block">
+      <span class="settings-block-label">背景配色</span>
+      <div class="color-grid">
+        {#each newNodePresets as preset, index (preset.name + index)}
+          <button
+            type="button"
+            title={preset.name}
+            class:editing={newNodeDefaults.backgroundColor === preset.color}
+            style={`--swatch: ${preset.color}; --accent-color: ${preset.color}`}
+            on:click={() => updateNewNode("backgroundColor", preset.color)}
+          ></button>
+        {/each}
+        <button type="button" class="palette-button" title="自定义颜色" on:click={() => newNodeColorInput.click()}></button>
+        {#if newNodeDefaults.backgroundColor}
+          <button type="button" class="reset-bg-button" title="恢复默认配色" on:click={() => updateNewNode("backgroundColor", "")}>
+            <RotateCcw size={14} />
+          </button>
+        {/if}
+      </div>
+      <input
+        bind:this={newNodeColorInput}
+        class="hidden-file"
+        type="color"
+        value={newNodeDefaults.backgroundColor || "#f4f1ea"}
+        on:change={(event) => updateNewNode("backgroundColor", event.currentTarget.value)}
+      />
+    </div>
+
+    <div class="settings-block">
+      <span class="settings-block-label">背景图片</span>
+      <label class="background-link">
+        图片链接
+        <input
+          value={isLocalImageRef(newNodeDefaults.backgroundImage) ? "" : newNodeDefaults.backgroundImage}
+          placeholder={isLocalImageRef(newNodeDefaults.backgroundImage) ? "已上传本地图片，填链接可替换" : "https://..."}
+          on:change={(event) => updateNewNode("backgroundImage", event.currentTarget.value.trim())}
+        />
+      </label>
+      <label class="opacity-row">
+        图片透明度
+        <input
+          type="range"
+          min="0"
+          max="80"
+          value={newNodeOpacityValue}
+          on:input={(event) => {
+            newNodeOpacityLive = true;
+            newNodeOpacityValue = Number(event.currentTarget.value);
+          }}
+          on:change={commitNewNodeOpacity}
+        />
+      </label>
+      <div class="new-node-actions">
+        <button class="settings-button" type="button" on:click={() => void pickNewNodeImage()}>
+          <ImageIcon size={15} /> 上传图片
+        </button>
+        {#if newNodeDefaults.backgroundImage}
+          <button class="settings-button" type="button" on:click={() => updateNewNode("backgroundImage", "")}>
+            <Eraser size={15} /> 清除图片
+          </button>
+        {/if}
+      </div>
+      <input bind:this={newNodeImageInput} class="hidden-file" type="file" accept="image/*" on:change={uploadNewNodeImage} />
+    </div>
+  </SettingsSection>
+
+  <SettingsSection title="特性开关" storageKey="features">
     <div class="settings-card">
       <label class="toggle-row" title="在左侧栏分类行显示该分类下未完成条目数。">
         <span>显示分类角标</span>
@@ -817,11 +976,10 @@
         />
       </label>
     </div>
-  </section>
+  </SettingsSection>
 
   {#if caps.trayLifecycle}
-    <section>
-      <h3>窗口与系统</h3>
+    <SettingsSection title="窗口与系统" storageKey="lifecycle">
       <div class="settings-row">
         <span>关闭按钮</span>
         <Dropdown
@@ -847,11 +1005,10 @@
       {:else}
         <p class="muted">托盘图标右键菜单可打开窗口或退出应用；再次启动程序会聚焦已运行窗口。</p>
       {/if}
-    </section>
+    </SettingsSection>
   {/if}
 
-  <section>
-    <h3>消息通知</h3>
+  <SettingsSection title="消息通知" storageKey="notifications">
     {#if caps.popupNotificationWindow}
       <div class="settings-row number-row">
         <span>自动隐藏</span>
@@ -927,11 +1084,10 @@
         <button type="button" on:click={testNotification}>发送测试通知</button>
       </div>
     {/if}
-  </section>
+  </SettingsSection>
 
   {#if caps.globalShortcuts}
-    <section>
-      <h3>快捷键</h3>
+    <SettingsSection title="快捷键" storageKey="shortcuts">
       <label class="shortcut-row">
         新建内容
         <input value={$appSettings.shortcuts.newTask} on:change={(event) => updateShortcut("newTask", event.currentTarget.value)} />
@@ -957,13 +1113,12 @@
         <input value={$appSettings.shortcuts.syncNow} on:change={(event) => updateShortcut("syncNow", event.currentTarget.value)} />
         <small>手动跑一轮同步</small>
       </label>
-    </section>
+    </SettingsSection>
   {/if}
 
   {#if $appSettings.features.sync !== false}
-  <section>
-    <div class="section-head">
-      <h3>数据同步</h3>
+  <SettingsSection title="数据同步" storageKey="sync">
+    <svelte:fragment slot="actions">
       <button
         class="icon-button"
         type="button"
@@ -971,7 +1126,7 @@
         aria-label="配对历史"
         on:click={toggleHistory}
       ><History size={16} /></button>
-    </div>
+    </svelte:fragment>
 
     {#if historyOpen}
       <div class="sync-popover">
@@ -1315,16 +1470,14 @@
         </div>
       {/if}
     </div>
-  </section>
+  </SettingsSection>
 {:else}
-  <section>
-    <h3>数据同步</h3>
+  <SettingsSection title="数据同步" storageKey="sync">
     <p class="muted">同步功能已在特性开关里停用：自动同步停止、同步配置隐藏、已有配对信息保留。勾回「启动同步功能」即恢复。</p>
-  </section>
+  </SettingsSection>
 {/if}
 
-  <section>
-    <h3>关于与更新</h3>
+  <SettingsSection title="关于与更新" storageKey="about">
     <div class="settings-row">
       <span>当前版本</span>
       <span class="muted">v{$appVersion || "…"}</span>
@@ -1368,5 +1521,5 @@
     {#if updateCheckError}
       <p class="update-error">{updateCheckError}</p>
     {/if}
-  </section>
+  </SettingsSection>
 </aside>

@@ -158,7 +158,7 @@ pub enum Commands {
     },
     /// 记账：收支流水、资金账户、两级分类、统计与 Excel 导入导出
     #[command(
-        long_about = "记账与 diary 平行但自成一域：账本住在自己的 ledger.json 里（第五个领域文件）。\n金额一律按「元」输入（CLI 与 Excel 都是两位小数的元），core 内部存整数分。\n转账（transfer）不计入收支统计，只改两个账户的余额。\n\n动作：\n  add            记一笔（--kind expense|income，--amount 元，--account 账户名或 ID）\n  transfer       账户间转账（--from --to --amount）\n  get / list     读取 / 列出（--date 某天、--from --to 区间、--kind、--account、--category）\n  modify         修改一笔\n  remove         删除一笔（high-risk-write）\n  accounts       列出账户与各自余额、净资产\n  account-add / account-modify / account-remove   账户管理（名下有账的账户不让删）\n  categories     列出两级分类（--side expense|income）\n  category-add / category-modify / category-remove 分类管理（删大类连带子分类）\n  stats          统计：--month 2026-09 或 --year 2026 或 --from --to；输出合计、逐日/逐月序列、大类占比\n  balance        资产：各账户余额 + 净资产/总资产/总负债\n  export         导出 zip（内含 kxtodo-ledger.xlsx：说明/账户/分类/账目 四张表）\n  import         从导出的 zip 或裸 xlsx 导入（账户/分类按名字合并，缺的自动建）\n\n示例：\n  kxtodo-cli ledger add --amount 30 --account 微信 --category 午餐 --note 小面\n  kxtodo-cli ledger add --kind income --amount 18155 --account 储蓄卡 --category 工资薪金\n  kxtodo-cli ledger transfer --from 储蓄卡 --to 微信 --amount 2000\n  kxtodo-cli ledger list --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli ledger stats --month 2026-09\n  kxtodo-cli ledger balance\n  kxtodo-cli ledger export --out kxtodo-ledger.zip\n  kxtodo-cli ledger export --out 2026-09.zip --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli ledger import --file kxtodo-ledger.zip --yes"
+        long_about = "记账与 diary 平行但自成一域：账本住在自己的 ledger.json 里（第五个领域文件）。\n金额一律按「元」输入（CLI 与 Excel 都是两位小数的元），core 内部存整数分。\n转账（transfer）不计入收支统计，只改两个账户的余额。\n\n**金融数据敏感**：所有写动作（add/transfer/modify/remove/account-add/account-modify/account-remove/\ncategory-add/category-modify/category-remove/import）一律 high-risk-write——必须先向用户说明这次改动\n并得到明确同意，再带 --yes 执行；未带 --yes 返回退出码 10。\n读动作（get/list/accounts/categories/stats/balance/export）永远不需要确认。\n\n动作：\n  add            记一笔（--kind expense|income，--amount 元，--account 账户名或 ID）\n  transfer       账户间转账（--from --to --amount）\n  get / list     读取 / 列出（--date 某天、--from --to 区间、--kind、--account、--category）\n  modify         修改一笔\n  remove         删除一笔\n  accounts       列出账户与各自余额、净资产\n  account-add / account-modify / account-remove   账户管理（名下有账的账户不让删）\n  categories     列出两级分类（--side expense|income）\n  category-add / category-modify / category-remove 分类管理（删大类连带子分类）\n  stats          统计：--month 2026-09 或 --year 2026 或 --from --to；输出合计、逐日/逐月序列、大类占比\n  balance        资产：各账户余额 + 净资产/总资产/总负债\n  export         导出 zip（内含 kxtodo-ledger.xlsx：说明/账户/分类/账目 四张表）\n  import         从导出的 zip 或裸 xlsx 导入（账户/分类按名字合并，缺的自动建）\n\n示例：\n  kxtodo-cli ledger add --amount 30 --account 微信 --category 午餐 --note 小面 --yes\n  kxtodo-cli ledger add --kind income --amount 18155 --account 储蓄卡 --category 工资薪金 --yes\n  kxtodo-cli ledger transfer --from 储蓄卡 --to 微信 --amount 2000 --yes\n  kxtodo-cli ledger list --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli ledger stats --month 2026-09\n  kxtodo-cli ledger balance\n  kxtodo-cli ledger export --out kxtodo-ledger.zip\n  kxtodo-cli ledger export --out 2026-09.zip --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli ledger import --file kxtodo-ledger.zip --yes"
     )]
     Ledger {
         #[command(subcommand)]
@@ -737,15 +737,15 @@ pub struct DiaryImportArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum LedgerAction {
-    /// 记一笔收支（Risk: write）
+    /// 记一笔收支（Risk: high-risk-write）
     #[command(
         visible_alias = "create",
-        long_about = "Risk: write\n\n记一笔。--kind 缺省 expense；--amount 是元（两位小数，第三位四舍五入到分）；\n--account 给账户名或 ID；--category 给分类名或 ID（支出/收入各有一套）。\n--date 缺省为本地今天，--time 缺省为当前时刻。\n\n输出：创建后的完整资源（含账户/分类名字与带符号金额）。\n\n示例：\n  kxtodo-cli ledger add --amount 30 --account 微信 --category 午餐 --note 小面\n  kxtodo-cli ledger add --kind income --amount 18155 --account 储蓄卡 --category 工资薪金"
+        long_about = "Risk: high-risk-write\n\n记一笔。--kind 缺省 expense；--amount 是元（两位小数，第三位四舍五入到分）；\n--account 给账户名或 ID；--category 给分类名或 ID（支出/收入各有一套）。\n--date 缺省为本地今天，--time 缺省为当前时刻。\n未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n输出：创建后的完整资源（含账户/分类名字与带符号金额）。\n\n示例：\n  kxtodo-cli ledger add --amount 30 --account 微信 --category 午餐 --note 小面 --yes\n  kxtodo-cli ledger add --kind income --amount 18155 --account 储蓄卡 --category 工资薪金 --yes"
     )]
     Add(LedgerAddArgs),
-    /// 账户间转账（Risk: write）
+    /// 账户间转账（Risk: high-risk-write）
     #[command(
-        long_about = "Risk: write\n\n把钱从一个账户挪到另一个账户：不计入收支统计，只改两个账户的余额。\n\n示例：kxtodo-cli ledger transfer --from 储蓄卡 --to 微信 --amount 2000"
+        long_about = "Risk: high-risk-write\n\n把钱从一个账户挪到另一个账户：不计入收支统计，只改两个账户的余额。\n未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger transfer --from 储蓄卡 --to 微信 --amount 2000 --yes"
     )]
     Transfer(LedgerTransferArgs),
     /// 按稳定 ID 读取一笔（Risk: read）
@@ -756,16 +756,16 @@ pub enum LedgerAction {
         long_about = "Risk: read\n\n按日期由近及远输出。\n--date 只看某天；--from/--to 限定区间；--kind 只看一类；--account/--category 按名字或 ID 过滤；--limit 截断。\n\n示例：\n  kxtodo-cli ledger list --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli ledger list --kind income --limit 10"
     )]
     List(LedgerListArgs),
-    /// 修改一笔（Risk: write）
+    /// 修改一笔（Risk: high-risk-write）
     #[command(
         visible_alias = "update",
-        long_about = "Risk: write\n\n按稳定 ID 修改；只动给了的字段。\n\n示例：kxtodo-cli ledger modify --id ledger-xxxx --amount 35 --note 加了一份小菜"
+        long_about = "Risk: high-risk-write\n\n按稳定 ID 修改；只动给了的字段。\n未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger modify --id ledger-xxxx --amount 35 --note 加了一份小菜 --yes"
     )]
     Modify(LedgerModifyArgs),
     /// 删除一笔（Risk: high-risk-write）
     #[command(
         visible_alias = "delete",
-        long_about = "Risk: high-risk-write\n\n删除一笔并写同步墓碑（删除会传播到其它设备）。未带 --yes 返回退出码 10。\n\n示例：kxtodo-cli ledger remove --id ledger-xxxx --yes"
+        long_about = "Risk: high-risk-write\n\n删除一笔并写同步墓碑（删除会传播到其它设备）。未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger remove --id ledger-xxxx --yes"
     )]
     Remove(LedgerIdArgs),
     /// 列出资金账户与余额（Risk: read）
@@ -773,21 +773,21 @@ pub enum LedgerAction {
         long_about = "Risk: read\n\n余额 = 期初 + 流水推导；同时给出净资产合计。\n\n示例：kxtodo-cli ledger accounts"
     )]
     Accounts,
-    /// 新增资金账户（Risk: write）
+    /// 新增资金账户（Risk: high-risk-write）
     #[command(
-        long_about = "Risk: write\n\n--kind 可选 cash|debit|credit|investment|other（信用卡的负余额计入总负债）。\n--initial 是期初余额（元，可为负）。\n\n示例：kxtodo-cli ledger account-add --name 招商储蓄卡 --kind debit --initial 1234.56"
+        long_about = "Risk: high-risk-write\n\n--kind 可选 cash|debit|credit|investment|other（信用卡的负余额计入总负债）。\n--initial 是期初余额（元，可为负）。\n未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger account-add --name 招商储蓄卡 --kind debit --initial 1234.56 --yes"
     )]
     #[command(name = "account-add")]
     AccountAdd(LedgerAccountAddArgs),
-    /// 修改资金账户（Risk: write）
+    /// 修改资金账户（Risk: high-risk-write）
     #[command(
-        long_about = "Risk: write\n\n改名/改类型/改图标颜色/改期初余额；改期初会整体平移该账户余额。\n\n示例：kxtodo-cli ledger accountModify --id lacc-xxxx --name 工资卡"
+        long_about = "Risk: high-risk-write\n\n改名/改类型/改图标颜色/改期初余额；改期初会整体平移该账户余额。\n未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger accountModify --id lacc-xxxx --name 工资卡 --yes"
     )]
     #[command(name = "account-modify")]
     AccountModify(LedgerAccountModifyArgs),
     /// 删除资金账户（Risk: high-risk-write）
     #[command(
-        long_about = "Risk: high-risk-write\n\n名下还有账目的账户不允许删除（先删账或改到别的账户）。未带 --yes 返回退出码 10。\n\n示例：kxtodo-cli ledger accountRemove --id lacc-xxxx --yes"
+        long_about = "Risk: high-risk-write\n\n名下还有账目的账户不允许删除（先删账或改到别的账户）。未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger accountRemove --id lacc-xxxx --yes"
     )]
     #[command(name = "account-remove")]
     AccountRemove(LedgerIdArgs),
@@ -796,21 +796,21 @@ pub enum LedgerAction {
         long_about = "Risk: read\n\n--side expense|income 只看一侧；输出含 parentId（空 = 大类）。\n\n示例：kxtodo-cli ledger categories --side expense"
     )]
     Categories(LedgerCategoriesArgs),
-    /// 新增分类（Risk: write）
+    /// 新增分类（Risk: high-risk-write）
     #[command(
-        long_about = "Risk: write\n\n--side 缺省 expense；--parent 给大类名或 ID（不给就是新建大类）。分类只有两级。\n\n示例：\n  kxtodo-cli ledger category-add --name 咖啡 --parent 餐饮 --icon Coffee\n  kxtodo-cli ledger category-add --name 副业 --side income"
+        long_about = "Risk: high-risk-write\n\n--side 缺省 expense；--parent 给大类名或 ID（不给就是新建大类）。分类只有两级。\n未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：\n  kxtodo-cli ledger category-add --name 咖啡 --parent 餐饮 --icon Coffee --yes\n  kxtodo-cli ledger category-add --name 副业 --side income --yes"
     )]
     #[command(name = "category-add")]
     CategoryAdd(LedgerCategoryAddArgs),
-    /// 修改分类（Risk: write）
+    /// 修改分类（Risk: high-risk-write）
     #[command(
-        long_about = "Risk: write\n\n改名/换父级/改图标颜色。--parent 传空串即提升为大类。\n\n示例：kxtodo-cli ledger categoryModify --id lcat-xxxx --name 下午茶"
+        long_about = "Risk: high-risk-write\n\n改名/换父级/改图标颜色。--parent 传空串即提升为大类。\n未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger categoryModify --id lcat-xxxx --name 下午茶 --yes"
     )]
     #[command(name = "category-modify")]
     CategoryModify(LedgerCategoryModifyArgs),
     /// 删除分类（Risk: high-risk-write）
     #[command(
-        long_about = "Risk: high-risk-write\n\n删大类会连带它的子分类一起删；名下账目保留但变为「未分类」。未带 --yes 返回退出码 10。\n\n示例：kxtodo-cli ledger categoryRemove --id lcat-xxxx --yes"
+        long_about = "Risk: high-risk-write\n\n删大类会连带它的子分类一起删；名下账目保留但变为「未分类」。未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger categoryRemove --id lcat-xxxx --yes"
     )]
     #[command(name = "category-remove")]
     CategoryRemove(LedgerIdArgs),
@@ -829,9 +829,9 @@ pub enum LedgerAction {
         long_about = "Risk: read\n\n导出 zip，内含一张 kxtodo-ledger.xlsx（说明/账户/分类/账目 四张表）。\n不给 --from/--to 就是全量导出；给了就按日期范围导出（账户与分类仍是全量）。\n\n示例：\n  kxtodo-cli ledger export --out kxtodo-ledger.zip\n  kxtodo-cli ledger export --out 2026-09.zip --from 2026-09-01 --to 2026-09-30"
     )]
     Export(LedgerExportArgs),
-    /// 从导出的 Excel 导入（Risk: write）
+    /// 从导出的 Excel 导入（Risk: high-risk-write）
     #[command(
-        long_about = "Risk: write\n\n接受 ledger export 的 zip，也接受裸 xlsx（只认这套表头）。\n账户/分类按名字合并，缺的自动创建；日期非法或金额为 0 的行跳过（skipped）。\n**重复导入会产生重复账目**，未带 --yes 返回退出码 10。\n\n示例：kxtodo-cli ledger import --file kxtodo-ledger.zip --yes"
+        long_about = "Risk: high-risk-write\n\n接受 ledger export 的 zip，也接受裸 xlsx（只认这套表头）。\n账户/分类按名字合并，缺的自动创建；日期非法或金额为 0 的行跳过（skipped）。\n**重复导入会产生重复账目**，未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger import --file kxtodo-ledger.zip --yes"
     )]
     Import(LedgerImportArgs),
 }

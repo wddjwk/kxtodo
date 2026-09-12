@@ -67,17 +67,6 @@
   opacity: 1;
 }
 
-.diary-subtitle {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin: -20px 0 18px;
-  padding-left: 58px;
-  color: var(--accent);
-  font-size: calc(var(--font-control) - 4px);
-  opacity: 0.82;
-}
-
 .diary-stat-dot {
   width: 3px;
   height: 3px;
@@ -619,7 +608,7 @@
    掉回正文流：菜单被拉成整行宽、又被 `.diary-view` 的 overflow:hidden 裁掉一半，
    + 按钮跑到左下角。（`.workspace > *` 没这个病，因为 workspace.css 在 menu.css 之前。）
    `.list-header` 自己就带 `position: relative; z-index: 20`，不必再列进来。 */
-.diary-view > .diary-subtitle,
+.diary-view > .list-subtitle,
 .diary-view > .diary-search,
 .diary-view > .diary-scroll {
   position: relative;

@@ -12,6 +12,7 @@ pub mod exec;
 pub mod history;
 pub mod host;
 pub mod ids;
+pub mod image_gc;
 pub mod ipc;
 pub mod jq;
 pub mod ledger_archive;

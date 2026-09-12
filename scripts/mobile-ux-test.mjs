@@ -43,7 +43,7 @@ await page.locator(".tree-row").first().click();
 await page.waitForTimeout(400);
 check("entry tap enters content view", (await page.locator(".app-shell.mobile.view-content").count()) === 1);
 check("workspace visible on content", await page.locator(".workspace").isVisible());
-check("back button visible", await page.locator(".mobile-back").first().isVisible());
+check("content page has no back arrow (system back owns navigation)", (await page.$$(".workspace .mobile-back")).length === 0);
 
 // add a task through the composer
 await page.locator(".add-task-bar textarea").fill("移动端冒烟任务");
@@ -230,7 +230,7 @@ await page.locator(".toolbox-sub-back").click();
 await page.waitForTimeout(250);
 check("sub-view back returns to tool list",
   (await page.locator(".toolbox-card").count()) >= 1 && (await page.locator(".toolbox-sub").count()) === 0);
-await page.locator(".toolbox-header .mobile-back").click();
+await page.goBack();
 await page.waitForTimeout(350);
 check("toolbox back returns to list view", (await page.locator(".app-shell.mobile.view-list").count()) === 1);
 
@@ -354,6 +354,43 @@ await dpage.locator(".list-header h1").click({ force: true });
 await dpage.waitForTimeout(200);
 check("desktop planned panel closes on outside click", (await dpage.locator(".planned-group-panel").count()) === 0);
 await desktopCtx.close();
+
+// v0.7.2：一般卡片不是待办清单，角标不统计它的未完成数（也不往上滚进分组）
+{
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await ctx.newPage();
+  await page.goto(URL, { waitUntil: "load" });
+  await page.evaluate(() => {
+    const stamp = new Date().toISOString();
+    localStorage.clear();
+    localStorage.setItem(
+      "todo-note-state-v3",
+      JSON.stringify({
+        nodes: [
+          { id: "cat-badge", kind: "category", name: "分组", parentId: null, icon: "folder", collapsed: false },
+          { id: "entry-todo", kind: "entry", name: "待办条目", parentId: "cat-badge", icon: "notebook", collapsed: false, cardStyle: "todo" },
+          { id: "entry-plain", kind: "entry", name: "一般条目", parentId: "cat-badge", icon: "notebook", collapsed: false, cardStyle: "card" }
+        ],
+        tasks: [
+          { id: "task-todo", nodeId: "entry-todo", markdown: "待办一", completed: false, important: false, myDay: false, tags: [], emojis: [], order: 1, createdAt: stamp, updatedAt: stamp },
+          { id: "task-plain", nodeId: "entry-plain", markdown: "一般一", completed: false, important: false, myDay: false, tags: [], emojis: [], order: 1, createdAt: stamp, updatedAt: stamp }
+        ],
+        backgrounds: {}
+      })
+    );
+  });
+  await page.reload({ waitUntil: "load" });
+  await page.waitForSelector(".custom-nav .tree-row", { timeout: 15000 });
+  const pillFor = async (name) =>
+    page.$eval(`.tree-row:has(.list-name:text-is("${name}"))`, (el) => el.querySelector(".count-pill")?.textContent?.trim() ?? "");
+  check("todo 条目角标统计未完成", (await pillFor("待办条目")) === "1", await pillFor("待办条目"));
+  check("一般卡片条目不显示角标", (await pillFor("一般条目")) === "", await pillFor("一般条目"));
+  await page.click(".tree-row:has(.list-name:text-is('分组')) .collapse-button");
+  await page.waitForTimeout(250);
+  check("分组折叠后角标只算 todo 条目", (await pillFor("分组")) === "1", await pillFor("分组"));
+  await ctx.close();
+}
+
 await browser.close();
 
 console.log(failures === 0 ? "ALL MOBILE UX CHECKS PASSED" : `${failures} CHECK(S) FAILED`);

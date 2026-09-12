@@ -5,7 +5,7 @@
 // ---------------------------------------------------------------------------
 
 import { get } from "svelte/store";
-import type { AppNode, AppState, CardStyle, DiaryEntry, LedgerAccount, LedgerAccountKind, LedgerBook, LedgerCategory, LedgerEntry, LedgerKind, LedgerSide, ScheduledTask, SchedulerState, Settings, SyncMode, Tag, TagColor, Task } from "./types";
+import type { AppNode, AppState, CardStyle, DiaryEntry, LedgerAccount, LedgerAccountKind, LedgerBook, LedgerCategory, LedgerEntry, LedgerKind, LedgerSide, ListBackground, ScheduledTask, SchedulerState, Settings, SyncMode, Tag, TagColor, Task } from "./types";
 import {
   appState, appSettings, commit, commitDiary, commitLedger, commitScheduler, commitSettings,
   coreMode, createDiaryId, createTaskId, diaryEntries, editBaseUpdatedAt, ledgerData, markEditStart, clearEditBase, rebaseEditBase,
@@ -13,7 +13,7 @@ import {
 } from "./stores";
 import {
   coreDispatch, CoreCommandError, exportDiaryZip, importDiaryZipFromDialog, importDiaryZipFromFile,
-  exportCardsZip, importCardsZipFromDialog, importCardsZipFromFile,
+  exportCardsZip, importCardsZipFromDialog, importCardsZipFromFile, importCardsFolderFromDialog,
   exportLedgerZip, importLedgerZipFromDialog, importLedgerZipFromFile,
   type DiaryArchiveResult, type DiaryExportRange
 } from "./backend";
@@ -139,7 +139,41 @@ export async function setNodeCardStyle(nodeId: string, cardStyle: CardStyle): Pr
 // 节点增删改移
 // ---------------------------------------------------------------------------
 
+/**
+ * 新建节点的默认外观（设置 → 新建分组默认外观）：主题色进 `appearance.uiColors`，
+ * 背景进 `state.backgrounds`。**留空就是不写**——给每个新节点都塞一条与默认值相同的
+ * 记录只会让这两个映射越长越大，还会挡住以后调整默认值。
+ */
+function newNodeAppearance(): { accent: string; background: ListBackground | null } {
+  const defaults = get(appSettings).appearance.newNodeDefaults;
+  const hex = /^#[0-9a-f]{6}$/i;
+  const accent = hex.test(defaults.accent ?? "") ? defaults.accent : "";
+  const image = defaults.backgroundImage || undefined;
+  const hasBackground = hex.test(defaults.backgroundColor ?? "") || Boolean(image);
+  if (!accent && !hasBackground) return { accent: "", background: null };
+  return {
+    accent,
+    background: hasBackground
+      ? {
+          color: hex.test(defaults.backgroundColor ?? "") ? defaults.backgroundColor : defaultBackground.color,
+          image,
+          imageOpacity: image ? defaults.backgroundOpacity : defaultBackground.imageOpacity
+        }
+      : null
+  };
+}
+
+/** 把默认外观落到刚建出来的节点上（复用已有的两条写路径，不新增命令）。 */
+async function applyNewNodeAppearance(
+  nodeId: string,
+  appearance: { accent: string; background: ListBackground | null }
+): Promise<void> {
+  if (appearance.background) await setBackground(nodeId, appearance.background);
+  if (appearance.accent) await setUiColor(nodeId, appearance.accent);
+}
+
 export async function addNode(kind: "category" | "entry", name: string, parentId: string | null, icon?: string): Promise<AppNode | null> {
+  const appearance = newNodeAppearance();
   if (coreMode) {
     try {
       const response = await coreDispatch<{ id: string }>("task.add", {
@@ -159,11 +193,15 @@ export async function addNode(kind: "category" | "entry", name: string, parentId
       };
       const next = { ...state(), nodes: [...state().nodes, node] };
       if (kind === "entry") {
-        next.backgrounds = { ...next.backgrounds, [node.id]: { ...defaultBackground } };
+        next.backgrounds = {
+          ...next.backgrounds,
+          [node.id]: appearance.background ? { ...appearance.background } : { ...defaultBackground }
+        };
         next.selectedNodeId = node.id;
         void coreDispatch("gui.select-node", { nodeId: node.id }).catch(() => undefined);
       }
       appState.set(next);
+      await applyNewNodeAppearance(node.id, appearance);
       return node;
     } catch (error) {
       return report(error, "新建失败");
@@ -172,10 +210,14 @@ export async function addNode(kind: "category" | "entry", name: string, parentId
   const node = kind === "category" ? createCategoryNode(name, parentId) : createEntryNode(name, parentId, icon ?? DEFAULT_ENTRY_ICON);
   const next = { ...state(), nodes: [...state().nodes, node] };
   if (kind === "entry") {
-    next.backgrounds = { ...next.backgrounds, [node.id]: { ...defaultBackground } };
+    next.backgrounds = {
+      ...next.backgrounds,
+      [node.id]: appearance.background ? { ...appearance.background } : { ...defaultBackground }
+    };
     next.selectedNodeId = node.id;
   }
   commit(next);
+  await applyNewNodeAppearance(node.id, appearance);
   return node;
 }
 
@@ -857,6 +899,19 @@ export async function exportCardsArchive(nodeId: string): Promise<number> {
 export async function importCardsArchive(nodeId: string): Promise<boolean> {
   try {
     const result = await importCardsZipFromDialog(nodeId);
+    if (!result) return false;
+    await afterCardsImport(result);
+    return true;
+  } catch (error) {
+    await report(error, "卡片导入失败");
+    return false;
+  }
+}
+
+/** 桌面：原生对话框选一个**文件夹**导入（不必先打包成 zip）。null = 用户取消。 */
+export async function importCardsFolder(nodeId: string): Promise<boolean> {
+  try {
+    const result = await importCardsFolderFromDialog(nodeId);
     if (!result) return false;
     await afterCardsImport(result);
     return true;

@@ -95,7 +95,13 @@ export const defaultSettings: Settings = {
     editorHeightPercent: 86,
     tagFontSize: 14,
     themePresets: themePresets.map((preset) => ({ ...preset })),
-    uiColors: {}
+    uiColors: {},
+    newNodeDefaults: {
+      accent: "",
+      backgroundColor: "",
+      backgroundImage: "",
+      backgroundOpacity: defaultBackground.imageOpacity ?? 0.28
+    }
   },
   lifecycle: {
     closeToTray: !isLinuxHost(),
@@ -954,6 +960,19 @@ export function normalizeSettings(raw: unknown): Settings {
     }
     return colors;
   };
+  const normalizeNewNodeDefaults = (value: unknown): Settings["appearance"]["newNodeDefaults"] => {
+    const raw = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+    const fallback = defaultSettings.appearance.newNodeDefaults;
+    return {
+      accent: normalizeHexColor(raw.accent, ""),
+      backgroundColor: normalizeHexColor(raw.backgroundColor, ""),
+      backgroundImage: typeof raw.backgroundImage === "string" ? raw.backgroundImage.trim() : "",
+      backgroundOpacity:
+        typeof raw.backgroundOpacity === "number" && Number.isFinite(raw.backgroundOpacity)
+          ? Math.min(1, Math.max(0, raw.backgroundOpacity))
+          : fallback.backgroundOpacity
+    };
+  };
   const storedUiScale = normalizeUiScale(source?.appearance?.uiScale) ?? normalizeUiScale(source?.display?.uiScale);
   return {
     profile: {
@@ -990,7 +1009,8 @@ export function normalizeSettings(raw: unknown): Settings {
       ),
       tagFontSize: normalizeFontSize(source?.appearance?.tagFontSize, defaultSettings.appearance.tagFontSize, 11, 30),
       themePresets: normalizeThemePresets(source?.appearance?.themePresets),
-      uiColors: normalizeUiColors(source?.appearance?.uiColors)
+      uiColors: normalizeUiColors(source?.appearance?.uiColors),
+      newNodeDefaults: normalizeNewNodeDefaults(source?.appearance?.newNodeDefaults)
     },
     lifecycle: {
       closeToTray:

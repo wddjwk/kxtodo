@@ -7,16 +7,15 @@
    */
   import { onMount } from "svelte";
   import {
-    ArrowLeft, CalendarDays, ChartPie, ChevronLeft, ChevronRight,
+    CalendarDays, ChartPie, ChevronLeft, ChevronRight,
     List as ListIcon, MoreHorizontal, Plus, Settings as SettingsIcon, Tags, Wallet
   } from "@lucide/svelte";
-  import { appSettings, ledgerData, ledgerEditor, ledgerOpen } from "./stores";
+  import { appSettings, ledgerData, ledgerEditor } from "./stores";
   import { setConfig } from "./actions";
   import { buildMainStyle, ledgerAccent, ledgerBackground } from "./styles";
-  import { isMobile, showMobileList } from "./platform";
   import { imageCache, resolveImageSrc } from "./images";
   import { monthOf, shiftMonth, todayDate, type MonthCursor } from "./diary";
-  import { assetsOverview, compactCents, formatCents, monthDayGroups, monthTotals } from "./ledger";
+  import { compactCents, monthDayGroups, monthTotals } from "./ledger";
   import MenuItem from "./menu/MenuItem.svelte";
   import ListMenu from "./workspace/ListMenu.svelte";
   import LedgerDayCard from "./ledger/LedgerDayCard.svelte";
@@ -65,7 +64,6 @@
   $: book = $ledgerData;
   $: thisMonth = monthOf(today);
   $: monthTotal = monthTotals(book.entries, cursor);
-  $: assets = assetsOverview(book);
   $: monthLabel = `${cursor.year}年${cursor.month + 1}月`;
   $: ledgerBg = ledgerBackground($appSettings.ledger);
   $: resolvedBgImage = resolveImageSrc(ledgerBg.image, $imageCache);
@@ -93,12 +91,6 @@
     showGear = false;
     listMenuAt = null;
     entryMenu = null;
-  }
-
-  function closeLedger(): void {
-    closeOverlays();
-    if ($isMobile) showMobileList();
-    else ledgerOpen.set(false);
   }
 
   function switchView(mode: LedgerViewMode): void {
@@ -204,9 +196,6 @@
 <main class="ledger-view" style={mainStyle}>
   <section class="list-header">
     <div>
-      <button class="mobile-back" type="button" aria-label="返回列表" on:click|stopPropagation={closeLedger}>
-        <ArrowLeft size={26} />
-      </button>
       <span class="header-icon"><Wallet size={34} /></span>
       <h1>记账</h1>
     </div>
@@ -243,40 +232,24 @@
     </div>
   </section>
 
-  <p class="ledger-subtitle">
-    {#if view === "list"}
+  {#if view === "list"}
+    <div class="ledger-month-bar">
       <span class="ledger-month-step">
         <button type="button" aria-label="上个月" on:click|stopPropagation={() => changeMonth(shiftMonth(cursor, -1))}>
-          <ChevronLeft size={15} />
+          <ChevronLeft size={18} />
         </button>
         <strong>{monthLabel}</strong>
         <button type="button" aria-label="下个月" on:click|stopPropagation={() => changeMonth(shiftMonth(cursor, 1))}>
-          <ChevronRight size={15} />
+          <ChevronRight size={18} />
         </button>
       </span>
-      <span class="ledger-stat-dot"></span>
-      <span class="in">收 {compactCents(monthTotal.income)}</span>
-      <span class="ledger-stat-dot"></span>
-      <span class="out">支 {compactCents(monthTotal.expense)}</span>
-      <span class="ledger-subtitle-net">
-        <i class="ledger-stat-dot"></i>结余 {compactCents(monthTotal.income - monthTotal.expense)}
+      <span class="ledger-month-sums">
+        <em class="in">收 {compactCents(monthTotal.income)}</em>
+        <em class="out">支 {compactCents(monthTotal.expense)}</em>
+        <em class="net">结余 {compactCents(monthTotal.income - monthTotal.expense)}</em>
       </span>
-    {:else if view === "assets"}
-      <span>净资产 {formatCents(assets.net)}</span>
-      <span class="ledger-stat-dot"></span>
-      <span>{book.accounts.length} 个账户</span>
-      <span class="ledger-stat-dot"></span>
-      <span>本月支出 {compactCents(monthTotals(book.entries, thisMonth).expense)}</span>
-    {:else if view === "stats"}
-      <span>共 {book.entries.length} 笔账</span>
-      <span class="ledger-stat-dot"></span>
-      <span>净资产 {formatCents(assets.net)}</span>
-    {:else}
-      <span>净资产 {formatCents(assets.net)}</span>
-      <span class="ledger-stat-dot"></span>
-      <span>共 {book.entries.length} 笔账</span>
-    {/if}
-  </p>
+    </div>
+  {/if}
 
   <section class="ledger-scroll" bind:this={scrollEl} on:scroll={handleScroll}>
     {#if view === "list"}

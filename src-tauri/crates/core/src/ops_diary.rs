@@ -125,6 +125,22 @@ fn in_range(date: &str, from: Option<&str>, to: Option<&str>) -> bool {
 // commands
 // ---------------------------------------------------------------------------
 
+/// 日记侧保存后的插图清理（v0.7.2）：对着**写入后**的日记文件扫 `img/data/diary/`，
+/// 删掉没有任何一篇日记再引用的图片（宽限窗保护在途图片，见 `image_gc`）。
+/// 清理失败一律吞掉——绝不让保存本身因为清理而失败。
+fn sweep_diary_images(ctx: &ExecContext, file: &crate::model::DiaryFile) {
+    let dir = ctx
+        .repo
+        .layout
+        .entry_img_dir(crate::model::DIARY_IMAGE_NODE);
+    let markdowns: Vec<&str> = file
+        .entries
+        .iter()
+        .map(|entry| entry.markdown.as_str())
+        .collect();
+    crate::image_gc::sweep_unreferenced(&dir, markdowns, crate::image_gc::GRACE);
+}
+
 fn diary_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
     let params = &inv.params;
     let date = match param_str(params, "date") {
@@ -139,7 +155,7 @@ fn diary_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult
     let tags = tags_param(params, "tags")?.unwrap_or_default();
 
     let mut created = Value::Null;
-    let (_file, outcome) = ctx.repo.write_diary(
+    let (file, outcome) = ctx.repo.write_diary(
         inv.controls.if_revision,
         inv.controls.idempotency_key.as_deref(),
         &inv.command,
@@ -166,6 +182,7 @@ fn diary_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult
     )?;
     apply_write_outcome(meta, Domain::Diary, &outcome);
     notify_host(ctx, Domain::Diary, outcome.revision, vec![]);
+    sweep_diary_images(ctx, &file);
     if outcome.replayed {
         return Ok(outcome.replay_summary.unwrap_or(created));
     }
@@ -222,7 +239,7 @@ fn diary_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRes
     let tags = tags_param(params, "replaceTags")?;
 
     let mut updated = Value::Null;
-    let (_file, outcome) = ctx.repo.write_diary(
+    let (file, outcome) = ctx.repo.write_diary(
         inv.controls.if_revision,
         inv.controls.idempotency_key.as_deref(),
         &inv.command,
@@ -259,6 +276,7 @@ fn diary_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRes
     )?;
     apply_write_outcome(meta, Domain::Diary, &outcome);
     notify_host(ctx, Domain::Diary, outcome.revision, vec![id.clone()]);
+    sweep_diary_images(ctx, &file);
     if outcome.replayed {
         return Ok(outcome.replay_summary.unwrap_or(updated));
     }
@@ -284,7 +302,7 @@ fn diary_remove(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRes
         set_read_revision(meta, Domain::Diary, file.meta.revision);
         return Ok(json!({ "dryRun": true, "action": "remove", "plan": plan }));
     }
-    let (_file, outcome) = ctx.repo.write_diary(
+    let (file, outcome) = ctx.repo.write_diary(
         inv.controls.if_revision,
         inv.controls.idempotency_key.as_deref(),
         &inv.command,
@@ -302,6 +320,7 @@ fn diary_remove(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRes
     )?;
     apply_write_outcome(meta, Domain::Diary, &outcome);
     notify_host(ctx, Domain::Diary, outcome.revision, vec![id.clone()]);
+    sweep_diary_images(ctx, &file);
     Ok(json!({ "removed": plan, "revision": outcome.revision }))
 }
 

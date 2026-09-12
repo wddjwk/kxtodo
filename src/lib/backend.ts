@@ -346,6 +346,21 @@ export async function importCardsZipFromDialog(nodeId: string): Promise<DiaryArc
   return invokeArchiveEnvelope("cards_import_zip", { path: picked, base64: null, nodeId });
 }
 
+/**
+ * 桌面：原生对话框选一个**文件夹**导入（不必先打包成 zip）——里面索引 md 与图片即可。
+ * null = 用户取消。移动端没有目录选择器，仍然只走压缩包那条路。
+ */
+export async function importCardsFolderFromDialog(nodeId: string): Promise<DiaryArchiveResult | null> {
+  if (!isTauriRuntime || !caps.nativeFileDialogs) {
+    throw new Error("当前平台不支持选择文件夹导入");
+  }
+  const picked = await open({ multiple: false, directory: true });
+  if (!picked || typeof picked !== "string") {
+    return null;
+  }
+  return invokeArchiveEnvelope("cards_import_folder", { path: picked, nodeId });
+}
+
 /** 移动端：隐藏 file input 读字节后以 base64 交给 Rust。 */
 export async function importCardsZipFromFile(nodeId: string, file: File): Promise<DiaryArchiveResult> {
   if (!isTauriRuntime) {

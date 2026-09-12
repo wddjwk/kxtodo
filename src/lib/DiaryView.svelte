@@ -1,14 +1,13 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import {
-    ArrowLeft, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Flame, FolderTree,
+    CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Flame, FolderTree,
     List as ListIcon, MoreHorizontal, NotebookPen, Plus, Search,
     Settings as SettingsIcon, X
   } from "@lucide/svelte";
-  import { appSettings, diaryEditor, diaryEntries, diaryOpen } from "./stores";
+  import { appSettings, diaryEditor, diaryEntries } from "./stores";
   import { setConfig, setDiaryUi } from "./actions";
   import { buildMainStyle, diaryAccent, diaryBackground } from "./styles";
-  import { isMobile, showMobileList } from "./platform";
   import { imageCache, resolveImageSrc } from "./images";
   import {
     calendarCells, calendarWeekdayHeaders, diaryByDate, diaryStats, filterDiaries,
@@ -101,14 +100,6 @@
     entryMenu = null;
     showGear = false;
     listMenuAt = null;
-  }
-
-  function closeDiary(): void {
-    if ($isMobile) {
-      showMobileList();
-      return;
-    }
-    diaryOpen.set(false);
   }
 
   function switchView(mode: DiaryViewMode): void {
@@ -206,9 +197,6 @@
 <main class="diary-view" style={mainStyle}>
   <section class="list-header">
     <div>
-      <button class="mobile-back" type="button" aria-label="返回列表" on:click|stopPropagation={closeDiary}>
-        <ArrowLeft size={26} />
-      </button>
       <span class="header-icon"><NotebookPen size={34} /></span>
       <h1>日记</h1>
     </div>
@@ -244,7 +232,7 @@
     </div>
   </section>
 
-  <p class="diary-subtitle">
+  <p class="list-subtitle">
     <span>共 {stats.total} 篇</span>
     <span class="diary-stat-dot"></span>
     <span>本月 {stats.monthCount} 篇</span>

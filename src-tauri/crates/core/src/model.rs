@@ -907,9 +907,50 @@ pub struct AppearanceSettings {
     pub theme_presets: Vec<ThemePreset>,
     #[serde(rename = "uiColors", default)]
     pub ui_colors: Map<String, Value>,
+    #[serde(rename = "newNodeDefaults", default)]
+    pub new_node_defaults: NewNodeDefaults,
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
+}
+
+/// 新建分组/条目的默认外观（v0.7.2）：建出来的节点直接带上这套主题色与背景，
+/// 省得每个新条目都要进列表菜单再调一遍。
+///
+/// 全部字段**空 = 没配置**，新建时跟随应用默认——给每个新节点都写一条与默认值相同的
+/// 记录只会让 `uiColors` / `backgrounds` 越长越大，还会挡住以后调整默认值。
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct NewNodeDefaults {
+    /// 主题色（#rrggbb）
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub accent: String,
+    /// 背景色（#rrggbb）
+    #[serde(rename = "backgroundColor", default, skip_serializing_if = "String::is_empty")]
+    pub background_color: String,
+    /// 背景图片：`img:<文件名>`（本地图，落在 img/background/）或 http(s)/data URL
+    #[serde(rename = "backgroundImage", default, skip_serializing_if = "String::is_empty")]
+    pub background_image: String,
+    #[serde(rename = "backgroundOpacity", default = "default_new_node_background_opacity")]
+    pub background_opacity: f64,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
+}
+
+fn default_new_node_background_opacity() -> f64 {
+    0.28
+}
+
+impl Default for NewNodeDefaults {
+    fn default() -> Self {
+        Self {
+            accent: String::new(),
+            background_color: String::new(),
+            background_image: String::new(),
+            background_opacity: default_new_node_background_opacity(),
+            extra: Map::new(),
+        }
+    }
 }
 
 fn default_link_open_mode() -> LinkOpenMode {
@@ -950,6 +991,7 @@ impl Default for AppearanceSettings {
             tag_font_size: default_tag_font_size(),
             theme_presets: default_theme_presets(),
             ui_colors: Map::new(),
+            new_node_defaults: NewNodeDefaults::default(),
             extra: Map::new(),
         }
     }

@@ -94,6 +94,20 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   const daySum = await page.textContent(".ledger-card-sums");
   check("卡片头给出当天合计", daySum?.includes("30.5") ?? false, daySum ?? "");
 
+  // v0.7.2：月份行是标题级的一行（只有列表视图有），卡片是单列（没有左侧日期栏外壳）
+  check("列表视图有月份标题行", (await page.$$(".ledger-month-bar")).length === 1);
+  check("月份行带收/支/结余", ((await page.textContent(".ledger-month-sums")) ?? "").includes("结余"));
+  check("卡片单列：无左侧日期栏外壳", (await page.$$(".ledger-card-main")).length === 0);
+  check("日期号在卡片标题行里", (await page.$$(".ledger-card-head .ledger-date-day")).length === 1);
+
+  // v0.7.2：关掉面板一律不落盘（只有显式点保存才写）
+  await page.click(".ledger-fab");
+  await page.waitForSelector(".ledger-sheet", { timeout: 8000 });
+  await page.fill(".ledger-amount-field input", "9.99");
+  await page.keyboard.press("Escape");
+  await page.waitForSelector(".ledger-sheet", { state: "detached", timeout: 8000 });
+  check("关掉面板不会多出一笔", (await page.$$(".ledger-entry")).length === 1);
+
   // 齿轮面板 → 记账菜单（三点菜单唤不出就是这条链断在冒泡上）
   await page.click(".ledger-view .header-actions > button[title='更多操作']");
   await page.waitForSelector(".ledger-gear-panel", { timeout: 5000 });
@@ -142,6 +156,14 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   const cellAmount = await page.textContent(".ledger-cell-amounts em");
   check("日历数额是当天支出", cellAmount?.trim() === "30.5", cellAmount ?? "");
   check("日历下方列出当天卡片", (await page.$$(".ledger-day-head + .ledger-card")).length === 1);
+  check("非列表视图不画月份标题行", (await page.$$(".ledger-month-bar")).length === 0);
+  const dayHeadBox = await page.locator(".ledger-day-head").boundingBox();
+  const scrollBox = await page.locator(".ledger-scroll").boundingBox();
+  check(
+    "日历下的当天标题左对齐到内容左缘",
+    Math.abs(dayHeadBox.x - scrollBox.x) < 2,
+    `${dayHeadBox.x} vs ${scrollBox.x}`
+  );
 
   // 统计视图
   await switchView(page, "统计视图");
@@ -152,6 +174,19 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   check("排行带比例条", (await page.$$(".ledger-rank-track i")).length >= 1);
   const summary = await page.textContent(".ledger-summary");
   check("汇总卡给出本期支出", summary?.includes("30.50") ?? false, (summary ?? "").replace(/\s+/g, " ").slice(0, 60));
+
+  // v0.7.2：饼图引线标出分类；点一片放大并把它的名字与金额放进环心
+  const slice = page.locator(".ledger-donut-slice circle").first();
+  const ring = await slice.boundingBox();
+  await page.mouse.click(ring.x + ring.width / 2, ring.y + 8);
+  await page.waitForTimeout(250);
+  const focusLabel = await page.textContent(".ledger-donut-label");
+  const focusValue = await page.textContent(".ledger-donut-value");
+  check("点中的分类进环心", (focusLabel ?? "").trim() !== "总支出" && (focusLabel ?? "").length > 0, focusLabel ?? "");
+  check("环心给出该分类金额", (focusValue ?? "").includes("30.5"), focusValue ?? "");
+  await page.mouse.click(ring.x + ring.width / 2, ring.y + 8);
+  await page.waitForTimeout(250);
+  check("再点一下回到总额", ((await page.textContent(".ledger-donut-label")) ?? "").trim() === "总支出");
 
   // 资产视图 + 账户管理
   await switchView(page, "资产视图");
@@ -202,6 +237,24 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
     scopes.length === 5 && scopes.includes("日记") && scopes.includes("账本"),
     scopes.join(",")
   );
+
+  // v0.7.2：设置大类可折叠，折叠状态记在 localStorage；新建分组默认外观是一段独立配置
+  const sectionCount = (await page.$$(".settings-section")).length;
+  check("设置是可折叠分区", sectionCount >= 8, String(sectionCount));
+  check("有新建分组默认外观分区", (await page.$$(".settings-section-toggle:has-text('新建分组默认外观')")).length === 1);
+  await page.click(".settings-section-toggle:has-text('消息通知')");
+  await page.waitForTimeout(200);
+  check("折叠后正文收起", (await page.$$eval(".settings-section.folded", (els) => els.length)) >= 1);
+  check(
+    "折叠状态落 localStorage",
+    await page.evaluate(() => localStorage.getItem("kxtodo-settings-section:notifications") === "1")
+  );
+  await page.click(".settings-section-toggle:has-text('消息通知')");
+  await page.waitForTimeout(200);
+  check("再点展开", (await page.evaluate(() => localStorage.getItem("kxtodo-settings-section:notifications"))) === "0");
+  await page.locator(".settings-section-toggle:has-text('新建分组默认外观')").scrollIntoViewIfNeeded();
+  check("默认外观带配色盘", (await page.$$(".settings-block .color-grid button")).length >= 8);
+  check("默认外观带背景图上传", (await page.$$(".settings-block button:has-text('上传图片')")).length === 1);
   await page.locator("button.settings-backdrop").click();
   await page.waitForSelector("aside.settings-drawer", { state: "detached", timeout: 8000 });
 
@@ -295,6 +348,24 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   check("移动端抽屉铺满宽度", viewport !== null && Math.abs(sheet.width - viewport.width) < 2, String(sheet.width));
   check("移动端有数字键盘", (await page.$$(".ledger-keypad .ledger-key")).length === 14);
   check("移动端金额只读展示", (await page.$$(".ledger-amount-value")).length === 1);
+  const keyBox = await page.locator('.ledger-key:text-is("7")').boundingBox();
+  const saveBox = await page.locator(".ledger-key.save").boundingBox();
+  check(
+    "记一笔键上下占两格",
+    keyBox !== null && saveBox !== null && saveBox.height > keyBox.height * 1.7,
+    `${saveBox?.height} vs ${keyBox?.height}`
+  );
+  await page.keyboard.press("Escape");
+  await page.waitForSelector(".ledger-sheet", { state: "detached", timeout: 8000 });
+  const monthBar = await page.locator(".ledger-month-bar").boundingBox();
+  const header = await page.locator(".ledger-view .list-header").boundingBox();
+  check(
+    "月份标题行在标题下方自成一行",
+    monthBar !== null && header !== null && monthBar.y > header.y + header.height - 4,
+    `${monthBar?.y} vs ${header?.y}+${header?.height}`
+  );
+  await page.click(".ledger-fab");
+  await page.waitForSelector(".ledger-sheet", { timeout: 8000 });
 
   await page.click(".ledger-parent-chip >> nth=0");
   await page.waitForSelector(".ledger-cat-tile", { timeout: 5000 });

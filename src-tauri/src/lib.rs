@@ -2127,7 +2127,8 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
             ledger_export_zip,
             ledger_import_zip,
             cards_export_zip,
-            cards_import_zip
+            cards_import_zip,
+            cards_import_folder
         ])
         .setup(move |app| {
             let core =
@@ -2545,6 +2546,30 @@ async fn cards_import_zip(
     .map_err(|error| error.to_string())?
 }
 
+/// 桌面：从一个**普通文件夹**导入 Markdown 卡片（不必先打包成 zip）。
+/// 遍历、引用归一与「只落被引用的图」都在 core 的 task.importMarkdown 里完成。
+/// 移动端没有目录选择器，仍然只走压缩包那条路。
+#[tauri::command]
+async fn cards_import_folder(
+    core: State<'_, Arc<domain::host::HostCore>>,
+    path: String,
+    node_id: String,
+) -> Result<Value, String> {
+    let host = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        run_core_command(
+            &host,
+            "task.importMarkdown",
+            serde_json::json!({
+                "folderPath": path,
+                "nodeId": node_id,
+            }),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// 以 GUI 的身份跑一条 core 命令（与 core_dispatch 同一套上下文与确认语义）。
 fn run_core_command(
     host: &Arc<domain::host::HostCore>,
@@ -2738,6 +2763,7 @@ pub fn run() {
                 ledger_import_zip,
                 cards_export_zip,
                 cards_import_zip,
+                cards_import_folder,
                 app_version,
                 open_url,
                 save_background_image,

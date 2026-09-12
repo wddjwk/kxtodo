@@ -3,10 +3,12 @@
    * 记账面板（记一笔 / 改一笔）：复用应用的 .editor-overlay 浮层——桌面居中对话框、
    * 移动端底部抽屉（主流记账 App 的同一条手感）。
    * 结构自上而下：类型页签 → 大额金额 → 分类（大类 chips + 子分类图标网格）→
-   * 日期/账户/备注 → 移动端数字键盘（桌面是「保存再记 / 保存」两个按钮）。
-   * 新建时金额为 0 就关掉 = 不落盘（与日记同一条规则）。
+   * 日期/账户/备注 → 移动端数字键盘（桌面是「保存再记 / 记一笔」两个按钮）。
+   *
+   * **只有显式点保存才落盘**：关掉（X / 遮罩 / Esc / 移动端返回）一律丢弃草稿。
+   * 卡片编辑器"关掉即保存"是为了防丢正文，账目照抄那条会凭空多出用户没确认过的记录。
    */
-  import { onDestroy, onMount } from "svelte";
+  import { onMount } from "svelte";
   import {
     ArrowLeftRight, CalendarDays, Check, ChevronRight, Delete, PenLine, Trash2, Wallet, X
   } from "@lucide/svelte";
@@ -200,15 +202,13 @@
     await commit(keepOpen);
   }
 
-  /** 关闭（X / 点遮罩 / Esc / 移动端返回）：合规则落盘，不合规就等于取消。 */
-  async function saveAndClose(): Promise<void> {
-    if (closed || busy) return;
-    if (!valid()) {
-      closed = true;
-      onClose();
-      return;
-    }
-    await commit(false);
+  /** 关闭（X / 点遮罩 / Esc / 移动端返回）：一律**不落盘**。
+   *  记账与卡片编辑器刻意不同——卡片"关掉即保存"是防丢正文，而金额这里
+   *  自动落盘会凭空多出一堆用户没确认过的账，所以只有显式点「记一笔 / 保存」才写。 */
+  function closeEditor(): void {
+    if (closed) return;
+    closed = true;
+    onClose();
   }
 
   async function remove(): Promise<void> {
@@ -222,7 +222,7 @@
   }
 
   function handleBackdrop(event: PointerEvent): void {
-    if (event.target === event.currentTarget) void saveAndClose();
+    if (event.target === event.currentTarget) closeEditor();
   }
 
   function handleKeydown(event: KeyboardEvent): void {
@@ -234,7 +234,7 @@
         openPicker = "";
         return;
       }
-      void saveAndClose();
+      closeEditor();
       return;
     }
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
@@ -257,12 +257,6 @@
       void save(false);
     }
   }
-
-  // 外部路径卸载（移动端硬件返回弹历史栈）时按关闭语义走一次
-  onDestroy(() => {
-    if (closed || busy) return;
-    if (valid()) void commit(false);
-  });
 </script>
 
 <svelte:window on:keydown={handleKeydown} />
@@ -308,7 +302,7 @@
             <Trash2 size={17} />
           </button>
         {/if}
-        <button type="button" class="ledger-icon-button" title="关闭" aria-label="关闭" on:click={() => void saveAndClose()}>
+        <button type="button" class="ledger-icon-button" title="关闭（不保存这一笔）" aria-label="关闭" on:click={closeEditor}>
           <X size={18} />
         </button>
       </div>
@@ -443,7 +437,7 @@
           <CalendarDays size={15} />{dateLabel}
         </button>
         {#if openPicker === "date"}
-          <div class="ledger-pop">
+          <div class="ledger-pop date">
             <DatePicker value={date} on:select={(event) => { date = event.detail; openPicker = ""; }} on:clear={() => { date = today; openPicker = ""; }} />
           </div>
         {/if}
@@ -500,6 +494,7 @@
         <span class="ledger-foot-hint">
           {#if cents > 0}{formatCents(cents)} 元{/if}
         </span>
+        <span class="ledger-foot-spacer"></span>
         <button type="button" class="settings-button" disabled={busy} on:click={() => void save(true)}>保存再记</button>
         <button type="button" class="settings-button primary" disabled={busy} on:click={() => void save(false)}>
           {existing ? "保存修改" : "记一笔"}

@@ -327,7 +327,8 @@
   <!-- --accent 内联：编辑器浮层挂在 App 层，拿不到 .diary-view 的主题色，跟着用户选的日记色走 -->
   <div class="editor-dialog diary-editor" style={`--accent: ${diaryAccent($appSettings.diary)}; ${editorSizeStyle}`} role="dialog" aria-label="编辑日记" tabindex="-1" on:pointerdown|stopPropagation on:click|stopPropagation>
     <header class="editor-header">
-      <div class="editor-mode-switch" role="tablist">
+      <div class="editor-mode-switch" role="tablist" data-mode={mode}>
+        <span class="editor-mode-thumb" aria-hidden="true"></span>
         <button type="button" role="tab" class:active={mode === "edit"} aria-selected={mode === "edit"} on:click={() => toggleMode("edit")}>
           <PenLine size={15} />编辑
         </button>

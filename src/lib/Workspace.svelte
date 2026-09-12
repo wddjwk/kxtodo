@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import {
-    ArrowLeft, Calendar, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
+    Calendar, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
     ChevronsDown, ChevronsUp, ExternalLink, FolderInput,
     Lightbulb, MoreHorizontal, PenLine, Plus, RefreshCw, Search, Settings as SettingsIcon, SmilePlus, Star, Sun, Tag, Trash2, X
   } from "@lucide/svelte";
@@ -38,7 +38,7 @@
   import ListMenu from "./workspace/ListMenu.svelte";
   import { sortTasks, type SortMode } from "./sort";
   import { filterPlannedTasks, plannedGroupOptions, plannedSections, type PlannedGroupKey } from "./plannedGroups";
-  import { showMobileList, isMobile, mobileView } from "./platform";
+  import { isMobile, mobileView } from "./platform";
   import { caps } from "./capabilities";
   import type { AppNode, CardStyle, TagColor, Task } from "./types";
 
@@ -744,9 +744,6 @@
 <main class="workspace" style={mainStyle}>
   <section class="list-header">
     <div>
-      <button class="mobile-back" type="button" aria-label="返回列表" on:click|stopPropagation={showMobileList}>
-        <ArrowLeft size={26} />
-      </button>
       <span class="header-icon">
         {#if $isSearching}
           <Search size={34} />
@@ -936,7 +933,7 @@
     <ScheduledTasksView bind:this={schedulerViewRef} />
   {:else}
   {#if isMyDay}
-    <p class="my-day-subtitle">
+    <p class="list-subtitle">
       {formatMyDayDate(myDayViewDate)}
       {#if isMyDayHistory}
         <button type="button" class="my-day-back" on:click={() => (myDayViewDate = todayIso())}>返回今天</button>

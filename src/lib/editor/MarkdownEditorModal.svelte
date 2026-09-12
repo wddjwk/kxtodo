@@ -388,7 +388,8 @@
 <div class="editor-overlay" use:imeInset on:pointerdown={handleBackdropPointerDown} on:contextmenu|preventDefault|stopPropagation>
   <div class="editor-dialog" style={editorSizeStyle} role="dialog" aria-label={draftMode ? "新建事项" : "编辑任务"} tabindex="-1" on:pointerdown|stopPropagation on:click|stopPropagation>
     <header class="editor-header">
-      <div class="editor-mode-switch" role="tablist">
+      <div class="editor-mode-switch" role="tablist" data-mode={mode}>
+        <span class="editor-mode-thumb" aria-hidden="true"></span>
         <button
           type="button"
           role="tab"

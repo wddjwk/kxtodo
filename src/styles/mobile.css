@@ -84,6 +84,15 @@
   border-radius: 0;
 }
 
+/* 移动端首屏就是这份分组列表：行名比桌面大一档，角标跟着大一号 */
+.app-shell.mobile .list-name {
+  font-size: calc(var(--font-list) + 2px);
+}
+
+.app-shell.mobile .count-pill {
+  font-size: calc(var(--font-control) - 4px);
+}
+
 /* Back button shown only on mobile content view. */
 .mobile-back {
   display: none;
@@ -382,11 +391,11 @@
   background: rgb(0 0 0 / 6%);
 }
 
-/* My Day subtitle smaller on mobile */
-.app-shell.mobile .my-day-subtitle {
-  font-size: 12px;
-  margin: -14px 0 12px;
-  padding-left: 48px;
+/* 标题下的小字（我的一天日期 / 日记统计）：与标题文字左对齐，留出 10px 呼吸距离
+   （移动端 .list-header 的 margin-bottom 是 18px）。 */
+.app-shell.mobile .list-subtitle {
+  margin: -8px 0 12px;
+  font-size: calc(var(--font-control) - 4px);
 }
 
 /* Planned group chip on mobile: left-aligned like the completed-section label */
@@ -785,14 +794,16 @@
   opacity: 1;
 }
 
-.app-shell.mobile .ledger-subtitle {
+/* 月份标题行：窄屏上「月份」与「收/支/结余」允许折成两行，
+   绝不再和头部的视图图标抢同一行（v0.7.1 的小字就是被图标挡住的）。 */
+.app-shell.mobile .ledger-month-bar {
   flex-wrap: wrap;
-  gap: 4px 8px;
-  margin: -26px 0 10px 44px;
+  gap: 2px 14px;
+  margin: -4px 0 14px;
 }
 
-.app-shell.mobile .ledger-subtitle-net {
-  display: none;
+.app-shell.mobile .ledger-month-step strong {
+  font-size: calc(var(--font-control) + 2px);
 }
 
 .app-shell.mobile .ledger-scroll {
@@ -823,11 +834,6 @@
   font-size: calc(var(--font-control) - 8px);
 }
 
-.app-shell.mobile .ledger-day-head,
-.app-shell.mobile .ledger-day-head + .ledger-card {
-  max-width: none;
-}
-
 /* 统计：环与排行上下排，汇总卡数字小一档（三张卡在窄屏上并排） */
 .app-shell.mobile .ledger-panel {
   padding: 13px 13px;
@@ -844,11 +850,12 @@
 .app-shell.mobile .ledger-proportion {
   flex-direction: column;
   gap: 14px;
-  align-items: center;
+  align-items: stretch;
 }
 
 .app-shell.mobile .ledger-donut-wrap {
   flex: 0 0 auto;
+  width: 100%;
 }
 
 .app-shell.mobile .ledger-rank {
@@ -883,7 +890,8 @@
 }
 
 .app-shell.mobile .ledger-sheet {
-  overflow: hidden;
+  /* 放开裁剪：日期日历整块比浮层可用高度高，被裁掉就只能滚动才看得见「清除 / 今天」 */
+  overflow: visible;
   width: 100%;
   max-width: none;
   height: auto;
@@ -894,6 +902,11 @@
   animation: ledger-sheet-up 0.2s ease-out;
 }
 
+.app-shell.mobile .ledger-sheet-foot,
+.app-shell.mobile .ledger-keypad {
+  border-radius: 0;
+}
+
 @keyframes ledger-sheet-up {
   from { transform: translateY(14%); opacity: 0.4; }
   to { transform: none; opacity: 1; }
@@ -901,6 +914,7 @@
 
 .app-shell.mobile .ledger-sheet-head {
   padding: 10px 10px 10px 14px;
+  border-radius: 18px 18px 0 0;
 }
 
 .app-shell.mobile .ledger-kind-tabs button {
@@ -947,6 +961,12 @@
 
 .app-shell.mobile .ledger-key {
   height: 48px;
+}
+
+/* 「记一笔」跨两行：高度必须收回 auto，否则这条 48px 会压住 span 2 的拉伸，
+   键只占第一行、第二行留一个洞（0 键旁边空一格）。 */
+.app-shell.mobile .ledger-key.save {
+  height: auto;
 }
 
 .app-shell.mobile .ledger-sheet-foot {

@@ -16,7 +16,7 @@ KXToDo v9 提供脚本化 CLI。本 SKILL 说明**何时调用、按什么步骤
 - 输出协议：成功写 stdout，`{ "ok": true, "command", "data", "meta" }`；错误写 stderr，`{ "ok": false, "error": { "type", "code", "message", "hint?" } }`。判断成功以退出码 0 或 `ok == true` 为准。
 - 退出码：0 成功；2 参数/校验错误；3 资源不存在；4 歧义或状态冲突；5 数据/锁/文件系统错误；10 高风险需确认；20 执行失败。
 - `--dry-run` 永不触发确认门禁，适合先向用户展示影响范围。
-- 高风险动作（删除、重置、启用/运行代码）必须 `--yes` 才执行，否则退出码 10。
+- 高风险动作（删除、重置、启用/运行代码，以及**记账 ledger 的一切写操作**）必须 `--yes` 才执行，否则退出码 10。
 
 ## 术语
 
@@ -56,13 +56,14 @@ KXToDo v9 提供脚本化 CLI。本 SKILL 说明**何时调用、按什么步骤
 ## 记账
 
 - **什么时候用 ledger**：用户要「记一笔账」「今天花了多少」「这个月开销」「钱花在哪」「资产/余额」→ `ledger`；要「待办/提醒」→ `task`；要「叙事记录」→ `diary`。三者互不替代。
-- 写：`ledger add --amount <元> --account <账户名|ID> [--kind expense|income] [--category <分类名|ID>] [--date <YYYY-MM-DD>] [--time <HH:MM>] [--note <备注>]`。`--amount` 是元（两位小数，第三位四舍五入到分）；`--account`/`--category` **认名字也认 ID**（名字对人类与 Agent 更友好）。`--date` 缺省为本地今天。返回体带 `accountName`/`categoryName`/`categoryParentName`/`signed`，不必二次查表。
-- 转账：`ledger transfer --from <账户> --to <账户> --amount <元>`。**转账不计入收支统计**，只改两个账户余额；转出转入相同报 `LEDGER_TRANSFER_SAME_ACCOUNT`。
+- **记账写操作一律要先经用户同意**：金融数据敏感，`add` / `transfer` / `modify` / `remove` / `import` / `account-add` / `account-modify` / `account-remove` / `category-add` / `category-modify` / `category-remove` 全部是 high-risk-write——**先向用户说明这次增删改的内容（金额/账户/日期等）并得到明确同意，再带 `--yes` 执行**；未带 `--yes` 报 `CONFIRMATION_REQUIRED`（退出码 10），数据分毫不动。读操作（`get`/`list`/`accounts`/`categories`/`stats`/`balance`/`export`）**永远不需要**确认。别把用户的「记一笔 30 元午饭」之外的沉默当同意。
+- 写：`ledger add --amount <元> --account <账户名|ID> [--kind expense|income] [--category <分类名|ID>] [--date <YYYY-MM-DD>] [--time <HH:MM>] [--note <备注>] --yes`。`--amount` 是元（两位小数，第三位四舍五入到分）；`--account`/`--category` **认名字也认 ID**（名字对人类与 Agent 更友好）。`--date` 缺省为本地今天。返回体带 `accountName`/`categoryName`/`categoryParentName`/`signed`，不必二次查表。
+- 转账：`ledger transfer --from <账户> --to <账户> --amount <元> --yes`。**转账不计入收支统计**，只改两个账户余额；转出转入相同报 `LEDGER_TRANSFER_SAME_ACCOUNT`。
 - 读：`ledger list [--date | --from --to] [--kind] [--account] [--category] [--limit N]`（按日期由近及远）；`ledger get --id`；`ledger accounts`（各账户余额 + 净资产）；`ledger categories [--side expense|income]`（两级分类，`parentId` 空 = 大类）；`ledger balance`（净资产/总资产/总负债，信用卡负余额计入负债）。
 - **统计（周/月/年总结的首选）**：`ledger stats --month 2026-09` / `--year 2026` / `--from <起> --to <止>`。返回 `totals`（收入/支出/结余/转账）、`series`（月视图逐天、年视图逐月，空档补齐，画趋势用）、`categories`（**子分类金额并进大类**的大类占比：笔数/金额/百分比/子分类明细）。回答「钱花在哪」直接读 `categories`，别自己逐笔加。
-- 改：`ledger modify --id ... --amount/--account/--category/--date/--note`，字段缺省 = 不变。删：`ledger remove --id ... --yes`（high-risk-write，写同步墓碑）。
-- 账户管理：`ledger account-add --name <名> [--kind cash|debit|credit|investment|other] [--initial <元>]`、`account-modify --id`、`account-remove --id --yes`。**名下还有账目的账户删不掉**（`LEDGER_ACCOUNT_IN_USE`）——先改账或删账，别绕。
-- 分类管理：`ledger category-add --name <名> [--side expense|income] [--parent <大类名|ID>] [--icon <lucide 名>]`、`category-modify --id`、`category-remove --id --yes`。**分类只有两级**（子分类下不能再挂，报 `LEDGER_CATEGORY_DEPTH`）；删大类会连带它的子分类，名下账目保留但变「未分类」。首跑自带一套覆盖日常场景的种子账户与两级分类（餐饮/交通/居住/购物/娱乐/医疗/学习/人情/宠物/其他 + 工资/理财/兼职/红包/退款/其他），**先 `ledger categories` 看现成的，别重复建同名分类**（同名同侧同父会报 `LEDGER_CATEGORY_EXISTS`）。
+- 改：`ledger modify --id ... --amount/--account/--category/--date/--note --yes`，字段缺省 = 不变。删：`ledger remove --id ... --yes`（写同步墓碑）。
+- 账户管理：`ledger account-add --name <名> [--kind cash|debit|credit|investment|other] [--initial <元>] --yes`、`account-modify --id ... --yes`、`account-remove --id --yes`。**名下还有账目的账户删不掉**（`LEDGER_ACCOUNT_IN_USE`）——先改账或删账，别绕。
+- 分类管理：`ledger category-add --name <名> [--side expense|income] [--parent <大类名|ID>] [--icon <lucide 名>] --yes`、`category-modify --id ... --yes`、`category-remove --id --yes`。**分类只有两级**（子分类下不能再挂，报 `LEDGER_CATEGORY_DEPTH`）；删大类会连带它的子分类，名下账目保留但变「未分类」。首跑自带一套覆盖日常场景的种子账户与两级分类（餐饮/交通/居住/购物/娱乐/医疗/学习/人情/宠物/其他 + 工资/理财/兼职/红包/退款/其他），**先 `ledger categories` 看现成的，别重复建同名分类**（同名同侧同父会报 `LEDGER_CATEGORY_EXISTS`）。
 - **导出**：`ledger export --out <path.zip> [--from <起> --to <止>]`。包内一张 `kxtodo-ledger.xlsx`，四张表：说明（格式标记与合计）/ 账户 / 分类 / 账目（日期|时间|类型|账户|转入账户|大类|分类|金额|备注，金额带符号的元）。不给范围就是全量。
 - **导入**：`ledger import --file <path.zip|.xlsx> --yes`（bulk 写，要确认；**重复导入会产生重复账目**，别重试）。只认这套表头；账户/分类按名字合并、缺的自动创建；日期非法或金额为 0 的行跳过并计入 `skipped`。想搬家就「全量导出 → 新目录导入」，账户与分类会跟着走。
 - 视图偏好 `config get|set ledger.view list|calendar|stats|assets` 是**本机 UI 状态**不跨设备同步；记账的主题色与背景（`ledger.accent` 等四项）**是**同步的。

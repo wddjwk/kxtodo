@@ -43,8 +43,12 @@
   background: #fafbfc;
 }
 
+/* 编辑 / 预览两格：滑块由 .editor-mode-thumb 画，切换时平移过去（早前是 active
+   直接换背景色，看起来只是闪一下）。两列等宽是滑块能按 100% 位移的前提。 */
 .editor-mode-switch {
-  display: inline-flex;
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   flex-shrink: 0;
   padding: 3px;
   border: 1px solid #e2e8f0;
@@ -52,9 +56,29 @@
   background: #f1f4f8;
 }
 
+.editor-mode-thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 10%);
+  pointer-events: none;
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.editor-mode-switch[data-mode="preview"] .editor-mode-thumb {
+  transform: translateX(100%);
+}
+
 .editor-mode-switch button {
+  position: relative;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   padding: 5px 14px;
   border: 0;
@@ -63,7 +87,7 @@
   color: #64748b;
   font-size: var(--font-control);
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition: color 0.16s ease;
 }
 
 .editor-mode-switch button:hover {
@@ -71,9 +95,7 @@
 }
 
 .editor-mode-switch button.active {
-  background: #ffffff;
   color: var(--accent, #2564cf);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 10%);
   font-weight: 600;
 }
 

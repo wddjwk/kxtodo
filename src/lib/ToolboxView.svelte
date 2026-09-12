@@ -4,8 +4,7 @@
    * 新工具 = 往 TOOLS 注册表加一项 + 在 {#if activeTool.id === ...} 分支加子视图；
    * 子视图是纯组件内部状态（activeToolId），不占历史栈层级。
    */
-  import { ArrowLeft, ChevronLeft, Dice5, Toolbox } from "@lucide/svelte";
-  import { showMobileList } from "./platform";
+  import { ChevronLeft, Dice5, Toolbox } from "@lucide/svelte";
   import NumberField from "./NumberField.svelte";
   import type { Component } from "svelte";
 
@@ -48,9 +47,6 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <section class="toolbox-view" on:click|stopPropagation>
   <header class="toolbox-header">
-    <button class="mobile-back" type="button" aria-label="返回列表" on:click={showMobileList}>
-      <ArrowLeft size={26} />
-    </button>
     <span class="toolbox-header-icon"><Toolbox size={26} /></span>
     <strong class="toolbox-header-title">工具箱</strong>
   </header>

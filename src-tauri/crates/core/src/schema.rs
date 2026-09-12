@@ -233,22 +233,25 @@ pub fn command_schema(root: &clap::Command, path: &str) -> CoreResult<Value> {
 pub fn risk_for(command: &str) -> &'static str {
     match command {
         "task.remove" | "schedule.remove" | "schedule.enable" | "schedule.run" | "config.reset"
-        | "diary.remove" | "ledger.remove" | "ledger.accountRemove" | "ledger.categoryRemove" => {
-            "high-risk-write"
-        }
+        | "diary.remove" => "high-risk-write",
+        // 记账的一切写动作都是 high-risk-write（v0.7.2）：金融数据敏感，
+        // CLI/Agent 未带 --yes 一律退出码 10，先向用户说明并得到同意再执行
+        "ledger.add"
+        | "ledger.transfer"
+        | "ledger.modify"
+        | "ledger.remove"
+        | "ledger.import"
+        | "ledger.accountAdd"
+        | "ledger.accountModify"
+        | "ledger.accountRemove"
+        | "ledger.categoryAdd"
+        | "ledger.categoryModify"
+        | "ledger.categoryRemove" => "high-risk-write",
         "task.add"
         | "task.modify"
         | "diary.add"
         | "diary.modify"
         | "diary.import"
-        | "ledger.add"
-        | "ledger.transfer"
-        | "ledger.modify"
-        | "ledger.import"
-        | "ledger.accountAdd"
-        | "ledger.accountModify"
-        | "ledger.categoryAdd"
-        | "ledger.categoryModify"
         | "schedule.add"
         | "schedule.modify"
         | "schedule.disable"

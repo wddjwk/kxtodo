@@ -173,6 +173,13 @@ export type Settings = {
     tagFontSize: number;
     themePresets: ThemePreset[];
     uiColors: Record<string, string>;
+    /** 新建分组/条目的默认外观；空串 = 不配置，跟随应用默认 */
+    newNodeDefaults: {
+      accent: string;
+      backgroundColor: string;
+      backgroundImage: string;
+      backgroundOpacity: number;
+    };
   };
   lifecycle: {
     closeToTray: boolean;
