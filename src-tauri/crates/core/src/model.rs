@@ -16,6 +16,10 @@ pub const LEDGER_SCHEMA_VERSION: u32 = 1;
 /// `diary`——与前端 `diary.ts` 的 DIARY_IMAGE_NODE 同名，图片存储与同步一行都不用改。
 pub const DIARY_IMAGE_NODE: &str = "diary";
 
+/// 记账条目的附图（v0.7.4）走同一条图片通道，伪条目 id 固定为 `ledger`——与前端同名，
+/// 于是图片的存储/同步（entry 类别随「同步数据」范围）/释放空间盘点一行都不用改。
+pub const LEDGER_IMAGE_NODE: &str = "ledger";
+
 pub const SYSTEM_NODE_IDS: [&str; 4] = ["my-day", "planned", "important", "scheduled"];
 
 // ---------------------------------------------------------------------------
@@ -369,47 +373,16 @@ impl LedgerSide {
     }
 }
 
-/// 资金账户类型：现金 / 储蓄卡 / 信用卡（负债）/ 投资 / 其他。
+/// 资金账户类型（v0.7.4 放开为自由字符串）：任意非空字符串都合法，预置清单由前端提供，
+/// core 不硬编码——用户想要「公积金」「医保」「数字人民币」这类账户不该被枚举挡住。
 ///
-/// 类型只影响资产视图的分组与负债口径（信用卡的负余额计入总负债），
-/// 不影响记账动作本身。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum AccountKind {
-    Cash,
-    Debit,
-    Credit,
-    Investment,
-    Other,
-}
+/// core 唯一认识的语义值是 `credit`（信用卡）：它的负余额计入总负债
+/// （`ledger balance` 与前端 `ledger.ts::assetsOverview` 同口径），其余类型只影响界面分组。
+pub const ACCOUNT_KIND_CREDIT: &str = "credit";
 
-impl Default for AccountKind {
-    fn default() -> Self {
-        AccountKind::Cash
-    }
-}
-
-impl AccountKind {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            AccountKind::Cash => "cash",
-            AccountKind::Debit => "debit",
-            AccountKind::Credit => "credit",
-            AccountKind::Investment => "investment",
-            AccountKind::Other => "other",
-        }
-    }
-
-    pub fn parse(raw: &str) -> Option<Self> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "cash" | "现金" => Some(AccountKind::Cash),
-            "debit" | "储蓄卡" => Some(AccountKind::Debit),
-            "credit" | "信用卡" => Some(AccountKind::Credit),
-            "investment" | "投资" => Some(AccountKind::Investment),
-            "other" | "其他" => Some(AccountKind::Other),
-            _ => None,
-        }
-    }
+/// 账户类型缺省值（与旧枚举 `AccountKind::Cash` 的序列化形态一致，serde 直接兼容）。
+pub fn default_account_kind() -> String {
+    "cash".to_string()
 }
 
 /// 资金账户。余额不存现值——当前余额 = 期初 + 流水推导，
@@ -424,8 +397,9 @@ pub struct LedgerAccount {
     /// #rrggbb；空 = 按类型取默认色
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub color: String,
-    #[serde(default)]
-    pub kind: AccountKind,
+    /// 账户类型（自由字符串，见 `default_account_kind`）；`credit` = 信用卡（负债口径）
+    #[serde(default = "default_account_kind")]
+    pub kind: String,
     /// 期初余额（分）
     #[serde(rename = "initialCents", default)]
     pub initial_cents: i64,
@@ -494,6 +468,10 @@ pub struct LedgerEntry {
     pub time: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
+    /// 附图裸文件名（v0.7.4，存放于 `img/data/ledger/`，走条目插图通道同步）；
+    /// None = 没有附图。图片本体不进 Excel 导出，只随实体同步。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
     #[serde(rename = "createdAt", default)]
     pub created_at: String,
     #[serde(rename = "updatedAt", skip_serializing_if = "Option::is_none")]
@@ -539,10 +517,10 @@ impl LedgerFile {
         // 不存在的账户。随机 id 会让「加载两次 = 两本不同的账」。
         let mut accounts = Vec::new();
         for (index, (name, kind, icon, color)) in [
-            ("现金", AccountKind::Cash, "Wallet", "#e8a33d"),
-            ("微信", AccountKind::Other, "MessageCircle", "#2aae67"),
-            ("支付宝", AccountKind::Other, "Smartphone", "#1677ff"),
-            ("储蓄卡", AccountKind::Debit, "Landmark", "#b23a48"),
+            ("现金", "cash", "Wallet", "#e8a33d"),
+            ("微信", "other", "MessageCircle", "#2aae67"),
+            ("支付宝", "other", "Smartphone", "#1677ff"),
+            ("储蓄卡", "debit", "Landmark", "#b23a48"),
         ]
         .iter()
         .enumerate()
@@ -552,7 +530,7 @@ impl LedgerFile {
                 name: (*name).to_string(),
                 icon: (*icon).to_string(),
                 color: (*color).to_string(),
-                kind: *kind,
+                kind: (*kind).to_string(),
                 initial_cents: 0,
                 note: String::new(),
                 order: index as f64 + 1.0,

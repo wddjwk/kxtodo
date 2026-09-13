@@ -1,21 +1,27 @@
 <script lang="ts">
   /**
-   * 统计视图：汇总卡 + 收支曲线 + 分类占比环与排行。
-   * 曲线是手写 SVG（描边动画），环抽成了 LedgerDonut（钻取面板复用同一份）——
+   * 统计视图：顶行两个段控（左 = 周期 周/月/年/总/自定义，右 = 侧 支出/收入/收支），
+   * 下面一整块白底圆角卡 = 可点周期标签 + 三标签 + 三数额，再往下是趋势与分类占比。
+   * 曲线手写 SVG（描边动画），环抽成了 LedgerDonut（钻取面板复用同一份）——
    * 不引图表库，包体积与风格都不值，server 管理台的活动曲线就是先例。
-   * 月视图逐天、年视图逐月。
    *
-   * 排行里点一个大类不再是就地展开子分类，而是派发 drill 让上层弹出钻取面板
-   * （移动端下半屏、桌面端锚在这一行的下拉区）：子分类占比环 → 账单明细 → 改这一笔。
+   * 侧选「收支」时趋势把收/支两条线画在同一张图上（共用纵轴此时才成立：
+   * 用户明确要对照两者）；分类占比仍按支出画（占比环的语义是"钱花在哪"）。
+   * 排行里点一个大类派发 drill 让上层弹出钻取面板（移动端下半屏、桌面端锚定下拉）。
    */
   import { createEventDispatcher } from "svelte";
   import { ChevronLeft, ChevronRight } from "@lucide/svelte";
-  import { categoryColor, categoryStats, compactCents, formatCents, statsEntries, statsSeries } from "../ledger";
+  import {
+    categoryColor, categoryStats, compactCents, formatCents, statsBounds, statsEntries,
+    statsPeriodLabel, statsSeries, shiftWeek, paletteColor, type StatsMode
+  } from "../ledger";
   import type { LedgerDonutItem } from "../ledger";
   import { ledgerIcon } from "../ledgerIcons";
   import { fitAmount } from "../fitText";
+  import { todayDate } from "../diary";
   import LedgerDonut from "./LedgerDonut.svelte";
   import MonthPopover from "../MonthPopover.svelte";
+  import DatePicker from "../DatePicker.svelte";
   import type { LedgerBook, LedgerEntry, LedgerSide } from "../types";
   import type { MonthCursor } from "../diary";
 
@@ -25,43 +31,75 @@
 
   const dispatch = createEventDispatcher<{
     month: MonthCursor;
-    drill: { categoryId: string; side: LedgerSide; mode: "month" | "year"; cursor: MonthCursor; anchor: HTMLElement };
+    drill: {
+      categoryId: string;
+      side: LedgerSide;
+      from: string;
+      to: string;
+      periodLabel: string;
+      anchor: HTMLElement;
+    };
   }>();
 
-  let mode: "month" | "year" = "month";
-  let side: LedgerSide = "expense";
-  let periodOpen = false;
-  let periodEl: HTMLElement;
+  type Side = LedgerSide | "both";
 
-  $: periodLabel = mode === "month" ? `${cursor.year}年${cursor.month + 1}月` : `${cursor.year}年`;
+  const MODES: Array<{ id: StatsMode; label: string }> = [
+    { id: "week", label: "周" },
+    { id: "month", label: "月" },
+    { id: "year", label: "年" },
+    { id: "total", label: "总" },
+    { id: "custom", label: "自定义" }
+  ];
+
+  let mode: StatsMode = "month";
+  let side: Side = "expense";
+  /** 周周期的锚点日（周一起算那一周）；自定义周期的起止 */
+  let weekAnchor = todayDate();
+  let customFrom = `${cursor.year}-${(cursor.month + 1).toString().padStart(2, "0")}-01`;
+  let customTo = todayDate();
+  let popOpen: "" | "month" | "week" | "from" | "to" = "";
+  let periodEl: HTMLElement;
+  let fromEl: HTMLElement;
+  let toEl: HTMLElement;
+
+  $: bounds = statsBounds(entries, mode, cursor, weekAnchor, customFrom, customTo);
+  $: periodLabel = statsPeriodLabel(mode, bounds, cursor);
   // 曲线、占比、排行都吃同一个窗口——早前占比拿全量数据配当期汇总，两个数字对不上
-  $: rangeEntries = statsEntries(entries, mode, cursor);
-  $: series = statsSeries(entries, mode, cursor);
+  $: rangeEntries = statsEntries(entries, bounds);
+  $: series = statsSeries(entries, bounds);
   $: totalIncome = series.reduce((sum, point) => sum + point.income, 0);
   $: totalExpense = series.reduce((sum, point) => sum + point.expense, 0);
-  $: stats = categoryStats(book, rangeEntries, side).filter((item) => item.cents > 0);
+  /** 侧 = 收支时占比环仍画支出：环的语义是"钱花在哪一类" */
+  let catSide: LedgerSide = "expense";
+  $: catSide = side === "both" ? "expense" : side;
+  $: stats = categoryStats(book, rangeEntries, catSide).filter((item) => item.cents > 0);
   $: statsTotal = stats.reduce((sum, item) => sum + item.cents, 0);
+  let bucket: "day" | "month" = "day";
+  $: bucket = series.length > 0 && series[0].key.length > 7 ? "month" : "day";
 
-  function colorOf(categoryId: string): string {
-    return categoryColor(book, book.categories.find((item) => item.id === categoryId));
+  function colorOf(categoryId: string, index: number): string {
+    const category = book.categories.find((item) => item.id === categoryId);
+    return category?.color || paletteColor(index);
   }
 
-  $: donutItems = stats.slice(0, 12).map<LedgerDonutItem>((item) => ({
+  $: donutItems = stats.slice(0, 12).map<LedgerDonutItem>((item, index) => ({
     id: item.categoryId || "none",
     name: item.name,
     cents: item.cents,
     count: item.count,
-    color: colorOf(item.categoryId)
+    color: colorOf(item.categoryId, index)
   }));
 
   // --- 曲线几何 ---
-  // 只画当前侧的一条线：收/支共用一根纵轴时，一笔工资就能把整月的支出压成地板线
   const W = 680;
   const H = 220;
   const PAD_X = 40;
   const PAD_TOP = 18;
   const PAD_BOTTOM = 28;
-  $: peak = Math.max(1, ...series.map((point) => point[side]));
+  $: peak = Math.max(
+    1,
+    ...series.map((point) => (side === "income" ? point.income : side === "expense" ? point.expense : Math.max(point.income, point.expense)))
+  );
   $: stepX = series.length > 1 ? (W - PAD_X * 2) / (series.length - 1) : 0;
   function pointX(index: number): number {
     return PAD_X + index * stepX;
@@ -69,15 +107,15 @@
   function pointY(cents: number): number {
     return H - PAD_BOTTOM - (cents / peak) * (H - PAD_TOP - PAD_BOTTOM);
   }
-  function linePath(): string {
+  function linePath(key: "income" | "expense"): string {
     return series
-      .map((point, index) => `${index === 0 ? "M" : "L"}${pointX(index).toFixed(1)},${pointY(point[side]).toFixed(1)}`)
+      .map((point, index) => `${index === 0 ? "M" : "L"}${pointX(index).toFixed(1)},${pointY(point[key]).toFixed(1)}`)
       .join(" ");
   }
-  function areaPath(): string {
+  function areaPath(key: "income" | "expense"): string {
     if (series.length === 0) return "";
     const base = (H - PAD_BOTTOM).toFixed(1);
-    return `${linePath()} L${pointX(series.length - 1).toFixed(1)},${base} L${pointX(0).toFixed(1)},${base} Z`;
+    return `${linePath(key)} L${pointX(series.length - 1).toFixed(1)},${base} L${pointX(0).toFixed(1)},${base} Z`;
   }
   function axisLabel(value: number): string {
     // 金额单位是分：1 万元 = 1_000_000 分
@@ -90,98 +128,205 @@
     .filter((index) => index % Math.max(1, Math.ceil(series.length / 8)) === 0);
 
   function step(delta: number): void {
-    periodOpen = false;
-    const date = new Date(cursor.year, cursor.month + delta, 1);
-    dispatch("month", { year: date.getFullYear(), month: date.getMonth() });
+    popOpen = "";
+    if (mode === "week") {
+      weekAnchor = shiftWeek(weekAnchor, delta);
+      return;
+    }
+    if (mode === "month") {
+      const date = new Date(cursor.year, cursor.month + delta, 1);
+      dispatch("month", { year: date.getFullYear(), month: date.getMonth() });
+      return;
+    }
+    if (mode === "year") {
+      dispatch("month", { year: cursor.year + delta, month: cursor.month });
+    }
   }
 
   function pickPeriod(next: { year: number; month: number }): void {
+    popOpen = "";
     dispatch("month", { year: next.year, month: next.month });
   }
 
-  function switchSide(next: LedgerSide): void {
+  function switchMode(next: StatsMode): void {
+    mode = next;
+    popOpen = "";
+  }
+
+  function switchSide(next: Side): void {
     side = next;
   }
 
   function drill(item: { categoryId: string }, anchor: HTMLElement): void {
-    periodOpen = false;
-    dispatch("drill", { categoryId: item.categoryId, side, mode, cursor, anchor });
+    popOpen = "";
+    dispatch("drill", { categoryId: item.categoryId, side: catSide, from: bounds.from, to: bounds.to, periodLabel, anchor });
+  }
+
+  function slash(date: string): string {
+    return date.replaceAll("-", "/");
+  }
+
+  function handleKeydown(event: KeyboardEvent): void {
+    if (event.key !== "Escape" || event.isComposing || event.keyCode === 229) return;
+    if (popOpen) {
+      event.preventDefault();
+      event.stopPropagation();
+      popOpen = "";
+    }
   }
 </script>
+
+<svelte:window on:keydown={handleKeydown} />
 
 <div class="ledger-stats">
   <div class="ledger-stats-bar">
     <div class="ledger-segmented" role="tablist" aria-label="统计范围">
-      <button type="button" role="tab" class:active={mode === "month"} on:click|stopPropagation={() => (mode = "month")}>月</button>
-      <button type="button" role="tab" class:active={mode === "year"} on:click|stopPropagation={() => (mode = "year")}>年</button>
+      {#each MODES as item (item.id)}
+        <button type="button" role="tab" class:active={mode === item.id} on:click|stopPropagation={() => switchMode(item.id)}>
+          {item.label}
+        </button>
+      {/each}
     </div>
-    <div class="ledger-segmented" role="tablist" aria-label="收支两侧">
+    <div class="ledger-segmented ledger-side-switch" role="tablist" aria-label="收支两侧">
       <button type="button" role="tab" class:active={side === "expense"} on:click|stopPropagation={() => switchSide("expense")}>支出</button>
       <button type="button" role="tab" class:active={side === "income"} on:click|stopPropagation={() => switchSide("income")}>收入</button>
+      <button type="button" role="tab" class:active={side === "both"} on:click|stopPropagation={() => switchSide("both")}>收支</button>
     </div>
-    <span class="ledger-stats-period">
-      <button type="button" aria-label="上一段" on:click|stopPropagation={() => step(mode === "month" ? -1 : -12)}><ChevronLeft size={17} /></button>
-      <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions a11y_no_noninteractive_element_to_interactive_role -->
-      <strong
-        bind:this={periodEl}
-        class="month-pop-anchor"
-        role="button"
-        tabindex="0"
-        title="点击直接选年月"
-        on:click|stopPropagation={() => (periodOpen = !periodOpen)}
-      >{periodLabel}</strong>
-      <button type="button" aria-label="下一段" on:click|stopPropagation={() => step(mode === "month" ? 1 : 12)}><ChevronRight size={17} /></button>
-    </span>
   </div>
 
-  <MonthPopover
-    open={periodOpen}
-    anchor={periodEl}
-    year={cursor.year}
-    month={cursor.month}
-    mode={mode}
-    onSelect={pickPeriod}
-    onClose={() => (periodOpen = false)}
-  />
+  <section class="ledger-panel ledger-summary-card">
+    <div class="ledger-stats-period">
+      {#if mode === "custom"}
+        <span class="ledger-custom-field" class:open={popOpen === "from"}>
+          <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions a11y_no_noninteractive_element_to_interactive_role -->
+          <strong
+            bind:this={fromEl}
+            role="button"
+            tabindex="0"
+            title="起始日期"
+            on:click|stopPropagation={() => (popOpen = popOpen === "from" ? "" : "from")}
+          >{slash(bounds.from)}</strong>
+          {#if popOpen === "from"}
+            <div class="ledger-pop date">
+              <DatePicker
+                value={customFrom}
+                on:select={(event) => {
+                  customFrom = event.detail;
+                  if (customTo < customFrom) customTo = customFrom;
+                  popOpen = "";
+                }}
+              />
+            </div>
+          {/if}
+        </span>
+        <span class="ledger-custom-sep">-</span>
+        <span class="ledger-custom-field" class:open={popOpen === "to"}>
+          <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions a11y_no_noninteractive_element_to_interactive_role -->
+          <strong
+            bind:this={toEl}
+            role="button"
+            tabindex="0"
+            title="结束日期"
+            on:click|stopPropagation={() => (popOpen = popOpen === "to" ? "" : "to")}
+          >{slash(bounds.to)}</strong>
+          {#if popOpen === "to"}
+            <div class="ledger-pop date">
+              <DatePicker
+                value={customTo}
+                on:select={(event) => {
+                  customTo = event.detail;
+                  if (customFrom > customTo) customFrom = customTo;
+                  popOpen = "";
+                }}
+              />
+            </div>
+          {/if}
+        </span>
+      {:else}
+        {#if mode !== "total"}
+          <button type="button" aria-label="上一段" on:click|stopPropagation={() => step(-1)}><ChevronLeft size={17} /></button>
+        {/if}
+        <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions a11y_no_noninteractive_element_to_interactive_role -->
+        <strong
+          bind:this={periodEl}
+          class="month-pop-anchor"
+          class:pickable={mode === "month" || mode === "year" || mode === "week"}
+          role="button"
+          tabindex="0"
+          title={mode === "total" ? "全部流水的跨度" : "点击直接选周期"}
+          on:click|stopPropagation={() => {
+            if (mode === "month" || mode === "year") popOpen = popOpen === "month" ? "" : "month";
+            else if (mode === "week") popOpen = popOpen === "week" ? "" : "week";
+          }}
+        >{periodLabel}</strong>
+        {#if mode !== "total"}
+          <button type="button" aria-label="下一段" on:click|stopPropagation={() => step(1)}><ChevronRight size={17} /></button>
+        {/if}
+      {/if}
+    </div>
 
-  <section class="ledger-summary">
-    <div>
-      <span>收入</span>
-      <strong class="in" use:fitAmount={totalIncome}>{formatCents(totalIncome)}</strong>
-    </div>
-    <div>
+    {#if mode === "month" || mode === "year"}
+      <MonthPopover
+        open={popOpen === "month"}
+        anchor={periodEl}
+        year={cursor.year}
+        month={cursor.month}
+        mode={mode === "year" ? "year" : "month"}
+        onSelect={pickPeriod}
+        onClose={() => (popOpen = "")}
+      />
+    {:else if mode === "week"}
+      {#if popOpen === "week"}
+        <div class="ledger-pop date ledger-week-pop">
+          <DatePicker
+            value={weekAnchor}
+            on:select={(event) => {
+              weekAnchor = event.detail;
+              popOpen = "";
+            }}
+          />
+        </div>
+      {/if}
+    {/if}
+
+    <div class="ledger-summary-labels">
       <span>支出</span>
-      <strong class="out" use:fitAmount={totalExpense}>{formatCents(totalExpense)}</strong>
-    </div>
-    <div>
+      <span>收入</span>
       <span>结余</span>
+    </div>
+    <div class="ledger-summary">
+      <strong class="out" use:fitAmount={totalExpense}>{formatCents(totalExpense)}</strong>
+      <strong class="in" use:fitAmount={totalIncome}>{formatCents(totalIncome)}</strong>
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <strong
-        class:out={totalIncome - totalExpense < 0}
-        use:fitAmount={totalIncome - totalExpense}
-      >{formatCents(totalIncome - totalExpense)}</strong>
+      <strong class:out={totalIncome - totalExpense < 0} use:fitAmount={totalIncome - totalExpense}>
+        {formatCents(totalIncome - totalExpense)}
+      </strong>
     </div>
   </section>
 
   <section class="ledger-panel">
     <header class="ledger-panel-head">
-      <h2>{side === "expense" ? "支出趋势" : "收入趋势"}</h2>
+      <h2>{side === "expense" ? "支出趋势" : side === "income" ? "收入趋势" : "收支趋势"}</h2>
       <span class="ledger-legend">
-        <i class={side === "expense" ? "out" : "in"}></i>{side === "expense" ? "支出" : "收入"}
-        <em>{series.filter((point) => point[side] > 0).length} 个{mode === "month" ? "日子" : "月份"}</em>
+        {#if side !== "income"}<i class="out"></i>支出{/if}
+        {#if side !== "expense"}<i class="in"></i>收入{/if}
       </span>
     </header>
-    {#key `${mode}-${side}-${cursor.year}-${cursor.month}`}
+    {#key `${mode}-${side}-${bounds.from}-${bounds.to}`}
       <svg class="ledger-line-chart" viewBox="0 0 {W} {H}" role="img" aria-label="收支趋势曲线">
         {#each axisValues as value (value)}
           <line class="ledger-chart-grid" x1={PAD_X} x2={W - PAD_X} y1={pointY(value)} y2={pointY(value)} />
           <text class="ledger-chart-axis" x={PAD_X - 8} y={pointY(value) + 4} text-anchor="end">{axisLabel(value)}</text>
         {/each}
-        <path class="ledger-line-area {side === "expense" ? "out" : "in"}" d={areaPath()} />
-        <path class="ledger-line {side === "expense" ? "out" : "in"}" d={linePath()} />
+        {#if side !== "both"}
+          {@const key = side === "income" ? "income" : "expense"}
+          <path class="ledger-line-area {key === "income" ? "in" : "out"}" d={areaPath(key)} />
+        {/if}
+        {#if side !== "income"}<path class="ledger-line out" d={linePath("expense")} />{/if}
+        {#if side !== "expense"}<path class="ledger-line in" d={linePath("income")} />{/if}
         {#each tickIndexes as index (index)}
           <text class="ledger-chart-axis" x={pointX(index)} y={H - 8} text-anchor="middle">
-            {mode === "month" ? Number(series[index].key.slice(8)) : `${Number(series[index].key.slice(5))}月`}
+            {bucket === "day" ? Number(series[index].key.slice(8)) : `${Number(series[index].key.slice(5))}月`}
           </text>
         {/each}
       </svg>
@@ -191,22 +336,21 @@
   <section class="ledger-panel">
     <header class="ledger-panel-head">
       <h2>分类占比</h2>
-      <span class="ledger-legend"><em>点一类看它的明细</em></span>
     </header>
 
     {#if stats.length === 0}
-      <div class="ledger-day-empty">{periodLabel}还没有{side === "expense" ? "支出" : "收入"}记录。</div>
+      <div class="ledger-day-empty">{periodLabel}还没有{catSide === "expense" ? "支出" : "收入"}记录。</div>
     {:else}
       <div class="ledger-proportion">
         <div class="ledger-donut-wrap">
-          <LedgerDonut items={donutItems} total={statsTotal} totalLabel={side === "expense" ? "总支出" : "总收入"} />
+          <LedgerDonut items={donutItems} total={statsTotal} totalLabel={catSide === "expense" ? "总支出" : "总收入"} />
         </div>
 
         <ul class="ledger-rank">
           {#each stats as item (item.categoryId || "none")}
             {@const category = book.categories.find((entry) => entry.id === item.categoryId)}
-            {@const icon = ledgerIcon(category?.icon, side === "income" ? "Banknote" : "Package")}
-            {@const color = colorOf(item.categoryId)}
+            {@const icon = ledgerIcon(category?.icon, catSide === "income" ? "Banknote" : "Package")}
+            {@const color = categoryColor(book, category)}
             <li>
               <button
                 type="button"

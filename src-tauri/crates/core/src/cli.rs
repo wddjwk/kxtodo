@@ -795,7 +795,7 @@ pub enum LedgerAction {
     Accounts,
     /// 新增资金账户（Risk: high-risk-write）
     #[command(
-        long_about = "Risk: high-risk-write\n\n--kind 可选 cash|debit|credit|investment|other（信用卡的负余额计入总负债）。\n--initial 是期初余额（元，可为负）。\n未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger account-add --name 招商储蓄卡 --kind debit --initial 1234.56 --yes"
+        long_about = "Risk: high-risk-write\n\n--kind 是自由字符串（v0.7.4 起不再限枚举；预置清单见界面或 ledger icon-list 的 accountGroups），\n类型为 credit（信用卡）的账户负余额计入总负债。\n--initial 是期初余额（元，可为负）。\n未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger account-add --name 招商储蓄卡 --kind debit --initial 1234.56 --yes"
     )]
     #[command(name = "account-add")]
     AccountAdd(LedgerAccountAddArgs),
@@ -836,7 +836,7 @@ pub enum LedgerAction {
     CategoryRemove(LedgerIdArgs),
     /// 列出可用图标（Risk: read）
     #[command(
-        long_about = "Risk: read\n\n按分组列出 --icon 能用的全部图标名（lucide 的 PascalCase 导出名）。\n设计分类/账户前先跑一次，别猜名字：不在目录里的名字前端画不出来，只会退化成省略号。\n输出 { total, groups: [{name, icons}], icons }。\n\n示例：kxtodo-cli ledger icon-list"
+        long_about = "Risk: read\n\n按分组列出 --icon 能用的全部图标名（lucide 的 PascalCase 导出名）。\n设计分类/账户前先跑一次，别猜名字：不在目录里的名字前端画不出来，只会退化成省略号。\ngroups/icons 是分类目录；accountGroups/accountIcons 是账户专用目录（现金/银行卡/电子支付/社保/投资/借贷等语义）。\n输出 { total, groups: [{name, icons}], icons, accountTotal, accountGroups, accountIcons }。\n\n示例：kxtodo-cli ledger icon-list"
     )]
     #[command(name = "icon-list")]
     IconList,
@@ -894,6 +894,9 @@ pub struct LedgerAddArgs {
     /// 备注
     #[arg(long, value_name = "text")]
     pub note: Option<String>,
+    /// 附图文件名（img/data/ledger/ 下的裸文件名；不含路径分隔符）
+    #[arg(long, value_name = "file")]
+    pub image: Option<String>,
 }
 
 #[derive(Debug, Args, Serialize)]
@@ -975,6 +978,9 @@ pub struct LedgerModifyArgs {
     /// 新备注
     #[arg(long, value_name = "text")]
     pub note: Option<String>,
+    /// 新附图文件名（传空串清除附图）
+    #[arg(long, value_name = "file")]
+    pub image: Option<String>,
 }
 
 #[derive(Debug, Args, Serialize)]
@@ -983,7 +989,7 @@ pub struct LedgerAccountAddArgs {
     /// 账户名（唯一）
     #[arg(long, value_name = "name")]
     pub name: String,
-    /// 类型 cash|debit|credit|investment|other
+    /// 账户类型（自由字符串；credit = 信用卡，负余额计入总负债）
     #[arg(long, value_name = "kind")]
     pub kind: Option<String>,
     /// 图标名（前端白名单内的 lucide 名）

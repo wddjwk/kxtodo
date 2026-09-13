@@ -217,3 +217,31 @@ fn clean_is_gated_and_deletes_exactly_the_orphans() {
     assert_eq!(again["removedLogs"], 0);
     assert_eq!(again["warnings"], json!([]));
 }
+
+/// 记账附图目录（img/data/ledger/）同样进「释放空间」的盘点与清理（v0.7.4）：
+/// 被账目引用的图活下来，孤儿图删掉，目录本身不当孤儿目录收走。
+#[test]
+fn clean_accounts_for_ledger_images() {
+    let env = TestEnv::fresh();
+    // 记一笔带附图（引用 ledger/lref.png）
+    env.ok(&[
+        "ledger", "add", "--amount", "12", "--account", "现金",
+        "--date", "2026-09-08", "--image", "lref.png", "--yes",
+    ]);
+    let root = env.path();
+    let ledger_dir = root.join("img").join("data").join("ledger");
+    // 图片在 add **之后**落盘：add 时目录还不存在，保存即清理扫不到，孤儿留给 clean 收
+    write_sized(&ledger_dir.join("lref.png"), 50);
+    write_sized(&ledger_dir.join("lorphan.png"), 51);
+
+    // usage 盘点：只有 lorphan.png 是无引用插图
+    let usage = env.ok(&["storage", "usage"]);
+    assert_eq!(usage["orphanImages"], json!({ "count": 1, "bytes": 51 }));
+
+    // clean：删孤儿、留被引用的，ledger 目录本身保留
+    let result = env.ok(&["storage", "clean", "--yes"]);
+    assert_eq!(result["removedImages"], 1);
+    assert!(ledger_dir.join("lref.png").exists(), "被引用的记账附图活着");
+    assert!(!ledger_dir.join("lorphan.png").exists(), "孤儿记账附图删掉");
+    assert!(ledger_dir.is_dir(), "ledger 目录不当孤儿目录收走");
+}

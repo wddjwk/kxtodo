@@ -66,44 +66,57 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.waitForSelector(".ledger-sheet", { timeout: 8000 });
   check("记账面板打开", (await page.$$(".ledger-sheet")).length === 1);
   check("桌面无数字键盘", (await page.$$(".ledger-keypad")).length === 0);
-  check("大类 chips 渲染", (await page.$$(".ledger-parent-chip")).length >= 5);
-  await page.click(".ledger-parent-chip >> nth=0");
-  await page.waitForSelector(".ledger-cat-tile", { timeout: 5000 });
-  const tileCount = (await page.$$(".ledger-cat-tile")).length;
-  check("子分类图标格子渲染", tileCount >= 2, String(tileCount));
-  await page.click(".ledger-cat-tile >> nth=0");
-  const picked = await page.textContent(".ledger-amount-cat em");
-  check("选中分类回显在金额行", Boolean(picked && picked !== "选择分类"), picked ?? "");
-  await page.fill(".ledger-amount-field input", "30.50");
+  check("大类圆形图标渲染", (await page.$$(".ledger-cat-grid > .ledger-cat-cell:not(.add)")).length >= 5);
+  await page.click(".ledger-cat-grid > .ledger-cat-cell:not(.add) >> nth=0");
+  await page.waitForSelector(".ledger-cat-sub .ledger-cat-cell", { timeout: 5000 });
+  const tileCount = (await page.$$(".ledger-cat-sub .ledger-cat-cell:not(.add)")).length;
+  check("二级分类展开块渲染", tileCount >= 2, String(tileCount));
+  await page.click(".ledger-cat-sub .ledger-cat-cell:not(.add) >> nth=0");
+  check("选中的分类带 active 标记", (await page.$$(".ledger-cat-cell.active")).length === 1);
+  await page.fill(".ledger-amount-plain input", "30.50");
   await page.click(".ledger-sheet-foot button:has-text('记一笔')");
   await page.waitForSelector(".ledger-sheet", { state: "detached", timeout: 8000 });
 
   // 列表视图：一天一张卡片，卡片里是当天每一笔
   await page.waitForSelector(".ledger-card", { timeout: 8000 });
   check("按天卡片出现", (await page.$$(".ledger-card")).length === 1);
-  check("卡片里有日期栏", (await page.$$(".ledger-card .ledger-date-day")).length === 1);
+  const cardTitle = (await page.textContent(".ledger-card-title")) ?? "";
+  check("卡片标题行是月/日日期", /^\d{1,2}\/\d{1,2}$/.test(cardTitle.trim()), cardTitle);
+  check("卡片标题行带周几", ((await page.textContent(".ledger-date-week")) ?? "").includes("周"));
   const cardTitleSize = await page.$eval(".ledger-card-title", (el) => getComputedStyle(el).fontSize);
   const entryAmountSize = await page.$eval(".ledger-entry-amount", (el) => getComputedStyle(el).fontSize);
   check(
-    "卡片字号跟全局变量走（18px 基准上下）",
-    Math.abs(parseFloat(cardTitleSize) - 19) < 0.6 && Math.abs(parseFloat(entryAmountSize) - 19) < 0.6,
+    "卡片字号跟全局变量走（标题比正文大一档）",
+    Math.abs(parseFloat(cardTitleSize) - 21) < 0.6 && Math.abs(parseFloat(entryAmountSize) - 19) < 0.6,
     `${cardTitleSize}/${entryAmountSize}`
   );
   const entryAmount = await page.textContent(".ledger-entry-amount");
   check("支出金额带负号", entryAmount?.trim() === "-30.50", entryAmount ?? "");
   const daySum = await page.textContent(".ledger-card-sums");
   check("卡片头给出当天合计", daySum?.includes("30.5") ?? false, daySum ?? "");
+  check("一笔两行：大字行 + 小字行", (await page.$$(".ledger-entry .ledger-entry-line")).length === 1);
+  check("小字行带时刻或账户", (await page.$$(".ledger-entry .ledger-entry-sub .ledger-entry-meta em")).length >= 1);
 
   // v0.7.2：月份行是标题级的一行（只有列表视图有），卡片是单列（没有左侧日期栏外壳）
   check("列表视图有月份标题行", (await page.$$(".ledger-month-bar")).length === 1);
   check("月份行带收/支/结余", ((await page.textContent(".ledger-month-sums")) ?? "").includes("结余"));
   check("卡片单列：无左侧日期栏外壳", (await page.$$(".ledger-card-main")).length === 0);
-  check("日期号在卡片标题行里", (await page.$$(".ledger-card-head .ledger-date-day")).length === 1);
+  // v0.7.4：桌面端月份左、收/支/结余右（同一行两端对齐）
+  const stepBox = await page.locator(".ledger-month-step").boundingBox();
+  const sumsBox = await page.locator(".ledger-month-sums").boundingBox();
+  const barBox = await page.locator(".ledger-month-bar").boundingBox();
+  check(
+    "桌面月份行两端对齐",
+    stepBox !== null && sumsBox !== null && barBox !== null &&
+      stepBox.y < sumsBox.y + sumsBox.height && sumsBox.y < stepBox.y + stepBox.height &&
+      sumsBox.x + sumsBox.width <= barBox.x + barBox.width + 2,
+    `${stepBox?.y}/${sumsBox?.y}`
+  );
 
   // v0.7.2：关掉面板一律不落盘（只有显式点保存才写）
   await page.click(".ledger-fab");
   await page.waitForSelector(".ledger-sheet", { timeout: 8000 });
-  await page.fill(".ledger-amount-field input", "9.99");
+  await page.fill(".ledger-amount-plain input", "9.99");
   await page.keyboard.press("Escape");
   await page.waitForSelector(".ledger-sheet", { state: "detached", timeout: 8000 });
   check("关掉面板不会多出一笔", (await page.$$(".ledger-entry")).length === 1);
@@ -155,14 +168,14 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   check("日历格显示数额", amountCells.length >= 1, String(amountCells.length));
   const cellAmount = await page.textContent(".ledger-cell-amounts em");
   check("日历数额是当天支出", cellAmount?.trim() === "30.5", cellAmount ?? "");
-  check("日历下方列出当天卡片", (await page.$$(".ledger-day-head + .ledger-card")).length === 1);
+  check("日历下方直接贴当天卡片", (await page.$$(".ledger-calendar + .ledger-card")).length === 1);
   check("非列表视图不画月份标题行", (await page.$$(".ledger-month-bar")).length === 0);
-  const dayHeadBox = await page.locator(".ledger-day-head").boundingBox();
+  const dayCardBox = await page.locator(".ledger-calendar + .ledger-card").boundingBox();
   const scrollBox = await page.locator(".ledger-scroll").boundingBox();
   check(
-    "日历下的当天标题左对齐到内容左缘",
-    Math.abs(dayHeadBox.x - scrollBox.x) < 2,
-    `${dayHeadBox.x} vs ${scrollBox.x}`
+    "日历下的当天卡片左对齐到内容左缘",
+    dayCardBox !== null && scrollBox !== null && Math.abs(dayCardBox.x - scrollBox.x) < 2,
+    `${dayCardBox?.x} vs ${scrollBox?.x}`
   );
 
   // 统计视图
@@ -303,25 +316,47 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
 
   const cardsBefore = (await page.$$(".ledger-card")).length;
   check("首屏只渲染当前月", cardsBefore >= 1 && cardsBefore <= 31, String(cardsBefore));
-  check("首屏不画月份分隔行", (await page.$$(".ledger-month-divider")).length === 0);
+  check("列表不画月份分隔行", (await page.$$(".ledger-month-divider")).length === 0);
 
+  // v0.7.4：滚到底 = 整屏换成上一个月（月份条跟着更新），不再是往下堆月份
+  const monthBefore = await page.textContent(".ledger-month-step strong");
   await page.evaluate(() => {
     const el = document.querySelector(".ledger-scroll");
     if (el) el.scrollTop = el.scrollHeight;
   });
-  await page.waitForSelector(".ledger-month-divider", { timeout: 8000 });
+  await page.waitForFunction(
+    (before) => (document.querySelector(".ledger-month-step strong")?.textContent ?? "") !== before,
+    monthBefore,
+    { timeout: 8000 }
+  );
+  const monthAfter = await page.textContent(".ledger-month-step strong");
+  check("滚到底整屏换成上一个月", monthAfter !== monthBefore, `${monthBefore} → ${monthAfter}`);
+  check("换月后仍无月份分隔行", (await page.$$(".ledger-month-divider")).length === 0);
   const cardsAfter = (await page.$$(".ledger-card")).length;
-  check("滚到底接上上个月", cardsAfter > cardsBefore, `${cardsBefore} → ${cardsAfter}`);
-  const divider = await page.textContent(".ledger-month-divider");
-  check("月份分隔行带收支持", divider?.includes("支") ?? false, (divider ?? "").replace(/\s+/g, " "));
+  check("换月后渲染的是那个月的卡片", cardsAfter >= 1, String(cardsAfter));
+
+  // 滚回中间再滚到顶 = 换回较新的一个月
+  await page.evaluate(() => {
+    const el = document.querySelector(".ledger-scroll");
+    if (el) el.scrollTop = Math.max(200, el.scrollHeight / 2);
+  });
+  await page.waitForTimeout(150);
+  await page.evaluate(() => {
+    const el = document.querySelector(".ledger-scroll");
+    if (el) el.scrollTop = 0;
+  });
+  await page.waitForFunction(
+    (expected) => (document.querySelector(".ledger-month-step strong")?.textContent ?? "") === expected,
+    monthBefore,
+    { timeout: 8000 }
+  );
+  check("到顶下拉换回较新的月", ((await page.textContent(".ledger-month-step strong")) ?? "") === monthBefore);
 
   // 月份导航：跳到上个月，卡片跟着换
-  const monthBefore = await page.textContent(".ledger-month-step strong");
   await page.click(".ledger-month-step button >> nth=0");
   await page.waitForTimeout(200);
-  const monthAfter = await page.textContent(".ledger-month-step strong");
-  check("月份导航换月", monthBefore !== monthAfter, `${monthBefore} → ${monthAfter}`);
-  check("换月后分隔行归零", (await page.$$(".ledger-month-divider")).length === 0);
+  const monthNav = await page.textContent(".ledger-month-step strong");
+  check("月份导航换月", monthNav !== monthBefore, `${monthBefore} → ${monthNav}`);
 
   check("翻页无 pageerror", errors.length === 0, errors.join(" | "));
   await context.close();
@@ -368,12 +403,19 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
     monthBar !== null && header !== null && monthBar.y > header.y + header.height - 4,
     `${monthBar?.y} vs ${header?.y}+${header?.height}`
   );
+  const stepBoxM = await page.locator(".ledger-month-step").boundingBox();
+  const sumsBoxM = await page.locator(".ledger-month-sums").boundingBox();
+  check(
+    "移动端月份行两行：月份左、收支右",
+    stepBoxM !== null && sumsBoxM !== null && sumsBoxM.y >= stepBoxM.y + stepBoxM.height - 4,
+    `${stepBoxM?.y}/${sumsBoxM?.y}`
+  );
   await page.click(".ledger-fab");
   await page.waitForSelector(".ledger-sheet", { timeout: 8000 });
 
-  await page.click(".ledger-parent-chip >> nth=0");
-  await page.waitForSelector(".ledger-cat-tile", { timeout: 5000 });
-  await page.click(".ledger-cat-tile >> nth=0");
+  await page.click(".ledger-cat-grid > .ledger-cat-cell:not(.add) >> nth=0");
+  await page.waitForSelector(".ledger-cat-sub .ledger-cat-cell", { timeout: 5000 });
+  await page.click(".ledger-cat-sub .ledger-cat-cell:not(.add) >> nth=0");
   for (const key of ["1", "2", ".", "3", "4"]) {
     await page.click(`.ledger-key:text-is("${key}")`);
   }

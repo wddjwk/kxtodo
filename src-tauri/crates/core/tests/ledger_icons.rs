@@ -8,7 +8,10 @@
 //! 顺带守住一条更要命的：**种子账本用到的每个图标都必须在目录里**——
 //! 种子分类/账户是首次启动就落盘的，图标不在目录里会一律退化成省略号。
 
-use kxtodo_core::ledger_icons::{all_icons, is_known_icon, ICON_GROUPS};
+use kxtodo_core::ledger_icons::{
+    all_account_icons, all_icons, is_known_account_icon, is_known_icon, ACCOUNT_ICON_GROUPS,
+    ICON_GROUPS,
+};
 use kxtodo_core::model::LedgerFile;
 
 const TS: &str = include_str!("../../../../src/lib/ledgerIcons.ts");
@@ -73,6 +76,82 @@ fn seeded_ledger_only_uses_known_icons() {
         assert!(
             is_known_icon(&account.icon),
             "种子账户「{}」的图标 {} 不在目录里",
+            account.name,
+            account.icon
+        );
+    }
+}
+
+#[test]
+fn every_account_icon_exists_in_the_frontend() {
+    let mut missing = Vec::new();
+    for group in ACCOUNT_ICON_GROUPS {
+        for icon in group.icons {
+            if !TS.contains(&format!("\"{icon}\"")) {
+                missing.push(format!("{}/{}", group.name, icon));
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "这些账户图标前端没有（界面会画成省略号）：{}",
+        missing.join(", ")
+    );
+}
+
+#[test]
+fn every_frontend_account_group_is_mirrored_in_order() {
+    // 定位前端的 LEDGER_ACCOUNT_ICON_GROUPS 数组，逐个分组、逐个图标按顺序比对。
+    // 顺序敏感：既能抓到「少了/多了图标」，也能抓到「组内或组间顺序漂移」。
+    let start = TS
+        .find("LEDGER_ACCOUNT_ICON_GROUPS")
+        .expect("前端少了 LEDGER_ACCOUNT_ICON_GROUPS 导出");
+    let body = &TS[start..];
+    let end = body.find("];").expect("LEDGER_ACCOUNT_ICON_GROUPS 没有闭合");
+    let block = &body[..end];
+    let mut cursor = 0usize;
+    for group in ACCOUNT_ICON_GROUPS {
+        let name_token = format!("name: \"{}\"", group.name);
+        let at = block[cursor..]
+            .find(&name_token)
+            .unwrap_or_else(|| panic!("前端账户图标目录缺少分组 {}（或顺序与 core 不一致）", group.name));
+        cursor += at + name_token.len();
+        for icon in group.icons {
+            let icon_token = format!("\"{icon}\"");
+            let at = block[cursor..].find(&icon_token).unwrap_or_else(|| {
+                panic!(
+                    "前端账户分组 {} 缺少图标 {}（或顺序与 core 不一致）",
+                    group.name, icon
+                )
+            });
+            cursor += at + icon_token.len();
+        }
+    }
+    assert_eq!(ACCOUNT_ICON_GROUPS.len(), 6, "账户图标分组数与前端对不上");
+}
+
+#[test]
+fn account_catalog_has_no_duplicates() {
+    let icons = all_account_icons();
+    let mut seen = std::collections::HashSet::new();
+    for icon in &icons {
+        assert!(seen.insert(*icon), "账户图标 {icon} 出现在多个分组里");
+    }
+    assert!(
+        icons.len() >= 30,
+        "账户图标目录被削了：只有 {} 个",
+        icons.len()
+    );
+}
+
+#[test]
+fn seeded_ledger_accounts_only_use_known_account_icons() {
+    let mut file = LedgerFile::default();
+    file.seed_defaults();
+    for account in &file.accounts {
+        assert!(
+            is_known_account_icon(&account.icon),
+            "种子账户「{}」的图标 {} 不在账户目录里",
             account.name,
             account.icon
         );

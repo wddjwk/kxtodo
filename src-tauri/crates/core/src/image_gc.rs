@@ -2,10 +2,11 @@
 //! 删掉没有任何 markdown 再引用的图片——从源头掐断孤儿图（图片同步的删除本就不传播，
 //! 事后清理不如不生）。
 //!
-//! **立即删是安全的，因为清理只跟在「本地写」后面**：两个生产调用点（`core.rs` 的
-//! `sweep_entry_images` 与 `ops_diary.rs` 的 `sweep_diary_images`）都只在 task/diary 的
-//! add/modify/remove **本地保存成功后**运行，传入的正是刚写盘那份文件里该目录归属实体的
-//! 全部 markdown——对这个目录来说引用集合就是权威的。同步拉取的合并走
+//! **立即删是安全的，因为清理只跟在「本地写」后面**：三个生产调用点（`core.rs` 的
+//! `sweep_entry_images`、`ops_diary.rs` 的 `sweep_diary_images` 与 `ops_ledger.rs` 的
+//! `sweep_ledger_images`）都只在 task/diary/ledger 的 add/modify/remove **本地保存成功后**
+//! 运行，传入的正是刚写盘那份文件里该目录归属实体的全部引用（task/diary 是 markdown，
+//! 记账是条目的 image 字段）——对这个目录来说引用集合就是权威的。同步拉取的合并走
 //! `sync/engine.rs` 里的 `repo::write_*`，**从不触发清理**，所以「图片先于引用它的
 //! 实体到达本机」的在途窗口根本不暴露给这把扫帚；编辑器「图片先落盘、正文后保存」
 //! 的流程也一样——正文保存那一刻引用集合已经完整。
@@ -43,10 +44,16 @@ pub fn sweep_unreferenced<'a>(
     dir: &Path,
     markdowns: impl IntoIterator<Item = &'a str>,
 ) -> usize {
+    let referenced = referenced_basenames(markdowns);
+    sweep_unreferenced_by_names(dir, &referenced)
+}
+
+/// `sweep_unreferenced` 的「引用集合已算好」版本：记账条目的附图不在 markdown 里，
+/// 而是各条目的 `image` 字段（裸文件名），调用点直接把这份集合传进来。护栏与语义完全一致。
+pub fn sweep_unreferenced_by_names(dir: &Path, referenced: &HashSet<String>) -> usize {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return 0;
     };
-    let referenced = referenced_basenames(markdowns);
     let mut removed = 0usize;
     for entry in entries.flatten() {
         let Ok(file_type) = entry.file_type() else { continue };

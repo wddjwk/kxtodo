@@ -362,3 +362,91 @@ pub fn all_icons() -> Vec<&'static str> {
 pub fn is_known_icon(name: &str) -> bool {
     ICON_GROUPS.iter().any(|group| group.icons.contains(&name))
 }
+
+/// 账户专用图标目录（v0.7.4），与前端 `src/lib/ledgerIcons.ts` 的
+/// `LEDGER_ACCOUNT_ICON_GROUPS` 一一对应。
+///
+/// 与分类目录分开：账户图标的语义偏向「资金容器」（现金/银行卡/电子钱包/社保/投资/借贷），
+/// 挑选面比分类窄。这里的每个名字都取自上面的 `ICON_GROUPS`（因此前端 `LEDGER_ICONS`
+/// 一定能画出来）；一致性同样由 `tests/ledger_icons.rs` 守着。
+pub static ACCOUNT_ICON_GROUPS: &[IconGroup] = &[
+    IconGroup {
+        name: "现金与卡",
+        icons: &[
+            "Wallet",
+            "Banknote",
+            "Coins",
+            "CreditCard",
+            "Landmark",
+            "WalletCards",
+            "Wallet2",
+            "PiggyBank",
+            "Vault",
+        ],
+    },
+    IconGroup {
+        name: "电子支付",
+        icons: &[
+            "MessageCircle",
+            "Smartphone",
+            "Currency",
+            "CircleDollarSign",
+            "Send",
+            "Zap",
+        ],
+    },
+    IconGroup {
+        name: "社保与公共",
+        icons: &[
+            "House",
+            "Home",
+            "ShieldPlus",
+            "HeartPulse",
+            "Hospital",
+            "Bus",
+            "TrainFront",
+            "Utensils",
+            "Ticket",
+            "KeyRound",
+        ],
+    },
+    IconGroup {
+        name: "投资理财",
+        icons: &[
+            "ChartLine",
+            "TrendingUp",
+            "Percent",
+            "Bitcoin",
+            "Scale",
+            "BadgeDollarSign",
+        ],
+    },
+    IconGroup {
+        name: "借贷往来",
+        icons: &["ArrowLeftRight", "HandCoins", "Handshake", "ReceiptText", "RotateCcw"],
+    },
+    IconGroup {
+        name: "其他",
+        icons: &["Ellipsis", "CircleDot", "Package", "Star", "Info", "Settings"],
+    },
+];
+
+/// 全部账户图标名（去重后的扁平列表，顺序 = 分组顺序）。
+pub fn all_account_icons() -> Vec<&'static str> {
+    let mut out = Vec::new();
+    for group in ACCOUNT_ICON_GROUPS {
+        for icon in group.icons {
+            if !out.contains(icon) {
+                out.push(icon);
+            }
+        }
+    }
+    out
+}
+
+/// 这个名字在账户目录里吗（`ledger accountAdd/accountModify --icon` 的参考口径）。
+pub fn is_known_account_icon(name: &str) -> bool {
+    ACCOUNT_ICON_GROUPS
+        .iter()
+        .any(|group| group.icons.contains(&name))
+}

@@ -6,17 +6,21 @@
 //! 金额一律**整数分**（i64）：浮点累加在统计里会 drift，而分是记账的最小单位。
 //! 对外（CLI/Excel/JSON 输出）同时给 `amountCents` 与两位小数的 `amount` 字符串。
 
+use std::collections::HashSet;
+
 use serde_json::{json, Map, Value};
 
 use crate::core::{
     apply_write_outcome, idem_summary, notify_host, param_str, require_confirmation, required_str,
     set_read_revision, ExecContext, Invocation,
 };
+use crate::diary_archive::is_safe_image_name;
 use crate::envelope::Meta;
 use crate::error::{CoreError, CoreResult};
 use crate::ids::gen_id;
 use crate::model::{
-    AccountKind, LedgerAccount, LedgerCategory, LedgerEntry, LedgerFile, LedgerKind, LedgerSide,
+    default_account_kind, LedgerAccount, LedgerCategory, LedgerEntry, LedgerFile, LedgerKind,
+    LedgerSide, ACCOUNT_KIND_CREDIT, LEDGER_IMAGE_NODE,
 };
 use crate::repo::Domain;
 use crate::time::{now_iso, parse_date, today_local};
@@ -304,6 +308,7 @@ fn entry_view(file: &LedgerFile, entry: &LedgerEntry) -> Value {
         "date": entry.date,
         "time": entry.time,
         "note": entry.note,
+        "image": entry.image,
         "createdAt": entry.created_at,
         "updatedAt": entry.updated_at,
     })
@@ -403,6 +408,7 @@ struct EntryDraft {
     date: String,
     time: String,
     note: String,
+    image: Option<String>,
 }
 
 fn validate_entry(file: &LedgerFile, draft: &EntryDraft) -> CoreResult<()> {
@@ -526,6 +532,23 @@ fn draft_from_params(file: &LedgerFile, params: &Value, base: Option<&LedgerEntr
     let note = param_str(params, "note")
         .map(|text| text.trim().to_string())
         .unwrap_or_else(|| base.map(|item| item.note.clone()).unwrap_or_default());
+    let image = match param_str(params, "image") {
+        Some(raw) => {
+            let name = raw.trim().to_string();
+            if name.is_empty() {
+                None // 空串 = 清除附图
+            } else {
+                if !is_safe_image_name(&name) {
+                    return Err(CoreError::validation(
+                        "LEDGER_IMAGE_NAME_INVALID",
+                        format!("无效附图文件名 `{name}`"),
+                    ));
+                }
+                Some(name)
+            }
+        }
+        None => base.and_then(|item| item.image.clone()),
+    };
     Ok(EntryDraft {
         kind,
         amount_cents,
@@ -535,12 +558,26 @@ fn draft_from_params(file: &LedgerFile, params: &Value, base: Option<&LedgerEntr
         date,
         time,
         note,
+        image,
     })
 }
 
 // ---------------------------------------------------------------------------
 // entries
 // ---------------------------------------------------------------------------
+
+/// 记账侧保存后的附图清理（v0.7.4）：对着**写入后**的账本扫 `img/data/ledger/`，删掉
+/// 没有任何一笔账再引用的图片（只跟本地写，见 `image_gc`）。引用集合 = 各条目的 `image`
+/// 字段（裸文件名），不是 markdown。清理失败一律吞掉——绝不让保存本身因为清理而失败。
+fn sweep_ledger_images(ctx: &ExecContext, file: &LedgerFile) {
+    let dir = ctx.repo.layout.entry_img_dir(LEDGER_IMAGE_NODE);
+    let referenced: HashSet<String> = file
+        .entries
+        .iter()
+        .filter_map(|entry| entry.image.clone())
+        .collect();
+    crate::image_gc::sweep_unreferenced_by_names(&dir, &referenced);
+}
 
 fn ledger_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
     let params = &inv.params;
@@ -566,6 +603,7 @@ fn ledger_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResul
                     date: draft.date.clone(),
                     time: draft.time.clone(),
                     note: draft.note.clone(),
+                    image: draft.image.clone(),
                     created_at: now.clone(),
                     updated_at: None,
                     extra: Map::new(),
@@ -577,6 +615,7 @@ fn ledger_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResul
         )?;
         apply_write_outcome(meta, Domain::Ledger, &outcome);
         notify_host(ctx, Domain::Ledger, outcome.revision, vec![]);
+        sweep_ledger_images(ctx, &file);
         if outcome.replayed {
             return Ok(outcome.replay_summary.clone().unwrap_or(Value::Null));
         }
@@ -708,6 +747,7 @@ fn ledger_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRe
                 entry.date = draft.date.clone();
                 entry.time = draft.time.clone();
                 entry.note = draft.note.clone();
+                entry.image = draft.image.clone();
                 entry.updated_at = Some(now.clone());
             }
             sort_entries(&mut file.entries);
@@ -721,6 +761,7 @@ fn ledger_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRe
     )?;
     apply_write_outcome(meta, Domain::Ledger, &outcome);
     notify_host(ctx, Domain::Ledger, outcome.revision, vec![id.clone()]);
+    sweep_ledger_images(ctx, &file);
     if outcome.replayed {
         return Ok(outcome.replay_summary.clone().unwrap_or(Value::Null));
     }
@@ -757,7 +798,7 @@ fn ledger_remove(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRe
         return Ok(json!({ "removed": 0, "dryRun": true }));
     }
     let now = now_iso();
-    let (_, outcome) = ctx.repo.write_ledger(
+    let (file, outcome) = ctx.repo.write_ledger(
         inv.controls.if_revision,
         inv.controls.idempotency_key.as_deref(),
         &inv.command,
@@ -771,6 +812,7 @@ fn ledger_remove(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRe
     )?;
     apply_write_outcome(meta, Domain::Ledger, &outcome);
     notify_host(ctx, Domain::Ledger, outcome.revision, vec![id.clone()]);
+    sweep_ledger_images(ctx, &file);
     Ok(json!({ "removed": 1, "revision": outcome.revision }))
 }
 
@@ -799,13 +841,17 @@ fn ledger_account_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> C
         return Err(CoreError::validation("LEDGER_ACCOUNT_NAME_EMPTY", "账户名不能为空"));
     }
     let kind = match param_str(params, "kind") {
-        Some(raw) => AccountKind::parse(&raw).ok_or_else(|| {
-            CoreError::validation(
-                "LEDGER_ACCOUNT_KIND_INVALID",
-                format!("无效账户类型 `{raw}`，支持 cash|debit|credit|investment|other"),
-            )
-        })?,
-        None => AccountKind::default(),
+        Some(raw) => {
+            let text = raw.trim().to_string();
+            if text.is_empty() {
+                return Err(CoreError::validation(
+                    "LEDGER_ACCOUNT_KIND_INVALID",
+                    "账户类型不能为空",
+                ));
+            }
+            text
+        }
+        None => default_account_kind(),
     };
     let initial = cents_param(params, "initial")?.unwrap_or(0);
     let icon = param_str(params, "icon").unwrap_or_default();
@@ -883,12 +929,16 @@ fn ledger_account_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -
                 }
             }
             let kind = match param_str(params, "kind") {
-                Some(raw) => Some(AccountKind::parse(&raw).ok_or_else(|| {
-                    CoreError::validation(
-                        "LEDGER_ACCOUNT_KIND_INVALID",
-                        format!("无效账户类型 `{raw}`"),
-                    )
-                })?),
+                Some(raw) => {
+                    let text = raw.trim().to_string();
+                    if text.is_empty() {
+                        return Err(CoreError::validation(
+                            "LEDGER_ACCOUNT_KIND_INVALID",
+                            "账户类型不能为空",
+                        ));
+                    }
+                    Some(text)
+                }
                 None => None,
             };
             let initial = cents_param(params, "initial")?;
@@ -986,8 +1036,9 @@ fn ledger_account_remove(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -
 
 /// 图标目录（只读，不属于账本数据，也不设 domain revision）。
 ///
-/// 给 CLI/Agent 一份「能选哪些图标」的权威清单：设计分类时照着挑，而不是猜一个
+/// 给 CLI/Agent 一份「能选哪些图标」的权威清单：设计分类/账户时照着挑，而不是猜一个
 /// lucide 里根本不存在的名字写进 --icon（前端画不出来，只会退化成省略号）。
+/// `groups`/`icons` 是分类目录，`accountGroups`/`accountIcons` 是账户专用目录（v0.7.4）。
 /// 目录本身是前端 `src/lib/ledgerIcons.ts` 的镜像，一致性由 tests/ledger_icons.rs 守着。
 fn ledger_icon_list(_inv: &Invocation, _ctx: &ExecContext, _meta: &mut Meta) -> CoreResult<Value> {
     let groups: Vec<Value> = crate::ledger_icons::ICON_GROUPS
@@ -995,10 +1046,18 @@ fn ledger_icon_list(_inv: &Invocation, _ctx: &ExecContext, _meta: &mut Meta) -> 
         .map(|group| json!({ "name": group.name, "icons": group.icons }))
         .collect();
     let icons = crate::ledger_icons::all_icons();
+    let account_groups: Vec<Value> = crate::ledger_icons::ACCOUNT_ICON_GROUPS
+        .iter()
+        .map(|group| json!({ "name": group.name, "icons": group.icons }))
+        .collect();
+    let account_icons = crate::ledger_icons::all_account_icons();
     Ok(json!({
         "total": icons.len(),
         "groups": groups,
         "icons": icons,
+        "accountTotal": account_icons.len(),
+        "accountGroups": account_groups,
+        "accountIcons": account_icons,
     }))
 }
 
@@ -1520,7 +1579,7 @@ fn ledger_balance(_inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> Core
         .map(|account| {
             let balance = account_balance_cents(&file, &account.id);
             net += balance;
-            if account.kind == AccountKind::Credit && balance < 0 {
+            if account.kind == ACCOUNT_KIND_CREDIT && balance < 0 {
                 liabilities += -balance;
             }
             account_view(&file, account)
@@ -1657,7 +1716,7 @@ fn ledger_import(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRe
                         name: item.name.clone(),
                         icon: item.icon.clone(),
                         color: item.color.clone(),
-                        kind: item.kind,
+                        kind: item.kind.clone(),
                         initial_cents: item.initial_cents,
                         note: String::new(),
                         order,
@@ -1781,6 +1840,7 @@ fn ledger_import(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRe
                     date,
                     time: item.time.clone(),
                     note: item.note.clone(),
+                    image: None,
                     created_at: now.clone(),
                     updated_at: None,
                     extra: Map::new(),

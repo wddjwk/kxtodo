@@ -7,8 +7,9 @@
   import { ArrowLeftRight, Plus } from "@lucide/svelte";
   import { assetsOverview, formatCents } from "../ledger";
   import {
-    ACCOUNT_KIND_COLOR, ACCOUNT_KIND_LABEL, accountIconName, ledgerIcon, softColor
+    ledgerIcon, softColor
   } from "../ledgerIcons";
+  import { accountTypeColor, accountTypeIcon, accountTypeLabel } from "../ledgerAccountTypes";
   import type { LedgerBook } from "../types";
 
   export let book: LedgerBook;
@@ -56,9 +57,9 @@
 
   <div class="ledger-account-list">
     {#each assets.perAccount as item (item.account.id)}
-      {@const iconName = accountIconName(item.account.icon, item.account.kind)}
+      {@const iconName = item.account.icon || accountTypeIcon(item.account.kind)}
       {@const icon = ledgerIcon(iconName, iconName)}
-      {@const color = item.account.color || ACCOUNT_KIND_COLOR[item.account.kind]}
+      {@const color = item.account.color || accountTypeColor(item.account.kind)}
       <button
         type="button"
         class="ledger-account-row"
@@ -70,7 +71,7 @@
         </span>
         <span class="ledger-account-text">
           <strong>{item.account.name}</strong>
-          <em>{ACCOUNT_KIND_LABEL[item.account.kind]}{item.account.note ? ` · ${item.account.note}` : ""}</em>
+          <em>{accountTypeLabel(item.account.kind)}{item.account.note ? ` · ${item.account.note}` : ""}</em>
         </span>
         <b class="ledger-account-balance" class:negative={item.balance < 0}>{formatCents(item.balance)}</b>
       </button>

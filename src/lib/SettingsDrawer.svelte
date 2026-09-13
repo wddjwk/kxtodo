@@ -108,6 +108,18 @@
       storageUsage.tempFiles.bytes +
       storageUsage.cleanableLogs.bytes
     : 0;
+  /** 占用组成的「其余」桶：域 JSON、同步 runtime、服务器库这些不单独盘点的部分 */
+  $: storageOtherBytes = storageUsage
+    ? Math.max(
+        0,
+        storageUsage.totalBytes -
+          storageUsage.images.bytes -
+          storageUsage.backgrounds.bytes -
+          storageUsage.avatars.bytes -
+          storageUsage.serverLogs.bytes -
+          storageUsage.backups.bytes
+      )
+    : 0;
 
   async function loadStorageUsage(): Promise<void> {
     storageUsage = await fetchStorageUsage();
@@ -1613,6 +1625,33 @@
         <span>数据占用</span>
         <span class="muted">{formatBytes(storageUsage.totalBytes)}</span>
       </div>
+      <ul class="storage-parts">
+        <li>
+          <strong>插图</strong>
+          <em>记事 / 日记 / 记账条目里 markdown 引用的图片</em>
+          <b>{formatBytes(storageUsage.images.bytes)}</b>
+        </li>
+        <li>
+          <strong>背景与头像</strong>
+          <em>列表 / 日记 / 记账的背景图与个人资料头像</em>
+          <b>{formatBytes(storageUsage.backgrounds.bytes + storageUsage.avatars.bytes)}</b>
+        </li>
+        <li>
+          <strong>服务器日志</strong>
+          <em>本机作为同步服务器时的操作日志（按日轮转）</em>
+          <b>{formatBytes(storageUsage.serverLogs.bytes)}</b>
+        </li>
+        <li>
+          <strong>备份</strong>
+          <em>域数据写盘前的历史备份，自动保留最近几份</em>
+          <b>{formatBytes(storageUsage.backups.bytes)}</b>
+        </li>
+        <li>
+          <strong>数据与运行时</strong>
+          <em>记事 / 日记 / 账本等领域数据、同步水位与服务器库</em>
+          <b>{formatBytes(storageOtherBytes)}</b>
+        </li>
+      </ul>
       <div class="settings-row">
         <span>可释放</span>
         <span class="muted">{formatBytes(cleanableBytes)}</span>

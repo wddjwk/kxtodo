@@ -677,8 +677,9 @@ function normalizeLedgerSide(raw: unknown): LedgerSide {
 }
 
 function normalizeAccountKind(raw: unknown): LedgerAccountKind {
-  if (raw === "debit" || raw === "credit" || raw === "investment" || raw === "other") return raw;
-  return "cash";
+  // v0.7.4 起类型是自由字符串（预置只是候选）：只有缺省才回落 cash
+  const text = typeof raw === "string" ? raw.trim() : "";
+  return text === "" ? "cash" : text;
 }
 
 function toCents(raw: unknown): number {
@@ -752,6 +753,7 @@ function normalizeLedgerEntry(raw: unknown): LedgerEntry | null {
     date,
     time: typeof item.time === "string" ? item.time : "",
     note: typeof item.note === "string" ? item.note : "",
+    image: typeof item.image === "string" && item.image !== "" ? item.image : undefined,
     createdAt: typeof item.createdAt === "string" ? item.createdAt : now(),
     updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : undefined
   };

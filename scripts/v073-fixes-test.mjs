@@ -48,13 +48,13 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   // 先记一笔（带时刻）：后面所有断言都用它
   await page.click(".ledger-fab");
   await page.waitForSelector(".ledger-sheet", { timeout: 8000 });
-  await page.click(".ledger-parent-chip >> nth=0");
-  await page.waitForSelector(".ledger-cat-tile", { timeout: 5000 });
-  await page.click(".ledger-cat-tile >> nth=0");
-  await page.fill(".ledger-amount-field input", "30.50");
+  await page.click(".ledger-cat-grid > .ledger-cat-cell:not(.add) >> nth=0");
+  await page.waitForSelector(".ledger-cat-sub .ledger-cat-cell", { timeout: 5000 });
+  await page.click(".ledger-cat-sub .ledger-cat-cell:not(.add) >> nth=0");
+  await page.fill(".ledger-amount-plain input", "30.50");
 
   // 日期浮层里有「时钟 + 18:19」那一行，点开是双列滚轮
-  await page.click(".ledger-meta-trigger:has(svg)");
+  await page.click(".ledger-meta-field >> nth=0 >> .ledger-meta-plain");
   await page.waitForSelector(".ledger-pop.date .date-picker", { timeout: 5000 });
   check("日期浮层带时刻行", (await page.$$(".ledger-pop.date .dp-time-trigger")).length === 1);
   const clockLabel = await page.textContent(".dp-time-trigger strong");
@@ -77,7 +77,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.waitForSelector(".date-picker-grid", { timeout: 5000 });
   await page.keyboard.press("Escape");
   await page.waitForSelector(".ledger-pop.date", { state: "detached", timeout: 5000 });
-  const triggerText = await page.textContent(".ledger-meta-field .ledger-meta-trigger");
+  const triggerText = await page.textContent(".ledger-meta-field .ledger-meta-plain");
   check("触发器回显选中的时刻", (triggerText ?? "").includes("45"), triggerText ?? "");
 
   await page.click(".ledger-sheet-foot button:has-text('记一笔')");
@@ -115,8 +115,8 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
     els.map((el) => el.textContent?.trim() ?? "")
   );
   check("编辑态只有「保存修改」一个动作", footButtons.join("|") === "保存修改", footButtons.join("|"));
-  check("编辑态回显已有时刻", (await page.textContent(".ledger-meta-field .ledger-meta-trigger"))?.includes("45") ?? false);
-  await page.fill(".ledger-amount-field input", "42");
+  check("编辑态回显已有时刻", (await page.textContent(".ledger-meta-field .ledger-meta-plain"))?.includes("45") ?? false);
+  await page.fill(".ledger-amount-plain input", "42");
   await page.click(".ledger-sheet-foot button:has-text('保存修改')");
   await page.waitForSelector(".ledger-sheet", { state: "detached", timeout: 8000 });
   await page.waitForTimeout(400);
@@ -143,7 +143,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   check("转账账户浮层没被金额行盖住", hit === "pop", String(hit));
   await page.keyboard.press("Escape");
   await page.waitForSelector(".ledger-transfer-field .ledger-pop", { state: "detached", timeout: 5000 });
-  await page.fill(".ledger-amount-field input", "12.34");
+  await page.fill(".ledger-amount-plain input", "12.34");
   await page.click(".ledger-sheet-foot button:has-text('记一笔')");
   await page.waitForSelector(".ledger-sheet", { state: "detached", timeout: 8000 });
   await page.waitForSelector(".ledger-entry:has-text('转账')", { timeout: 8000 });
@@ -151,7 +151,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.click(".ledger-entry:has-text('转账')");
   await page.waitForSelector(".ledger-sheet", { timeout: 8000 });
   check("编辑转账时仍是转账页签", (await page.$$(".ledger-transfer-block")).length === 1);
-  await page.fill(".ledger-amount-field input", "20");
+  await page.fill(".ledger-amount-plain input", "20");
   await page.click(".ledger-sheet-foot button:has-text('保存修改')");
   await page.waitForSelector(".ledger-sheet", { state: "detached", timeout: 8000 });
   await page.waitForTimeout(400);
@@ -162,10 +162,10 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   );
   check("转账金额改到了", (await page.textContent(".ledger-entry:has-text('转账') .ledger-entry-amount"))?.includes("20") ?? false);
 
-  // 分类加号：一级 chips 行末与二级网格末尾都能直达分类管理的新增表单
+  // 分类加号：一级网格末尾与二级展开块末尾都能直达分类管理的新增表单
   await page.click(".ledger-fab");
   await page.waitForSelector(".ledger-sheet", { timeout: 8000 });
-  await page.click(".ledger-chip-add");
+  await page.click(".ledger-cat-grid > .ledger-cat-cell.add");
   await page.waitForSelector(".ledger-manager", { timeout: 8000 });
   check("一级加号打开新增分类表单", (await page.textContent(".ledger-sheet-title"))?.trim() === "添加分类");
   check("加号打开时带图标分组", (await page.$$(".ledger-icon-group")).length >= 10);
@@ -179,7 +179,9 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.keyboard.press("Escape");
   await page.waitForSelector(".ledger-manager", { state: "detached", timeout: 8000 });
   check("分类管理关掉后记账面板还在", (await page.$$(".ledger-sheet")).length === 1);
-  await page.click(".ledger-cat-tile.add");
+  await page.click(".ledger-cat-grid > .ledger-cat-cell:not(.add) >> nth=0");
+  await page.waitForSelector(".ledger-cat-sub .ledger-cat-cell.add", { timeout: 5000 });
+  await page.click(".ledger-cat-sub .ledger-cat-cell.add");
   await page.waitForSelector(".ledger-manager", { timeout: 8000 });
   check("二级加号也打开新增表单", (await page.textContent(".ledger-sheet-title"))?.trim() === "添加分类");
   await page.keyboard.press("Escape");
@@ -205,15 +207,15 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   const drillTitle = await page.textContent(".ledger-drill-title strong");
   check("钻取面板标题是大类名", Boolean(drillTitle && drillTitle.length > 0), drillTitle ?? "");
   const hasRows = (await page.$$(".ledger-drill-row")).length;
-  const hasEntries = (await page.$$(".ledger-drill-entry")).length;
+  const hasEntries = (await page.$$(".ledger-drill-entries .ledger-entry")).length;
   check("钻取面板给出二级分类或账单明细", hasRows + hasEntries >= 1, `${hasRows}/${hasEntries}`);
   if (hasRows > 0) {
     await page.click(".ledger-drill-row >> nth=0");
-    await page.waitForSelector(".ledger-drill-entry", { timeout: 5000 });
-    check("点二级分类看到账单明细", (await page.$$(".ledger-drill-entry")).length >= 1);
+    await page.waitForSelector(".ledger-drill-entries .ledger-entry", { timeout: 5000 });
+    check("点二级分类看到账单明细", (await page.$$(".ledger-drill-entries .ledger-entry")).length >= 1);
     check("返回按钮出现", (await page.$$(".ledger-drill-back")).length === 1);
   }
-  await page.click(".ledger-drill-entry >> nth=0");
+  await page.click(".ledger-drill-entries .ledger-entry >> nth=0");
   await page.waitForSelector(".ledger-sheet", { timeout: 8000 });
   check("点账单明细直接进编辑器", (await page.$$(".ledger-sheet-foot button:has-text('保存修改')")).length === 1);
   await page.keyboard.press("Escape");
@@ -339,8 +341,9 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   // 保存键在右下角，正上方是「+」：保存后不能被补发的 click 再开一个面板
   await page.click(".ledger-fab");
   await page.waitForSelector(".ledger-sheet", { timeout: 8000 });
-  await page.click(".ledger-parent-chip >> nth=0");
-  await page.click(".ledger-cat-tile >> nth=0");
+  await page.click(".ledger-cat-grid > .ledger-cat-cell:not(.add) >> nth=0");
+  await page.waitForSelector(".ledger-cat-sub .ledger-cat-cell", { timeout: 5000 });
+  await page.click(".ledger-cat-sub .ledger-cat-cell:not(.add) >> nth=0");
   await page.tap(".ledger-key:has-text('7')");
   await page.tap(".ledger-key:has-text('8')");
   const saveKey = await page.locator(".ledger-key.save").boundingBox();

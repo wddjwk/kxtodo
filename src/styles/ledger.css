@@ -156,6 +156,7 @@
   display: inline-flex;
   gap: 14px;
   align-items: baseline;
+  margin-left: auto;
   font-size: calc(var(--font-ledger) - 3px);
 }
 
@@ -188,40 +189,6 @@
   padding: 0 51px 78px 0;
 }
 
-/* ---------- 列表视图：月份分隔 ---------- */
-
-.ledger-month-divider {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 22px 0 11px;
-}
-
-.ledger-month-divider:first-child {
-  margin-top: 2px;
-}
-
-.ledger-month-divider span {
-  color: var(--accent);
-  font-size: calc(var(--font-ledger) + 3px);
-  font-weight: 800;
-  letter-spacing: 0.02em;
-}
-
-.ledger-month-divider em {
-  color: #9aa1ac;
-  font-size: calc(var(--font-ledger) - 5px);
-  font-style: normal;
-  font-variant-numeric: tabular-nums;
-}
-
-.ledger-month-divider::after {
-  height: 1px;
-  flex: 1 1 auto;
-  background: rgb(0 0 0 / 8%);
-  content: "";
-}
-
 /* ---------- 按天卡片（一天一张，卡片里是当天每一笔，不折叠） ---------- */
 
 .ledger-card {
@@ -241,20 +208,12 @@
   box-shadow: 0 8px 24px rgb(31 41 55 / 8%);
 }
 
-/* 标题行：主题色的日期号 + 日期 + 周几，右侧是当天收/支与「在这天记一笔」 */
+/* 标题行：日期（月/日）+ 周几在左，当天收/支与「在这天记一笔」在右 */
 .ledger-card-head {
   display: flex;
   gap: 9px;
   align-items: center;
   min-width: 0;
-}
-
-.ledger-date-day {
-  color: var(--accent);
-  font-size: calc(var(--font-ledger) + 7px);
-  font-variant-numeric: tabular-nums;
-  font-weight: 800;
-  line-height: 1;
 }
 
 .ledger-date-week {
@@ -268,10 +227,11 @@
   overflow: hidden;
   flex: 0 1 auto;
   margin: 0;
-  color: #23272f;
-  font-size: calc(var(--font-ledger) + 1px);
-  font-weight: 700;
-  line-height: 1.4;
+  color: var(--accent);
+  font-size: calc(var(--font-ledger) + 3px);
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -326,16 +286,18 @@
 }
 
 .ledger-entry-list {
-  margin-top: 8px;
+  margin-top: 6px;
   padding-top: 3px;
   border-top: 1px solid rgb(0 0 0 / 5%);
 }
 
+/* 一笔两行：图标跨两行居左，大字行 = 分类名 + 金额（左右对齐），
+   小字行 = 备注（+图片图标）+ 时刻/账户（左右对齐）。 */
 .ledger-entry {
   display: flex;
   gap: 11px;
   align-items: center;
-  padding: 8px 6px;
+  padding: 7px 6px;
   border-radius: 7px;
   cursor: pointer;
   transition: background 0.12s ease;
@@ -352,54 +314,39 @@
 
 .ledger-entry-icon {
   display: grid;
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
   place-items: center;
   flex: 0 0 auto;
-  border-radius: 10px;
+  border-radius: 11px;
   color: var(--cat, #7f8c8d);
 }
 
-.ledger-entry-text {
+.ledger-entry-main {
+  display: grid;
+  gap: 2px;
   min-width: 0;
-  overflow: hidden;
   flex: 1 1 auto;
-  white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
-.ledger-entry-text strong {
+.ledger-entry-line,
+.ledger-entry-sub {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.ledger-entry-line strong {
+  min-width: 0;
+  overflow: hidden;
+  flex: 0 1 auto;
   color: #2b3038;
   font-size: var(--font-ledger);
   font-weight: 600;
-}
-
-.ledger-entry-text em {
-  margin-left: 8px;
-  color: #93989f;
-  font-size: calc(var(--font-ledger) - 4px);
-  font-style: normal;
-}
-
-.ledger-entry-account {
-  display: inline-flex;
-  gap: 4px;
-  align-items: center;
-  max-width: 11em;
-  overflow: hidden;
-  flex: 0 1 auto;
-  color: #9aa1ac;
-  font-size: calc(var(--font-ledger) - 5px);
   white-space: nowrap;
   text-overflow: ellipsis;
-}
-
-/* 每一笔的时刻：比账户更淡一档，只是给同一天里的先后一个参照 */
-.ledger-entry-time {
-  color: #b6bcc6;
-  font-size: calc(var(--font-ledger) - 6px);
-  font-variant-numeric: tabular-nums;
-  flex: 0 0 auto;
 }
 
 .ledger-entry-amount {
@@ -416,6 +363,68 @@
 
 .ledger-entry-amount.out {
   color: var(--ledger-out);
+}
+
+.ledger-entry-note {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  flex: 0 1 auto;
+  color: #93989f;
+  font-size: calc(var(--font-ledger) - 4px);
+  font-style: normal;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 备注右侧的图片小图标：点它全屏看这条账的插图 */
+.ledger-entry-image {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: #b6bcc6;
+  cursor: pointer;
+  transition: color 0.12s ease;
+}
+
+.ledger-entry-image:hover {
+  color: var(--accent);
+}
+
+.ledger-entry-meta {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.ledger-entry-meta em {
+  font-style: normal;
+  white-space: nowrap;
+}
+
+/* 每一笔的时刻：比账户更淡一档，只是给同一天里的先后一个参照 */
+.ledger-entry-time {
+  color: #b6bcc6;
+  font-size: calc(var(--font-ledger) - 6px);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+.ledger-entry-account {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  max-width: 11em;
+  overflow: hidden;
+  flex: 0 1 auto;
+  color: #9aa1ac;
+  font-size: calc(var(--font-ledger) - 5px);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .ledger-day-empty {
@@ -571,25 +580,6 @@
   color: var(--ledger-in);
 }
 
-.ledger-day-head {
-  display: flex;
-  gap: 10px;
-  align-items: baseline;
-  margin: 0 0 11px;
-}
-
-.ledger-day-head strong {
-  color: var(--accent);
-  font-size: calc(var(--font-ledger) + 1px);
-  font-weight: 800;
-}
-
-.ledger-day-head span {
-  color: #93989f;
-  font-size: calc(var(--font-ledger) - 4px);
-  font-variant-numeric: tabular-nums;
-}
-
 /* ---------- 统计与资产：通用面板 ---------- */
 
 .ledger-panel {
@@ -669,18 +659,32 @@
 
 /* ---------- 统计视图 ---------- */
 
+/* 顶行：周期段控靠左、收支侧段控靠右（v0.7.4 的双段控布局） */
 .ledger-stats-bar {
   display: flex;
-  gap: 14px;
+  gap: 10px;
   align-items: center;
-  margin-bottom: 14px;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.ledger-side-switch {
+  margin-left: auto;
+}
+
+/* 一整块白底圆角分区：周期标签行 + 三标签行 + 三数额行 */
+.ledger-summary-card {
+  position: relative;
+  display: grid;
+  gap: 7px;
 }
 
 .ledger-stats-period {
   display: inline-flex;
   gap: 4px;
   align-items: center;
-  margin-left: auto;
+  justify-content: center;
+  margin: 0 auto;
 }
 
 .ledger-stats-period strong {
@@ -689,6 +693,10 @@
   font-size: calc(var(--font-ledger) + 1px);
   font-weight: 800;
   text-align: center;
+}
+
+.ledger-stats-period strong.pickable {
+  cursor: pointer;
 }
 
 .ledger-stats-period button {
@@ -708,37 +716,76 @@
   background: rgb(0 0 0 / 6%);
 }
 
-.ledger-summary {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 14px;
+/* 自定义区间：起止两个可点标签，各自挂一个 DatePicker 浮层 */
+.ledger-custom-field {
+  position: relative;
+  display: inline-flex;
 }
 
-.ledger-summary > div {
+.ledger-custom-field strong {
+  color: var(--accent);
+  font-size: calc(var(--font-ledger) + 1px);
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.ledger-custom-field.open strong {
+  text-decoration: underline;
+}
+
+.ledger-custom-sep {
+  color: #9aa1ac;
+  font-size: calc(var(--font-ledger) - 2px);
+}
+
+/* 自定义起止的选日浮层朝下开：它在白块顶部，朝上会被滚动区裁掉 */
+.ledger-custom-field .ledger-pop {
+  top: calc(100% + 6px);
+  bottom: auto;
+}
+
+/* 周周期的选日浮层：锚在白块中间往下开（base 的 bottom 必须清掉，
+   否则 top+bottom 同时生效会把绝对定位盒子压成 0 高；选择器要压过 .ledger-pop 基规则） */
+.ledger-pop.ledger-week-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  bottom: auto;
+  left: 50%;
+  z-index: 70;
+  transform: translateX(-50%);
+}
+
+.ledger-summary-labels {
   display: grid;
-  gap: 5px;
-  flex: 1 1 0;
-  min-width: 0;
-  padding: 14px 18px;
-  border: 1px solid rgb(0 0 0 / 4%);
-  border-radius: 14px;
-  background: rgb(255 255 255 / 88%);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 3px;
 }
 
-.ledger-summary span {
+.ledger-summary-labels span {
   color: #8b929e;
   font-size: calc(var(--font-ledger) - 5px);
+  text-align: center;
+}
+
+.ledger-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 0;
 }
 
 /* 钱数不许截断出省略号（读不出来的金额比小一号的字糟得多）：字号统一收一档，
    还是放不下就由 fitAmount（fitText.ts）按内容一档一档缩到放得下为止。 */
 .ledger-summary strong {
   color: #2b3038;
-  font-size: calc(var(--font-ledger) + 3px);
+  font-size: calc(var(--font-ledger) + 6px);
   font-variant-numeric: tabular-nums;
   font-weight: 800;
   line-height: 1.2;
   white-space: nowrap;
+  text-align: center;
 }
 
 .ledger-summary strong.in {
@@ -1606,91 +1653,166 @@
   background: #eef1f5;
 }
 
-/* 金额行：左边是选中的分类，右边是大字号金额（记账软件的核心信息，必须一眼看到） */
-.ledger-amount-row {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  flex: 0 0 auto;
-  padding: 12px 18px;
-  border-bottom: 1px solid #f1f4f8;
-}
-
-.ledger-amount-cat {
-  display: inline-flex;
-  gap: 9px;
-  align-items: center;
-  min-width: 0;
+/* 分类区：圆形图标 + 名字的网格，点大类在它所在行下面展开一块全宽阴影的二级区。
+   移动端抽屉高度恒定，靠这块自己滚动（滚动条藏起来）。 */
+.ledger-cat-zone {
   flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  max-height: 340px;
+  padding: 12px 14px 6px;
+  scrollbar-width: none;
 }
 
-.ledger-amount-icon {
+.ledger-cat-zone::-webkit-scrollbar {
+  display: none;
+}
+
+.ledger-cat-grid {
   display: grid;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  flex: 0 0 auto;
-  border-radius: 11px;
-  color: var(--cat, var(--side, #7f8c8d));
+  grid-template-columns: repeat(auto-fill, minmax(62px, 1fr));
+  gap: 8px 4px;
 }
 
-.ledger-amount-cat em {
+.ledger-cat-cell {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 4px 2px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.12s ease;
+}
+
+.ledger-cat-cell:hover {
+  background: rgb(0 0 0 / 3%);
+}
+
+.ledger-cat-round {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border-radius: 50%;
+  color: #ffffff;
+  transition: box-shadow 0.12s ease, transform 0.12s ease;
+}
+
+.ledger-cat-cell.small .ledger-cat-round {
+  width: 36px;
+  height: 36px;
+}
+
+/* 选中 / 展开：白圈 + 自身颜色描边，一眼看出点的是哪个 */
+.ledger-cat-cell.active .ledger-cat-round,
+.ledger-cat-cell.open .ledger-cat-round {
+  box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px var(--cat, var(--accent));
+}
+
+.ledger-cat-cell em {
+  max-width: 100%;
   overflow: hidden;
-  color: #9aa1ac;
-  font-size: calc(var(--font-ledger) - 2px);
+  color: #5c6470;
+  font-size: calc(var(--font-ledger) - 5px);
   font-style: normal;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-.ledger-amount-cat em.selected {
-  color: #2b3038;
-  font-weight: 600;
+.ledger-cat-cell.active em {
+  color: var(--cat, var(--accent));
+  font-weight: 700;
 }
 
-.ledger-amount-field {
-  display: flex;
-  gap: 4px;
-  align-items: baseline;
-  flex: 1 1 auto;
-  justify-content: flex-end;
-}
-
-.ledger-amount-symbol {
+.ledger-cat-round.add {
+  border: 1px dashed #d7dce3;
+  background: transparent;
   color: #9aa1ac;
-  font-size: calc(var(--font-ledger) + 2px);
-  font-weight: 600;
 }
 
-.ledger-amount-field input {
+.ledger-cat-cell.add:hover .ledger-cat-round.add {
+  border-color: var(--side, var(--accent));
+  color: var(--side, var(--accent));
+}
+
+/* 二级分类展开块：跟一级同样的排列逻辑，只是加一块阴影底把它和一级区分开 */
+.ledger-cat-sub {
+  margin: 8px -4px 10px;
+  padding: 10px 6px;
+  border-radius: 12px;
+  background: rgb(0 0 0 / 4%);
+}
+
+/* 备注 + 金额一行：备注是无框纯文字（点它唤起输入法），金额右对齐大字 */
+.ledger-note-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 10px 16px;
+  border-top: 1px solid #f1f4f8;
+}
+
+.ledger-note-plain {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.ledger-note-plain input {
+  width: 100%;
+  padding: 3px 0;
   border: 0;
   background: transparent;
   color: #1f2937;
-  font-size: calc(var(--font-ledger) + 16px);
+  font-size: calc(var(--font-ledger) - 2px);
+  outline: none;
+}
+
+.ledger-note-plain input::placeholder {
+  color: #b6bcc6;
+}
+
+.ledger-amount-plain {
+  display: flex;
+  align-items: baseline;
+  flex: 0 0 auto;
+  justify-content: flex-end;
+}
+
+.ledger-amount-plain input {
+  border: 0;
+  background: transparent;
+  color: var(--side, #1f2937);
+  font-size: calc(var(--font-ledger) + 10px);
   font-variant-numeric: tabular-nums;
-  font-weight: 700;
+  font-weight: 800;
   line-height: 1.2;
   text-align: right;
   outline: none;
 }
 
-.ledger-amount-field input::placeholder {
-  color: #c9cfd8;
+.ledger-amount-plain input::placeholder {
+  color: #d3d8df;
 }
 
 .ledger-amount-value {
-  flex: 1 1 auto;
-  color: #1f2937;
-  font-size: calc(var(--font-ledger) + 16px);
+  flex: 0 0 auto;
+  color: var(--side, #1f2937);
+  font-size: calc(var(--font-ledger) + 10px);
   font-variant-numeric: tabular-nums;
-  font-weight: 700;
+  font-weight: 800;
   line-height: 1.2;
   text-align: right;
   user-select: none;
 }
 
 .ledger-amount-value.empty {
-  color: #c9cfd8;
+  color: #d3d8df;
 }
 
 .ledger-amount-caret {
@@ -1731,46 +1853,6 @@
   line-height: 1.5;
 }
 
-/* 大类 chips（横向，藏滚动条） */
-.ledger-parent-row {
-  display: flex;
-  gap: 8px;
-  flex: 0 0 auto;
-  overflow-x: auto;
-  padding: 2px;
-  scrollbar-width: none;
-}
-
-.ledger-parent-row::-webkit-scrollbar {
-  display: none;
-}
-
-.ledger-parent-chip {
-  display: inline-flex;
-  gap: 7px;
-  align-items: center;
-  flex: 0 0 auto;
-  padding: 5px 13px 5px 6px;
-  border: 1px solid #e8ebef;
-  border-radius: 999px;
-  background: #ffffff;
-  color: #5c6470;
-  font-size: calc(var(--font-ledger) - 3px);
-  white-space: nowrap;
-  cursor: pointer;
-  transition: border-color 0.12s ease, color 0.12s ease;
-}
-
-.ledger-parent-chip:hover {
-  border-color: #dfe3e8;
-}
-
-.ledger-parent-chip.active {
-  border-color: var(--side, var(--accent));
-  color: var(--side, var(--accent));
-  font-weight: 700;
-}
-
 .ledger-chip-icon {
   display: grid;
   width: 24px;
@@ -1780,57 +1862,7 @@
   color: var(--cat, #7f8c8d);
 }
 
-/* 行末的加号：滑到最右边就是「加大类」，不用退出去找齿轮 → 分类管理 */
-.ledger-chip-add {
-  display: grid;
-  width: 32px;
-  height: 32px;
-  place-items: center;
-  flex: 0 0 auto;
-  align-self: center;
-  border: 1px dashed #d7dce3;
-  border-radius: 50%;
-  padding: 0;
-  background: #ffffff;
-  color: #9aa1ac;
-  cursor: pointer;
-  transition: border-color 0.12s ease, color 0.12s ease;
-}
-
-.ledger-chip-add:hover {
-  border-color: var(--side, var(--accent));
-  color: var(--side, var(--accent));
-}
-
-/* 子分类图标网格：格子够大，手指点得准，也不显得挤 */
-.ledger-tile-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
-  gap: 4px;
-}
-
-.ledger-cat-tile {
-  display: grid;
-  justify-items: center;
-  gap: 6px;
-  padding: 9px 4px;
-  border: 1px solid transparent;
-  border-radius: 12px;
-  background: transparent;
-  cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease;
-}
-
-.ledger-cat-tile:hover {
-  background: #f6f7f9;
-}
-
-.ledger-cat-tile.active {
-  border-color: var(--cat, var(--accent));
-  background: #ffffff;
-  box-shadow: 0 2px 10px rgb(31 41 55 / 8%);
-}
-
+/* 管理器表单预览与分类分组头共用的圆角图标块 */
 .ledger-tile-icon {
   display: grid;
   width: 44px;
@@ -1838,41 +1870,6 @@
   place-items: center;
   border-radius: 14px;
   color: var(--cat, #7f8c8d);
-}
-
-.ledger-cat-tile em {
-  max-width: 100%;
-  overflow: hidden;
-  color: #5c6470;
-  font-size: calc(var(--font-ledger) - 5px);
-  font-style: normal;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.ledger-cat-tile.active em {
-  color: var(--cat, var(--accent));
-  font-weight: 700;
-}
-
-/* 网格右下角的加号格子：在当前大类下直接加子分类 */
-.ledger-cat-tile.add .ledger-tile-icon.add {
-  border: 1px dashed #d7dce3;
-  background: transparent;
-  color: #9aa1ac;
-}
-
-.ledger-cat-tile.add em {
-  color: #9aa1ac;
-}
-
-.ledger-cat-tile.add:hover .ledger-tile-icon.add {
-  border-color: var(--side, var(--accent));
-  color: var(--side, var(--accent));
-}
-
-.ledger-cat-tile.add:hover em {
-  color: var(--side, var(--accent));
 }
 
 /* 转账：转出 → 转入 两个大块。
@@ -1950,13 +1947,13 @@
   flex: 0 0 auto;
 }
 
-/* 日期 / 账户 / 备注 一排；浮层一律往上开（这一排贴在面板底部，往下会被裁掉） */
+/* 日期 / 账户 / 图片 一排：纯文字可点（不带按钮底），浮层一律往上开 */
 .ledger-meta-row {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
   flex: 0 0 auto;
-  padding: 10px 14px;
+  padding: 4px 14px 8px;
   border-top: 1px solid #eceff3;
   background: #ffffff;
 }
@@ -1966,25 +1963,35 @@
   flex: 0 0 auto;
 }
 
-.ledger-meta-trigger {
+.ledger-meta-plain {
   display: inline-flex;
   gap: 6px;
   align-items: center;
-  padding: 6px 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
-  color: #475569;
+  padding: 4px 2px;
+  border: 0;
+  background: transparent;
+  color: #5c6470;
   font-size: calc(var(--font-ledger) - 3px);
   white-space: nowrap;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
-  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  transition: color 0.12s ease;
 }
 
-.ledger-meta-trigger:hover {
-  background: #eef2f7;
-  color: #334155;
+.ledger-meta-plain:hover {
+  color: var(--accent);
+}
+
+.ledger-meta-plain.has-image {
+  color: var(--accent);
+}
+
+.ledger-meta-plain.danger:hover {
+  color: #c0392b;
+}
+
+.ledger-meta-field.open .ledger-meta-plain {
+  color: var(--accent);
 }
 
 .ledger-meta-clock {
@@ -1995,37 +2002,8 @@
   font-variant-numeric: tabular-nums;
 }
 
-.ledger-meta-field.open .ledger-meta-trigger {
-  border-color: var(--accent);
-  background: #ffffff;
-  color: var(--accent);
-}
-
-.ledger-note-field {
-  display: flex;
-  gap: 7px;
-  align-items: center;
-  min-width: 0;
+.ledger-meta-spacer {
   flex: 1 1 auto;
-  padding: 6px 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
-  color: #93989f;
-}
-
-.ledger-note-field input {
-  min-width: 0;
-  flex: 1 1 auto;
-  border: 0;
-  background: transparent;
-  color: #1f2937;
-  font-size: calc(var(--font-ledger) - 3px);
-  outline: none;
-}
-
-.ledger-note-field input::placeholder {
-  color: #b6bcc6;
 }
 
 .ledger-pop {
@@ -2301,6 +2279,18 @@
   font-weight: 700;
 }
 
+/* 自定义账户类型的行内输入：嵌在 chips 行里，宽度收住不撑破换行 */
+.ledger-kind-custom {
+  width: 7.5em;
+  padding: 6px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: #ffffff;
+  color: #1f2937;
+  font-size: calc(var(--font-ledger) - 3px);
+  outline: none;
+}
+
 /* 图标分组：图标库扩到两百多个之后，不先按大类筛根本找不到（「全部」是默认档） */
 .ledger-icon-groups {
   display: flex;
@@ -2523,4 +2513,50 @@
 .ledger-card:focus,
 .ledger-card:focus-visible {
   outline: none;
+}
+
+/* ---------- 条目插图的全屏查看 ----------
+   盖在一切浮层之上（记账面板 4000 / 管理器与钻取 4200），深色底 + contain。 */
+
+.ledger-image-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 4600;
+  display: grid;
+  place-items: center;
+  padding:
+    calc(44px + env(safe-area-inset-top, 0px) * var(--safe-inv, 1))
+    12px
+    calc(16px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
+  background: rgb(12 14 18 / 92%);
+  animation: menu-fade-in 0.12s ease-out;
+}
+
+.ledger-image-stage {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 6px;
+  object-fit: contain;
+  user-select: none;
+}
+
+.ledger-image-close {
+  position: absolute;
+  top: calc(10px + env(safe-area-inset-top, 0px) * var(--safe-inv, 1));
+  right: 12px;
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  padding: 0;
+  background: rgb(255 255 255 / 14%);
+  color: #ffffff;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.ledger-image-close:hover {
+  background: rgb(255 255 255 / 24%);
 }

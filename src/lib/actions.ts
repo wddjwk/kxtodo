@@ -988,6 +988,7 @@ export type LedgerEntryDraft = {
   date?: string;
   time?: string;
   note?: string;
+  image?: string;
 };
 
 export type LedgerEntryChanges = Partial<LedgerEntryDraft>;
@@ -1018,7 +1019,8 @@ export async function addLedgerEntry(draft: LedgerEntryDraft): Promise<boolean> 
         categoryId: draft.categoryId ?? null,
         date: draft.date,
         time: draft.time,
-        note: draft.note ?? ""
+        note: draft.note ?? "",
+        image: draft.image ?? null
       });
     } catch (error) {
       await report(error, "记账失败");
@@ -1038,6 +1040,7 @@ export async function addLedgerEntry(draft: LedgerEntryDraft): Promise<boolean> 
     date: draft.date ?? todayIso(),
     time: draft.time ?? "",
     note: draft.note ?? "",
+    image: draft.image,
     createdAt,
     updatedAt: createdAt
   };
@@ -1052,6 +1055,7 @@ export async function transferLedger(input: {
   date?: string;
   time?: string;
   note?: string;
+  image?: string;
 }): Promise<boolean> {
   if (coreMode) {
     try {
@@ -1061,7 +1065,8 @@ export async function transferLedger(input: {
         amountCents: input.amountCents,
         date: input.date,
         time: input.time,
-        note: input.note ?? ""
+        note: input.note ?? "",
+        image: input.image ?? null
       });
     } catch (error) {
       await report(error, "转账失败");
@@ -1080,6 +1085,7 @@ export async function transferLedger(input: {
     date: input.date ?? todayIso(),
     time: input.time ?? "",
     note: input.note ?? "",
+    image: input.image,
     createdAt,
     updatedAt: createdAt
   };
@@ -1098,6 +1104,7 @@ export async function updateLedgerEntry(id: string, changes: LedgerEntryChanges)
     if (changes.date !== undefined) params.date = changes.date;
     if (changes.time !== undefined) params.time = changes.time;
     if (changes.note !== undefined) params.note = changes.note;
+    if (changes.image !== undefined) params.image = changes.image;
     try {
       await coreDispatch("ledger.modify", params);
     } catch (error) {

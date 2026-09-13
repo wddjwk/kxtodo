@@ -794,12 +794,18 @@
   opacity: 1;
 }
 
-/* 月份标题行：窄屏上「月份」与「收/支/结余」允许折成两行，
+/* 月份标题行：窄屏上拆成两行——月份左对齐在上，收/支/结余右对齐在下，
    绝不再和头部的视图图标抢同一行（v0.7.1 的小字就是被图标挡住的）。 */
 .app-shell.mobile .ledger-month-bar {
-  flex-wrap: wrap;
-  gap: 2px 14px;
+  flex-direction: column;
+  gap: 2px;
+  align-items: stretch;
   margin: -4px 0 14px;
+}
+
+.app-shell.mobile .ledger-month-sums {
+  margin-left: 0;
+  justify-content: flex-end;
 }
 
 .app-shell.mobile .ledger-month-step strong {
@@ -837,10 +843,6 @@
 /* 统计：环与排行上下排，汇总卡数字小一档（三张卡在窄屏上并排） */
 .app-shell.mobile .ledger-panel {
   padding: 13px 13px;
-}
-
-.app-shell.mobile .ledger-summary > div {
-  padding: 11px 13px;
 }
 
 .app-shell.mobile .ledger-summary strong {
@@ -921,37 +923,42 @@
   padding: 6px 13px;
 }
 
-.app-shell.mobile .ledger-amount-row {
-  padding: 10px 14px;
+.app-shell.mobile .ledger-amount-value,
+.app-shell.mobile .ledger-amount-plain input {
+  font-size: calc(var(--font-ledger) + 8px);
 }
 
-.app-shell.mobile .ledger-amount-value,
-.app-shell.mobile .ledger-amount-field input {
-  font-size: calc(var(--font-ledger) + 12px);
+/* 记账抽屉高度恒定：分类区自己滚动，图标多少都不撑高或缩矮浮窗（高度飘着手感就飘） */
+.app-shell.mobile .ledger-editor-sheet {
+  height: min(78vh, 640px);
+}
+
+/* 转账没有分类区：定高会在键盘上方留一大块空白，收回 auto */
+.app-shell.mobile .ledger-editor-sheet.ledger-transfer-sheet {
+  height: auto;
+}
+
+.app-shell.mobile .ledger-cat-zone {
+  flex: 1 1 auto;
+  padding: 10px 10px 4px;
+}
+
+.app-shell.mobile .ledger-cat-grid {
+  grid-template-columns: repeat(auto-fill, minmax(58px, 1fr));
+}
+
+.app-shell.mobile .ledger-note-row {
+  padding: 9px 12px;
+}
+
+.app-shell.mobile .ledger-meta-row {
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding: 3px 10px 7px;
 }
 
 .app-shell.mobile .ledger-sheet-body {
   padding: 11px 12px;
-}
-
-.app-shell.mobile .ledger-tile-grid {
-  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
-}
-
-.app-shell.mobile .ledger-tile-icon {
-  width: 46px;
-  height: 46px;
-}
-
-/* 日期/账户一行，备注独占第二行（窄屏上三个挤一行会互相吃字） */
-.app-shell.mobile .ledger-meta-row {
-  flex-wrap: wrap;
-  gap: 7px;
-  padding: 9px 12px;
-}
-
-.app-shell.mobile .ledger-note-field {
-  flex: 1 1 100%;
 }
 
 .app-shell.mobile .ledger-keypad {

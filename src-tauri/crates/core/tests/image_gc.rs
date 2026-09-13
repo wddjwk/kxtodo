@@ -124,3 +124,34 @@ fn diary_modify_sweeps_diary_images() {
     assert!(img_dir.join("d.png").exists(), "被日记引用的图保留");
     assert!(!img_dir.join("orphan.png").exists(), "没人引用的孤儿图删掉");
 }
+
+#[test]
+fn ledger_write_sweeps_ledger_images() {
+    let env = Env::new();
+    // 记一笔带附图：引用 ledger/keep.png（ensure_initialized 已种下账户「现金」）
+    let entry = env.dispatch(
+        "ledger.add",
+        json!({ "amount": "12", "account": "现金", "date": "2026-09-08", "image": "keep.png" }),
+    );
+    let entry_id = entry["id"].as_str().unwrap().to_string();
+    assert_eq!(entry["image"], "keep.png", "附图裸文件名回显");
+
+    let img_dir = env
+        .dir
+        .path()
+        .join("img")
+        .join("data")
+        .join(kxtodo_core::model::LEDGER_IMAGE_NODE);
+    std::fs::create_dir_all(&img_dir).expect("mkdir ledger img");
+    std::fs::write(img_dir.join("keep.png"), b"k").expect("write keep");
+    std::fs::write(img_dir.join("orphan.png"), b"o").expect("write orphan");
+
+    // 任意一次 ledger 写（这里改备注）都触发保存后的清理
+    env.dispatch("ledger.modify", json!({ "id": entry_id, "note": "换了备注" }));
+    assert!(img_dir.join("keep.png").exists(), "被账目引用的图保留");
+    assert!(!img_dir.join("orphan.png").exists(), "没人引用的孤儿图立即删掉");
+
+    // 删掉这一笔后 keep.png 也没人引用了，一并清掉
+    env.dispatch("ledger.remove", json!({ "id": entry_id }));
+    assert!(!img_dir.join("keep.png").exists(), "删掉账目后它的附图也被清掉");
+}

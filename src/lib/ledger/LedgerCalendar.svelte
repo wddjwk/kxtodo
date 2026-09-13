@@ -5,7 +5,7 @@
    */
   import { createEventDispatcher } from "svelte";
   import { ChevronLeft, ChevronRight } from "@lucide/svelte";
-  import { calendarWeekdayHeaders, fullDayLabel, relativeDayLabel, shiftMonth } from "../diary";
+  import { calendarWeekdayHeaders, shiftMonth } from "../diary";
   import { compactCents, dayGroup, ledgerCalendarCells, monthTotals } from "../ledger";
   import MonthPopover from "../MonthPopover.svelte";
   import LedgerDayCard from "./LedgerDayCard.svelte";
@@ -26,6 +26,7 @@
     day: string;
     edit: string;
     add: string;
+    image: string;
     context: { id: string; x: number; y: number };
   }>();
 
@@ -92,27 +93,15 @@
   </div>
 </div>
 
-<div class="ledger-day-head">
-  <strong>{fullDayLabel(selectedDate)}</strong>
-  <span>
-    {relativeDayLabel(selectedDate, today)}
-    {#if group}
-      · {group.entries.length} 笔 · 支 {compactCents(group.expense)} · 收 {compactCents(group.income)}
-    {:else}
-      · 没有记账
-    {/if}
-  </span>
-</div>
-
 {#if group}
   <LedgerDayCard
     {book}
     {group}
     {today}
-    showDate={false}
     {selectedId}
     on:edit={(event) => dispatch("edit", event.detail)}
     on:add={(event) => dispatch("add", event.detail)}
+    on:image={(event) => dispatch("image", event.detail)}
     on:context={(event) => dispatch("context", event.detail)}
   />
 {:else}

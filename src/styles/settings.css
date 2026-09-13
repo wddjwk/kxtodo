@@ -132,11 +132,6 @@
   margin-bottom: 12px;
 }
 
-.settings-block-label {
-  color: #555;
-  font-size: calc(var(--ui-font-size) - 2px);
-}
-
 /* 块内再分一层（外观效果里的「背景配色 / 背景图片」）：比块标签更淡一档 */
 .settings-subblock {
   display: grid;
@@ -200,19 +195,23 @@
 .settings-segmented {
   display: inline-flex;
   gap: 2px;
-  padding: 2px;
-  border-radius: 9px;
+  width: 100%;
+  padding: 3px;
+  border: 1px solid rgb(0 0 0 / 7%);
+  border-radius: 10px;
   background: #eef0f3;
 }
 
 .settings-segmented button {
-  padding: 4px 12px;
+  padding: 5px 12px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 8px;
   background: transparent;
   color: #5c6470;
   font-size: calc(var(--ui-font-size) - 4px);
   cursor: pointer;
+  flex: 1 1 0;
+  min-width: 0;
   transition: background 0.12s ease, color 0.12s ease;
 }
 
@@ -221,6 +220,54 @@
   color: #1f2937;
   font-weight: 600;
   box-shadow: 0 1px 3px rgb(0 0 0 / 10%);
+}
+
+/* 外观效果里的子分组（字号 / 缩放 / 固定分组 / 默认外观）之间加一道淡分隔，
+   不然一堆控件连成一片分不清哪块是哪块 */
+.settings-block + .settings-block {
+  padding-top: 11px;
+  border-top: 1px dashed rgb(0 0 0 / 9%);
+}
+
+.settings-block-label {
+  color: #3d434c;
+  font-size: calc(var(--ui-font-size) - 2px);
+  font-weight: 600;
+}
+
+/* 存储占用组成：名字 + 一句解释 + 右端体积 */
+.storage-parts {
+  display: grid;
+  gap: 5px;
+  margin: -2px 0 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.storage-parts li {
+  display: grid;
+  grid-template-columns: 5.2em minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.storage-parts strong {
+  color: #4b5563;
+  font-size: calc(var(--ui-font-size) - 4px);
+  font-weight: 600;
+}
+
+.storage-parts em {
+  color: #9aa1ac;
+  font-size: calc(var(--ui-font-size) - 5px);
+  font-style: normal;
+  line-height: 1.5;
+}
+
+.storage-parts b {
+  color: #5c6470;
+  font-size: calc(var(--ui-font-size) - 4px);
+  font-variant-numeric: tabular-nums;
 }
 
 .storage-detail {

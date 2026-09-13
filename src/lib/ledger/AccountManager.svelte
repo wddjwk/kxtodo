@@ -18,13 +18,15 @@
   import { ledgerAccent } from "../styles";
   import { assetsOverview, formatCents, parseYuanToCents } from "../ledger";
   import {
-    ACCOUNT_KIND_COLOR, ACCOUNT_KIND_ICON, ACCOUNT_KIND_LABEL,
-    LEDGER_ICON_CHOICES, accountIconName, ledgerIcon, softColor
+    LEDGER_ACCOUNT_ICON_GROUPS, ledgerIcon, softColor
   } from "../ledgerIcons";
+  import {
+    ACCOUNT_TYPE_PRESETS, accountTypeColor, accountTypeIcon, accountTypeLabel
+  } from "../ledgerAccountTypes";
   import {
     addLedgerAccount, deleteLedgerAccount, transferLedger, updateLedgerAccount
   } from "../actions";
-  import type { LedgerAccountKind, LedgerBook } from "../types";
+  import type { LedgerBook } from "../types";
 
   export let book: LedgerBook;
   export let onClose: () => void = () => {};
@@ -40,19 +42,22 @@
     "#2f8f6b", "#9b59b6", "#7f8c8d", "#1677ff",
     "#f0862c", "#34495e", "#7cb342", "#d94f70"
   ];
-  const KINDS: LedgerAccountKind[] = ["cash", "debit", "credit", "investment", "other"];
+  const ALL_ICON_GROUP = "全部";
 
   let panel: "list" | "form" | "transfer" = startWithTransfer ? "transfer" : "list";
   /** null = 不在表单里；空串 = 新建；否则是要改的账户 id */
   let editingId: string | null = null;
   let nameDraft = "";
-  let kindDraft: LedgerAccountKind = "debit";
+  let kindDraft = "cash";
   let iconDraft = "";
   let colorDraft = "";
   let initialDraft = "";
   let noteDraft = "";
   let busy = false;
-  let nameInput: HTMLInputElement;
+  /** 自定义类型：加号展开一行输入，回车/确认即成为当前类型 */
+  let kindCustomOpen = false;
+  let kindCustomText = "";
+  let iconGroup = ALL_ICON_GROUP;
 
   let fromId = book.accounts[0]?.id ?? "";
   let toId = book.accounts.find((item) => item.id !== fromId)?.id ?? "";
@@ -63,9 +68,19 @@
   $: assets = assetsOverview(book);
   $: accent = ledgerAccent($appSettings.ledger);
   $: transferCents = parseYuanToCents(transferText) ?? 0;
+  /** 类型候选：预置 + 已有账户用过的 + 当前草稿（自定义类型不能从 chips 上消失） */
+  $: kindChoices = [...new Set([
+    ...ACCOUNT_TYPE_PRESETS.map((item) => item.kind),
+    ...book.accounts.map((item) => item.kind),
+    kindDraft
+  ])];
+  $: iconChoices =
+    iconGroup === ALL_ICON_GROUP
+      ? LEDGER_ACCOUNT_ICON_GROUPS.flatMap((group) => [...group.icons])
+      : LEDGER_ACCOUNT_ICON_GROUPS.find((group) => group.name === iconGroup)?.icons ?? [];
   /** 表单预览：没手选颜色/图标就退回该类型的默认值 */
-  $: previewColor = colorDraft || ACCOUNT_KIND_COLOR[kindDraft];
-  $: previewIcon = iconDraft || ACCOUNT_KIND_ICON[kindDraft];
+  $: previewColor = colorDraft || accountTypeColor(kindDraft);
+  $: previewIcon = iconDraft || accountTypeIcon(kindDraft);
 
   if (editId) {
     const target = book.accounts.find((item) => item.id === editId);
@@ -74,20 +89,17 @@
     beginAdd();
   }
 
-  function focusName(): void {
-    void Promise.resolve().then(() => nameInput?.focus());
-  }
-
   function beginAdd(): void {
     editingId = "";
     nameDraft = "";
-    kindDraft = "debit";
+    kindDraft = "cash";
     iconDraft = "";
     colorDraft = "";
     initialDraft = "";
     noteDraft = "";
+    kindCustomOpen = false;
+    kindCustomText = "";
     panel = "form";
-    focusName();
   }
 
   function beginEdit(id: string): void {
@@ -100,8 +112,9 @@
     colorDraft = target.color;
     initialDraft = target.initialCents ? (target.initialCents / 100).toString() : "";
     noteDraft = target.note;
+    kindCustomOpen = false;
+    kindCustomText = "";
     panel = "form";
-    focusName();
   }
 
   function beginTransfer(): void {
@@ -132,10 +145,21 @@
   );
 
   /** 选账户类型时顺手把图标换回该类型的默认（用户已手选过就不动） */
-  function pickKind(kind: LedgerAccountKind): void {
-    const wasDefault = !iconDraft || iconDraft === ACCOUNT_KIND_ICON[kindDraft];
+  function pickKind(kind: string): void {
+    const wasDefault = !iconDraft || iconDraft === accountTypeIcon(kindDraft);
     kindDraft = kind;
+    kindCustomOpen = false;
     if (wasDefault) iconDraft = "";
+  }
+
+  function confirmCustomKind(): void {
+    const kind = kindCustomText.trim();
+    if (!kind) {
+      kindCustomOpen = false;
+      return;
+    }
+    kindCustomText = "";
+    pickKind(kind);
   }
 
   async function saveForm(): Promise<void> {
@@ -276,8 +300,8 @@
         </div>
 
         {#each assets.perAccount as item (item.account.id)}
-          {@const iconName = accountIconName(item.account.icon, item.account.kind)}
-          {@const color = item.account.color || ACCOUNT_KIND_COLOR[item.account.kind]}
+          {@const iconName = item.account.icon || accountTypeIcon(item.account.kind)}
+          {@const color = item.account.color || accountTypeColor(item.account.kind)}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <div class="ledger-account-row" role="button" tabindex="0" on:click={() => beginEdit(item.account.id)}>
             <span class="ledger-account-icon" style="--cat: {color}; background: {softColor(color)}">
@@ -285,7 +309,7 @@
             </span>
             <span class="ledger-account-text">
               <strong>{item.account.name}</strong>
-              <em>{ACCOUNT_KIND_LABEL[item.account.kind]}{item.account.note ? ` · ${item.account.note}` : ""}</em>
+              <em>{accountTypeLabel(item.account.kind)}{item.account.note ? ` · ${item.account.note}` : ""}</em>
             </span>
             <b class="ledger-account-balance" class:negative={item.balance < 0}>{formatCents(item.balance)}</b>
             <span class="ledger-row-actions">
@@ -367,18 +391,46 @@
       <div class="ledger-sheet-body ledger-form-body">
         <label class="ledger-field-row">
           <span>名称</span>
-          <input bind:this={nameInput} bind:value={nameDraft} type="text" maxlength="20" placeholder="例如 招商银行" on:keydown={fieldKeydown} />
+          <input bind:value={nameDraft} type="text" maxlength="20" placeholder="例如 招商银行" on:keydown={fieldKeydown} />
+        </label>
+
+        <label class="ledger-field-row">
+          <span>备注</span>
+          <input bind:value={noteDraft} type="text" maxlength="60" placeholder="选填" on:keydown={fieldKeydown} />
         </label>
 
         <div class="ledger-field-row ledger-field-column">
           <span>类型</span>
           <div class="ledger-choice-row">
-            {#each KINDS as kind (kind)}
+            {#each kindChoices as kind (kind)}
               <button type="button" class="ledger-choice" class:active={kindDraft === kind} on:click={() => pickKind(kind)}>
-                <svelte:component this={ledgerIcon(ACCOUNT_KIND_ICON[kind], "Wallet")} size={14} />
-                {ACCOUNT_KIND_LABEL[kind]}
+                <svelte:component this={ledgerIcon(accountTypeIcon(kind), "Wallet")} size={14} />
+                {accountTypeLabel(kind)}
               </button>
             {/each}
+            {#if kindCustomOpen}
+              <input
+                class="ledger-kind-custom"
+                type="text"
+                maxlength="10"
+                placeholder="自定义类型名"
+                bind:value={kindCustomText}
+                on:keydown={(event) => {
+                  if (event.key === "Enter" && !event.isComposing) {
+                    event.preventDefault();
+                    confirmCustomKind();
+                  }
+                }}
+              />
+              <button type="button" class="ledger-choice active" on:click={confirmCustomKind}>确定</button>
+            {:else}
+              <button
+                type="button"
+                class="ledger-choice"
+                title="自定义账户类型"
+                on:click={() => (kindCustomOpen = true)}
+              ><Plus size={14} />类型</button>
+            {/if}
           </div>
         </div>
 
@@ -389,8 +441,24 @@
 
         <div class="ledger-field-row ledger-field-column">
           <span>图标</span>
+          <div class="ledger-icon-groups" role="tablist" aria-label="账户图标分组">
+            <button
+              type="button"
+              class="ledger-icon-group"
+              class:active={iconGroup === ALL_ICON_GROUP}
+              on:click={() => (iconGroup = ALL_ICON_GROUP)}
+            >{ALL_ICON_GROUP}</button>
+            {#each LEDGER_ACCOUNT_ICON_GROUPS as group (group.name)}
+              <button
+                type="button"
+                class="ledger-icon-group"
+                class:active={iconGroup === group.name}
+                on:click={() => (iconGroup = group.name)}
+              >{group.name}</button>
+            {/each}
+          </div>
           <div class="ledger-icon-grid">
-            {#each LEDGER_ICON_CHOICES as name (name)}
+            {#each iconChoices as name (name)}
               {@const icon = ledgerIcon(name, name)}
               <button
                 type="button"
@@ -426,11 +494,6 @@
             {/if}
           </div>
         </div>
-
-        <label class="ledger-field-row">
-          <span>备注</span>
-          <input bind:value={noteDraft} type="text" maxlength="60" placeholder="选填" on:keydown={fieldKeydown} />
-        </label>
 
         <div class="ledger-form-preview">
           <span class="ledger-tile-icon" style="--cat: {previewColor}; background: {softColor(previewColor)}">

@@ -4,7 +4,7 @@
    * 写入全走 actions（core 命令层），菜单自己只负责收集意图。
    */
   import { createEventDispatcher } from "svelte";
-  import { CalendarDays, PenLine, Trash2, Wallet } from "@lucide/svelte";
+  import { CalendarDays, Image as ImageIcon, PenLine, Trash2, Wallet } from "@lucide/svelte";
   import ContextMenu from "../menu/ContextMenu.svelte";
   import MenuItem from "../menu/MenuItem.svelte";
   import MenuSeparator from "../menu/MenuSeparator.svelte";
@@ -19,7 +19,7 @@
   export let entry: LedgerEntry;
   export let book: LedgerBook;
 
-  const dispatch = createEventDispatcher<{ edit: string; close: void }>();
+  const dispatch = createEventDispatcher<{ edit: string; image: string; close: void }>();
 
   function close(): void {
     dispatch("close");
@@ -27,6 +27,11 @@
 
   function edit(): void {
     dispatch("edit", entry.id);
+    close();
+  }
+
+  function viewImage(): void {
+    dispatch("image", entry.id);
     close();
   }
 
@@ -53,6 +58,9 @@
 
 <ContextMenu {x} {y} minWidth={216} onClose={close}>
   <MenuItem icon={PenLine} label="编辑这一笔" onSelect={edit} />
+  {#if entry.image}
+    <MenuItem icon={ImageIcon} label="查看图片" onSelect={viewImage} />
+  {/if}
   <MenuItem icon={CalendarDays} label="修改日期">
     <div slot="submenu" class="task-menu-date">
       <DatePicker

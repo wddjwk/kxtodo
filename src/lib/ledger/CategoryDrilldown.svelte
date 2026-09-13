@@ -14,24 +14,24 @@
   import { statsEntries } from "../ledger";
   import CategoryDrillBody from "./CategoryDrillBody.svelte";
   import type { LedgerBook, LedgerEntry, LedgerSide } from "../types";
-  import type { MonthCursor } from "../diary";
 
   export let book: LedgerBook;
   export let entries: LedgerEntry[];
   export let categoryId: string;
   export let side: LedgerSide;
-  export let mode: "month" | "year";
-  export let cursor: MonthCursor;
+  export let from: string;
+  export let to: string;
+  export let periodLabel: string;
   export let anchor: HTMLElement | undefined = undefined;
   export let onClose: () => void = () => {};
   export let onEditEntry: (id: string) => void = () => {};
+  export let onImageView: (id: string) => void = () => {};
 
   const WIDTH = 400;
   const HEIGHT = 470;
 
   $: category = book.categories.find((item) => item.id === categoryId);
-  $: rangeEntries = statsEntries(entries, mode, cursor);
-  $: periodLabel = mode === "month" ? `${cursor.year}年${cursor.month + 1}月` : `${cursor.year}年`;
+  $: rangeEntries = statsEntries(entries, { from, to });
   $: popStyle = anchoredPopoverStyle(anchor, uiScaleValue($appSettings.appearance.uiScale), WIDTH, HEIGHT);
 
   function close(): void {
@@ -86,13 +86,13 @@
     <div class="editor-overlay ledger-overlay" on:pointerdown={handleBackdrop} on:contextmenu|preventDefault|stopPropagation>
       <div class="editor-dialog ledger-sheet ledger-drill-sheet" role="dialog" aria-label="{category.name} 明细" tabindex="-1"
         on:pointerdown|stopPropagation on:click|stopPropagation>
-        <CategoryDrillBody {book} {rangeEntries} {category} {side} {periodLabel} onClose={close} onEditEntry={edit} />
+        <CategoryDrillBody {book} {rangeEntries} {category} {side} {periodLabel} onClose={close} onEditEntry={edit} onImageView={onImageView} />
       </div>
     </div>
   {:else}
     <div class="ledger-drill-pop" style={popStyle} role="dialog" aria-label="{category.name} 明细" tabindex="-1"
       on:click|stopPropagation on:pointerdown|stopPropagation on:contextmenu|preventDefault|stopPropagation>
-      <CategoryDrillBody {book} {rangeEntries} {category} {side} {periodLabel} onClose={close} onEditEntry={edit} />
+      <CategoryDrillBody {book} {rangeEntries} {category} {side} {periodLabel} onClose={close} onEditEntry={edit} onImageView={onImageView} />
     </div>
   {/if}
 {/if}

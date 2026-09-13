@@ -2,8 +2,10 @@
   /**
    * 记账面板（记一笔 / 改一笔）：复用应用的 .editor-overlay 浮层——桌面居中对话框、
    * 移动端底部抽屉（主流记账 App 的同一条手感）。
-   * 结构自上而下：类型页签 → 大额金额 → 分类（大类 chips + 子分类图标网格）→
-   * 日期时刻/账户/备注 → 移动端数字键盘（桌面是「保存再记 / 记一笔」两个按钮）。
+   * 结构自上而下：类型页签 → 分类圆形图标网格（点大类在它所在行下面展开一块
+   * 全宽阴影的二级区，没有二级的大类点一下即选中）→ 「添加备注」+ 金额一行 →
+   * 日期/账户/图片一行（纯文字按钮，不带框）→ 移动端数字键盘（桌面是底部两个按钮）。
+   * 移动端抽屉高度恒定：分类区自己滚动（藏滚动条），图标多少都不撑高或缩矮浮窗。
    *
    * **只有显式点保存才落盘**：关掉（X / 遮罩 / Esc / 移动端返回）一律丢弃草稿。
    * 卡片编辑器"关掉即保存"是为了防丢正文，账目照抄那条会凭空多出用户没确认过的记录。
@@ -14,19 +16,24 @@
    */
   import { onMount } from "svelte";
   import {
-    ArrowLeftRight, CalendarDays, Check, ChevronRight, Delete, PenLine, Plus, Trash2, Wallet, X
+    ArrowLeftRight, CalendarDays, Camera, Check, ChevronRight, Delete, Image as ImageIcon,
+    Plus, Trash2, Wallet, X
   } from "@lucide/svelte";
-  import { appSettings, showToast, todayIso, ledgerCategoryDraft } from "../stores";
+  import { appSettings, showToast, todayIso, ledgerCategoryDraft, fileToDataUrl } from "../stores";
   import { isMobile } from "../platform";
+  import { caps } from "../capabilities";
   import { imeInset } from "../imeInset";
   import { fieldKeydown } from "../shortcuts";
   import { clampPopoverToViewport } from "../popover";
   import { suppressGhostClick } from "../ghostClick";
   import { displayClock } from "../clock";
   import { ledgerAccent, uiScaleValue } from "../styles";
-  import { categoryTree, formatCents, parseYuanToCents } from "../ledger";
+  import { categoryTree, formatCents, parseYuanToCents, LEDGER_IMAGE_NODE } from "../ledger";
   import { accountIconName, ledgerIcon, softColor, TRANSFER_ICON } from "../ledgerIcons";
-  import { addLedgerEntry, transferLedger, updateLedgerEntry, deleteLedgerEntry } from "../actions";
+  import {
+    addLedgerEntry, transferLedger, updateLedgerEntry, deleteLedgerEntry
+  } from "../actions";
+  import { isTauriRuntime, pickImageFile, saveMdImage, saveMdImageFromDataUrl } from "../backend";
   import { relativeDayLabel, todayDate } from "../diary";
   import DatePicker from "../DatePicker.svelte";
   import type { LedgerBook, LedgerEditorTarget, LedgerKind, LedgerSide } from "../types";
@@ -46,23 +53,20 @@
   /** HH:MM；新建时留空——core 落盘会按当前时刻补，不必在前端猜 */
   let time = existing ? displayClock(existing.time) : "";
   let note = existing?.note ?? "";
+  let image = existing?.image ?? "";
   let busy = false;
   let closed = false;
   let openPicker: "" | "date" | "account" | "toAccount" = "";
   let sheetEl: HTMLDivElement;
+  let imageFileInput: HTMLInputElement;
 
-  /** 大类 chips 里当前展开的那一个；跟着已选分类走，没有就落在第一个大类 */
-  let parentDraft = "";
+  /** 展开二级区的大类；跟着已选分类走，新建时收着 */
+  let openParent = book.categories.find((item) => item.id === categoryId)?.parentId ?? "";
 
   $: side = (kind === "income" ? "income" : "expense") as LedgerSide;
   $: tree = categoryTree(book, side);
   $: selectedCategory = book.categories.find((item) => item.id === categoryId);
-  $: openParent =
-    parentDraft || selectedCategory?.parentId || selectedCategory?.id || tree[0]?.parent.id || "";
-  $: openParentCategory = tree.find((item) => item.parent.id === openParent)?.parent ?? null;
   $: openChildren = tree.find((item) => item.parent.id === openParent)?.children ?? [];
-  /** 大类没有子分类时，它自己就是可选的那一格 */
-  $: tiles = openChildren.length > 0 ? openChildren : openParentCategory ? [openParentCategory] : [];
   $: cents = parseYuanToCents(amountText) ?? 0;
   $: account = book.accounts.find((item) => item.id === accountId);
   $: toAccount = book.accounts.find((item) => item.id === toAccountId);
@@ -70,11 +74,12 @@
   $: dateLabel = date === today ? "今天" : relativeDayLabel(date, today);
   $: accent = ledgerAccent($appSettings.ledger);
   $: sideColor = kind === "income" ? "#2f9e6e" : kind === "transfer" ? "#6b7fd7" : "#e0654f";
+  $: sideDefault = side === "income" ? "#2f9e6e" : "#f0862c";
 
   function switchKind(next: LedgerKind): void {
     if (next === kind) return;
     kind = next;
-    parentDraft = "";
+    openParent = "";
     if (next === "transfer") {
       if (toAccountId === accountId) {
         toAccountId = book.accounts.find((item) => item.id !== accountId)?.id ?? "";
@@ -105,20 +110,23 @@
     amountText = amountText === "0" ? key : `${amountText}${key}`;
   }
 
-  function pickParent(id: string): void {
-    parentDraft = id;
-    const parent = tree.find((item) => item.parent.id === id)?.parent;
-    // 大类自己没有子分类时，点它就是选它
-    if (parent && !tree.find((item) => item.parent.id === id)?.children.length) {
+  /** 点大类：有二级 = 展开/收起它下面那块阴影区；没有二级 = 直接选中记账 */
+  function tapParent(id: string): void {
+    const node = tree.find((item) => item.parent.id === id);
+    if (!node) return;
+    if (node.children.length === 0) {
       categoryId = categoryId === id ? "" : id;
+      openParent = "";
+      return;
     }
+    openParent = openParent === id ? "" : id;
   }
 
   function pickCategory(id: string): void {
     categoryId = categoryId === id ? "" : id;
   }
 
-  /** 分类行末尾的加号：分类管理长在 LedgerView 上、本面板挂在 App 层，
+  /** 分类加号：分类管理长在 LedgerView 上、本面板挂在 App 层，
    *  两棵不相干的子树只能靠 store 递话（与菜单系统 menu/submenu.ts 同一套路）。 */
   function requestCategory(parentId: string): void {
     openPicker = "";
@@ -142,6 +150,36 @@
       toAccountId = id;
     }
     openPicker = "";
+  }
+
+  async function pickImage(): Promise<void> {
+    if (!isTauriRuntime) return;
+    if (!caps.nativeFileDialogs) {
+      // 移动端没有原生文件对话框：隐藏 file input + dataURL
+      imageFileInput?.click();
+      return;
+    }
+    try {
+      const srcPath = await pickImageFile();
+      if (!srcPath) return;
+      image = await saveMdImage(srcPath, LEDGER_IMAGE_NODE);
+    } catch (error) {
+      showToast(`图片添加失败：${String(error)}`);
+    }
+  }
+
+  async function pickImageFromInput(event: Event): Promise<void> {
+    const input = event.currentTarget;
+    if (!(input instanceof HTMLInputElement) || !input.files?.[0]) return;
+    if (!isTauriRuntime) return;
+    try {
+      const dataUrl = await fileToDataUrl(input.files[0]);
+      image = await saveMdImageFromDataUrl(dataUrl, LEDGER_IMAGE_NODE);
+    } catch (error) {
+      showToast(`图片添加失败：${String(error)}`);
+    } finally {
+      input.value = "";
+    }
   }
 
   function dismissPopovers(event: Event): void {
@@ -174,7 +212,7 @@
     if (existing) {
       // 改一笔就是改这一笔——转账也走 modify（core 的 ledger.modify 认 kind/转入账户，
       // 空串即清除）。早先这里按 kind 分派去 ledger.transfer，于是「改转账」变成了
-      // 「又记一笔新的转账」，旧的那笔还原封不动躺着。
+      // 「又记一笔新的转账」，旧的那还原封不动躺着。
       ok = await updateLedgerEntry(existing.id, {
         kind,
         amountCents: cents,
@@ -183,10 +221,19 @@
         categoryId: isTransfer ? "" : categoryId,
         date,
         time: clock,
-        note
+        note,
+        image
       });
     } else if (isTransfer) {
-      ok = await transferLedger({ from: accountId, to: toAccountId, amountCents: cents, date, time: clock, note });
+      ok = await transferLedger({
+        from: accountId,
+        to: toAccountId,
+        amountCents: cents,
+        date,
+        time: clock,
+        note,
+        image: image || undefined
+      });
     } else {
       ok = await addLedgerEntry({
         kind,
@@ -195,7 +242,8 @@
         categoryId: categoryId || undefined,
         date,
         time: clock,
-        note
+        note,
+        image: image || undefined
       });
     }
     busy = false;
@@ -307,7 +355,8 @@
   on:contextmenu|preventDefault|stopPropagation
 >
   <div
-    class="editor-dialog ledger-sheet"
+    class="editor-dialog ledger-sheet ledger-editor-sheet"
+    class:ledger-transfer-sheet={kind === "transfer"}
     bind:this={sheetEl}
     style={`--accent: ${accent}`}
     role="dialog"
@@ -345,48 +394,8 @@
       </div>
     </header>
 
-    <div class="ledger-amount-row">
-      {#if kind === "transfer"}
-        <span class="ledger-amount-cat">
-          <span class="ledger-amount-icon" style="background: {softColor("#6b7fd7")}">
-            <svelte:component this={ledgerIcon(TRANSFER_ICON, TRANSFER_ICON)} size={18} />
-          </span>
-          <em>{account?.name ?? "转出"} → {toAccount?.name ?? "转入"}</em>
-        </span>
-      {:else}
-        {@const color = selectedCategory?.color || (side === "income" ? "#2f9e6e" : "#f0862c")}
-        {@const icon = ledgerIcon(selectedCategory?.icon, side === "income" ? "Banknote" : "Package")}
-        <span class="ledger-amount-cat">
-          <span class="ledger-amount-icon" style="--cat: {color}; background: {softColor(color)}">
-            <svelte:component this={icon} size={18} />
-          </span>
-          <em class:selected={Boolean(selectedCategory)}>{selectedCategory?.name ?? "选择分类"}</em>
-        </span>
-      {/if}
-
-      {#if $isMobile}
-        <!-- 移动端金额只由键盘驱动：再放一个可聚焦的输入框会和软键盘抢位 -->
-        <div class="ledger-amount-value" class:empty={!amountText}>
-          <span class="ledger-amount-symbol">¥</span>{amountText || "0.00"}<i class="ledger-amount-caret"></i>
-        </div>
-      {:else}
-        <label class="ledger-amount-field">
-          <span class="ledger-amount-symbol">¥</span>
-          <input
-            type="text"
-            inputmode="decimal"
-            autocomplete="off"
-            placeholder="0.00"
-            aria-label="金额（元）"
-            style="width: {Math.max(4, amountText.length + 1)}ch"
-            bind:value={amountText}
-          />
-        </label>
-      {/if}
-    </div>
-
     {#if kind === "transfer"}
-      <!-- 转账块刻意不放进滚动区：.ledger-sheet-body 的 overflow 会把账户浮层裁掉，
+      <!-- 转账块刻意不放进滚动区：滚动容器的 overflow 会把账户浮层裁掉，
            看起来就是「浮层被上面的金额行盖住」。 -->
       <div class="ledger-transfer-block">
         <div class="ledger-transfer-row" on:click|stopPropagation>
@@ -431,62 +440,94 @@
         <p class="ledger-sheet-hint">转账只改两个账户的余额，不计入收支统计。</p>
       </div>
     {:else}
-      <div class="ledger-sheet-body">
-        <div class="ledger-parent-row">
+      <div class="ledger-cat-zone">
+        <div class="ledger-cat-grid">
           {#each tree as item (item.parent.id)}
-            {@const color = item.parent.color || (side === "income" ? "#2f9e6e" : "#f0862c")}
+            {@const color = item.parent.color || sideDefault}
             <button
               type="button"
-              class="ledger-parent-chip"
-              class:active={openParent === item.parent.id}
-              on:click={() => pickParent(item.parent.id)}
+              class="ledger-cat-cell"
+              class:open={openParent === item.parent.id}
+              class:active={categoryId === item.parent.id}
+              style="--cat: {color}"
+              on:click={() => tapParent(item.parent.id)}
             >
-              <span class="ledger-chip-icon" style="--cat: {color}; background: {softColor(color)}">
-                <svelte:component this={ledgerIcon(item.parent.icon, "Package")} size={14} />
+              <span class="ledger-cat-round" style="background: {color}">
+                <svelte:component this={ledgerIcon(item.parent.icon, "Package")} size={20} />
               </span>
-              {item.parent.name}
+              <em>{item.parent.name}</em>
             </button>
           {:else}
-            <p class="ledger-sheet-hint">还没有{side === "income" ? "收入" : "支出"}分类，点右边的加号加一个。</p>
+            <p class="ledger-sheet-hint">还没有{side === "income" ? "收入" : "支出"}分类，点加号加一个。</p>
           {/each}
-          <button type="button" class="ledger-chip-add" title="新增大类" aria-label="新增大类" on:click={() => requestCategory("")}>
-            <Plus size={16} />
-          </button>
-        </div>
-
-        <div class="ledger-tile-grid">
-          {#each tiles as tile (tile.id)}
-            {@const color = tile.color || (side === "income" ? "#2f9e6e" : "#f0862c")}
-            <button
-              type="button"
-              class="ledger-cat-tile"
-              class:active={categoryId === tile.id}
-              style="--cat: {color}"
-              on:click={() => pickCategory(tile.id)}
-            >
-              <span class="ledger-tile-icon" style="background: {softColor(color)}">
-                <svelte:component this={ledgerIcon(tile.icon, "Package")} size={20} />
-              </span>
-              <em>{tile.name}</em>
-            </button>
-          {/each}
-          <button
-            type="button"
-            class="ledger-cat-tile add"
-            title={openParent && openChildren.length > 0 ? `在「${openParentCategory?.name ?? ""}」下新增子分类` : "新增分类"}
-            on:click={() => requestCategory(openChildren.length > 0 ? openParent : "")}
-          >
-            <span class="ledger-tile-icon add"><Plus size={20} /></span>
+          <button type="button" class="ledger-cat-cell add" title="新增大类" on:click={() => requestCategory("")}>
+            <span class="ledger-cat-round add"><Plus size={20} /></span>
             <em>新增</em>
           </button>
         </div>
+
+        {#if openParent && openChildren.length > 0}
+          <div class="ledger-cat-sub">
+            <div class="ledger-cat-grid">
+              {#each openChildren as tile (tile.id)}
+                {@const color = tile.color || sideDefault}
+                <button
+                  type="button"
+                  class="ledger-cat-cell small"
+                  class:active={categoryId === tile.id}
+                  style="--cat: {color}"
+                  on:click={() => pickCategory(tile.id)}
+                >
+                  <span class="ledger-cat-round" style="background: {color}">
+                    <svelte:component this={ledgerIcon(tile.icon, "Package")} size={17} />
+                  </span>
+                  <em>{tile.name}</em>
+                </button>
+              {/each}
+              <button
+                type="button"
+                class="ledger-cat-cell small add"
+                title="在「{tree.find((item) => item.parent.id === openParent)?.parent.name ?? ""}」下新增子分类"
+                on:click={() => requestCategory(openParent)}
+              >
+                <span class="ledger-cat-round add"><Plus size={17} /></span>
+                <em>新增</em>
+              </button>
+            </div>
+          </div>
+        {/if}
       </div>
     {/if}
 
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div class="ledger-note-row" on:click|stopPropagation>
+      <label class="ledger-note-plain" title="备注">
+        <input type="text" maxlength="120" placeholder="添加备注" bind:value={note} on:keydown={fieldKeydown} />
+      </label>
+      {#if $isMobile}
+        <!-- 移动端金额只由键盘驱动：再放一个可聚焦的输入框会和软键盘抢位 -->
+        <div class="ledger-amount-value" class:empty={!amountText}>
+          {amountText || "0.00"}<i class="ledger-amount-caret"></i>
+        </div>
+      {:else}
+        <label class="ledger-amount-plain">
+          <input
+            type="text"
+            inputmode="decimal"
+            autocomplete="off"
+            placeholder="0.00"
+            aria-label="金额（元）"
+            style="width: {Math.max(4, amountText.length + 1)}ch"
+            bind:value={amountText}
+          />
+        </label>
+      {/if}
+    </div>
+
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div class="ledger-meta-row" on:click|stopPropagation>
       <div class="ledger-meta-field" class:open={openPicker === "date"}>
-        <button type="button" class="ledger-meta-trigger" title="归属日期与时刻" on:click={() => togglePicker("date")}>
+        <button type="button" class="ledger-meta-plain" title="归属日期与时刻" on:click={() => togglePicker("date")}>
           <CalendarDays size={15} />{dateLabel}{#if time}<em class="ledger-meta-clock">{time}</em>{/if}
         </button>
         {#if openPicker === "date"}
@@ -505,7 +546,7 @@
 
       {#if kind !== "transfer"}
         <div class="ledger-meta-field" class:open={openPicker === "account"}>
-          <button type="button" class="ledger-meta-trigger" title="资金账户" on:click={() => togglePicker("account")}>
+          <button type="button" class="ledger-meta-plain" title="资金账户" on:click={() => togglePicker("account")}>
             <Wallet size={15} />{account?.name ?? "选择账户"}
           </button>
           {#if openPicker === "account"}
@@ -522,10 +563,20 @@
         </div>
       {/if}
 
-      <label class="ledger-note-field" title="备注">
-        <PenLine size={15} />
-        <input type="text" maxlength="120" placeholder="备注" bind:value={note} on:keydown={fieldKeydown} />
-      </label>
+      <span class="ledger-meta-spacer"></span>
+      {#if image}
+        <button type="button" class="ledger-meta-plain has-image" title="替换这条账的图片" on:click={() => void pickImage()}>
+          <ImageIcon size={16} />
+        </button>
+        <button type="button" class="ledger-meta-plain danger" title="移除图片" on:click={() => (image = "")}>
+          <X size={14} />
+        </button>
+      {:else}
+        <button type="button" class="ledger-meta-plain" title="给这条账加一张图片" on:click={() => void pickImage()}>
+          <Camera size={16} />
+        </button>
+      {/if}
+      <input type="file" hidden accept="image/*" bind:this={imageFileInput} on:change={pickImageFromInput} />
     </div>
 
     {#if $isMobile}

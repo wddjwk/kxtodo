@@ -83,17 +83,12 @@
     editingId = null;
   }
 
-  function focusName(): void {
-    void Promise.resolve().then(() => nameInput?.focus());
-  }
-
   function beginAdd(parentId = ""): void {
     editingId = "";
     nameDraft = "";
     iconDraft = "";
     colorDraft = "";
     parentDraft = parentId;
-    focusName();
   }
 
   function beginEdit(category: LedgerCategory): void {
@@ -102,7 +97,6 @@
     iconDraft = category.icon;
     colorDraft = category.color;
     parentDraft = category.parentId ?? "";
-    focusName();
   }
 
   function closeForm(): void {

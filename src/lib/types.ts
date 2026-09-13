@@ -78,7 +78,8 @@ export type DiaryEditorTarget = { id: string } | { date: string };
 export type LedgerKind = "expense" | "income" | "transfer";
 /** 分类归属侧：支出与收入各有一套分类。 */
 export type LedgerSide = "expense" | "income";
-export type LedgerAccountKind = "cash" | "debit" | "credit" | "investment" | "other";
+/** 账户类型：预置几种（cash/debit/credit/investment/other），v0.7.4 起允许自定义字符串 */
+export type LedgerAccountKind = string;
 
 export type LedgerAccount = {
   id: string;
@@ -124,6 +125,8 @@ export type LedgerEntry = {
   /** HH:MM:SS；空 = 只记到天 */
   time: string;
   note: string;
+  /** 这条账的插图文件名（img/data/ledger/ 下）；空 = 没有 */
+  image?: string;
   createdAt: string;
   updatedAt?: string;
 };

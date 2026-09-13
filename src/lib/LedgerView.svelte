@@ -15,7 +15,8 @@
   import { buildMainStyle, ledgerAccent, ledgerBackground } from "./styles";
   import { imageCache, resolveImageSrc } from "./images";
   import { monthOf, shiftMonth, todayDate, type MonthCursor } from "./diary";
-  import { compactCents, monthDayGroups, monthTotals } from "./ledger";
+  import { compactCents, monthDayGroups, monthTotals, LEDGER_IMAGE_NODE } from "./ledger";
+  import { mdImageUrl } from "./backend";
   import MenuItem from "./menu/MenuItem.svelte";
   import MonthPopover from "./MonthPopover.svelte";
   import ListMenu from "./workspace/ListMenu.svelte";
@@ -27,6 +28,7 @@
   import CategoryDrilldown from "./ledger/CategoryDrilldown.svelte";
   import CategoryManager from "./ledger/CategoryManager.svelte";
   import AccountManager from "./ledger/AccountManager.svelte";
+  import LedgerImagePreview from "./ledger/LedgerImagePreview.svelte";
   import type { LedgerSide, LedgerViewMode } from "./types";
 
   const VIEWS: Array<{ mode: LedgerViewMode; label: string; icon: typeof ListIcon }> = [
@@ -46,23 +48,27 @@
   let accountEditId = "";
   let scrollEl: HTMLElement;
   let paging = false;
+  /** 滚到边缘后是否允许再换月：换完一次先收掉，等滚回中间再武装，
+   *  否则停在顶/底时每个 scroll 事件都会再翻一个月（一路翻到尽头）。 */
+  let edgeArmed = true;
   /** 统计里点了某个大类：钻取面板（移动端下半屏、桌面端锚在那一行下方） */
   let drill: {
     categoryId: string;
     side: LedgerSide;
-    mode: "month" | "year";
-    cursor: MonthCursor;
+    from: string;
+    to: string;
+    periodLabel: string;
     anchor: HTMLElement;
   } | null = null;
   let monthPopOpen = false;
   let monthLabelEl: HTMLElement;
   /** 从记账面板的加号过来时，分类管理直接停在新增表单上（可带预置大类） */
   let categoryStart: { side: LedgerSide; parentId: string } | null = null;
+  /** 条目插图的全屏查看（点卡片小字行里的图片图标） */
+  let preview: { src: string; title: string } | null = null;
 
   let cursor: MonthCursor = monthOf(todayDate());
   let selectedDate = todayDate();
-  /** 列表视图已加载的月份栈（新→旧）：滚到底接上一个月，滚到顶接回下一个月 */
-  let months: MonthCursor[] = [monthOf(todayDate())];
   // 分钟级 tick：记账页常常一直开着，跨天后「今天」必须自己跟上（与日记同一套路）
   let dayTick = 0;
 
@@ -84,21 +90,15 @@
   $: mainStyle = buildMainStyle(ledgerBg, ledgerAccent($appSettings.ledger), resolvedBgImage);
   $: menuEntry = entryMenu ? book.entries.find((entry) => entry.id === entryMenu?.id) ?? null : null;
 
-  /** 列表视图的月份分区：每段带上自己的按天分组与合计（滚进来的旧月份要有自己的段头） */
-  $: sections = months.map((month, index) => ({
-    key: `${month.year}-${month.month}`,
-    month,
-    index,
-    groups: monthDayGroups(book.entries, month),
-    totals: monthTotals(book.entries, month)
-  }));
+  /** 列表视图只展示 cursor 一个月：滚到底整屏换成上一个月，滚到顶下拉换回下一个月 */
+  $: sections = [{ key: `${cursor.year}-${cursor.month}`, groups: monthDayGroups(book.entries, cursor) }];
 
   /** 记账按钮落在哪一天：日历视图跟着选中的日期，其余视图永远是今天 */
   $: focusDate = view === "calendar" ? selectedDate : today;
   $: awayFromToday =
     view === "calendar"
       ? selectedDate !== today || cursor.year !== thisMonth.year || cursor.month !== thisMonth.month
-      : months[0].year !== thisMonth.year || months[0].month !== thisMonth.month;
+      : cursor.year !== thisMonth.year || cursor.month !== thisMonth.month;
   $: showTodayButton = awayFromToday;
 
   export function closeOverlays(): void {
@@ -107,6 +107,7 @@
     entryMenu = null;
     drill = null;
     monthPopOpen = false;
+    preview = null;
   }
 
   /** 记账面板里的加号：面板挂在 App 层，只能靠 store 把「要加分类」递到这一页来。 */
@@ -125,7 +126,7 @@
     closeOverlays();
     if (mode === view) return;
     if (mode === "calendar") cursor = monthOf(selectedDate);
-    if (mode === "list") months = [cursor];
+    if (mode === "list") resetScroll();
     void setConfig("ledger.view", mode);
   }
 
@@ -150,10 +151,16 @@
     if (event.key === "Escape" && !event.isComposing && event.keyCode !== 229) showGear = false;
   }
 
+  function resetScroll(): void {
+    edgeArmed = true;
+    paging = false;
+    if (scrollEl) scrollEl.scrollTop = 0;
+  }
+
   function changeMonth(next: MonthCursor): void {
     cursor = next;
     selectedDate = `${next.year}-${(next.month + 1).toString().padStart(2, "0")}-01`;
-    if (view === "list") months = [next];
+    if (view === "list") resetScroll();
   }
 
   function pickDay(date: string): void {
@@ -166,7 +173,7 @@
   function jumpToToday(): void {
     selectedDate = today;
     cursor = monthOf(today);
-    if (view === "list") months = [monthOf(today)];
+    resetScroll();
   }
 
   function createEntry(date = focusDate): void {
@@ -177,6 +184,18 @@
   function openEditor(id: string): void {
     entryMenu = null;
     ledgerEditor.set({ id });
+  }
+
+  /** 点条目小字行的图片图标：全屏看这条账的插图（图走 markdown 插图的 ledger 伪条目通道）。 */
+  async function openEntryImage(id: string): Promise<void> {
+    const entry = book.entries.find((item) => item.id === id);
+    if (!entry?.image) return;
+    try {
+      const src = await mdImageUrl(LEDGER_IMAGE_NODE, entry.image);
+      preview = { src, title: entry.note || entry.date };
+    } catch {
+      preview = null;
+    }
   }
 
   function openCategories(): void {
@@ -199,23 +218,32 @@
     showAccounts = true;
   }
 
-  /** 列表视图的无限月份：到底接上一个月（往过去），到顶接回下一个月（往现在）。 */
+  /** 列表视图的换月：滚到底 = 整屏换成上一个月（时间近的在上面），滚到顶下拉 = 换回下一个月。
+   *  向上以当前真实月为顶——再新就是还没发生的月份，翻过去只有空屏。 */
   function handleScroll(): void {
     if (view !== "list" || paging || !scrollEl) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollEl;
-    if (scrollHeight - scrollTop - clientHeight < 80) {
-      const last = months[months.length - 1];
+    if (!edgeArmed) {
+      if (scrollTop > 120 && scrollHeight - scrollTop - clientHeight > 120) edgeArmed = true;
+      return;
+    }
+    if (scrollHeight - scrollTop - clientHeight < 60) {
       paging = true;
-      months = [...months, shiftMonth(last, -1)];
-      window.setTimeout(() => (paging = false), 120);
+      edgeArmed = false;
+      cursor = shiftMonth(cursor, -1);
+      window.setTimeout(() => {
+        paging = false;
+        if (scrollEl) scrollEl.scrollTop = 0;
+      }, 60);
     } else if (scrollTop < 60) {
-      const first = months[0];
-      if (first.year === thisMonth.year && first.month === thisMonth.month) return;
+      if (cursor.year === thisMonth.year && cursor.month === thisMonth.month) return;
       paging = true;
-      const next = shiftMonth(first, 1);
-      months = [next, ...months];
-      cursor = next;
-      window.setTimeout(() => (paging = false), 120);
+      edgeArmed = false;
+      cursor = shiftMonth(cursor, 1);
+      window.setTimeout(() => {
+        paging = false;
+        if (scrollEl) scrollEl.scrollTop = 0;
+      }, 60);
     }
   }
 </script>
@@ -305,32 +333,23 @@
           <span>点右下角的 + 记下第一笔。</span>
         </div>
       {:else}
-        {#each sections as section (section.key)}
-          {#if section.index > 0}
-            <div class="ledger-month-divider">
-              <span>{section.month.year}年{section.month.month + 1}月</span>
-              <em>收 {compactCents(section.totals.income)} · 支 {compactCents(section.totals.expense)}</em>
-            </div>
-          {/if}
-          {#each section.groups as group (group.date)}
-            <LedgerDayCard
-              {book}
-              {group}
-              {today}
-              selectedId={entryMenu?.id ?? ""}
-              on:edit={(event) => openEditor(event.detail)}
-              on:add={(event) => createEntry(event.detail)}
-              on:context={(event) => {
-                entryMenu = event.detail;
-                showGear = false;
-                listMenuAt = null;
-              }}
-            />
-          {:else}
-            {#if section.index === 0}
-              <div class="ledger-day-empty">{monthLabel}还没有记账。</div>
-            {/if}
-          {/each}
+        {#each sections[0].groups as group (group.date)}
+          <LedgerDayCard
+            {book}
+            {group}
+            {today}
+            selectedId={entryMenu?.id ?? ""}
+            on:edit={(event) => openEditor(event.detail)}
+            on:add={(event) => createEntry(event.detail)}
+            on:image={(event) => void openEntryImage(event.detail)}
+            on:context={(event) => {
+              entryMenu = event.detail;
+              showGear = false;
+              listMenuAt = null;
+            }}
+          />
+        {:else}
+          <div class="ledger-day-empty">{monthLabel}还没有记账。</div>
         {/each}
       {/if}
 
@@ -345,6 +364,7 @@
         on:day={(event) => pickDay(event.detail)}
         on:edit={(event) => openEditor(event.detail)}
         on:add={(event) => createEntry(event.detail)}
+        on:image={(event) => void openEntryImage(event.detail)}
         on:context={(event) => (entryMenu = event.detail)}
       />
 
@@ -390,6 +410,7 @@
       entry={menuEntry}
       {book}
       on:edit={(event) => openEditor(event.detail)}
+      on:image={(event) => void openEntryImage(event.detail)}
       on:close={() => (entryMenu = null)}
     />
   {/if}
@@ -400,15 +421,24 @@
       entries={book.entries}
       categoryId={drill.categoryId}
       side={drill.side}
-      mode={drill.mode}
-      cursor={drill.cursor}
+      from={drill.from}
+      to={drill.to}
+      periodLabel={drill.periodLabel}
       anchor={drill.anchor}
       onClose={() => (drill = null)}
       onEditEntry={(id) => {
         drill = null;
         openEditor(id);
       }}
+      onImageView={(id) => {
+        drill = null;
+        void openEntryImage(id);
+      }}
     />
+  {/if}
+
+  {#if preview}
+    <LedgerImagePreview src={preview.src} title={preview.title} onClose={() => (preview = null)} />
   {/if}
 
   {#if showCategories}

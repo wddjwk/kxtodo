@@ -20,7 +20,7 @@ use crate::core::{require_confirmation, ExecContext, Invocation};
 use crate::diary_archive::{is_image_name, is_safe_image_name};
 use crate::envelope::Meta;
 use crate::error::{CoreError, CoreResult};
-use crate::model::DIARY_IMAGE_NODE;
+use crate::model::{DIARY_IMAGE_NODE, LEDGER_IMAGE_NODE};
 use crate::repo::Domain;
 
 pub fn storage_dispatch(
@@ -146,6 +146,7 @@ fn scan(ctx: &ExecContext) -> CoreResult<Scan> {
     let layout = &ctx.repo.layout;
     let data = ctx.repo.load_data()?;
     let diary = ctx.repo.load_diary()?;
+    let ledger = ctx.repo.load_ledger()?;
     let settings = ctx.repo.load_settings()?;
     let mut out = Scan::default();
 
@@ -173,23 +174,32 @@ fn scan(ctx: &ExecContext) -> CoreResult<Scan> {
         for id in dir_ids {
             let dir = layout.entry_img_dir(&id);
             // 引用集合：现存节点 = 归属它的任务 markdown；diary = 全部日记；
+            // ledger = 全部账目的 image 字段（裸文件名，不是 markdown）；
             // 都不是 = 目录整个是孤儿（条目删掉后同步/崩溃留下的残骸）
-            let markdowns: Vec<&str> = if id == DIARY_IMAGE_NODE {
-                diary
+            let referenced: HashSet<String> = if id == DIARY_IMAGE_NODE {
+                let markdowns: Vec<&str> = diary
                     .entries
                     .iter()
                     .map(|entry| entry.markdown.as_str())
+                    .collect();
+                crate::image_gc::referenced_basenames(markdowns)
+            } else if id == LEDGER_IMAGE_NODE {
+                ledger
+                    .entries
+                    .iter()
+                    .filter_map(|entry| entry.image.clone())
                     .collect()
             } else if node_ids.contains(id.as_str()) {
-                data.tasks
+                let markdowns: Vec<&str> = data
+                    .tasks
                     .iter()
                     .filter(|item| item.node_id == id)
                     .map(|item| item.markdown.as_str())
-                    .collect()
+                    .collect();
+                crate::image_gc::referenced_basenames(markdowns)
             } else {
-                Vec::new()
+                HashSet::new()
             };
-            let referenced = crate::image_gc::referenced_basenames(markdowns.iter().copied());
             for (path, len) in collect_files(&dir, false) {
                 out.images.add(len);
                 let Some(name) = path.file_name().and_then(|raw| raw.to_str()) else {
@@ -200,7 +210,7 @@ fn scan(ctx: &ExecContext) -> CoreResult<Scan> {
                     out.orphan_images.push((path, len));
                 }
             }
-            if id != DIARY_IMAGE_NODE && !node_ids.contains(id.as_str()) {
+            if id != DIARY_IMAGE_NODE && id != LEDGER_IMAGE_NODE && !node_ids.contains(id.as_str()) {
                 out.prunable_dirs.push(dir);
             }
         }

@@ -1,15 +1,17 @@
 <script lang="ts">
   /**
-   * 记账的一天 = 一张卡片（与日记卡片同一套组织形式），单列布局：
-   * 标题行是日期（主题色的日期号 + 日期 + 周几，右侧当天收/支），下面每一笔一行、左对齐。
-   * 不做折叠——一天的笔数本来就该一眼看完，折叠只会把信息藏起来。
+   * 记账的一天 = 一张卡片。标题行 = 日期 + 周几 + 右端当天收/支与「在这天记一笔」；
+   * 每一笔占两行：图标跨两行，大字行 = 分类名 + 带符号金额（左右对齐），
+   * 小字行 = 备注（有插图时跟一个图片图标）+ 右端时刻与账户。
+   * 所有展示记账条目的地方（列表 / 日历选中日 / 钻取账单明细）都是这一套排版。
    */
   import { createEventDispatcher } from "svelte";
-  import { Plus } from "@lucide/svelte";
+  import { Image as ImageIcon, Plus } from "@lucide/svelte";
   import { longpress, isLongPressSuppressed } from "../longpress";
   import { compactCents, formatCents } from "../ledger";
-  import { ledgerIcon, softColor, ACCOUNT_KIND_ICON, TRANSFER_ICON } from "../ledgerIcons";
-  import { monthDayLabel, relativeDayLabel, weekdayOf } from "../diary";
+  import { ledgerIcon, softColor, TRANSFER_ICON } from "../ledgerIcons";
+  import { accountTypeIcon } from "../ledgerAccountTypes";
+  import { relativeDayLabel, weekdayOf } from "../diary";
   import { displayClock } from "../clock";
   import type { LedgerBook, LedgerEntry } from "../types";
   import type { LedgerDayGroup } from "../ledger";
@@ -17,23 +19,20 @@
   export let book: LedgerBook;
   export let group: LedgerDayGroup;
   export let today = "";
-  /** 日历视图里日期已经写在日头上了，卡片就不再重复一遍 */
-  export let showDate = true;
   export let selectedId = "";
 
   const dispatch = createEventDispatcher<{
     edit: string;
     add: string;
+    image: string;
     context: { id: string; x: number; y: number };
   }>();
 
-  $: dayNumber = group.date.slice(8, 10);
+  $: dayNumber = Number.parseInt(group.date.slice(8, 10), 10);
+  $: dayMonth = Number.parseInt(group.date.slice(5, 7), 10);
   $: weekday = weekdayOf(group.date);
   $: dayLabel = relativeDayLabel(group.date, today);
-  /** 标题行的日期：口语标签（今天/昨天/前天）或「9月10日」——完整标签自带周几，会和旁边那格重复 */
-  $: dayTitle =
-    dayLabel === "今天" || dayLabel === "昨天" || dayLabel === "前天" ? dayLabel : monthDayLabel(group.date);
-  $: dayTotal = group.income + group.expense;
+  $: dayTitle = `${dayMonth}/${dayNumber}`;
 
   function entryName(entry: LedgerEntry): string {
     if (entry.kind === "transfer") return "转账";
@@ -73,7 +72,7 @@
 
   function accountIcon(entry: LedgerEntry): string {
     const account = book.accounts.find((item) => item.id === entry.accountId);
-    return account?.icon || ACCOUNT_KIND_ICON[account?.kind ?? "other"];
+    return account?.icon || accountTypeIcon(account?.kind ?? "other");
   }
 
   function amountText(entry: LedgerEntry): string {
@@ -112,21 +111,11 @@
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <article class="ledger-card" on:contextmenu|preventDefault|stopPropagation>
   <header class="ledger-card-head">
-    {#if showDate}
-      <span class="ledger-date-day" title={dayLabel}>{dayNumber}</span>
-      <h3 class="ledger-card-title">{dayTitle}</h3>
-      <span class="ledger-date-week">{weekday}</span>
-    {/if}
+    <h3 class="ledger-card-title" title={dayLabel}>{dayTitle}</h3>
+    <span class="ledger-date-week">{weekday}</span>
     <span class="ledger-card-sums">
-      {#if group.income > 0}
-        <em class="in" title="当天收入">收 {compactCents(group.income)}</em>
-      {/if}
-      {#if group.expense > 0}
-        <em class="out" title="当天支出">支 {compactCents(group.expense)}</em>
-      {/if}
-      {#if dayTotal === 0}
-        <em class="flat">转账 {group.entries.length} 笔</em>
-      {/if}
+      <em class="in" title="当天收入">收 {compactCents(group.income)}</em>
+      <em class="out" title="当天支出">支 {compactCents(group.expense)}</em>
     </span>
     <button class="ledger-card-add" type="button" title="在这天记一笔" on:click|stopPropagation={addHere}>
       <Plus size={15} />
@@ -138,6 +127,7 @@
       {@const color = entryColor(entry)}
       {@const icon = ledgerIcon(entryIcon(entry), "Ellipsis")}
       {@const accountText = accountLabel(entry)}
+      {@const clock = displayClock(entry.time)}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <div
@@ -148,25 +138,40 @@
         on:contextmenu={(event) => openMenu(event, entry.id)}
       >
         <span class="ledger-entry-icon" style="--cat: {color}; background: {softColor(color)}">
-          <svelte:component this={icon} size={16} />
+          <svelte:component this={icon} size={17} />
         </span>
-        <span class="ledger-entry-text">
-          <strong>{entryName(entry)}</strong>
-          {#if entry.note}<em>{entry.note}</em>{/if}
-        </span>
-        {#if accountText}
-          <span class="ledger-entry-account" title={accountText}>
-            {#if entry.kind === "transfer"}
-              <svelte:component this={ledgerIcon(accountIcon(entry), "Wallet")} size={12} />
-            {/if}
-            {accountText}
+        <span class="ledger-entry-main">
+          <span class="ledger-entry-line">
+            <strong>{entryName(entry)}</strong>
+            <b class="ledger-entry-amount" class:in={entry.kind === "income"} class:out={entry.kind === "expense"}>
+              {amountText(entry)}
+            </b>
           </span>
-        {/if}
-        {#if displayClock(entry.time)}
-          <span class="ledger-entry-time" title="记账时刻">{displayClock(entry.time)}</span>
-        {/if}
-        <span class="ledger-entry-amount" class:in={entry.kind === "income"} class:out={entry.kind === "expense"}>
-          {amountText(entry)}
+          <span class="ledger-entry-sub">
+            <em class="ledger-entry-note">
+              {#if entry.note}{entry.note}{/if}
+              {#if entry.image}
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <span
+                  class="ledger-entry-image"
+                  title="查看这条账的图片"
+                  on:click|stopPropagation={() => dispatch("image", entry.id)}
+                ><ImageIcon size={12} /></span>
+              {/if}
+            </em>
+            <span class="ledger-entry-meta">
+              {#if clock}<em class="ledger-entry-time" title="记账时刻">{clock}</em>{/if}
+              {#if accountText}
+                <em class="ledger-entry-account" title={accountText}>
+                  {#if entry.kind === "transfer"}
+                    <svelte:component this={ledgerIcon(accountIcon(entry), "Wallet")} size={11} />
+                  {/if}
+                  {accountText}
+                </em>
+              {/if}
+            </span>
+          </span>
         </span>
       </div>
     {/each}

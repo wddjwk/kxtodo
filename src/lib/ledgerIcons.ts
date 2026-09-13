@@ -506,6 +506,21 @@ export const LEDGER_ICON_CHOICES: string[] = LEDGER_ICON_GROUPS.flatMap(
   (group) => [...group.icons]
 ).filter((name, index, all) => all.indexOf(name) === index);
 
+/**
+ * 账户专用图标分组目录（v0.7.4）：与 LEDGER_ICON_GROUPS 同构，语义偏向资金账户
+ * （现金/银行卡/电子支付/社保与公共/投资理财/借贷往来）。Rust 侧 ledger_icons.rs 的
+ * ACCOUNT_ICON_GROUPS 镜像本常量，一致性由 tests/ledger_icons.rs 守着；
+ * 所有名字都在 LEDGER_ICONS 里（无需新增 import）。
+ */
+export const LEDGER_ACCOUNT_ICON_GROUPS: LedgerIconGroup[] = [
+  { name: "现金与卡", icons: ["Wallet", "Banknote", "Coins", "CreditCard", "Landmark", "WalletCards", "Wallet2", "PiggyBank", "Vault"] },
+  { name: "电子支付", icons: ["MessageCircle", "Smartphone", "Currency", "CircleDollarSign", "Send", "Zap"] },
+  { name: "社保与公共", icons: ["House", "Home", "ShieldPlus", "HeartPulse", "Hospital", "Bus", "TrainFront", "Utensils", "Ticket", "KeyRound"] },
+  { name: "投资理财", icons: ["ChartLine", "TrendingUp", "Percent", "Bitcoin", "Scale", "BadgeDollarSign"] },
+  { name: "借贷往来", icons: ["ArrowLeftRight", "HandCoins", "Handshake", "ReceiptText", "RotateCcw"] },
+  { name: "其他", icons: ["Ellipsis", "CircleDot", "Package", "Star", "Info", "Settings"] }
+];
+
 export const ACCOUNT_KIND_ICON: Record<LedgerAccountKind, string> = {
   cash: "Wallet",
   debit: "Landmark",

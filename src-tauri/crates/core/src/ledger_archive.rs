@@ -15,7 +15,7 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 use crate::error::{CoreError, CoreResult};
-use crate::model::{AccountKind, LedgerCategory, LedgerEntry, LedgerFile, LedgerKind, LedgerSide};
+use crate::model::{LedgerCategory, LedgerEntry, LedgerFile, LedgerKind, LedgerSide};
 use crate::ops_ledger::cents_to_yuan;
 
 /// 导入护栏：与日记压缩包同一套口径。
@@ -248,7 +248,7 @@ fn kind_label(kind: LedgerKind) -> &'static str {
 #[derive(Debug, Clone, Default)]
 pub struct ImportAccount {
     pub name: String,
-    pub kind: AccountKind,
+    pub kind: String,
     pub icon: String,
     pub color: String,
     pub initial_cents: i64,
@@ -460,10 +460,15 @@ fn parse_xlsx(bytes: &[u8]) -> CoreResult<ParsedLedger> {
                     if name.is_empty() {
                         continue;
                     }
+                    let kind_text = get_text(row, &columns.index, "类型");
+                    let kind = if kind_text.is_empty() {
+                        crate::model::default_account_kind()
+                    } else {
+                        kind_text
+                    };
                     out.accounts.push(ImportAccount {
                         name,
-                        kind: AccountKind::parse(&get_text(row, &columns.index, "类型"))
-                            .unwrap_or_default(),
+                        kind,
                         icon: get_text(row, &columns.index, "图标"),
                         color: get_text(row, &columns.index, "颜色"),
                         initial_cents: get_cents(row, &columns.index, "期初余额"),

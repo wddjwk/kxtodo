@@ -11,6 +11,20 @@ import type {
 import type { MonthCursor } from "./diary";
 import { isoOf, shiftDays } from "./diary";
 
+/** 记账条目的插图走 markdown 插图同一条通道，伪条目 id = ledger（与日记的 diary 同款）。 */
+export const LEDGER_IMAGE_NODE = "ledger";
+
+/** 占比环的兜底配色：分类自己没填颜色时按序号取，保证一屏里片片区得开
+ *  （钻取二级分类尤其需要——子分类默认继承大类颜色，不换调色板整个环就一块色）。 */
+export const DONUT_PALETTE = [
+  "#f0862c", "#3d8bfd", "#2f9e6e", "#e0654f", "#9b59b6", "#e8a33d",
+  "#16a5a5", "#d94f70", "#7cb342", "#6b7fd7", "#c0392b", "#5c6470"
+];
+
+export function paletteColor(index: number): string {
+  return DONUT_PALETTE[((index % DONUT_PALETTE.length) + DONUT_PALETTE.length) % DONUT_PALETTE.length];
+}
+
 /** 分 → 两位小数字符串（带千分位，界面读起来不累）。 */
 export function formatCents(cents: number): string {
   const sign = cents < 0 ? "-" : "";
@@ -172,65 +186,115 @@ export function ledgerCalendarCells(cursor: MonthCursor, entries: LedgerEntry[])
   return cells;
 }
 
-/** 统计窗口判定：与 statsSeries 同一口径，占比环/排行不能拿全量数据配当期汇总。 */
-export function inStatsRange(date: string, mode: "month" | "year", cursor: MonthCursor): boolean {
-  if (mode === "month") {
-    const prefix = `${cursor.year}-${(cursor.month + 1).toString().padStart(2, "0")}`;
-    return date.startsWith(prefix);
-  }
-  return date.startsWith(`${cursor.year}-`);
+/** 统计周期：周（周一起）/月/年/总（全部流水跨度）/自定义区间。 */
+export type StatsMode = "week" | "month" | "year" | "total" | "custom";
+
+export type StatsBounds = { from: string; to: string };
+
+/** 周一是一周的开始（国内习惯）。 */
+export function weekStartOf(date: string): string {
+  const weekday = new Date(`${date}T00:00:00`).getDay();
+  return shiftDays(date, -((weekday + 6) % 7));
 }
 
-export function statsEntries(
+export function weekRangeOf(date: string): StatsBounds {
+  const from = weekStartOf(date);
+  return { from, to: shiftDays(from, 6) };
+}
+
+export function shiftWeek(date: string, delta: number): string {
+  return shiftDays(date, delta * 7);
+}
+
+function monthBounds(cursor: MonthCursor): StatsBounds {
+  const prefix = `${cursor.year}-${(cursor.month + 1).toString().padStart(2, "0")}`;
+  const lastDay = new Date(cursor.year, cursor.month + 1, 0).getDate();
+  return { from: `${prefix}-01`, to: `${prefix}-${lastDay.toString().padStart(2, "0")}` };
+}
+
+/** 周期 → 起止日期（含两端）。总 = 全部流水的首末；自定义直接用给的起止。 */
+export function statsBounds(
   entries: LedgerEntry[],
-  mode: "month" | "year",
-  cursor: MonthCursor
-): LedgerEntry[] {
-  return entries.filter((entry) => inStatsRange(entry.date, mode, cursor));
+  mode: StatsMode,
+  cursor: MonthCursor,
+  anchor = "",
+  from = "",
+  to = ""
+): StatsBounds {
+  if (mode === "week") {
+    return weekRangeOf(anchor || todayIsoLike(cursor));
+  }
+  if (mode === "month") return monthBounds(cursor);
+  if (mode === "year") return { from: `${cursor.year}-01-01`, to: `${cursor.year}-12-31` };
+  if (mode === "custom") {
+    return { from: from || `${cursor.year}-01-01`, to: to || from || `${cursor.year}-12-31` };
+  }
+  let min = "";
+  let max = "";
+  for (const entry of entries) {
+    if (!min || entry.date < min) min = entry.date;
+    if (!max || entry.date > max) max = entry.date;
+  }
+  return { from: min || `${cursor.year}-01-01`, to: max || `${cursor.year}-12-31` };
+}
+
+function todayIsoLike(cursor: MonthCursor): string {
+  return `${cursor.year}-${(cursor.month + 1).toString().padStart(2, "0")}-01`;
+}
+
+export function inStatsBounds(date: string, bounds: StatsBounds): boolean {
+  return date >= bounds.from && date <= bounds.to;
+}
+
+/** 统计窗口判定：占比环/排行不能拿全量数据配当期汇总。 */
+export function statsEntries(entries: LedgerEntry[], bounds: StatsBounds): LedgerEntry[] {
+  return entries.filter((entry) => inStatsBounds(entry.date, bounds));
 }
 
 export type LedgerSeriesPoint = { key: string; income: number; expense: number };
 
-/** 统计序列：月视图逐天、年视图逐月、自定义区间按跨度自动选。 */
-export function statsSeries(
-  entries: LedgerEntry[],
-  mode: "month" | "year" | "range",
-  cursor: MonthCursor,
-  from?: string,
-  to?: string
-): LedgerSeriesPoint[] {
+function bucketOf(bounds: StatsBounds): "day" | "month" {
+  const days =
+    (new Date(`${bounds.to}T00:00:00`).getTime() - new Date(`${bounds.from}T00:00:00`).getTime()) / 86_400_000 + 1;
+  return days <= 62 ? "day" : "month";
+}
+
+/** 统计序列：按起止区间分桶（day 逐天 / month 逐月），空档补齐曲线不断线。 */
+export function statsSeries(entries: LedgerEntry[], bounds: StatsBounds): LedgerSeriesPoint[] {
+  const bucket = bucketOf(bounds);
   const buckets = new Map<string, LedgerSeriesPoint>();
-  const keyOf = (date: string): string => (mode === "month" ? date : date.slice(0, 7));
-  const inRange = (date: string): boolean => {
-    if (mode === "month") {
-      const prefix = `${cursor.year}-${(cursor.month + 1).toString().padStart(2, "0")}`;
-      return date.startsWith(prefix);
-    }
-    if (mode === "year") return date.startsWith(`${cursor.year}-`);
-    if (from && date < from) return false;
-    if (to && date > to) return false;
-    return true;
-  };
   for (const entry of entries) {
-    if (!inRange(entry.date)) continue;
-    const key = keyOf(entry.date);
+    if (!inStatsBounds(entry.date, bounds)) continue;
+    const key = bucket === "day" ? entry.date : entry.date.slice(0, 7);
     const point = buckets.get(key) ?? { key, income: 0, expense: 0 };
     if (entry.kind === "income") point.income += entry.amountCents;
     if (entry.kind === "expense") point.expense += entry.amountCents;
     buckets.set(key, point);
   }
-  // 补齐空档，曲线不断线
   const keys: string[] = [];
-  if (mode === "month") {
-    const days = new Date(cursor.year, cursor.month + 1, 0).getDate();
-    const prefix = `${cursor.year}-${(cursor.month + 1).toString().padStart(2, "0")}`;
-    for (let day = 1; day <= days; day += 1) keys.push(`${prefix}-${day.toString().padStart(2, "0")}`);
-  } else if (mode === "year") {
-    for (let month = 1; month <= 12; month += 1) keys.push(`${cursor.year}-${month.toString().padStart(2, "0")}`);
+  if (bucket === "day") {
+    for (let date = bounds.from; date <= bounds.to; date = shiftDays(date, 1)) keys.push(date);
   } else {
-    keys.push(...[...buckets.keys()].sort());
+    let [year, month] = bounds.from.slice(0, 7).split("-").map(Number);
+    const [endYear, endMonth] = bounds.to.slice(0, 7).split("-").map(Number);
+    while (year < endYear || (year === endYear && month <= endMonth)) {
+      keys.push(`${year}-${month.toString().padStart(2, "0")}`);
+      month += 1;
+      if (month > 12) {
+        month = 1;
+        year += 1;
+      }
+    }
   }
   return keys.map((key) => buckets.get(key) ?? { key, income: 0, expense: 0 });
+}
+
+/** 周期标签：年 <2026>、月 <2026/09>、周 <2026/09/14-09/20>、总/自定义 起止全写。 */
+export function statsPeriodLabel(mode: StatsMode, bounds: StatsBounds, cursor: MonthCursor): string {
+  if (mode === "year") return `${cursor.year}`;
+  if (mode === "month") return `${cursor.year}/${(cursor.month + 1).toString().padStart(2, "0")}`;
+  if (mode === "week") return `${bounds.from.replaceAll("-", "/")}-${bounds.to.slice(5).replaceAll("-", "/")}`;
+  return `${bounds.from.replaceAll("-", "/")}-${bounds.to.replaceAll("-", "/")}`;
 }
 
 /** 占比环吃的一项：统计视图给大类，钻取面板给二级分类。 */
