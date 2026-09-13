@@ -69,6 +69,8 @@ button,
   --ui-font-size: 18px;
   --markdown-font-size: 20px;
   --editor-font-size: 20px;
+  --ledger-font-size: 18px;
+  --diary-font-size: 18px;
   --app-width: 100vw;
   --app-height: 100vh;
   --font-title: 36px;
@@ -76,6 +78,8 @@ button,
   --font-control: 18px;
   --font-task: 18px;
   --font-composer: 17px;
+  --font-ledger: 18px;
+  --font-diary: 18px;
   --font-drawer-title: 24px;
 
   width: var(--app-width);

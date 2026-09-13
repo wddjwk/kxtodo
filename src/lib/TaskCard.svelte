@@ -23,7 +23,7 @@
     edit: string;
     context: { id: string; x: number; y: number };
     openLink: { href: string; title: string };
-    setDate: { id: string; date: string };
+    setDate: { id: string; date: string; time?: string };
     removeTag: { id: string; tagId: string };
     editTag: { id: string; tagId: string; text: string };
     removeEmoji: { id: string; index: number };
@@ -54,7 +54,9 @@
   $: resolvedMd = resolveMarkdownImages(task.markdown, nodeId, $mdImageCache);
   $: collapsedHtml = renderInlineMarkdown(collapsedMarkdownLine(task.markdown));
   $: fullHtml = renderMarkdown(resolvedMd);
-  $: formattedDate = task.dueDate ? formatDate(task.dueDate) : "";
+  $: formattedDate = task.dueDate
+    ? `${formatDate(task.dueDate)}${task.dueTime ? ` ${task.dueTime}` : ""}`
+    : "";
   $: canExpand = hasMultipleMarkdownLines(task.markdown) || titleOverflow;
   // 展开态只认存储值：canExpand 是量出来的易失值（列表增减导致滚动条出现/消失、
   // 宽度一变标题溢出判定就翻转），拿它门控渲染会出现「动了别的任务这张卡自己展开」。
@@ -124,7 +126,7 @@
     if (!showPicker || !dueButtonEl) return;
     const scale = uiScaleValue($appSettings.appearance.uiScale);
     const rect = dueButtonEl.getBoundingClientRect();
-    const estVisualHeight = 360;
+    const estVisualHeight = 400;
     const openBelow = rect.bottom + estVisualHeight <= window.innerHeight;
     const anchorEdge = openBelow ? rect.bottom + 6 : rect.top - estVisualHeight - 6;
     const topLogical = anchorEdge / scale;
@@ -135,6 +137,11 @@
   function handlePick(date: string): void {
     showPicker = false;
     dispatch("setDate", { id: task.id, date });
+  }
+
+  /** 只改时刻：浮层留着（滚轮可能还要再拨一下），日期沿用卡片上的原值。 */
+  function handlePickTime(time: string): void {
+    dispatch("setDate", { id: task.id, date: task.dueDate?.slice(0, 10) ?? "", time });
   }
 
   function handleClearDate(): void {
@@ -382,7 +389,14 @@
           <button bind:this={dueButtonEl} class="task-due-date" type="button" on:click|stopPropagation={toggleDatePicker}>{formattedDate}</button>
           {#if showPicker}
             <div class="task-date-popover" style={datePopoverStyle}>
-              <DatePicker value={task.dueDate?.slice(0, 10) ?? ""} on:select={(e) => handlePick(e.detail)} on:clear={handleClearDate} />
+              <DatePicker
+                value={task.dueDate?.slice(0, 10) ?? ""}
+                time={task.dueTime ?? ""}
+                withTime
+                on:select={(e) => handlePick(e.detail)}
+                on:selectTime={(e) => handlePickTime(e.detail)}
+                on:clear={handleClearDate}
+              />
             </div>
           {/if}
         </div>

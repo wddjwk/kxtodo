@@ -38,16 +38,17 @@ KXToDo v9 提供脚本化 CLI。本 SKILL 说明**何时调用、按什么步骤
 
 - 所有修改/删除按稳定 ID 进行：`task modify --type item --id ...`。
 - patch 语义：字段缺省 = 不变；显式 null = 清空；数组整体替换。
+- 任务的时间精度到分钟（可选）：`task add/modify --due-time <HH:MM[:SS]>` 写 `dueTime`（规范化为 HH:MM，秒被舍掉），与 `--due-date` 搭配使用；`task modify --due-time ""` 清除（回到只精确到天）。`dueTime` 随任务实体同步。
 - 删除一律 high-risk-write：先 `--dry-run` 看影响，再 `--yes` 执行。非空节点需 `--cascade`。
 
 ## 日记
 
 - **什么时候用 diary 而不是 task**：用户要「记一笔」「写今天的日记」「补记某天发生的事」→ `diary`；要「待办/提醒/勾选完成」→ `task`。日记没有完成状态、不属于任何 entry/category，也不出现在任何列表视图或角标计数里。
 - 日记住在**自己的 `diary.json`**（第四个领域文件，独立的 revision 与幂等台账）；写一篇日记不会抬高 data 域的 revision。
-- 写：`diary add --markdown "..."`（`--date` 缺省为**本地今天**），可带 `--title`、`--mood <emoji>`、`--weather <emoji>`、`--tag "color:text"`（可重复，只给 `color` 就是无文字标签）。长正文用 `--markdown-file <path|->`。**标题与正文不能同时为空**（`DIARY_EMPTY`）。
-- **`--date` 是「归属日期」不是创建时间**：补写昨天的日记就传昨天的日期，`createdAt` 仍是现在。同一天可以有多篇，`diary list` 按日期由近及远、同一天内按写作先后返回。
+- 写：`diary add --markdown "..."`（`--date` 缺省为**本地今天**），可带 `--title`、`--mood <emoji>`、`--weather <emoji>`、`--tag "color:text"`（可重复，只给 `color` 就是无文字标签）、`--time <HH:MM[:SS]>`（写作时刻，落进 `createdAt` 的钟点部分，秒被舍掉；缺省为当前时刻）。长正文用 `--markdown-file <path|->`。**标题与正文不能同时为空**（`DIARY_EMPTY`）。
+- **`--date` 是「归属日期」不是创建时间**：补写昨天的日记就传昨天的日期，`createdAt` 仍是现在（要连写作时刻一起补就加 `--time`）。同一天可以有多篇，`diary list` 按日期由近及远、同一天内按写作先后返回。日记**没有独立的 time 字段**：分钟精度就住在 `createdAt` 里，导出 front-matter 的 `time` 正是它的钟点部分。
 - 读：`diary list [--date <某天> | --from <起> --to <止>] [--limit N]`（`total` 是全部条数，`returned` 是这一页）；单篇 `diary get --id`。
-- 改：`diary modify --id ... --date/--title/--markdown/--mood/--weather`，字段缺省 = 不变，**心情/天气/标题传空串 = 清除**；标签用 `--replace-tags` 整体替换。
+- 改：`diary modify --id ... --date/--time/--title/--markdown/--mood/--weather`，字段缺省 = 不变，**心情/天气/标题传空串 = 清除**；标签用 `--replace-tags` 整体替换。`--time` 改 `createdAt` 的钟点部分；**只改 `--date` 时 `createdAt` 的日期部分跟着走、钟点自动保留**（导出/导入的往返稳定靠这条）；`updatedAt` 每次修改自动刷新。
 - 删：`diary remove --id ... --yes`（high-risk-write，会写同步墓碑，删除传播到其它设备）。
 - **导出**：`diary export --out <path.zip> [--from <起> --to <止>]`（不给范围就是一键全量）。压缩包是给人读的：`年/月/YYYYMMDD[_序号][_标题].md`，一天多篇才带序号，没标题就只用日期；每篇的 `title/date/time/tags/mood/weather/createdAt` 写在 YAML front-matter 里，解压出来任何编辑器都能直接看。**插图随包走**：正文里引用到的本地图进包内 `images/`，md 里的引用改写成相对路径，解压即可显示。
 - **导入**：`diary import --zip <path> --yes`（bulk 写，要确认；`--dry-run` 先看会进多少条）。解析很宽容：没有 front-matter 的手写 md 也能进（日期退回文件名 `YYYYMMDD` 或目录 `年/月`），非 UTF-8 按 lossy 解码，日期非法或标题正文全空的条目跳过并计入 `skipped`；包内 `images/` 的图落回 `img/data/diary/`（已存在的同名文件不覆盖），落盘张数在返回值 `images` 里。**同一天已有日记不算冲突**：导入进来的直接追加成另一篇，不合并正文也不去重——所以同一个包导两遍就会得到两份，别重试。
@@ -59,14 +60,22 @@ KXToDo v9 提供脚本化 CLI。本 SKILL 说明**何时调用、按什么步骤
 - **记账写操作一律要先经用户同意**：金融数据敏感，`add` / `transfer` / `modify` / `remove` / `import` / `account-add` / `account-modify` / `account-remove` / `category-add` / `category-modify` / `category-remove` 全部是 high-risk-write——**先向用户说明这次增删改的内容（金额/账户/日期等）并得到明确同意，再带 `--yes` 执行**；未带 `--yes` 报 `CONFIRMATION_REQUIRED`（退出码 10），数据分毫不动。读操作（`get`/`list`/`accounts`/`categories`/`stats`/`balance`/`export`）**永远不需要**确认。别把用户的「记一笔 30 元午饭」之外的沉默当同意。
 - 写：`ledger add --amount <元> --account <账户名|ID> [--kind expense|income] [--category <分类名|ID>] [--date <YYYY-MM-DD>] [--time <HH:MM>] [--note <备注>] --yes`。`--amount` 是元（两位小数，第三位四舍五入到分）；`--account`/`--category` **认名字也认 ID**（名字对人类与 Agent 更友好）。`--date` 缺省为本地今天。返回体带 `accountName`/`categoryName`/`categoryParentName`/`signed`，不必二次查表。
 - 转账：`ledger transfer --from <账户> --to <账户> --amount <元> --yes`。**转账不计入收支统计**，只改两个账户余额；转出转入相同报 `LEDGER_TRANSFER_SAME_ACCOUNT`。
-- 读：`ledger list [--date | --from --to] [--kind] [--account] [--category] [--limit N]`（按日期由近及远）；`ledger get --id`；`ledger accounts`（各账户余额 + 净资产）；`ledger categories [--side expense|income]`（两级分类，`parentId` 空 = 大类）；`ledger balance`（净资产/总资产/总负债，信用卡负余额计入负债）。
+- 读：`ledger list [--date | --from --to] [--kind] [--account] [--category] [--limit N]`（按日期由近及远）；`ledger get --id`；`ledger accounts`（各账户余额 + 净资产）；`ledger categories [--side expense|income]`（两级分类，`parentId` 空 = 大类）；`ledger balance`（净资产/总资产/总负债，信用卡负余额计入负债）；`ledger icon-list`（可用图标目录）。
 - **统计（周/月/年总结的首选）**：`ledger stats --month 2026-09` / `--year 2026` / `--from <起> --to <止>`。返回 `totals`（收入/支出/结余/转账）、`series`（月视图逐天、年视图逐月，空档补齐，画趋势用）、`categories`（**子分类金额并进大类**的大类占比：笔数/金额/百分比/子分类明细）。回答「钱花在哪」直接读 `categories`，别自己逐笔加。
-- 改：`ledger modify --id ... --amount/--account/--category/--date/--note --yes`，字段缺省 = 不变。删：`ledger remove --id ... --yes`（写同步墓碑）。
+- 改：`ledger modify --id ... --amount/--account/--category/--date/--time/--note --yes`，字段缺省 = 不变；**改转账也是 `modify`**（`--kind transfer --to <转入账户>`），不会另外新增一笔。删：`ledger remove --id ... --yes`（写同步墓碑）。
 - 账户管理：`ledger account-add --name <名> [--kind cash|debit|credit|investment|other] [--initial <元>] --yes`、`account-modify --id ... --yes`、`account-remove --id --yes`。**名下还有账目的账户删不掉**（`LEDGER_ACCOUNT_IN_USE`）——先改账或删账，别绕。
 - 分类管理：`ledger category-add --name <名> [--side expense|income] [--parent <大类名|ID>] [--icon <lucide 名>] --yes`、`category-modify --id ... --yes`、`category-remove --id --yes`。**分类只有两级**（子分类下不能再挂，报 `LEDGER_CATEGORY_DEPTH`）；删大类会连带它的子分类，名下账目保留但变「未分类」。首跑自带一套覆盖日常场景的种子账户与两级分类（餐饮/交通/居住/购物/娱乐/医疗/学习/人情/宠物/其他 + 工资/理财/兼职/红包/退款/其他），**先 `ledger categories` 看现成的，别重复建同名分类**（同名同侧同父会报 `LEDGER_CATEGORY_EXISTS`）。
+- **图标目录（设计分类前必看）**：`ledger icon-list` 返回 `{ total, groups: [{name, icons}], icons }`——20 个中文分组（饮食/娱乐/购物/交通/旅行/居住家具/家庭生活/医疗健康/学习教育/办公工作/通讯网络/金融理财/收入/运动健身/个人护理/服饰美容/宠物/数码/运动户外/通用）下两百多个 lucide 图标名（PascalCase，如 `UtensilsCrossed`）。`--icon` 只认这份目录里的名字：**猜一个不存在的，界面画不出来只会退化成省略号**。帮用户重设计分类时，先 `icon-list` 再 `categories`，然后逐个 `category-modify --icon`。
 - **导出**：`ledger export --out <path.zip> [--from <起> --to <止>]`。包内一张 `kxtodo-ledger.xlsx`，四张表：说明（格式标记与合计）/ 账户 / 分类 / 账目（日期|时间|类型|账户|转入账户|大类|分类|金额|备注，金额带符号的元）。不给范围就是全量。
 - **导入**：`ledger import --file <path.zip|.xlsx> --yes`（bulk 写，要确认；**重复导入会产生重复账目**，别重试）。只认这套表头；账户/分类按名字合并、缺的自动创建；日期非法或金额为 0 的行跳过并计入 `skipped`。想搬家就「全量导出 → 新目录导入」，账户与分类会跟着走。
 - 视图偏好 `config get|set ledger.view list|calendar|stats|assets` 是**本机 UI 状态**不跨设备同步；记账的主题色与背景（`ledger.accent` 等四项）**是**同步的。
+
+## 存储清理
+
+- 用户问「占了多少空间 / 清理一下 / 释放空间」→ `storage usage` 先统计，再按结果决定是否 `storage clean`。
+- `storage usage`（Risk: read，不需要确认）：输出数据目录总体积（`totalBytes`）与分类计数（`images`/`orphanImages` 插图与孤儿、`backgrounds`/`orphanBackgrounds` 背景、`avatars`/`orphanAvatars` 头像、`tempFiles` 临时残留、`serverLogs`/`cleanableLogs` 内置服务器日志与其中可清理的、`backups` 备份），每项都是 `{count, bytes}`。「孤儿」= 没有任何 markdown/背景/头像配置再引用的图片文件。
+- `storage clean`（Risk: high-risk-write）：删除孤儿图片（含整目录孤儿，即条目已删掉的残骸）、数据目录根的 `.tmp` 与 `img/` 下的 `.part` 残留、过期服务器日志（**保留最新两份且绝不删今天的**）。返回 `freedBytes`、逐项 `removed*` 计数与 `warnings`（单个文件删不动只进 warnings，命令不半途失败）。未带 `--yes` 返回退出码 10；`--dry-run` 先看将删除的数量与预计释放体积。
+- **它永远不碰**：五个领域 JSON（数据本体）、`runtime/`（同步状态）、`history/`、`backups/`（只统计）、服务器数据库与账户/令牌。删除不可恢复——先向用户报 `usage` 的数字并得到同意再 `clean --yes`。
 
 ## 定时任务工作流
 
@@ -84,6 +93,8 @@ KXToDo v9 提供脚本化 CLI。本 SKILL 说明**何时调用、按什么步骤
 
 - 点路径读取：`config get appearance.uiScale`；列表 `config list --prefix appearance`。
 - 动态 map（如 `appearance.uiColors`）必须带 `--map-key <entry-id>`，键不做点路径拆解。
+- 字号（本机偏好，不跨设备同步）：`appearance.uiFontSize`（分组分类与页面标题，14-22）、`appearance.markdownFontSize`（正文，14-26）、`appearance.ledgerFontSize` / `appearance.diaryFontSize`（记账页/日记页，14-26，默认 18）。
+- 固定导航（本机偏好）：`appearance.navItems` 是字符串数组（可选 `my-day`/`planned`/`important`/`diary`/`ledger`/`scheduled`/`toolbox`，顺序即显示顺序，重复自动去掉，未知 id 拒绝），`appearance.navLayout` 为 `list|grid|icons`。写入用 `config set appearance.navItems --json-value '["diary","my-day"]'`。
 - `config reset` 为高风险，先 `--dry-run`。
 
 ## 数据同步

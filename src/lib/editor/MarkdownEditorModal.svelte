@@ -5,6 +5,7 @@
   import { createMarkdownEditor, insertAtCursor } from "./codemirrorSetup";
   import { markdownTitle, renderMarkdown } from "../markdown";
   import { markdownWire } from "../markdownControls";
+  import { suppressGhostClick } from "../ghostClick";
   import { mdImageCache, primeMdImageCache, resolveMarkdownImages } from "../images";
   import {
     isTauriRuntime, mdImageUrl, pickImageFile, saveMdImage, saveMdImageFromDataUrl
@@ -59,9 +60,12 @@
 
   // 元数据：编辑态从任务读初值并记住，新建态是纯本地草稿，保存时随 addTask 一起提交
   let dueDate = "";
+  /** 到期时刻 HH:MM；没有日期时它没有意义，保存时会被忽略 */
+  let dueTime = "";
   let emojis: string[] = [];
   let tags: Tag[] = [];
   let initialDueDate = "";
+  let initialDueTime = "";
   let initialEmojis = "";
   let initialTags = "";
   let metaOpen: "" | "date" | "tag" = "";
@@ -111,9 +115,11 @@
     previewHtml = renderMarkdown(resolveMarkdownImages(text, nodeId, $mdImageCache));
   }
   $: dateLabel = dueDate
-    ? dueDate === todayIso()
-      ? "今天"
-      : `${Number.parseInt(dueDate.slice(5, 7), 10)}月${Number.parseInt(dueDate.slice(8, 10), 10)}日`
+    ? `${
+        dueDate === todayIso()
+          ? "今天"
+          : `${Number.parseInt(dueDate.slice(5, 7), 10)}月${Number.parseInt(dueDate.slice(8, 10), 10)}日`
+      }${dueTime ? ` ${dueTime}` : ""}`
     : "";
   // 桌面编辑器尺寸按窗口比例（设置项 appearance.editorWidthPercent/HeightPercent）：
   // 百分比相对 app-shell，全屏/改窗口时比例不变、尺寸跟着变。移动端固定铺满，不给内联值。
@@ -129,6 +135,8 @@
     initialText = text;
     dueDate = task?.dueDate?.slice(0, 10) ?? "";
     initialDueDate = dueDate;
+    dueTime = task?.dueTime ?? "";
+    initialDueTime = dueTime;
     emojis = task ? task.emojis.map((emoji) => emoji) : [];
     initialEmojis = emojis.join("");
     tags = task ? task.tags.map((tag) => ({ ...tag })) : [];
@@ -169,15 +177,17 @@
   /** 元数据变化落到已有任务上（新建模式随 addTask 一起提交，不走这里）。 */
   async function applyMetaChanges(): Promise<void> {
     if (draftMode || !task) return;
-    if (dueDate !== initialDueDate) {
+    if (dueDate !== initialDueDate || (dueDate && dueTime !== initialDueTime)) {
       const changes: TaskChanges = {
         dueDate: dueDate || null,
-        plannedDate: dueDate || null
+        plannedDate: dueDate || null,
+        dueTime: dueDate ? dueTime || null : null
       };
       // 与卡片菜单「添加日期」同一套语义：设成今天就顺带进我的一天
       if (dueDate === todayIso()) changes.myDay = true;
       await updateTask(taskId, changes);
       initialDueDate = dueDate;
+      initialDueTime = dueTime;
     }
     if (emojis.join("") !== initialEmojis) {
       await replaceTaskEmojis(taskId, emojis);
@@ -199,6 +209,7 @@
         markdown,
         dueDate: dueDate || undefined,
         plannedDate: dueDate || undefined,
+        dueTime: dueDate && dueTime ? dueTime : undefined,
         myDay: dueDate === todayIso(),
         tags,
         emojis
@@ -256,6 +267,13 @@
   function pickDate(date: string): void {
     dueDate = date;
     metaOpen = "";
+  }
+
+  /** 拨时刻不收浮层（滚轮常常要再动一下）。还没有日期就落在今天：
+   *  时刻没有日期就没有意义，而这一下是用户显式要的，不算"悄悄给今天"。 */
+  function pickTime(value: string): void {
+    dueTime = value;
+    if (!dueDate) dueDate = todayIso();
   }
 
   function addEmoji(emoji: string): void {
@@ -347,9 +365,11 @@
   }
 
   function handleBackdropPointerDown(event: PointerEvent): void {
-    if (event.target === event.currentTarget) {
-      void saveAndClose();
-    }
+    if (event.target !== event.currentTarget) return;
+    // 浮层马上就拆掉，触屏补发的那一下 click 会落到下面的卡片上（见 ghostClick.ts）
+    event.preventDefault();
+    suppressGhostClick({ x: event.clientX, y: event.clientY });
+    void saveAndClose();
   }
 
   function handleWindowKeydown(event: KeyboardEvent): void {
@@ -431,7 +451,14 @@
         </button>
         {#if metaOpen === "date"}
           <div class="editor-meta-pop">
-            <DatePicker value={dueDate} on:select={(event) => pickDate(event.detail)} on:clear={() => pickDate("")} />
+            <DatePicker
+              value={dueDate}
+              time={dueTime}
+              withTime
+              on:select={(event) => pickDate(event.detail)}
+              on:selectTime={(event) => pickTime(event.detail)}
+              on:clear={() => pickDate("")}
+            />
           </div>
         {/if}
       </div>

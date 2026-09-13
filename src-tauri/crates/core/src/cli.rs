@@ -164,6 +164,14 @@ pub enum Commands {
         #[command(subcommand)]
         action: LedgerAction,
     },
+    /// 数据目录占用统计与清理（释放空间）
+    #[command(
+        long_about = "统计并清理数据目录里的可再生文件：无引用图片（插图/背景/头像）、崩溃残留的临时文件、\n过期的内置服务器日志。\n\n**永远不碰**：五个领域 JSON、runtime/、history/、backups/（只统计）、服务器数据库与账户/令牌数据。\n\n动作：\n  usage   统计各类占用（含孤儿数量与可清理体积；Risk: read）\n  clean   实际删除（high-risk-write；保留最新两份服务器日志且绝不删今天的；\n          单个文件删不动只进 warnings，不半途失败；未带 --yes 返回退出码 10）\n\n示例：\n  kxtodo-cli storage usage\n  kxtodo-cli storage clean --dry-run\n  kxtodo-cli storage clean --yes"
+    )]
+    Storage {
+        #[command(subcommand)]
+        action: StorageAction,
+    },
     /// 管理和运行定时任务
     #[command(
         long_about = "定时任务的完整定义只能通过 --spec/--patch JSON 输入（结构见 kxtodo-cli schema schedule.spec）。\n\n动作：\n  add/validate/get/list/find/modify/remove  定义管理\n  enable/disable/run/stop/logs/status       运行控制\n  runtime list/detect/set                   脚本运行时\n\n示例流程见 kxtodo-cli skills read kxtodo。"
@@ -321,6 +329,9 @@ pub struct TaskAddArgs {
     /// 截止日期 YYYY-MM-DD（或 +Nd）
     #[arg(long, value_name = "date")]
     pub due_date: Option<String>,
+    /// 到期时刻 HH:MM[:SS]（规范化为 HH:MM；与 --due-date 搭配，不给 = 只精确到天）
+    #[arg(long, value_name = "time")]
+    pub due_time: Option<String>,
     /// 标签 <color>:<text>（可重复；颜色 red/yellow/blue/green/gray）
     #[arg(long = "tag", value_name = "color:text")]
     pub tags: Vec<String>,
@@ -539,6 +550,9 @@ pub struct TaskModifyArgs {
     /// 截止日期
     #[arg(long, value_name = "date")]
     pub due_date: Option<String>,
+    /// 到期时刻 HH:MM[:SS]（规范化为 HH:MM；传空串清除，回到只精确到天）
+    #[arg(long, value_name = "time")]
+    pub due_time: Option<String>,
     /// 清空计划日期
     #[arg(long)]
     pub clear_planned_date: bool,
@@ -647,6 +661,9 @@ pub struct DiaryAddArgs {
     /// 归属日期 YYYY-MM-DD 或相对写法 +Nd（缺省为本地今天）
     #[arg(long, value_name = "date")]
     pub date: Option<String>,
+    /// 写作时刻 HH:MM[:SS]（落进 createdAt 的钟点部分；缺省为当前时刻）
+    #[arg(long, value_name = "time")]
+    pub time: Option<String>,
     /// 标题
     #[arg(long, value_name = "text")]
     pub title: Option<String>,
@@ -693,6 +710,9 @@ pub struct DiaryModifyArgs {
     /// 新归属日期
     #[arg(long, value_name = "date")]
     pub date: Option<String>,
+    /// 写作时刻 HH:MM[:SS]（改 createdAt 的钟点部分；只改日期时原时刻自动保留）
+    #[arg(long, value_name = "time")]
+    pub time: Option<String>,
     /// 新标题（空串清除）
     #[arg(long, value_name = "text")]
     pub title: Option<String>,
@@ -814,6 +834,12 @@ pub enum LedgerAction {
     )]
     #[command(name = "category-remove")]
     CategoryRemove(LedgerIdArgs),
+    /// 列出可用图标（Risk: read）
+    #[command(
+        long_about = "Risk: read\n\n按分组列出 --icon 能用的全部图标名（lucide 的 PascalCase 导出名）。\n设计分类/账户前先跑一次，别猜名字：不在目录里的名字前端画不出来，只会退化成省略号。\n输出 { total, groups: [{name, icons}], icons }。\n\n示例：kxtodo-cli ledger icon-list"
+    )]
+    #[command(name = "icon-list")]
+    IconList,
     /// 收支统计（Risk: read）
     #[command(
         long_about = "Risk: read\n\n--month 2026-09 / --year 2026 / --from --to 三选一（都不给 = 全量）。\n输出：合计（收入/支出/结余/转账）、逐日或逐月序列、大类占比（含笔数与百分比）。\n--side 只统计一侧的占比。\n\n示例：\n  kxtodo-cli ledger stats --month 2026-09\n  kxtodo-cli ledger stats --year 2026 --side expense"
@@ -1088,6 +1114,20 @@ pub struct LedgerImportArgs {
     /// 要导入的 zip 或 xlsx 路径
     #[arg(long, value_name = "path")]
     pub file: String,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum StorageAction {
+    /// 统计数据目录占用（Risk: read）
+    #[command(
+        long_about = "Risk: read\n\n输出各类文件的数量与字节数：插图（含无引用孤儿）、背景、头像、临时文件、\n服务器日志（含可清理的过期日志）、备份，以及数据目录总体积。\n\n示例：kxtodo-cli storage usage"
+    )]
+    Usage,
+    /// 清理孤儿图片、临时文件与过期日志（Risk: high-risk-write）
+    #[command(
+        long_about = "Risk: high-risk-write\n\n删除无引用的插图/背景图/头像、数据目录根的 .tmp 与 img/ 下的 .part 残留、\n过期的服务器日志（保留最新两份，今天的永远不删）。删除不可恢复，未带 --yes 返回退出码 10；\n--dry-run 先看将删除的数量与预计释放体积。\n\n示例：kxtodo-cli storage clean --yes"
+    )]
+    Clean,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1937,6 +1977,7 @@ fn build_invocation(cli: &Cli, cwd: &Path) -> CoreResult<Option<(Invocation, Opt
         Commands::Task { action } => build_task_invocation(action)?,
         Commands::Diary { action } => build_diary_invocation(action)?,
         Commands::Ledger { action } => build_ledger_invocation(action)?,
+        Commands::Storage { action } => build_storage_invocation(action)?,
         Commands::Schedule { action } => build_schedule_invocation(action)?,
         Commands::Config { action } => build_config_invocation(action)?,
         Commands::Sync { action } => build_sync_invocation(action)?,
@@ -2209,6 +2250,7 @@ fn build_ledger_invocation(action: &LedgerAction) -> CoreResult<Invocation> {
         LedgerAction::Modify(args) => ("ledger.modify", serialize_args(args)),
         LedgerAction::Remove(args) => ("ledger.remove", serialize_args(args)),
         LedgerAction::Accounts => ("ledger.accounts", serde_json::json!({})),
+        LedgerAction::IconList => ("ledger.iconList", serde_json::json!({})),
         LedgerAction::AccountAdd(args) => ("ledger.accountAdd", serialize_args(args)),
         LedgerAction::AccountModify(args) => ("ledger.accountModify", serialize_args(args)),
         LedgerAction::AccountRemove(args) => ("ledger.accountRemove", serialize_args(args)),
@@ -2238,6 +2280,14 @@ fn build_ledger_invocation(action: &LedgerAction) -> CoreResult<Invocation> {
         }
     };
     Ok(Invocation::new(name, params))
+}
+
+fn build_storage_invocation(action: &StorageAction) -> CoreResult<Invocation> {
+    let name = match action {
+        StorageAction::Usage => "storage.usage",
+        StorageAction::Clean => "storage.clean",
+    };
+    Ok(Invocation::new(name, serde_json::json!({})))
 }
 
 fn build_schedule_invocation(action: &ScheduleAction) -> CoreResult<Invocation> {

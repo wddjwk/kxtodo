@@ -824,23 +824,67 @@ fn image_data_url(
     if bytes.len() > 24 * 1024 * 1024 {
         return Err("Image too large for data URL".to_string());
     }
-    let mime = match path
+    Ok(format!(
+        "data:{};base64,{}",
+        sniff_image_mime(&bytes, &path),
+        base64::engine::general_purpose::STANDARD.encode(&bytes)
+    ))
+}
+
+/// 按文件头认 mime，扩展名只作兜底。
+///
+/// 早前只看扩展名，认不出就回 `application/octet-stream`——WebView 拿到这个 mime
+/// 根本不当图片解码，表现就是「同一张图有时显示有时不显示」（`.jfif`、无扩展名、
+/// 同步过来的怪名字都会中）。魔数是不会骗人的。
+fn sniff_image_mime(bytes: &[u8], path: &std::path::Path) -> &'static str {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        return "image/png";
+    }
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return "image/jpeg";
+    }
+    if bytes.starts_with(b"GIF8") {
+        return "image/gif";
+    }
+    if bytes.starts_with(b"BM") {
+        return "image/bmp";
+    }
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return "image/webp";
+    }
+    // ISO BMFF（ftyp）：avif 能渲染，heic 各家 WebView 支持不一，但 mime 要诚实
+    if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
+        let brand = &bytes[8..12];
+        if brand == b"avif" || brand == b"avis" {
+            return "image/avif";
+        }
+        if brand == b"heic" || brand == b"heix" || brand == b"mif1" {
+            return "image/heic";
+        }
+    }
+    // SVG 是文本：只看头部有没有 <svg（允许前置 XML 声明与空白）
+    let head_len = bytes.len().min(512);
+    if let Ok(head) = std::str::from_utf8(&bytes[..head_len]) {
+        let trimmed = head.trim_start();
+        if trimmed.starts_with("<svg") || trimmed.contains("<svg") {
+            return "image/svg+xml";
+        }
+    }
+    match path
         .extension()
         .and_then(|value| value.to_str())
         .map(|value| value.to_lowercase())
         .as_deref()
     {
         Some("png") => "image/png",
-        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("jpg") | Some("jpeg") | Some("jfif") => "image/jpeg",
         Some("gif") => "image/gif",
         Some("webp") => "image/webp",
+        Some("bmp") => "image/bmp",
+        Some("avif") => "image/avif",
         Some("svg") => "image/svg+xml",
         _ => "application/octet-stream",
-    };
-    Ok(format!(
-        "data:{mime};base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(&bytes)
-    ))
+    }
 }
 
 /// Absolute filesystem path of a stored background image, for `convertFileSrc`.

@@ -995,3 +995,71 @@ fn tree_shows_counts_and_depth() {
         .iter()
         .all(|node| node.get("children").is_none()));
 }
+
+#[test]
+fn due_time_round_trips_normalizes_and_clears() {
+    let env = TestEnv::fresh();
+    let (_category_id, entry_id) = setup_entry(&env);
+
+    // add：HH:MM 补零规范化；HH:MM:SS 舍掉秒
+    let item = env.ok(&[
+        "task", "add", "--type", "item", "--entry-id", &entry_id,
+        "--markdown", "带时刻的任务",
+        "--due-date", "2026-07-31",
+        "--due-time", "9:05",
+    ]);
+    assert_eq!(item["dueTime"], "09:05");
+    assert_eq!(item["dueDate"], "2026-07-31");
+    let id = item["id"].as_str().unwrap().to_string();
+
+    let modified = env.ok(&[
+        "task", "modify", "--type", "item", "--id", &id,
+        "--due-time", "23:59:45",
+    ]);
+    assert_eq!(modified["dueTime"], "23:59", "秒被舍掉，规范化成 HH:MM");
+
+    // get / list / 磁盘三处一致
+    let got = env.ok(&["task", "get", "--type", "item", "--id", &id]);
+    assert_eq!(got["dueTime"], "23:59");
+    let listed = env.ok(&["task", "list", "--type", "item", "--entry-id", &entry_id, "--all"]);
+    assert_eq!(listed["items"][0]["dueTime"], "23:59");
+    let raw = env.read_file("data.json");
+    let stored = raw["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["id"] == Value::String(id.clone()))
+        .unwrap();
+    assert_eq!(stored["dueTime"], "23:59");
+
+    // 非法时刻拒绝（25 点 / 61 分 / 垃圾），已存值不动
+    env.err(&["task", "modify", "--type", "item", "--id", &id, "--due-time", "25:00"], 2);
+    env.err(&["task", "modify", "--type", "item", "--id", &id, "--due-time", "12:61"], 2);
+    env.err(&["task", "modify", "--type", "item", "--id", &id, "--due-time", "abc"], 2);
+    assert_eq!(
+        env.ok(&["task", "get", "--type", "item", "--id", &id])["dueTime"],
+        "23:59"
+    );
+
+    // 空串 = 清除：视图与磁盘都不再带 dueTime
+    let cleared = env.ok(&["task", "modify", "--type", "item", "--id", &id, "--due-time", ""]);
+    assert!(
+        cleared.get("dueTime").is_none(),
+        "清除后视图不给 dueTime：{cleared}"
+    );
+    let raw = env.read_file("data.json");
+    let stored = raw["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["id"] == Value::String(id.clone()))
+        .unwrap();
+    assert!(stored.get("dueTime").is_none(), "空串不落盘（skip_serializing_if）");
+
+    // 不给 --due-time 的任务：字段整个不出现
+    let plain = env.ok(&[
+        "task", "add", "--type", "item", "--entry-id", &entry_id,
+        "--markdown", "只精确到天的任务", "--due-date", "2026-08-01",
+    ]);
+    assert!(plain.get("dueTime").is_none());
+}

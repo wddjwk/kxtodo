@@ -868,6 +868,7 @@ mod tests {
             my_day: false,
             planned_date: None,
             due_date: None,
+            due_time: String::new(),
             completed_at: None,
             tags: Vec::new(),
             emojis: Vec::new(),
@@ -1003,6 +1004,8 @@ mod tests {
         };
         data.nodes[0].collapsed = Some(true);
         data.tasks[0].expanded = Some(true);
+        // dueTime 是任务内容（不是本机 UI 态）：载荷是整个 Item 序列化的，字段自动跟着走
+        data.tasks[0].due_time = "09:30".to_string();
         let settings = SettingsFile::default();
         let schedule = ScheduleFile::default();
 
@@ -1026,6 +1029,7 @@ mod tests {
         assert!(node_entity.data.get("collapsed").is_none());
         let task_entity = entities.iter().find(|e| e.kind == "task").unwrap();
         assert!(task_entity.data.get("expanded").is_none());
+        assert_eq!(task_entity.data["dueTime"], json!("09:30"));
     }
 
     #[test]

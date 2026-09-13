@@ -325,6 +325,8 @@ pub struct AddItemParams {
     pub my_day: bool,
     pub planned_date: Option<String>,
     pub due_date: Option<String>,
+    /// 到期时刻 HH:MM（已规范化；空 = 只精确到天）
+    pub due_time: String,
     pub tags: Vec<TagInput>,
     pub emojis: Vec<String>,
 }
@@ -353,6 +355,7 @@ pub fn add_item(data: &mut DataFile, params: AddItemParams) -> CoreResult<Item> 
         my_day: params.my_day,
         planned_date: params.planned_date,
         due_date: params.due_date,
+        due_time: params.due_time,
         completed_at: if completed { Some(now.clone()) } else { None },
         tags: params.tags.iter().map(build_tag).collect(),
         emojis: params.emojis,
@@ -468,6 +471,9 @@ pub fn item_view(data: &DataFile, item: &Item) -> Value {
     }
     if let Some(value) = &item.due_date {
         view["dueDate"] = json!(value);
+    }
+    if !item.due_time.is_empty() {
+        view["dueTime"] = json!(item.due_time);
     }
     if let Some(value) = &item.completed_at {
         view["completedAt"] = json!(value);
@@ -969,6 +975,8 @@ pub struct ItemChanges {
     pub my_day: Option<bool>,
     pub planned_date: Option<Option<String>>,
     pub due_date: Option<Option<String>>,
+    /// 到期时刻（已规范化的 HH:MM；空串 = 清除，回到只精确到天）
+    pub due_time: Option<String>,
     pub add_tags: Vec<TagInput>,
     pub remove_tag_ids: Vec<String>,
     pub replace_tags: Option<Vec<TagInput>>,
@@ -1050,6 +1058,10 @@ pub fn modify_item(data: &mut DataFile, id: &str, changes: ItemChanges) -> CoreR
     }
     if let Some(due) = changes.due_date {
         item.due_date = due;
+        touched = true;
+    }
+    if let Some(due_time) = changes.due_time {
+        item.due_time = due_time;
         touched = true;
     }
     if let Some(tags) = changes.replace_tags {

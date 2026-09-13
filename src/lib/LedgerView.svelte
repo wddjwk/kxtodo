@@ -10,22 +10,24 @@
     CalendarDays, ChartPie, ChevronLeft, ChevronRight,
     List as ListIcon, MoreHorizontal, Plus, Settings as SettingsIcon, Tags, Wallet
   } from "@lucide/svelte";
-  import { appSettings, ledgerData, ledgerEditor } from "./stores";
+  import { appSettings, ledgerData, ledgerEditor, ledgerCategoryDraft } from "./stores";
   import { setConfig } from "./actions";
   import { buildMainStyle, ledgerAccent, ledgerBackground } from "./styles";
   import { imageCache, resolveImageSrc } from "./images";
   import { monthOf, shiftMonth, todayDate, type MonthCursor } from "./diary";
   import { compactCents, monthDayGroups, monthTotals } from "./ledger";
   import MenuItem from "./menu/MenuItem.svelte";
+  import MonthPopover from "./MonthPopover.svelte";
   import ListMenu from "./workspace/ListMenu.svelte";
   import LedgerDayCard from "./ledger/LedgerDayCard.svelte";
   import LedgerCalendar from "./ledger/LedgerCalendar.svelte";
   import LedgerStats from "./ledger/LedgerStats.svelte";
   import LedgerAssets from "./ledger/LedgerAssets.svelte";
   import LedgerEntryMenu from "./ledger/LedgerEntryMenu.svelte";
+  import CategoryDrilldown from "./ledger/CategoryDrilldown.svelte";
   import CategoryManager from "./ledger/CategoryManager.svelte";
   import AccountManager from "./ledger/AccountManager.svelte";
-  import type { LedgerViewMode } from "./types";
+  import type { LedgerSide, LedgerViewMode } from "./types";
 
   const VIEWS: Array<{ mode: LedgerViewMode; label: string; icon: typeof ListIcon }> = [
     { mode: "list", label: "列表视图", icon: ListIcon },
@@ -44,6 +46,18 @@
   let accountEditId = "";
   let scrollEl: HTMLElement;
   let paging = false;
+  /** 统计里点了某个大类：钻取面板（移动端下半屏、桌面端锚在那一行下方） */
+  let drill: {
+    categoryId: string;
+    side: LedgerSide;
+    mode: "month" | "year";
+    cursor: MonthCursor;
+    anchor: HTMLElement;
+  } | null = null;
+  let monthPopOpen = false;
+  let monthLabelEl: HTMLElement;
+  /** 从记账面板的加号过来时，分类管理直接停在新增表单上（可带预置大类） */
+  let categoryStart: { side: LedgerSide; parentId: string } | null = null;
 
   let cursor: MonthCursor = monthOf(todayDate());
   let selectedDate = todayDate();
@@ -91,6 +105,20 @@
     showGear = false;
     listMenuAt = null;
     entryMenu = null;
+    drill = null;
+    monthPopOpen = false;
+  }
+
+  /** 记账面板里的加号：面板挂在 App 层，只能靠 store 把「要加分类」递到这一页来。 */
+  $: if ($ledgerCategoryDraft) {
+    categoryStart = $ledgerCategoryDraft;
+    ledgerCategoryDraft.set(null);
+    showGear = false;
+    listMenuAt = null;
+    entryMenu = null;
+    drill = null;
+    monthPopOpen = false;
+    showCategories = true;
   }
 
   function switchView(mode: LedgerViewMode): void {
@@ -153,6 +181,7 @@
 
   function openCategories(): void {
     closeOverlays();
+    categoryStart = null;
     showCategories = true;
   }
 
@@ -238,7 +267,15 @@
         <button type="button" aria-label="上个月" on:click|stopPropagation={() => changeMonth(shiftMonth(cursor, -1))}>
           <ChevronLeft size={18} />
         </button>
-        <strong>{monthLabel}</strong>
+        <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions a11y_no_noninteractive_element_to_interactive_role -->
+        <strong
+          bind:this={monthLabelEl}
+          class="month-pop-anchor"
+          role="button"
+          tabindex="0"
+          title="点击直接选年月"
+          on:click|stopPropagation={() => (monthPopOpen = !monthPopOpen)}
+        >{monthLabel}</strong>
         <button type="button" aria-label="下个月" on:click|stopPropagation={() => changeMonth(shiftMonth(cursor, 1))}>
           <ChevronRight size={18} />
         </button>
@@ -249,6 +286,15 @@
         <em class="net">结余 {compactCents(monthTotal.income - monthTotal.expense)}</em>
       </span>
     </div>
+
+    <MonthPopover
+      open={monthPopOpen}
+      anchor={monthLabelEl}
+      year={cursor.year}
+      month={cursor.month}
+      onSelect={(next) => changeMonth({ year: next.year, month: next.month })}
+      onClose={() => (monthPopOpen = false)}
+    />
   {/if}
 
   <section class="ledger-scroll" bind:this={scrollEl} on:scroll={handleScroll}>
@@ -303,7 +349,17 @@
       />
 
     {:else if view === "stats"}
-      <LedgerStats {book} entries={book.entries} {cursor} on:month={(event) => changeMonth(event.detail)} />
+      <LedgerStats
+        {book}
+        entries={book.entries}
+        {cursor}
+        on:month={(event) => changeMonth(event.detail)}
+        on:drill={(event) => {
+          drill = event.detail;
+          showGear = false;
+          entryMenu = null;
+        }}
+      />
 
     {:else}
       <LedgerAssets
@@ -338,8 +394,35 @@
     />
   {/if}
 
+  {#if drill}
+    <CategoryDrilldown
+      {book}
+      entries={book.entries}
+      categoryId={drill.categoryId}
+      side={drill.side}
+      mode={drill.mode}
+      cursor={drill.cursor}
+      anchor={drill.anchor}
+      onClose={() => (drill = null)}
+      onEditEntry={(id) => {
+        drill = null;
+        openEditor(id);
+      }}
+    />
+  {/if}
+
   {#if showCategories}
-    <CategoryManager {book} onClose={() => (showCategories = false)} />
+    <CategoryManager
+      {book}
+      side={categoryStart?.side ?? "expense"}
+      startWithAdd={Boolean(categoryStart)}
+      startSide={categoryStart?.side ?? ""}
+      startParentId={categoryStart?.parentId ?? ""}
+      onClose={() => {
+        showCategories = false;
+        categoryStart = null;
+      }}
+    />
   {/if}
 
   {#if showAccounts}

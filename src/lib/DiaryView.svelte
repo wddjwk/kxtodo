@@ -17,6 +17,7 @@
   import DiaryCard from "./diary/DiaryCard.svelte";
   import DiaryEntryMenu from "./diary/DiaryEntryMenu.svelte";
   import MenuItem from "./menu/MenuItem.svelte";
+  import MonthPopover from "./MonthPopover.svelte";
   import ListMenu from "./workspace/ListMenu.svelte";
   import type { DiaryEntry, DiaryViewMode } from "./types";
 
@@ -38,6 +39,8 @@
   let entryMenu: { id: string; x: number; y: number } | null = null;
   let cursor: MonthCursor = monthOf(todayDate());
   let selectedDate = todayDate();
+  let monthPopOpen = false;
+  let monthLabelEl: HTMLElement;
   /** 分组视图的年/月折叠状态（本机 UI 状态，不持久化） */
   let collapsed: Record<string, boolean> = {};
   // 分钟级 tick：日记页面常常一直开着，跨天后「今天」必须自己跟上，
@@ -275,9 +278,29 @@
       <div class="diary-calendar">
         <div class="diary-calendar-bar">
           <button type="button" aria-label="上个月" on:click|stopPropagation={prevMonth}><ChevronLeft size={18} /></button>
-          <strong>{monthLabel}</strong>
+          <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions a11y_no_noninteractive_element_to_interactive_role -->
+          <strong
+            bind:this={monthLabelEl}
+            class="month-pop-anchor"
+            role="button"
+            tabindex="0"
+            title="点击直接选年月"
+            on:click|stopPropagation={() => (monthPopOpen = !monthPopOpen)}
+          >{monthLabel}</strong>
           <button type="button" aria-label="下个月" on:click|stopPropagation={nextMonth}><ChevronRight size={18} /></button>
         </div>
+        <MonthPopover
+          open={monthPopOpen}
+          anchor={monthLabelEl}
+          year={cursor.year}
+          month={cursor.month}
+          onSelect={(next) => {
+            cursor = { year: next.year, month: next.month };
+            selectedDate = `${next.year}-${(next.month + 1).toString().padStart(2, "0")}-01`;
+            entryMenu = null;
+          }}
+          onClose={() => (monthPopOpen = false)}
+        />
         <div class="diary-calendar-grid">
           {#each calendarWeekdayHeaders as label (label)}
             <span class="diary-calendar-head">{label}</span>

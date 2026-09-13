@@ -1,5 +1,5 @@
 import { writable, derived, get } from "svelte/store";
-import type { AppNotification, AppState, AppNode, DiaryEditorTarget, DiaryEntry, EmojiPickerTarget, LedgerBook, LedgerEditorTarget, NotificationTone, SchedulerState, Settings, Task } from "./types";
+import type { AppNotification, AppState, AppNode, DiaryEditorTarget, DiaryEntry, EmojiPickerTarget, LedgerBook, LedgerEditorTarget, LedgerSide, NotificationTone, SchedulerState, Settings, Task } from "./types";
 import { cachedAppearance, cachedProfile, defaultSchedulerRuntimes, defaultSettings, emptyState, normalizeDiaryEntries, normalizeLedger, normalizeState, normalizeSettings, schedulerRuntimeKeys, seedLedgerBook, writeAppearanceCache, writeProfileCache } from "./defaults";
 import {
   loadState, saveState, loadSettings, saveSettings, loadScheduler, saveScheduler,
@@ -161,6 +161,11 @@ export const ledgerOpen = writable(false);
  * null = 面板关闭。
  */
 export const ledgerEditor = writable<LedgerEditorTarget | null>(null);
+/**
+ * 记账面板里点了分类加号：请记账页打开分类管理的新增表单（可带预置的大类）。
+ * 面板挂在 App 层、分类管理长在 LedgerView 上，两棵不相干的子树只能靠 store 递话。
+ */
+export const ledgerCategoryDraft = writable<{ side: LedgerSide; parentId: string } | null>(null);
 
 // ---------------------------------------------------------------------------
 // Toast

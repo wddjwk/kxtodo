@@ -93,6 +93,30 @@ fn bad_date(raw: &str) -> CoreError {
     )
 }
 
+/// Validate / normalize a wall-clock `HH:MM` or `HH:MM:SS` → 规范 `HH:MM`。
+/// 秒被舍掉（存储与界面都只精确到分钟）；空串不是合法时刻，调用方自己先处理「清除」语义。
+pub fn parse_clock(raw: &str) -> CoreResult<String> {
+    let value = raw.trim();
+    let mut parts = value.split(':');
+    let hour = parts.next().and_then(|part| part.parse::<u32>().ok());
+    let minute = parts.next().and_then(|part| part.parse::<u32>().ok());
+    let second = match parts.next() {
+        Some(part) => part.parse::<u32>().ok(),
+        None => Some(0),
+    };
+    let valid = matches!(
+        (hour, minute, second, parts.next()),
+        (Some(h), Some(m), Some(s), None) if h < 24 && m < 60 && s < 60
+    );
+    if !valid {
+        return Err(CoreError::validation(
+            "INVALID_TIME",
+            format!("无效时刻 `{raw}`，应为 HH:MM 或 HH:MM:SS"),
+        ));
+    }
+    Ok(format!("{:02}:{:02}", hour.unwrap(), minute.unwrap()))
+}
+
 /// Parse an instant: ISO 8601 with timezone, or relative `+Ns|Nm|Nh|Nd` (from now).
 /// Returns normalized ISO 8601 UTC string.
 pub fn parse_instant(raw: &str) -> CoreResult<String> {

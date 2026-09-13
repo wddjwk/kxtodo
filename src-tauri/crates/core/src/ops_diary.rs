@@ -125,8 +125,8 @@ fn in_range(date: &str, from: Option<&str>, to: Option<&str>) -> bool {
 // commands
 // ---------------------------------------------------------------------------
 
-/// 日记侧保存后的插图清理（v0.7.2）：对着**写入后**的日记文件扫 `img/data/diary/`，
-/// 删掉没有任何一篇日记再引用的图片（宽限窗保护在途图片，见 `image_gc`）。
+/// 日记侧保存后的插图清理（v0.7.2，v0.7.3 起立即删）：对着**写入后**的日记文件扫
+/// `img/data/diary/`，删掉没有任何一篇日记再引用的图片（只跟本地写，见 `image_gc`）。
 /// 清理失败一律吞掉——绝不让保存本身因为清理而失败。
 fn sweep_diary_images(ctx: &ExecContext, file: &crate::model::DiaryFile) {
     let dir = ctx
@@ -138,7 +138,7 @@ fn sweep_diary_images(ctx: &ExecContext, file: &crate::model::DiaryFile) {
         .iter()
         .map(|entry| entry.markdown.as_str())
         .collect();
-    crate::image_gc::sweep_unreferenced(&dir, markdowns, crate::image_gc::GRACE);
+    crate::image_gc::sweep_unreferenced(&dir, markdowns);
 }
 
 fn diary_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
@@ -146,6 +146,12 @@ fn diary_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult
     let date = match param_str(params, "date") {
         Some(raw) => parse_date(&raw)?,
         None => today_local(),
+    };
+    // 写作时刻（HH:MM[:SS] → HH:MM）：落进 createdAt 的钟点部分——导出 front-matter
+    // 的 `time` 与导入的 compose_timestamp 用的就是这一对关系
+    let time = match param_str(params, "time") {
+        Some(raw) if !raw.trim().is_empty() => Some(crate::time::parse_clock(&raw)?),
+        _ => None,
     };
     let title = param_str(params, "title").unwrap_or_default();
     let markdown = param_str(params, "markdown").unwrap_or_default();
@@ -161,6 +167,11 @@ fn diary_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult
         &inv.command,
         |file| {
             let now = now_iso();
+            let created_at = match &time {
+                Some(clock) => crate::diary_archive::compose_timestamp(&date, clock)
+                    .unwrap_or_else(|| now.clone()),
+                None => now.clone(),
+            };
             let entry = DiaryEntry {
                 id: gen_id("diary"),
                 date,
@@ -170,7 +181,7 @@ fn diary_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult
                 weather,
                 tags,
                 expanded: None,
-                created_at: now.clone(),
+                created_at,
                 updated_at: Some(now),
                 extra: Map::new(),
             };
@@ -232,11 +243,18 @@ fn diary_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRes
     let params = &inv.params;
     let id = required_str(params, "id")?;
     let date = param_str(params, "date").map(|raw| parse_date(&raw)).transpose()?;
+    // 写作时刻：--time 直接改 createdAt 的钟点；只改日期时 createdAt 的日期部分跟着走、
+    // 钟点保留（否则导出 front-matter 的 date 与 time 会各自漂移）
+    let time = match param_str(params, "time") {
+        Some(raw) if !raw.trim().is_empty() => Some(crate::time::parse_clock(&raw)?),
+        _ => None,
+    };
     let title = param_str(params, "title");
     let markdown = param_str(params, "markdown");
     let mood = param_str(params, "mood");
     let weather = param_str(params, "weather");
     let tags = tags_param(params, "replaceTags")?;
+    let date_set = date.is_some();
 
     let mut updated = Value::Null;
     let (file, outcome) = ctx.repo.write_diary(
@@ -266,6 +284,16 @@ fn diary_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRes
             }
             if let Some(tags) = tags {
                 entry.tags = tags;
+            }
+            if let Some(clock) = &time {
+                if let Some(ts) = crate::diary_archive::compose_timestamp(&entry.date, clock) {
+                    entry.created_at = ts;
+                }
+            } else if date_set {
+                let clock = crate::diary_archive::time_of(&entry.created_at);
+                if let Some(ts) = crate::diary_archive::compose_timestamp(&entry.date, &clock) {
+                    entry.created_at = ts;
+                }
             }
             ensure_has_content(&entry.title, &entry.markdown)?;
             entry.updated_at = Some(now_iso());

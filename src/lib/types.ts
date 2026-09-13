@@ -1,3 +1,5 @@
+import type { NavItemId, NavLayout } from "./nav";
+
 export type NodeKind = "system" | "category" | "entry";
 
 /** 条目渲染类型：todo = 可勾选的待办卡片（默认）；card = 一般卡片（隐藏勾选框，展示型） */
@@ -33,6 +35,8 @@ export type Task = {
   myDay: boolean;
   plannedDate?: string;
   dueDate?: string;
+  /** 到期时刻 HH:MM；空/缺省 = 只精确到天 */
+  dueTime?: string;
   completedAt?: string;
   tags: Tag[];
   emojis: string[];
@@ -165,14 +169,24 @@ export type Settings = {
   appearance: {
     linkOpenMode: "app" | "system";
     uiScale: number;
+    /** UI 字号：分组分类与页面标题（我的一天那些）吃它 */
     uiFontSize: number;
+    /** 正文字号：任务卡/日记的 markdown 正文 */
     markdownFontSize: number;
+    /** 记账页字号：那一页信息密度高，独立于 UI 字号 */
+    ledgerFontSize: number;
+    /** 日记页字号 */
+    diaryFontSize: number;
     editorFontSize: number;
     editorWidthPercent: number;
     editorHeightPercent: number;
     tagFontSize: number;
     themePresets: ThemePreset[];
     uiColors: Record<string, string>;
+    /** 固定导航里显示哪些行、按什么顺序（id 见 nav.ts） */
+    navItems: NavItemId[];
+    /** 固定导航的展示方式：单列 / 双列 / 只图标 */
+    navLayout: NavLayout;
     /** 新建分组/条目的默认外观；空串 = 不配置，跟随应用默认 */
     newNodeDefaults: {
       accent: string;

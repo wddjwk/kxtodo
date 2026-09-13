@@ -7,6 +7,7 @@
   import MenuItem from "../menu/MenuItem.svelte";
   import MenuSeparator from "../menu/MenuSeparator.svelte";
   import { MOOD_PRESETS, WEATHER_PRESETS } from "../diary";
+  import { clockOf } from "../clock";
   import type { DiaryEntry, Tag, TagColor } from "../types";
 
   /**
@@ -45,6 +46,11 @@
   function setDate(date: string): void {
     close();
     void updateDiaryEntry(entry.id, { date });
+  }
+
+  /** 只拨时刻：菜单留着（滚轮可能还要再动一下）。日记的时刻住在 createdAt 里。 */
+  function setTime(time: string): void {
+    void updateDiaryEntry(entry.id, { time });
   }
 
   function setMood(emoji: string): void {
@@ -96,7 +102,14 @@
   <MenuItem icon={PenLine} label="编辑" onSelect={edit} />
   <MenuItem icon={CalendarDays} label="修改日期">
     <div slot="submenu" class="task-menu-date">
-      <DatePicker value={entry.date} on:select={(event) => setDate(event.detail)} on:clear={() => setDate(today)} />
+      <DatePicker
+        value={entry.date}
+        time={clockOf(entry.createdAt)}
+        withTime
+        on:select={(event) => setDate(event.detail)}
+        on:selectTime={(event) => setTime(event.detail)}
+        on:clear={() => setDate(today)}
+      />
     </div>
   </MenuItem>
   <MenuItem icon={TagIcon} label="标签">

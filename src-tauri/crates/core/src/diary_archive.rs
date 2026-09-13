@@ -268,7 +268,8 @@ fn yaml_quote(value: &str) -> String {
 }
 
 /// ISO 时间戳 → 本地 HH:MM（解析不出返回空串，front-matter 里就不写这一行）。
-fn time_of(iso: &str) -> String {
+/// ops_diary 也用它读 createdAt 的钟点部分（改日期时保留原时刻）。
+pub(crate) fn time_of(iso: &str) -> String {
     DateTime::parse_from_rfc3339(iso)
         .map(|parsed| parsed.with_timezone(&Local).format("%H:%M").to_string())
         .unwrap_or_default()
@@ -646,7 +647,8 @@ fn valid_date_from_digits(digits: &str) -> Option<String> {
 }
 
 /// 用 front-matter 的 date + time 拼一个本地时间戳（导入时保留原来的写作时刻）。
-fn compose_timestamp(date: &str, time: &str) -> Option<String> {
+/// ops_diary 也用它按 `--time` 参数落 createdAt（date 已校验、time 已规范化时不会失败）。
+pub(crate) fn compose_timestamp(date: &str, time: &str) -> Option<String> {
     if date.is_empty() {
         return None;
     }

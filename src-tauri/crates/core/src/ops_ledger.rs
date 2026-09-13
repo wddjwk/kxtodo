@@ -45,6 +45,7 @@ pub fn ledger_dispatch(
         "categoryAdd" => ledger_category_add(inv, ctx, meta),
         "categoryModify" => ledger_category_modify(inv, ctx, meta),
         "categoryRemove" => ledger_category_remove(inv, ctx, meta),
+        "iconList" => ledger_icon_list(inv, ctx, meta),
         "stats" => ledger_stats(inv, ctx, meta),
         "balance" => ledger_balance(inv, ctx, meta),
         "export" => ledger_export(inv, ctx, meta),
@@ -982,6 +983,24 @@ fn ledger_account_remove(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -
 // ---------------------------------------------------------------------------
 // categories
 // ---------------------------------------------------------------------------
+
+/// 图标目录（只读，不属于账本数据，也不设 domain revision）。
+///
+/// 给 CLI/Agent 一份「能选哪些图标」的权威清单：设计分类时照着挑，而不是猜一个
+/// lucide 里根本不存在的名字写进 --icon（前端画不出来，只会退化成省略号）。
+/// 目录本身是前端 `src/lib/ledgerIcons.ts` 的镜像，一致性由 tests/ledger_icons.rs 守着。
+fn ledger_icon_list(_inv: &Invocation, _ctx: &ExecContext, _meta: &mut Meta) -> CoreResult<Value> {
+    let groups: Vec<Value> = crate::ledger_icons::ICON_GROUPS
+        .iter()
+        .map(|group| json!({ "name": group.name, "icons": group.icons }))
+        .collect();
+    let icons = crate::ledger_icons::all_icons();
+    Ok(json!({
+        "total": icons.len(),
+        "groups": groups,
+        "icons": icons,
+    }))
+}
 
 fn ledger_categories(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
     let file = ctx.repo.load_ledger()?;

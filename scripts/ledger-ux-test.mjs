@@ -238,10 +238,10 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
     scopes.join(",")
   );
 
-  // v0.7.2：设置大类可折叠，折叠状态记在 localStorage；新建分组默认外观是一段独立配置
+  // v0.7.2：设置大类可折叠，折叠状态记在 localStorage；v0.7.3：外观相关的都并在「外观效果」里
   const sectionCount = (await page.$$(".settings-section")).length;
   check("设置是可折叠分区", sectionCount >= 8, String(sectionCount));
-  check("有新建分组默认外观分区", (await page.$$(".settings-section-toggle:has-text('新建分组默认外观')")).length === 1);
+  check("有外观效果分区", (await page.$$(".settings-section-toggle:has-text('外观效果')")).length === 1);
   await page.click(".settings-section-toggle:has-text('消息通知')");
   await page.waitForTimeout(200);
   check("折叠后正文收起", (await page.$$eval(".settings-section.folded", (els) => els.length)) >= 1);
@@ -252,7 +252,11 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.click(".settings-section-toggle:has-text('消息通知')");
   await page.waitForTimeout(200);
   check("再点展开", (await page.evaluate(() => localStorage.getItem("kxtodo-settings-section:notifications"))) === "0");
-  await page.locator(".settings-section-toggle:has-text('新建分组默认外观')").scrollIntoViewIfNeeded();
+  await page.locator(".settings-section-toggle:has-text('外观效果')").scrollIntoViewIfNeeded();
+  check(
+    "新建分组默认外观并入外观效果",
+    (await page.locator(".settings-block-label:has-text('新建分组默认外观')").count()) === 1
+  );
   check("默认外观带配色盘", (await page.$$(".settings-block .color-grid button")).length >= 8);
   check("默认外观带背景图上传", (await page.$$(".settings-block button:has-text('上传图片')")).length === 1);
   await page.locator("button.settings-backdrop").click();

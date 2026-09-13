@@ -86,13 +86,13 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
     FieldMeta {
         path: "appearance.uiFontSize",
         kind: "integer(14-22)",
-        description: "界面字号",
+        description: "UI 字号（分组分类与页面标题）",
         is_map: false,
     },
     FieldMeta {
         path: "appearance.markdownFontSize",
         kind: "integer(14-26)",
-        description: "Markdown 字号",
+        description: "正文字号",
         is_map: false,
     },
     FieldMeta {
@@ -117,6 +117,30 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         path: "appearance.tagFontSize",
         kind: "integer(11-30)",
         description: "标签字号",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "appearance.ledgerFontSize",
+        kind: "integer(14-26)",
+        description: "记账页字号",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "appearance.diaryFontSize",
+        kind: "integer(14-26)",
+        description: "日记页字号",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "appearance.navItems",
+        kind: "array<string>",
+        description: "显示哪些固定导航行（按显示顺序；可选 my-day/planned/important/diary/ledger/scheduled/toolbox，重复项自动去掉）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "appearance.navLayout",
+        kind: "enum(list|grid|icons)",
+        description: "固定导航布局：list 单列（默认）/ grid 两列图标+文字 / icons 单行纯图标",
         is_map: false,
     },
     FieldMeta {
@@ -463,6 +487,10 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "appearance.editorWidthPercent" => json!(settings.appearance.editor_width_percent),
         "appearance.editorHeightPercent" => json!(settings.appearance.editor_height_percent),
         "appearance.tagFontSize" => json!(settings.appearance.tag_font_size),
+        "appearance.ledgerFontSize" => json!(settings.appearance.ledger_font_size),
+        "appearance.diaryFontSize" => json!(settings.appearance.diary_font_size),
+        "appearance.navItems" => json!(settings.appearance.nav_items),
+        "appearance.navLayout" => json!(settings.appearance.nav_layout),
         "appearance.themePresets" => json!(settings.appearance.theme_presets),
         "appearance.uiColors" => json!(settings.appearance.ui_colors),
         "appearance.newNodeDefaults.accent" => json!(settings.appearance.new_node_defaults.accent),
@@ -689,6 +717,34 @@ fn expect_color(path: &str, value: &Value) -> CoreResult<String> {
     }
 }
 
+/// 固定导航行清单：必须全是已知 id（写进去一个不存在的 id 只会让那一行凭空消失，
+/// CLI/Agent 的笔误要当场拒绝），重复项去掉、顺序保留（顺序就是显示顺序）。
+fn expect_nav_items(path: &str, value: &Value) -> CoreResult<Vec<String>> {
+    let items = value
+        .as_array()
+        .ok_or_else(|| invalid_value(path, "应为字符串数组"))?;
+    let mut out: Vec<String> = Vec::new();
+    for item in items {
+        let raw = item
+            .as_str()
+            .ok_or_else(|| invalid_value(path, "每项应为字符串"))?
+            .trim();
+        if !crate::model::NAV_ITEM_IDS.contains(&raw) {
+            return Err(invalid_value(
+                path,
+                format!(
+                    "未知导航项 `{raw}`，可选 {}",
+                    crate::model::NAV_ITEM_IDS.join("/")
+                ),
+            ));
+        }
+        if !out.iter().any(|existing| existing == raw) {
+            out.push(raw.to_string());
+        }
+    }
+    Ok(out)
+}
+
 fn expect_theme_presets(path: &str, value: &Value) -> CoreResult<Vec<ThemePreset>> {
     let items = value
         .as_array()
@@ -798,6 +854,19 @@ pub fn set_value(
         }
         "appearance.tagFontSize" => {
             settings.appearance.tag_font_size = expect_int(path, &value, 11, 30)? as u32;
+        }
+        "appearance.ledgerFontSize" => {
+            settings.appearance.ledger_font_size = expect_int(path, &value, 14, 26)? as u32;
+        }
+        "appearance.diaryFontSize" => {
+            settings.appearance.diary_font_size = expect_int(path, &value, 14, 26)? as u32;
+        }
+        "appearance.navItems" => {
+            settings.appearance.nav_items = expect_nav_items(path, &value)?;
+        }
+        "appearance.navLayout" => {
+            settings.appearance.nav_layout =
+                expect_enum(path, &value, &crate::model::NAV_LAYOUTS)?;
         }
         "appearance.themePresets" => {
             settings.appearance.theme_presets = expect_theme_presets(path, &value)?;
@@ -1151,6 +1220,16 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "appearance.tagFontSize" => {
             target.appearance.tag_font_size = defaults.appearance.tag_font_size
         }
+        "appearance.ledgerFontSize" => {
+            target.appearance.ledger_font_size = defaults.appearance.ledger_font_size
+        }
+        "appearance.diaryFontSize" => {
+            target.appearance.diary_font_size = defaults.appearance.diary_font_size
+        }
+        "appearance.navItems" => {
+            target.appearance.nav_items = defaults.appearance.nav_items.clone()
+        }
+        "appearance.navLayout" => target.appearance.nav_layout = defaults.appearance.nav_layout.clone(),
         "appearance.themePresets" => {
             target.appearance.theme_presets = defaults.appearance.theme_presets.clone()
         }

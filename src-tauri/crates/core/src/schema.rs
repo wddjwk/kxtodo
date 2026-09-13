@@ -234,6 +234,9 @@ pub fn risk_for(command: &str) -> &'static str {
     match command {
         "task.remove" | "schedule.remove" | "schedule.enable" | "schedule.run" | "config.reset"
         | "diary.remove" => "high-risk-write",
+        // 存储清理不可恢复（孤儿图片/临时文件/过期日志直接删），与删除同级；
+        // storage.usage 是纯读，落在默认分支
+        "storage.clean" => "high-risk-write",
         // 记账的一切写动作都是 high-risk-write（v0.7.2）：金融数据敏感，
         // CLI/Agent 未带 --yes 一律退出码 10，先向用户说明并得到同意再执行
         "ledger.add"

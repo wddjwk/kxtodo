@@ -285,3 +285,65 @@ fn diary_images_travel_with_the_archive() {
     let again = target.ok(&["diary", "import", "--zip", &target_path, "--yes"]);
     assert_eq!(again["images"], 0);
 }
+
+#[test]
+fn time_param_lands_in_created_at_and_date_moves_preserve_the_clock() {
+    use chrono::{DateTime, Local};
+    let env = TestEnv::fresh();
+    let clock_of = |iso: &str| {
+        DateTime::parse_from_rfc3339(iso)
+            .unwrap()
+            .with_timezone(&Local)
+            .format("%H:%M")
+            .to_string()
+    };
+    let date_of = |iso: &str| {
+        DateTime::parse_from_rfc3339(iso)
+            .unwrap()
+            .with_timezone(&Local)
+            .format("%Y-%m-%d")
+            .to_string()
+    };
+
+    // add --time：createdAt 的钟点就是给的时刻（秒被舍掉），日期部分 = 归属日期
+    let created = add(&env, &[
+        "--date", "2026-09-01", "--time", "14:30:05", "--markdown", "下午写的一篇",
+    ]);
+    let id = created["id"].as_str().unwrap().to_string();
+    let created_at = created["createdAt"].as_str().unwrap();
+    assert_eq!(clock_of(created_at), "14:30");
+    assert_eq!(date_of(created_at), "2026-09-01");
+    assert_eq!(created["date"], "2026-09-01");
+
+    // 只改日期：createdAt 的日期部分跟着走、钟点保留（导出 front-matter 的 date/time 靠这对齐）
+    let moved = env.ok(&["diary", "modify", "--id", &id, "--date", "2026-09-05"]);
+    let moved_at = moved["createdAt"].as_str().unwrap();
+    assert_eq!(date_of(moved_at), "2026-09-05");
+    assert_eq!(clock_of(moved_at), "14:30", "改日期不许弄丢写作时刻");
+
+    // 只改时刻：日期部分保留
+    let retimed = env.ok(&["diary", "modify", "--id", &id, "--time", "08:05"]);
+    let retimed_at = retimed["createdAt"].as_str().unwrap();
+    assert_eq!(clock_of(retimed_at), "08:05");
+    assert_eq!(date_of(retimed_at), "2026-09-05");
+
+    // 日期 + 时刻一起改
+    let both = env.ok(&["diary", "modify", "--id", &id, "--date", "2026-10-01", "--time", "21:00"]);
+    let both_at = both["createdAt"].as_str().unwrap();
+    assert_eq!(date_of(both_at), "2026-10-01");
+    assert_eq!(clock_of(both_at), "21:00");
+
+    // updatedAt 每次 modify 都自动刷新（用户口中的「编辑时间」）
+    assert_ne!(both["updatedAt"], retimed["updatedAt"]);
+    assert_ne!(retimed["updatedAt"], moved["updatedAt"]);
+
+    // 非法时刻拒绝，createdAt 不动
+    env.err(&["diary", "modify", "--id", &id, "--time", "24:00"], 2);
+    env.err(&["diary", "add", "--time", "noon", "--markdown", "x"], 2);
+    let unchanged = env.ok(&["diary", "get", "--id", &id]);
+    assert_eq!(unchanged["createdAt"].as_str().unwrap(), both_at);
+
+    // 不给 --time 的新日记：createdAt 仍是「现在」，与 updatedAt 同值
+    let plain = add(&env, &["--markdown", "没给时刻的一篇"]);
+    assert_eq!(plain["createdAt"], plain["updatedAt"]);
+}

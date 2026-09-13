@@ -30,6 +30,7 @@ import type {
   Task,
   ThemePreset
 } from "./types";
+import { NAV_ITEM_IDS, normalizeNavItems, normalizeNavLayout } from "./nav";
 
 const now = () => new Date().toISOString();
 
@@ -90,12 +91,16 @@ export const defaultSettings: Settings = {
     uiScale: 0.75,
     uiFontSize: 18,
     markdownFontSize: 20,
+    ledgerFontSize: 18,
+    diaryFontSize: 18,
     editorFontSize: 20,
     editorWidthPercent: 72,
     editorHeightPercent: 86,
     tagFontSize: 14,
     themePresets: themePresets.map((preset) => ({ ...preset })),
     uiColors: {},
+    navItems: [...NAV_ITEM_IDS],
+    navLayout: "list",
     newNodeDefaults: {
       accent: "",
       backgroundColor: "",
@@ -994,6 +999,8 @@ export function normalizeSettings(raw: unknown): Settings {
         storedUiScale ?? defaultSettings.appearance.uiScale,
       uiFontSize: normalizeFontSize(source?.appearance?.uiFontSize, defaultSettings.appearance.uiFontSize, 14, 22),
       markdownFontSize: normalizeFontSize(source?.appearance?.markdownFontSize, defaultSettings.appearance.markdownFontSize, 14, 26),
+      ledgerFontSize: normalizeFontSize(source?.appearance?.ledgerFontSize, defaultSettings.appearance.ledgerFontSize, 14, 26),
+      diaryFontSize: normalizeFontSize(source?.appearance?.diaryFontSize, defaultSettings.appearance.diaryFontSize, 14, 26),
       editorFontSize: normalizeFontSize(source?.appearance?.editorFontSize, defaultSettings.appearance.editorFontSize, 14, 26),
       editorWidthPercent: normalizeFontSize(
         source?.appearance?.editorWidthPercent,
@@ -1010,6 +1017,8 @@ export function normalizeSettings(raw: unknown): Settings {
       tagFontSize: normalizeFontSize(source?.appearance?.tagFontSize, defaultSettings.appearance.tagFontSize, 11, 30),
       themePresets: normalizeThemePresets(source?.appearance?.themePresets),
       uiColors: normalizeUiColors(source?.appearance?.uiColors),
+      navItems: normalizeNavItems(source?.appearance?.navItems),
+      navLayout: normalizeNavLayout(source?.appearance?.navLayout),
       newNodeDefaults: normalizeNewNodeDefaults(source?.appearance?.newNodeDefaults)
     },
     lifecycle: {
@@ -1123,7 +1132,15 @@ export function normalizeSettings(raw: unknown): Settings {
 // ---------------------------------------------------------------------------
 
 const APPEARANCE_CACHE_KEY = "kxtodo-appearance-cache";
-const CACHED_APPEARANCE_KEYS = ["uiScale", "uiFontSize", "markdownFontSize", "editorFontSize", "tagFontSize"] as const;
+const CACHED_APPEARANCE_KEYS = [
+  "uiScale",
+  "uiFontSize",
+  "markdownFontSize",
+  "ledgerFontSize",
+  "diaryFontSize",
+  "editorFontSize",
+  "tagFontSize"
+] as const;
 
 /**
  * 水合是异步的（安卓要等 core 把设置读出来），第一帧只能用默认外观渲染，设置到了再跳

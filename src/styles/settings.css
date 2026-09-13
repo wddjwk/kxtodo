@@ -137,6 +137,98 @@
   font-size: calc(var(--ui-font-size) - 2px);
 }
 
+/* 块内再分一层（外观效果里的「背景配色 / 背景图片」）：比块标签更淡一档 */
+.settings-subblock {
+  display: grid;
+  gap: 7px;
+}
+
+.settings-subblock-label {
+  color: #7a7f87;
+  font-size: calc(var(--ui-font-size) - 4px);
+}
+
+/* 字号：两列紧凑网格，标签在上、数字框在下（六项竖着排一列会占掉半屏） */
+.settings-font-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px 12px;
+}
+
+.settings-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-field > span {
+  color: #6b7280;
+  font-size: calc(var(--ui-font-size) - 4px);
+}
+
+/* 固定分组：点一下显示/隐藏，选中态用主题色 */
+.settings-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settings-chip {
+  padding: 4px 12px;
+  border: 1px solid #dfe2e6;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #6b7280;
+  font-size: calc(var(--ui-font-size) - 4px);
+  cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+
+.settings-chip:hover {
+  border-color: #c9ced6;
+  color: #3d444e;
+}
+
+.settings-chip.active {
+  border-color: var(--accent, #2478d4);
+  background: rgb(36 120 212 / 8%);
+  color: var(--accent, #2478d4);
+  font-weight: 600;
+}
+
+/* 展示方式段控：与记账视图切换同一套视觉语言 */
+.settings-segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9px;
+  background: #eef0f3;
+}
+
+.settings-segmented button {
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #5c6470;
+  font-size: calc(var(--ui-font-size) - 4px);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.settings-segmented button.active {
+  background: #ffffff;
+  color: #1f2937;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 10%);
+}
+
+.storage-detail {
+  margin: -4px 0 9px;
+  font-size: calc(var(--ui-font-size) - 5px);
+  line-height: 1.6;
+}
+
 .new-node-color {
   display: flex;
   gap: 8px;

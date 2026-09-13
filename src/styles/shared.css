@@ -21,7 +21,6 @@
   align-items: center;
   gap: 9px;
   margin: -18px 0 18px;
-  padding-left: 58px;
   color: var(--accent);
   font-size: calc(var(--font-control) - 3px);
   opacity: 0.82;

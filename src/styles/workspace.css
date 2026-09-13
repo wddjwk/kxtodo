@@ -1400,6 +1400,18 @@ h1 {
   margin-bottom: 10px;
 }
 
+/* 年月标题可点：点开来年月选择浮层，翻到去年这时候不用连点十几次箭头 */
+.calendar-header .cal-title {
+  padding: 2px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.calendar-header .cal-title:hover {
+  background: #f2f4f7;
+  color: var(--accent);
+}
+
 .calendar-header span {
   font-size: 15px;
   font-weight: 600;
@@ -1721,6 +1733,235 @@ h1 {
   border: none;
   padding: 4px 0 0;
   width: 100%;
+}
+
+/* 头部的年月是可点的：就地换成月/年网格，翻到去年这时候不用连点十几次箭头 */
+.date-picker-header .dp-title {
+  padding: 2px 8px;
+  border-radius: 7px;
+}
+
+.date-picker-header .dp-title.pickable {
+  cursor: pointer;
+}
+
+.date-picker-header .dp-title.pickable:hover {
+  background: #f2f4f7;
+  color: var(--accent);
+}
+
+/* ---------- 时刻滚轮（DatePicker 的 withTime 那一行） ---------- */
+
+.date-picker-time {
+  margin-top: 8px;
+  border-top: 1px solid #f1f2f4;
+  padding-top: 5px;
+}
+
+.dp-time-trigger {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #4b5563;
+  font-size: calc(var(--font-control) - 4px);
+  cursor: pointer;
+}
+
+.dp-time-trigger:hover {
+  background: #f2f4f7;
+  color: var(--accent);
+}
+
+.dp-time-trigger strong {
+  font-size: calc(var(--font-control) - 2px);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.dp-time-caret {
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  border-right: 1.5px solid #9aa1ac;
+  border-bottom: 1.5px solid #9aa1ac;
+  transform: rotate(-45deg);
+}
+
+.dp-head-spacer {
+  width: 26px;
+  height: 26px;
+}
+
+.dp-time-wheel {
+  padding: 2px 6px 4px;
+}
+
+.time-picker {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  height: var(--time-height);
+}
+
+.time-band {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  left: 4px;
+  height: 34px;
+  border-radius: 9px;
+  background: rgb(0 0 0 / 4%);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.time-col {
+  height: var(--time-height);
+  overflow-y: auto;
+  padding: var(--time-pad) 0;
+  scroll-snap-type: y mandatory;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.time-col::-webkit-scrollbar {
+  display: none;
+}
+
+/* 34px 必须与 TimePicker.svelte 的 ROW 常量一致：选中项是靠 scrollTop / 行高反推的 */
+.time-cell {
+  display: grid;
+  width: 100%;
+  height: 34px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  padding: 0;
+  background: transparent;
+  color: #9aa1ac;
+  font-size: calc(var(--font-control) - 3px);
+  font-variant-numeric: tabular-nums;
+  scroll-snap-align: center;
+  cursor: pointer;
+}
+
+.time-cell.active {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.time-sep {
+  padding: 0 3px;
+  color: #9aa1ac;
+  font-weight: 600;
+}
+
+/* ---------- 年月选择器（各处「‹ 2026年9月 ›」点开来就是它） ---------- */
+
+.month-picker {
+  width: 240px;
+  padding: 10px;
+  border: 1px solid #ececec;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 14px 36px rgb(0 0 0 / 16%);
+}
+
+.month-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  color: #444444;
+  font-size: calc(var(--font-control) - 4px);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.month-picker-header button {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #666666;
+  cursor: pointer;
+}
+
+.month-picker-header button:hover {
+  background: #f2f4f7;
+}
+
+.month-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+.month-picker-grid .mp-cell {
+  padding: 8px 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #333333;
+  font-size: calc(var(--font-control) - 5px);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.month-picker-grid .mp-cell:hover {
+  background: #f2f4f7;
+}
+
+.month-picker-grid .mp-cell.selected {
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.month-picker-actions {
+  display: flex;
+  margin-top: 8px;
+}
+
+.month-picker-actions .mp-now {
+  flex: 1;
+  padding: 6px 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #555555;
+  font-size: calc(var(--font-control) - 5px);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.month-picker-actions .mp-now:hover {
+  color: var(--accent);
+}
+
+/* 内联进日历时不要第二层壳（与 .task-menu-date .date-picker 同一条思路） */
+.date-picker .month-picker {
+  width: auto;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* 作为浮层用时的固定定位外壳：坐标由 anchoredPopoverStyle 内联给出 */
+.month-pop {
+  position: fixed;
+  z-index: 2300;
+  animation: menu-fade-in 0.1s ease-out;
 }
 
 /* ---------- Tags ---------- */

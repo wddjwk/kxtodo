@@ -9,6 +9,8 @@
   import MenuItem from "../menu/MenuItem.svelte";
   import MenuSeparator from "../menu/MenuSeparator.svelte";
   import DatePicker from "../DatePicker.svelte";
+  import { displayClock } from "../clock";
+  import { todayDate } from "../diary";
   import type { LedgerBook, LedgerEntry } from "../types";
   import { updateLedgerEntry, deleteLedgerEntry } from "../actions";
 
@@ -33,6 +35,11 @@
     close();
   }
 
+  /** 只拨时刻：菜单留着，滚轮可能还要再动一下 */
+  async function setTime(time: string): Promise<void> {
+    await updateLedgerEntry(entry.id, { time });
+  }
+
   async function setAccount(accountId: string): Promise<void> {
     await updateLedgerEntry(entry.id, { accountId });
     close();
@@ -48,7 +55,14 @@
   <MenuItem icon={PenLine} label="编辑这一笔" onSelect={edit} />
   <MenuItem icon={CalendarDays} label="修改日期">
     <div slot="submenu" class="task-menu-date">
-      <DatePicker value={entry.date} on:select={(event) => setDate(event.detail)} />
+      <DatePicker
+        value={entry.date}
+        time={displayClock(entry.time)}
+        withTime
+        on:select={(event) => setDate(event.detail)}
+        on:selectTime={(event) => void setTime(event.detail)}
+        on:clear={() => void setDate(todayDate())}
+      />
     </div>
   </MenuItem>
   {#if entry.kind !== "transfer"}

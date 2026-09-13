@@ -233,6 +233,15 @@ export function statsSeries(
   return keys.map((key) => buckets.get(key) ?? { key, income: 0, expense: 0 });
 }
 
+/** 占比环吃的一项：统计视图给大类，钻取面板给二级分类。 */
+export type LedgerDonutItem = {
+  id: string;
+  name: string;
+  cents: number;
+  count: number;
+  color: string;
+};
+
 export type LedgerCategoryStat = {
   categoryId: string;
   name: string;

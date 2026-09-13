@@ -27,6 +27,7 @@
   import MenuSeparator from "./menu/MenuSeparator.svelte";
   import { isMobile, mobileView, showMobileContent, showMobileDiary, showMobileLedger, showMobileToolbox } from "./platform";
   import { caps } from "./capabilities";
+  import type { NavItemId } from "./nav";
   import { longpress, isLongPressSuppressed } from "./longpress";
 
   const dispatch = createEventDispatcher<{ suppressClose: void }>();
@@ -48,12 +49,55 @@
   $: resolvedAvatar = resolveAvatarSrc($appSettings.profile.avatar, $avatarCache);
   $: avStyle = avatarStyle(resolvedAvatar);
   $: avInitial = avatarInitial($appSettings.profile.displayName);
-  // 移动端没有调度引擎：隐藏"定时任务"系统节点
-  $: systemNavNodes = $appState.nodes.filter((n) => n.kind === "system" && (caps.scheduler || n.id !== "scheduled"));
   // 日记不是节点：高亮跟着「谁占着主区域」走（移动端 mobileView，桌面 diaryOpen）
   $: diaryActive = $isMobile ? $mobileView === "diary" : $diaryOpen;
   // 记账同日记：不是节点，高亮跟着「谁占着主区域」走
   $: ledgerActive = $isMobile ? $mobileView === "ledger" : $ledgerOpen;
+
+  /**
+   * 固定导航的每一行：四个系统节点（我的一天/计划内/收藏/定时任务）与三条不是节点的
+   * 行（日记/记账/工具箱）合成一份数据，于是「显示哪些、什么顺序、怎么排」全由
+   * appearance.navItems / navLayout 决定，模板里不再散落 hardcoded 的行。
+   */
+  type NavRow = {
+    id: NavItemId;
+    label: string;
+    glyph?: string;
+    component?: typeof NotebookPen;
+    selected: boolean;
+    count: number;
+    onSelect: () => void;
+  };
+
+  $: navRows = $appSettings.appearance.navItems.flatMap((id): NavRow[] => {
+    if (id === "diary") {
+      return [{ id, label: "日记", component: NotebookPen, selected: diaryActive, count: 0, onSelect: openDiary }];
+    }
+    if (id === "ledger") {
+      return [{ id, label: "记账", component: Wallet, selected: ledgerActive, count: 0, onSelect: openLedger }];
+    }
+    if (id === "toolbox") {
+      // 工具箱是移动端专属的能力位
+      return caps.toolbox
+        ? [{ id, label: "工具箱", component: Toolbox, selected: $mobileView === "toolbox", count: 0, onSelect: showMobileToolbox }]
+        : [];
+    }
+    // 移动端没有调度引擎：定时任务这一行不给
+    if (id === "scheduled" && !caps.scheduler) return [];
+    const node = $appState.nodes.find((item) => item.id === id && item.kind === "system");
+    if (!node) return [];
+    return [
+      {
+        id,
+        label: node.name,
+        glyph: node.icon,
+        selected: !diaryActive && !ledgerActive && $appState.selectedNodeId === node.id && !$isSearching,
+        count: $listCounts[node.id] ?? 0,
+        onSelect: () => selectNode(node.id)
+      }
+    ];
+  });
+  $: navLayout = $appSettings.appearance.navLayout;
 
   export function closeOverlays(): void {
     if (ignoreOverlayCloseOnce) {
@@ -361,39 +405,25 @@
     <SearchResults bind:this={searchResultsRef} />
   {/if}
 
-  <nav class="system-nav">
-    {#each systemNavNodes as node (node.id)}
-      <button class:selected={!diaryActive && !ledgerActive && $appState.selectedNodeId === node.id && !$isSearching} class="nav-row" type="button" on:click={() => selectNode(node.id)}>
+  <nav class="system-nav" class:nav-grid={navLayout === "grid"} class:nav-icons={navLayout === "icons"}>
+    {#each navRows as row (row.id)}
+      <button class="nav-row" class:selected={row.selected} type="button" title={row.label} on:click={row.onSelect}>
         <span class="active-rail"></span>
-        <span class="system-icon"><IconGlyph icon={node.icon} size={19} /></span>
-        <span class="list-name">{node.name}</span>
-        {#if $listCounts[node.id]}
-          <span class="count-pill">{$listCounts[node.id]}</span>
+        <span class="system-icon">
+          {#if row.component}
+            <svelte:component this={row.component} size={19} />
+          {:else}
+            <IconGlyph icon={row.glyph ?? "notebook"} size={19} />
+          {/if}
+        </span>
+        {#if navLayout !== "icons"}
+          <span class="list-name">{row.label}</span>
+        {/if}
+        {#if row.count}
+          <span class="count-pill">{row.count}</span>
         {/if}
       </button>
-      {#if node.id === "important"}
-        <!-- 日记不是节点：显式排在「收藏」下面（移动端「定时任务」隐藏，于是正好在「工具箱」上面） -->
-        <button class:selected={diaryActive} class="nav-row" type="button" on:click={openDiary}>
-          <span class="active-rail"></span>
-          <span class="system-icon"><NotebookPen size={19} /></span>
-          <span class="list-name">日记</span>
-        </button>
-        <!-- 记账同日记：显式一行，排在日记下面 -->
-        <button class:selected={ledgerActive} class="nav-row" type="button" on:click={openLedger}>
-          <span class="active-rail"></span>
-          <span class="system-icon"><Wallet size={19} /></span>
-          <span class="list-name">记账</span>
-        </button>
-      {/if}
     {/each}
-    {#if caps.toolbox}
-      <!-- 移动端专属：工具箱（预留能力位，不选中任何节点，走独立视图层） -->
-      <button class:selected={$mobileView === "toolbox"} class="nav-row" type="button" on:click={showMobileToolbox}>
-        <span class="active-rail"></span>
-        <span class="system-icon"><Toolbox size={19} /></span>
-        <span class="list-name">工具箱</span>
-      </button>
-    {/if}
   </nav>
 
   <div class="nav-divider"></div>

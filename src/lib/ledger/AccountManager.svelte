@@ -8,9 +8,12 @@
    * 表单字段一律是平铺的 let 变量（同 CategoryManager 的理由：bind 到 `{@const}`
    * 别名指向的对象属性不会让 Svelte 失效，保存按钮会一直停在 disabled）。
    */
+  import { onMount } from "svelte";
   import { ArrowLeft, ArrowLeftRight, PenLine, Plus, Trash2, X } from "@lucide/svelte";
+  import { addBackInterceptor } from "../platform";
   import { appSettings, showToast, todayIso } from "../stores";
   import { imeInset } from "../imeInset";
+  import { suppressGhostClick } from "../ghostClick";
   import { fieldKeydown } from "../shortcuts";
   import { ledgerAccent } from "../styles";
   import { assetsOverview, formatCents, parseYuanToCents } from "../ledger";
@@ -115,6 +118,19 @@
     panel = "list";
   }
 
+  onMount(() =>
+    // 安卓返回键：表单/转账面板先退回列表，列表态才关浮层——否则返回会把底下的页面
+    // 弹掉而浮层留在原地（与桌面 Esc 的两段式同一口径）
+    addBackInterceptor(() => {
+      if (panel !== "list") {
+        backToList();
+        return true;
+      }
+      onClose();
+      return true;
+    })
+  );
+
   /** 选账户类型时顺手把图标换回该类型的默认（用户已手选过就不动） */
   function pickKind(kind: LedgerAccountKind): void {
     const wasDefault = !iconDraft || iconDraft === ACCOUNT_KIND_ICON[kindDraft];
@@ -187,7 +203,10 @@
   }
 
   function handleBackdrop(event: PointerEvent): void {
-    if (event.target === event.currentTarget) onClose();
+    if (event.target !== event.currentTarget) return;
+    event.preventDefault();
+    suppressGhostClick({ x: event.clientX, y: event.clientY });
+    onClose();
   }
 
   function handleKeydown(event: KeyboardEvent): void {

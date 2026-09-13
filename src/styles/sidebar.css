@@ -194,6 +194,75 @@
   background: #2478d4;
 }
 
+/* 双列（图标 + 名称）：行数减半，窄屏上少滚一截 */
+.system-nav.nav-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 4px;
+}
+
+.system-nav.nav-grid .nav-row {
+  gap: 7px;
+  height: 44px;
+  padding: 0 6px 0 10px;
+}
+
+.system-nav.nav-grid .system-icon {
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+}
+
+.system-nav.nav-grid .list-name {
+  font-size: calc(var(--font-list) - 2px);
+}
+
+.system-nav.nav-grid .count-pill {
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  font-size: calc(var(--font-control) - 7px);
+}
+
+/* 只图标：单行横排方块（放不下就换行），名称进 title，选中靠底色不靠左侧竖条 */
+.system-nav.nav-icons {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 2px 6px;
+}
+
+.system-nav.nav-icons .nav-row {
+  justify-content: center;
+  gap: 0;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 11px;
+}
+
+.system-nav.nav-icons .active-rail {
+  display: none;
+}
+
+.system-nav.nav-icons .system-icon {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+}
+
+.system-nav.nav-icons .count-pill {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  background: #d9dde2;
+  font-size: 10px;
+  line-height: 15px;
+}
+
 .tree-row {
   position: relative;
   display: flex;

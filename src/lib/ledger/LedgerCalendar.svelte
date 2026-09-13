@@ -7,6 +7,7 @@
   import { ChevronLeft, ChevronRight } from "@lucide/svelte";
   import { calendarWeekdayHeaders, fullDayLabel, relativeDayLabel, shiftMonth } from "../diary";
   import { compactCents, dayGroup, ledgerCalendarCells, monthTotals } from "../ledger";
+  import MonthPopover from "../MonthPopover.svelte";
   import LedgerDayCard from "./LedgerDayCard.svelte";
   import type { LedgerBook } from "../types";
   import type { MonthCursor } from "../diary";
@@ -16,6 +17,9 @@
   export let selectedDate: string;
   export let today = "";
   export let selectedId = "";
+
+  let monthPopOpen = false;
+  let monthLabelEl: HTMLElement;
 
   const dispatch = createEventDispatcher<{
     month: MonthCursor;
@@ -36,11 +40,28 @@
     <button type="button" aria-label="上个月" on:click|stopPropagation={() => dispatch("month", shiftMonth(cursor, -1))}>
       <ChevronLeft size={18} />
     </button>
-    <strong>{monthLabel}</strong>
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions a11y_no_noninteractive_element_to_interactive_role -->
+    <strong
+      bind:this={monthLabelEl}
+      class="month-pop-anchor"
+      role="button"
+      tabindex="0"
+      title="点击直接选年月"
+      on:click|stopPropagation={() => (monthPopOpen = !monthPopOpen)}
+    >{monthLabel}</strong>
     <button type="button" aria-label="下个月" on:click|stopPropagation={() => dispatch("month", shiftMonth(cursor, 1))}>
       <ChevronRight size={18} />
     </button>
   </div>
+
+  <MonthPopover
+    open={monthPopOpen}
+    anchor={monthLabelEl}
+    year={cursor.year}
+    month={cursor.month}
+    onSelect={(next) => dispatch("month", { year: next.year, month: next.month })}
+    onClose={() => (monthPopOpen = false)}
+  />
 
   <div class="ledger-calendar-sums">
     <span class="in">收 {compactCents(totals.income)}</span>

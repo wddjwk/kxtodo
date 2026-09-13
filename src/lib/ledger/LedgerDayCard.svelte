@@ -10,6 +10,7 @@
   import { compactCents, formatCents } from "../ledger";
   import { ledgerIcon, softColor, ACCOUNT_KIND_ICON, TRANSFER_ICON } from "../ledgerIcons";
   import { monthDayLabel, relativeDayLabel, weekdayOf } from "../diary";
+  import { displayClock } from "../clock";
   import type { LedgerBook, LedgerEntry } from "../types";
   import type { LedgerDayGroup } from "../ledger";
 
@@ -160,6 +161,9 @@
             {/if}
             {accountText}
           </span>
+        {/if}
+        {#if displayClock(entry.time)}
+          <span class="ledger-entry-time" title="记账时刻">{displayClock(entry.time)}</span>
         {/if}
         <span class="ledger-entry-amount" class:in={entry.kind === "income"} class:out={entry.kind === "expense"}>
           {amountText(entry)}

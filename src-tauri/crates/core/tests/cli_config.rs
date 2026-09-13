@@ -213,3 +213,119 @@ fn set_is_atomic_under_bad_values() {
     let settings = env.read_file("settings.json");
     assert_eq!(settings["appearance"]["uiScale"], json!(0.8));
 }
+
+#[test]
+fn ledger_and_diary_font_sizes_round_trip_within_range() {
+    let env = TestEnv::fresh();
+    // 默认 18，source = default
+    for path in ["appearance.ledgerFontSize", "appearance.diaryFontSize"] {
+        let got = env.ok(&["config", "get", path]);
+        assert_eq!(got["value"], 18);
+        assert_eq!(got["source"], "default");
+    }
+
+    assert_eq!(
+        env.ok(&["config", "set", "appearance.ledgerFontSize", "22"])["value"],
+        22
+    );
+    assert_eq!(
+        env.ok(&["config", "set", "appearance.diaryFontSize", "16"])["value"],
+        16
+    );
+    assert_eq!(
+        env.ok(&["config", "get", "appearance.ledgerFontSize"])["value"],
+        22
+    );
+    assert_eq!(
+        env.ok(&["config", "get", "appearance.diaryFontSize"])["value"],
+        16
+    );
+
+    // 14-26 之外一律拒绝，已存值不动
+    env.err(&["config", "set", "appearance.ledgerFontSize", "13"], 2);
+    env.err(&["config", "set", "appearance.diaryFontSize", "27"], 2);
+    assert_eq!(
+        env.ok(&["config", "get", "appearance.ledgerFontSize"])["value"],
+        22
+    );
+
+    // 字号是本机偏好：不进设置同步的共享子集
+    assert!(!kxtodo_core::ops_config::is_shared_settings_path("appearance.ledgerFontSize"));
+    assert!(!kxtodo_core::ops_config::is_shared_settings_path("appearance.diaryFontSize"));
+
+    env.ok(&["config", "reset", "appearance", "--yes"]);
+    assert_eq!(
+        env.ok(&["config", "get", "appearance.ledgerFontSize"])["value"],
+        18
+    );
+    assert_eq!(
+        env.ok(&["config", "get", "appearance.diaryFontSize"])["value"],
+        18
+    );
+}
+
+#[test]
+fn nav_items_and_layout_are_validated_and_local() {
+    let env = TestEnv::fresh();
+    // 默认 = 全部七行，按显示顺序
+    let got = env.ok(&["config", "get", "appearance.navItems"]);
+    assert_eq!(
+        got["value"],
+        json!(["my-day", "planned", "important", "diary", "ledger", "scheduled", "toolbox"])
+    );
+    assert_eq!(got["source"], "default");
+    assert_eq!(env.ok(&["config", "get", "appearance.navLayout"])["value"], "list");
+
+    // 顺序就是显示顺序；重复项去掉
+    env.ok(&[
+        "config", "set", "appearance.navItems",
+        "--json-value", r#"["diary","my-day","diary","ledger"]"#,
+    ]);
+    assert_eq!(
+        env.ok(&["config", "get", "appearance.navItems"])["value"],
+        json!(["diary", "my-day", "ledger"])
+    );
+    // 空列表 = 全部隐藏，也是合法配置
+    env.ok(&["config", "set", "appearance.navItems", "--json-value", "[]"]);
+    assert_eq!(env.ok(&["config", "get", "appearance.navItems"])["value"], json!([]));
+
+    // 未知 id 拒绝（today 不是 my-day），已存值不动
+    let bad = env.err(
+        &["config", "set", "appearance.navItems", "--json-value", r#"["today"]"#],
+        2,
+    );
+    assert_eq!(bad["code"], "INVALID_CONFIG_VALUE");
+    assert_eq!(env.ok(&["config", "get", "appearance.navItems"])["value"], json!([]));
+    // 不是字符串数组也拒绝
+    env.err(&["config", "set", "appearance.navItems", "diary"], 2);
+
+    // 布局三选一
+    env.ok(&["config", "set", "appearance.navLayout", "grid"]);
+    assert_eq!(env.ok(&["config", "get", "appearance.navLayout"])["value"], "grid");
+    env.ok(&["config", "set", "appearance.navLayout", "icons"]);
+    assert_eq!(env.ok(&["config", "get", "appearance.navLayout"])["value"], "icons");
+    let bad = env.err(&["config", "set", "appearance.navLayout", "carousel"], 2);
+    assert_eq!(bad["code"], "INVALID_CONFIG_VALUE");
+
+    // 导航可见性/布局都是本机偏好，不跨设备同步
+    assert!(!kxtodo_core::ops_config::is_shared_settings_path("appearance.navItems"));
+    assert!(!kxtodo_core::ops_config::is_shared_settings_path("appearance.navLayout"));
+
+    // 默认清单在 config list 里可见；reset 恢复默认
+    let list = env.ok(&["config", "list", "--prefix", "appearance"]);
+    let paths: Vec<&str> = list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["path"].as_str().unwrap())
+        .collect();
+    assert!(paths.contains(&"appearance.navItems"));
+    assert!(paths.contains(&"appearance.navLayout"));
+
+    env.ok(&["config", "reset", "appearance", "--yes"]);
+    assert_eq!(env.ok(&["config", "get", "appearance.navLayout"])["value"], "list");
+    assert_eq!(
+        env.ok(&["config", "get", "appearance.navItems"])["value"],
+        json!(["my-day", "planned", "important", "diary", "ledger", "scheduled", "toolbox"])
+    );
+}

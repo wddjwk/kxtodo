@@ -21,6 +21,7 @@
 import { get } from "svelte/store";
 import { appSettings, coreMode, isHydrated, manualSyncAt, nextSyncAt, syncConnection } from "./stores";
 import { syncNow } from "./actions";
+import { retryFailedImages } from "./images";
 
 /** 与 core 侧一致的下限：低于 5 秒按 5 秒生效。 */
 const MIN_INTERVAL_SECONDS = 5;
@@ -145,6 +146,9 @@ async function tick(): Promise<void> {
   } finally {
     running = false;
     lastFinishedAt = Date.now();
+    // 这一轮很可能刚把图片字节送到本机（同步是引用先到、字节后到）：
+    // 让之前读不到的背景/插图/头像再试一轮，否则它们会一直空着
+    retryFailedImages();
   }
   scheduleNext(online);
 }

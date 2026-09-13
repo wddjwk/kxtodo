@@ -67,7 +67,12 @@ check("settings opens as page (view-settings)", (await page.locator(".app-shell.
 check("settings drawer visible", await page.locator(".settings-drawer").isVisible());
 const drawerText = await page.locator(".settings-drawer").innerText();
 check("settings shows update section on mobile", drawerText.includes("关于与更新"));
-check("settings hides desktop-only sections", !drawerText.includes("窗口与系统") && !drawerText.includes("快捷键") && !drawerText.includes("云同步预留"));
+// v0.7.3：「链接打开」搬进「窗口与系统」，于是这个分区移动端也渲染（托盘/开机自启仍按能力门控）
+check(
+  "settings hides desktop-only sections",
+  !drawerText.includes("快捷键") && !drawerText.includes("开机自启") && !drawerText.includes("云同步预留")
+);
+check("settings keeps link-open on mobile", drawerText.includes("链接打开"));
 check("settings hides popup geometry on mobile", !drawerText.includes("弹窗位置"));
 
 // item 1: uiScale row now visible on mobile and drives the shell transform

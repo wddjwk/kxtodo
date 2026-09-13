@@ -1,6 +1,6 @@
 //! Shared test harness: every test manages its own temporary data dir.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde_json::{json, Value};
 use tempfile::TempDir;

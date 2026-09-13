@@ -13,6 +13,8 @@
   import { diaryAccent, uiScaleValue } from "../styles";
   import { clampPopoverToViewport } from "../popover";
   import { addDiaryEntry, updateDiaryEntry, type DiaryChanges } from "../actions";
+  import { clockOf } from "../clock";
+  import { suppressGhostClick } from "../ghostClick";
   import DatePicker from "../DatePicker.svelte";
   import MarkdownToolbar from "../editor/MarkdownToolbar.svelte";
   import {
@@ -48,13 +50,15 @@
   let closed = false;
 
   let date = existing?.date ?? ("date" in target ? target.date : todayDate());
+  /** 时刻 HH:MM。日记没有独立的 time 字段，它是 createdAt 的时钟部分（导出 front-matter 同源）。 */
+  let time = existing ? clockOf(existing.createdAt) : "";
   let title = existing?.title ?? "";
   let text = existing?.markdown ?? "";
   let mood = existing?.mood ?? "";
   let weather = existing?.weather ?? "";
   let tags: Tag[] = existing ? existing.tags.map((tag) => ({ ...tag })) : [];
 
-  const initial = { date, title, text, mood, weather, tags: JSON.stringify(tags) };
+  const initial = { date, time, title, text, mood, weather, tags: JSON.stringify(tags) };
 
   let openPicker: "" | "date" | "mood" | "weather" | "tag" = "";
   let tagDraft = "";
@@ -159,6 +163,7 @@
     if (editingId) {
       const changes: DiaryChanges = {};
       if (date !== initial.date) changes.date = date;
+      if (time !== initial.time) changes.time = time;
       if (trimmedTitle !== initial.title) changes.title = trimmedTitle;
       if (markdown !== initial.text) changes.markdown = markdown;
       if (mood !== initial.mood) changes.mood = mood;
@@ -168,7 +173,7 @@
       await updateDiaryEntry(editingId, changes);
       return;
     }
-    await addDiaryEntry({ date, title: trimmedTitle, markdown, mood, weather, tags });
+    await addDiaryEntry({ date, time: time || undefined, title: trimmedTitle, markdown, mood, weather, tags });
   }
 
   async function saveAndClose(): Promise<void> {
@@ -201,6 +206,11 @@
   function pickDate(value: string): void {
     date = value;
     openPicker = "";
+  }
+
+  /** 拨时刻不收浮层：滚轮常常要再动一下 */
+  function pickTime(value: string): void {
+    time = value;
   }
 
   function pickMood(emoji: string): void {
@@ -290,9 +300,11 @@
   }
 
   function handleBackdropPointerDown(event: PointerEvent): void {
-    if (event.target === event.currentTarget) {
-      void saveAndClose();
-    }
+    if (event.target !== event.currentTarget) return;
+    // 浮层马上就拆掉，触屏补发的那一下 click 会落到下面的卡片上（见 ghostClick.ts）
+    event.preventDefault();
+    suppressGhostClick({ x: event.clientX, y: event.clientY });
+    void saveAndClose();
   }
 
   function handleWindowKeydown(event: KeyboardEvent): void {
@@ -361,7 +373,14 @@
         </button>
         {#if openPicker === "date"}
           <div class="editor-meta-pop">
-            <DatePicker value={date} on:select={(event) => pickDate(event.detail)} on:clear={() => pickDate(today)} />
+            <DatePicker
+              value={date}
+              {time}
+              withTime
+              on:select={(event) => pickDate(event.detail)}
+              on:selectTime={(event) => pickTime(event.detail)}
+              on:clear={() => pickDate(today)}
+            />
           </div>
         {/if}
       </div>

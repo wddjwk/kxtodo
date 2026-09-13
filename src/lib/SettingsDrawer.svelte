@@ -39,6 +39,8 @@
   } from "./backend";
   import { avatarCache, resolveAvatarSrc, primeImageCache, localImageRef, isLocalImageRef } from "./images";
   import { themePresets } from "./defaults";
+  import { NAV_ITEM_IDS, NAV_ITEM_LABELS, NAV_LAYOUTS, type NavItemId } from "./nav";
+  import { cleanStorage, fetchStorageUsage, formatBytes, type StorageUsage } from "./actions";
   import Dropdown from "./Dropdown.svelte";
   import NumberField from "./NumberField.svelte";
   import SettingsSection from "./SettingsSection.svelte";
@@ -66,6 +68,68 @@
 
   function updateAppearance<K extends keyof Settings["appearance"]>(field: K, value: Settings["appearance"][K]): void {
     void setConfigAction(`appearance.${field}`, value);
+  }
+
+  // ---- 固定分组：显示哪些、怎么排（appearance.navItems / navLayout）----
+
+  /** 工具箱只在移动端存在、定时任务只在有调度引擎的平台上存在，选不了的就不列出来 */
+  $: navChoices = NAV_ITEM_IDS.filter((id) =>
+    id === "toolbox" ? caps.toolbox : id === "scheduled" ? caps.scheduler : true
+  );
+
+  function navEnabled(id: NavItemId): boolean {
+    return $appSettings.appearance.navItems.includes(id);
+  }
+
+  /** 勾选按规范顺序插回、取消就摘掉：侧栏顺序因此恒定，不会因为点了两下就乱 */
+  function toggleNavItem(id: NavItemId): void {
+    const current = $appSettings.appearance.navItems;
+    const next = current.includes(id) ? current.filter((item) => item !== id) : [...current, id];
+    updateAppearance("navItems", NAV_ITEM_IDS.filter((item) => next.includes(item)));
+  }
+
+  // ---- 存储空间（storage.usage / storage.clean）----
+
+  let storageUsage: StorageUsage | null = null;
+  let storageBusy = false;
+  let storageNote = "";
+  let storageLoaded = false;
+
+  $: if ($showSettings && !storageLoaded) {
+    storageLoaded = true;
+    void loadStorageUsage();
+  }
+  $: if (!$showSettings) storageLoaded = false;
+
+  $: cleanableBytes = storageUsage
+    ? storageUsage.orphanImages.bytes +
+      storageUsage.orphanBackgrounds.bytes +
+      storageUsage.orphanAvatars.bytes +
+      storageUsage.tempFiles.bytes +
+      storageUsage.cleanableLogs.bytes
+    : 0;
+
+  async function loadStorageUsage(): Promise<void> {
+    storageUsage = await fetchStorageUsage();
+  }
+
+  async function freeUpSpace(): Promise<void> {
+    if (storageBusy) return;
+    storageBusy = true;
+    storageNote = "";
+    const result = await cleanStorage();
+    storageBusy = false;
+    if (!result) return;
+    const parts: string[] = [];
+    if (result.removedImages) parts.push(`插图 ${result.removedImages} 张`);
+    if (result.removedBackgrounds) parts.push(`背景 ${result.removedBackgrounds} 张`);
+    if (result.removedAvatars) parts.push(`头像 ${result.removedAvatars} 张`);
+    if (result.removedTempFiles) parts.push(`临时文件 ${result.removedTempFiles} 个`);
+    if (result.removedLogs) parts.push(`旧日志 ${result.removedLogs} 个`);
+    const detail = parts.length > 0 ? `（${parts.join("、")}）` : "（没有需要清理的）";
+    showToast(`已释放 ${formatBytes(result.freedBytes)}${detail}`);
+    if (result.warnings.length > 0) storageNote = result.warnings.join("；");
+    await loadStorageUsage();
   }
 
   function updateNotifications<K extends keyof Settings["notifications"]>(field: K, value: Settings["notifications"][K]): void {
@@ -346,10 +410,12 @@
   // 未配对时预填：解除配对后地址与用户名仍在设置里，直接带出来省得重敲。
   // 密码也带（打码输入框）：勾「本机作为服务器」要求本机有账户密码，别让用户重敲一遍。
   // 解除配对会清密码，所以那种情况下本来就没有可带的值。
+  // **绝不回落到 profile.displayName**：同步账户与资料里的显示名是两件事，
+  // 早先用显示名预填用户名，用户就会以为「同步用的就是我这个名字」。
   $: if (!syncFormPrefilled && !syncPaired) {
     syncFormPrefilled = true;
     syncForm.serverUrl = $appSettings.sync?.serverUrl || "";
-    syncForm.username = $appSettings.sync?.username || $appSettings.profile.displayName || "";
+    syncForm.username = $appSettings.sync?.username || "";
     syncForm.secret = $appSettings.sync?.secret || "";
   }
 
@@ -759,193 +825,245 @@
     </label>
   </SettingsSection>
 
-  <SettingsSection title="显示与链接" storageKey="appearance">
-    <!-- 界面缩放对移动端同样生效（CSS transform 缩放）；原生 setWebviewZoom
-         仍由 backend.ts 的 caps.desktop 门控在移动端 no-op。 -->
-    <div class="settings-row number-row">
-      <span>界面缩放</span>
-      <NumberField
-        ariaLabel="界面缩放"
-        suffix="%"
-        min={50}
-        max={150}
-        live={true}
-        value={scalePercentValue($appSettings.appearance.uiScale)}
-        onCommit={(v) => updateAppearance("uiScale", v / 100)}
-      />
-    </div>
-    <div class="settings-row number-row">
-      <span>UI 字号</span>
-      <NumberField
-        ariaLabel="UI 字号"
-        suffix="px"
-        min={14}
-        max={22}
-        live={true}
-        value={$appSettings.appearance.uiFontSize}
-        onCommit={(v) => updateAppearance("uiFontSize", v)}
-      />
-    </div>
-    <div class="settings-row number-row">
-      <span>Markdown 字号</span>
-      <NumberField
-        ariaLabel="Markdown 字号"
-        suffix="px"
-        min={14}
-        max={26}
-        live={true}
-        value={$appSettings.appearance.markdownFontSize}
-        onCommit={(v) => updateAppearance("markdownFontSize", v)}
-      />
-    </div>
-    <div class="settings-row number-row">
-      <span>编辑器字号</span>
-      <NumberField
-        ariaLabel="编辑器字号"
-        suffix="px"
-        min={14}
-        max={26}
-        live={true}
-        value={$appSettings.appearance.editorFontSize}
-        onCommit={(v) => updateAppearance("editorFontSize", v)}
-      />
-    </div>
-    {#if !$isMobile}
-      <div class="settings-row number-row">
-        <span>编辑器宽度</span>
-        <NumberField
-          ariaLabel="编辑器宽度占比"
-          suffix="%"
-          min={30}
-          max={100}
-          live={true}
-          value={$appSettings.appearance.editorWidthPercent}
-          onCommit={(v) => updateAppearance("editorWidthPercent", v)}
-        />
-      </div>
-      <div class="settings-row number-row">
-        <span>编辑器高度</span>
-        <NumberField
-          ariaLabel="编辑器高度占比"
-          suffix="%"
-          min={30}
-          max={100}
-          live={true}
-          value={$appSettings.appearance.editorHeightPercent}
-          onCommit={(v) => updateAppearance("editorHeightPercent", v)}
-        />
-      </div>
-    {/if}
-    <div class="settings-row number-row">
-      <span>标签字号</span>
-      <NumberField
-        ariaLabel="标签字号"
-        suffix="px"
-        min={11}
-        max={30}
-        live={true}
-        value={$appSettings.appearance.tagFontSize}
-        onCommit={(v) => updateAppearance("tagFontSize", v)}
-      />
-    </div>
-    <div class="settings-row">
-      <span>链接打开</span>
-      <Dropdown
-        ariaLabel="链接打开"
-        value={$appSettings.appearance.linkOpenMode}
-        options={[
-          { value: "app", label: "应用内打开" },
-          { value: "system", label: "系统浏览器" }
-        ]}
-        on:change={(event) => updateAppearance("linkOpenMode", event.detail as Settings["appearance"]["linkOpenMode"])}
-      />
-    </div>
-  </SettingsSection>
-
-  <SettingsSection title="新建分组默认外观" storageKey="new-node">
-    <p class="muted">新建的分组与条目直接带上这套外观；留空就是跟随应用默认。</p>
-
-    <div class="settings-row">
-      <span>主题色</span>
-      <div class="new-node-color">
-        <label class="ui-color-picker" title="新建分组的标题与控件颜色">
-          <span style={`--swatch: ${newNodeDefaults.accent || "#2564cf"}`}></span>
-          <input
-            type="color"
-            value={newNodeDefaults.accent || "#2564cf"}
-            on:change={(event) => updateNewNode("accent", event.currentTarget.value)}
+  <SettingsSection title="外观效果" storageKey="appearance">
+    <div class="settings-block">
+      <span class="settings-block-label">字号</span>
+      <div class="settings-font-grid">
+        <label class="settings-field" title="左侧分组分类、页面标题（我的一天 / 计划内 那些）与各处控件的字号">
+          <span>UI 字号</span>
+          <NumberField
+            ariaLabel="UI 字号"
+            suffix="px"
+            min={14}
+            max={22}
+            live={true}
+            value={$appSettings.appearance.uiFontSize}
+            onCommit={(v) => updateAppearance("uiFontSize", v)}
           />
         </label>
-        <span class="ui-color-value">{newNodeDefaults.accent || "默认"}</span>
-        {#if newNodeDefaults.accent}
-          <button class="settings-button" type="button" on:click={() => updateNewNode("accent", "")}>清除</button>
-        {/if}
+        <label class="settings-field" title="任务卡片与日记正文（Markdown）的字号">
+          <span>正文字号</span>
+          <NumberField
+            ariaLabel="正文字号"
+            suffix="px"
+            min={14}
+            max={26}
+            live={true}
+            value={$appSettings.appearance.markdownFontSize}
+            onCommit={(v) => updateAppearance("markdownFontSize", v)}
+          />
+        </label>
+        <label class="settings-field" title="记账整页（列表 / 日历 / 统计 / 资产与记账面板）的字号">
+          <span>记账字号</span>
+          <NumberField
+            ariaLabel="记账字号"
+            suffix="px"
+            min={14}
+            max={26}
+            live={true}
+            value={$appSettings.appearance.ledgerFontSize}
+            onCommit={(v) => updateAppearance("ledgerFontSize", v)}
+          />
+        </label>
+        <label class="settings-field" title="日记整页（卡片 / 日历 / 分组与日记编辑器）的字号">
+          <span>日记字号</span>
+          <NumberField
+            ariaLabel="日记字号"
+            suffix="px"
+            min={14}
+            max={26}
+            live={true}
+            value={$appSettings.appearance.diaryFontSize}
+            onCommit={(v) => updateAppearance("diaryFontSize", v)}
+          />
+        </label>
+        <label class="settings-field" title="浮窗编辑器里正文输入区的字号">
+          <span>编辑器字号</span>
+          <NumberField
+            ariaLabel="编辑器字号"
+            suffix="px"
+            min={14}
+            max={26}
+            live={true}
+            value={$appSettings.appearance.editorFontSize}
+            onCommit={(v) => updateAppearance("editorFontSize", v)}
+          />
+        </label>
+        <label class="settings-field" title="卡片上标签与表情角标的字号">
+          <span>标签字号</span>
+          <NumberField
+            ariaLabel="标签字号"
+            suffix="px"
+            min={11}
+            max={30}
+            live={true}
+            value={$appSettings.appearance.tagFontSize}
+            onCommit={(v) => updateAppearance("tagFontSize", v)}
+          />
+        </label>
       </div>
     </div>
 
     <div class="settings-block">
-      <span class="settings-block-label">背景配色</span>
-      <div class="color-grid">
-        {#each newNodePresets as preset, index (preset.name + index)}
+      <span class="settings-block-label">缩放与编辑器尺寸</span>
+      <!-- 界面缩放对移动端同样生效（CSS transform 缩放）；原生 setWebviewZoom
+           仍由 backend.ts 的 caps.desktop 门控在移动端 no-op。 -->
+      <div class="settings-row number-row">
+        <span>界面缩放</span>
+        <NumberField
+          ariaLabel="界面缩放"
+          suffix="%"
+          min={50}
+          max={150}
+          live={true}
+          value={scalePercentValue($appSettings.appearance.uiScale)}
+          onCommit={(v) => updateAppearance("uiScale", v / 100)}
+        />
+      </div>
+      {#if !$isMobile}
+        <div class="settings-row number-row">
+          <span>编辑器宽度</span>
+          <NumberField
+            ariaLabel="编辑器宽度占比"
+            suffix="%"
+            min={30}
+            max={100}
+            live={true}
+            value={$appSettings.appearance.editorWidthPercent}
+            onCommit={(v) => updateAppearance("editorWidthPercent", v)}
+          />
+        </div>
+        <div class="settings-row number-row">
+          <span>编辑器高度</span>
+          <NumberField
+            ariaLabel="编辑器高度占比"
+            suffix="%"
+            min={30}
+            max={100}
+            live={true}
+            value={$appSettings.appearance.editorHeightPercent}
+            onCommit={(v) => updateAppearance("editorHeightPercent", v)}
+          />
+        </div>
+      {/if}
+    </div>
+
+    <div class="settings-block">
+      <span class="settings-block-label">固定分组</span>
+      <div class="settings-chip-row">
+        {#each navChoices as id (id)}
           <button
             type="button"
-            title={preset.name}
-            class:editing={newNodeDefaults.backgroundColor === preset.color}
-            style={`--swatch: ${preset.color}; --accent-color: ${preset.color}`}
-            on:click={() => updateNewNode("backgroundColor", preset.color)}
-          ></button>
+            class="settings-chip"
+            class:active={navEnabled(id)}
+            title={navEnabled(id) ? "点一下从侧栏隐藏" : "点一下显示到侧栏"}
+            on:click={() => toggleNavItem(id)}
+          >{NAV_ITEM_LABELS[id]}</button>
         {/each}
-        <button type="button" class="palette-button" title="自定义颜色" on:click={() => newNodeColorInput.click()}></button>
-        {#if newNodeDefaults.backgroundColor}
-          <button type="button" class="reset-bg-button" title="恢复默认配色" on:click={() => updateNewNode("backgroundColor", "")}>
-            <RotateCcw size={14} />
-          </button>
-        {/if}
       </div>
-      <input
-        bind:this={newNodeColorInput}
-        class="hidden-file"
-        type="color"
-        value={newNodeDefaults.backgroundColor || "#f4f1ea"}
-        on:change={(event) => updateNewNode("backgroundColor", event.currentTarget.value)}
-      />
+      <div class="settings-row">
+        <span>展示方式</span>
+        <div class="settings-segmented" role="tablist" aria-label="固定分组展示方式">
+          {#each NAV_LAYOUTS as layout (layout.id)}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={$appSettings.appearance.navLayout === layout.id}
+              class:active={$appSettings.appearance.navLayout === layout.id}
+              title={layout.hint}
+              on:click={() => updateAppearance("navLayout", layout.id)}
+            >{layout.label}</button>
+          {/each}
+        </div>
+      </div>
     </div>
 
     <div class="settings-block">
-      <span class="settings-block-label">背景图片</span>
-      <label class="background-link">
-        图片链接
-        <input
-          value={isLocalImageRef(newNodeDefaults.backgroundImage) ? "" : newNodeDefaults.backgroundImage}
-          placeholder={isLocalImageRef(newNodeDefaults.backgroundImage) ? "已上传本地图片，填链接可替换" : "https://..."}
-          on:change={(event) => updateNewNode("backgroundImage", event.currentTarget.value.trim())}
-        />
-      </label>
-      <label class="opacity-row">
-        图片透明度
-        <input
-          type="range"
-          min="0"
-          max="80"
-          value={newNodeOpacityValue}
-          on:input={(event) => {
-            newNodeOpacityLive = true;
-            newNodeOpacityValue = Number(event.currentTarget.value);
-          }}
-          on:change={commitNewNodeOpacity}
-        />
-      </label>
-      <div class="new-node-actions">
-        <button class="settings-button" type="button" on:click={() => void pickNewNodeImage()}>
-          <ImageIcon size={15} /> 上传图片
-        </button>
-        {#if newNodeDefaults.backgroundImage}
-          <button class="settings-button" type="button" on:click={() => updateNewNode("backgroundImage", "")}>
-            <Eraser size={15} /> 清除图片
-          </button>
-        {/if}
+      <span class="settings-block-label">新建分组默认外观</span>
+      <p class="muted">新建的分组与条目直接带上这套外观；留空就是跟随应用默认。</p>
+
+      <div class="settings-row">
+        <span>主题色</span>
+        <div class="new-node-color">
+          <label class="ui-color-picker" title="新建分组的标题与控件颜色">
+            <span style={`--swatch: ${newNodeDefaults.accent || "#2564cf"}`}></span>
+            <input
+              type="color"
+              value={newNodeDefaults.accent || "#2564cf"}
+              on:change={(event) => updateNewNode("accent", event.currentTarget.value)}
+            />
+          </label>
+          <span class="ui-color-value">{newNodeDefaults.accent || "默认"}</span>
+          {#if newNodeDefaults.accent}
+            <button class="settings-button" type="button" on:click={() => updateNewNode("accent", "")}>清除</button>
+          {/if}
+        </div>
       </div>
-      <input bind:this={newNodeImageInput} class="hidden-file" type="file" accept="image/*" on:change={uploadNewNodeImage} />
+
+      <div class="settings-subblock">
+        <span class="settings-subblock-label">背景配色</span>
+        <div class="color-grid">
+          {#each newNodePresets as preset, index (preset.name + index)}
+            <button
+              type="button"
+              title={preset.name}
+              class:editing={newNodeDefaults.backgroundColor === preset.color}
+              style={`--swatch: ${preset.color}; --accent-color: ${preset.color}`}
+              on:click={() => updateNewNode("backgroundColor", preset.color)}
+            ></button>
+          {/each}
+          <button type="button" class="palette-button" title="自定义颜色" on:click={() => newNodeColorInput.click()}></button>
+          {#if newNodeDefaults.backgroundColor}
+            <button type="button" class="reset-bg-button" title="恢复默认配色" on:click={() => updateNewNode("backgroundColor", "")}>
+              <RotateCcw size={14} />
+            </button>
+          {/if}
+        </div>
+        <input
+          bind:this={newNodeColorInput}
+          class="hidden-file"
+          type="color"
+          value={newNodeDefaults.backgroundColor || "#f4f1ea"}
+          on:change={(event) => updateNewNode("backgroundColor", event.currentTarget.value)}
+        />
+      </div>
+
+      <div class="settings-subblock">
+        <span class="settings-subblock-label">背景图片</span>
+        <label class="background-link">
+          图片链接
+          <input
+            value={isLocalImageRef(newNodeDefaults.backgroundImage) ? "" : newNodeDefaults.backgroundImage}
+            placeholder={isLocalImageRef(newNodeDefaults.backgroundImage) ? "已上传本地图片，填链接可替换" : "https://..."}
+            on:change={(event) => updateNewNode("backgroundImage", event.currentTarget.value.trim())}
+          />
+        </label>
+        <label class="opacity-row">
+          图片透明度
+          <input
+            type="range"
+            min="0"
+            max="80"
+            value={newNodeOpacityValue}
+            on:input={(event) => {
+              newNodeOpacityLive = true;
+              newNodeOpacityValue = Number(event.currentTarget.value);
+            }}
+            on:change={commitNewNodeOpacity}
+          />
+        </label>
+        <div class="new-node-actions">
+          <button class="settings-button" type="button" on:click={() => void pickNewNodeImage()}>
+            <ImageIcon size={15} /> 上传图片
+          </button>
+          {#if newNodeDefaults.backgroundImage}
+            <button class="settings-button" type="button" on:click={() => updateNewNode("backgroundImage", "")}>
+              <Eraser size={15} /> 清除图片
+            </button>
+          {/if}
+        </div>
+        <input bind:this={newNodeImageInput} class="hidden-file" type="file" accept="image/*" on:change={uploadNewNodeImage} />
+      </div>
     </div>
   </SettingsSection>
 
@@ -978,8 +1096,20 @@
     </div>
   </SettingsSection>
 
-  {#if caps.trayLifecycle}
-    <SettingsSection title="窗口与系统" storageKey="lifecycle">
+  <SettingsSection title="窗口与系统" storageKey="lifecycle">
+    <div class="settings-row">
+      <span>链接打开</span>
+      <Dropdown
+        ariaLabel="链接打开"
+        value={$appSettings.appearance.linkOpenMode}
+        options={[
+          { value: "app", label: "应用内打开" },
+          { value: "system", label: "系统浏览器" }
+        ]}
+        on:change={(event) => updateAppearance("linkOpenMode", event.detail as Settings["appearance"]["linkOpenMode"])}
+      />
+    </div>
+    {#if caps.trayLifecycle}
       <div class="settings-row">
         <span>关闭按钮</span>
         <Dropdown
@@ -1005,8 +1135,8 @@
       {:else}
         <p class="muted">托盘图标右键菜单可打开窗口或退出应用；再次启动程序会聚焦已运行窗口。</p>
       {/if}
-    </SettingsSection>
-  {/if}
+    {/if}
+  </SettingsSection>
 
   <SettingsSection title="消息通知" storageKey="notifications">
     {#if caps.popupNotificationWindow}
@@ -1476,6 +1606,39 @@
     <p class="muted">同步功能已在特性开关里停用：自动同步停止、同步配置隐藏、已有配对信息保留。勾回「启动同步功能」即恢复。</p>
   </SettingsSection>
 {/if}
+
+  <SettingsSection title="存储空间" storageKey="storage">
+    {#if storageUsage}
+      <div class="settings-row">
+        <span>数据占用</span>
+        <span class="muted">{formatBytes(storageUsage.totalBytes)}</span>
+      </div>
+      <div class="settings-row">
+        <span>可释放</span>
+        <span class="muted">{formatBytes(cleanableBytes)}</span>
+      </div>
+      <p class="muted storage-detail">
+        无引用插图 {storageUsage.orphanImages.count} 张 · 无引用背景 {storageUsage.orphanBackgrounds.count} 张 ·
+        无引用头像 {storageUsage.orphanAvatars.count} 张 · 临时文件 {storageUsage.tempFiles.count} 个 ·
+        旧服务器日志 {storageUsage.cleanableLogs.count} 个
+      </p>
+    {:else}
+      <p class="muted">浏览器预览没有数据目录，看不到占用。</p>
+    {/if}
+    <div class="settings-row">
+      <span>释放空间</span>
+      <button class="settings-button" type="button" disabled={storageBusy} on:click={() => void freeUpSpace()}>
+        {storageBusy ? "清理中…" : "释放空间"}
+      </button>
+    </div>
+    <p
+      class="muted"
+      title="只删确认没人再用的东西：markdown 里不再引用的插图、不再被任何条目/日记/记账/头像设置的背景与头像、崩溃残留的临时文件、以及本机作为服务器时的旧日志（保留最近两份与今天的）。笔记、日记、账目、账户、配对信息与同步水位一概不动。"
+    >只清没人引用的图片、崩溃残留的临时文件与旧服务器日志；笔记、日记、账目、账户与同步记录一概不动。</p>
+    {#if storageNote}
+      <p class="update-status">{storageNote}</p>
+    {/if}
+  </SettingsSection>
 
   <SettingsSection title="关于与更新" storageKey="about">
     <div class="settings-row">

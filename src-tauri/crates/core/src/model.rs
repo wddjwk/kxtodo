@@ -221,6 +221,9 @@ pub struct Item {
     pub planned_date: Option<String>,
     #[serde(rename = "dueDate", skip_serializing_if = "Option::is_none")]
     pub due_date: Option<String>,
+    /// 到期时刻 HH:MM，空 = 只精确到天（与 dueDate 搭配使用）
+    #[serde(rename = "dueTime", default, skip_serializing_if = "String::is_empty")]
+    pub due_time: String,
     #[serde(rename = "completedAt", skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -903,6 +906,19 @@ pub struct AppearanceSettings {
     pub editor_height_percent: u32,
     #[serde(rename = "tagFontSize", default = "default_tag_font_size")]
     pub tag_font_size: u32,
+    /// 记账页字号（v0.7.3，本机偏好不共享）
+    #[serde(rename = "ledgerFontSize", default = "default_ledger_font_size")]
+    pub ledger_font_size: u32,
+    /// 日记页字号（v0.7.3，本机偏好不共享）
+    #[serde(rename = "diaryFontSize", default = "default_diary_font_size")]
+    pub diary_font_size: u32,
+    /// 显示哪些固定导航行，按显示顺序（v0.7.3）。合法 id 见 [`NAV_ITEM_IDS`]：
+    /// 前四个是内置 system 节点，diary/ledger/toolbox 是前端渲染的伪行。
+    #[serde(rename = "navItems", default = "default_nav_items")]
+    pub nav_items: Vec<String>,
+    /// 系统导航布局（v0.7.3）：`list` 单列（默认）/ `grid` 两列图标+文字 / `icons` 单行纯图标。
+    #[serde(rename = "navLayout", default = "default_nav_layout")]
+    pub nav_layout: String,
     #[serde(rename = "themePresets", default = "default_theme_presets")]
     pub theme_presets: Vec<ThemePreset>,
     #[serde(rename = "uiColors", default)]
@@ -977,6 +993,30 @@ fn default_editor_height_percent() -> u32 {
 fn default_tag_font_size() -> u32 {
     14
 }
+fn default_ledger_font_size() -> u32 {
+    18
+}
+fn default_diary_font_size() -> u32 {
+    18
+}
+
+/// 固定导航行的合法 id：前四个是 `kind:"system"` 的内置节点（注意是 `my-day` 不是
+/// `today`），后三个是前端渲染的伪行（日记/记账/工具箱）。`config set appearance.navItems`
+/// 拒绝这个集合之外的值——CLI/Agent 写进去一个不存在的 id 只会让那一行凭空消失。
+pub const NAV_ITEM_IDS: [&str; 7] = [
+    "my-day", "planned", "important", "diary", "ledger", "scheduled", "toolbox",
+];
+
+/// `appearance.navLayout` 的合法取值。
+pub const NAV_LAYOUTS: [&str; 3] = ["list", "grid", "icons"];
+
+pub fn default_nav_items() -> Vec<String> {
+    NAV_ITEM_IDS.iter().map(|id| id.to_string()).collect()
+}
+
+fn default_nav_layout() -> String {
+    "list".to_string()
+}
 
 impl Default for AppearanceSettings {
     fn default() -> Self {
@@ -989,6 +1029,10 @@ impl Default for AppearanceSettings {
             editor_width_percent: default_editor_width_percent(),
             editor_height_percent: default_editor_height_percent(),
             tag_font_size: default_tag_font_size(),
+            ledger_font_size: default_ledger_font_size(),
+            diary_font_size: default_diary_font_size(),
+            nav_items: default_nav_items(),
+            nav_layout: default_nav_layout(),
             theme_presets: default_theme_presets(),
             ui_colors: Map::new(),
             new_node_defaults: NewNodeDefaults::default(),

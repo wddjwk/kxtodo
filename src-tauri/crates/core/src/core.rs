@@ -113,6 +113,7 @@ fn run(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value
         ["task", action] => task_dispatch(action, inv, ctx, meta),
         ["diary", action] => crate::ops_diary::diary_dispatch(action, inv, ctx, meta),
         ["ledger", action] => crate::ops_ledger::ledger_dispatch(action, inv, ctx, meta),
+        ["storage", action] => crate::ops_storage::storage_dispatch(action, inv, ctx, meta),
         ["schedule", action] => schedule_dispatch(action, inv, ctx, meta),
         ["schedule", "runtime", action] => schedule_runtime_dispatch(action, inv, ctx, meta),
         ["config", action] => config_dispatch(action, inv, ctx, meta),
@@ -400,6 +401,7 @@ fn task_import_markdown(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) ->
                     my_day: false,
                     planned_date: None,
                     due_date: None,
+                    due_time: String::new(),
                     tags: Vec::new(),
                     emojis: Vec::new(),
                 };
@@ -420,8 +422,8 @@ fn task_import_markdown(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) ->
     }))
 }
 
-/// 任务侧保存后的插图清理（v0.7.2）：对着**写入后**的文件内容扫给定条目的插图目录，
-/// 删掉没有任何卡片再引用的图片（宽限窗保护在途图片，见 `image_gc`）。
+/// 任务侧保存后的插图清理（v0.7.2，v0.7.3 起立即删）：对着**写入后**的文件内容扫给定
+/// 条目的插图目录，删掉没有任何卡片再引用的图片（只跟本地写，见 `image_gc`）。
 /// 清理失败一律吞掉——绝不让保存本身因为清理而失败。
 fn sweep_entry_images(
     ctx: &ExecContext,
@@ -440,7 +442,7 @@ fn sweep_entry_images(
             .filter(|item| item.node_id == entry_id)
             .map(|item| item.markdown.as_str())
             .collect();
-        crate::image_gc::sweep_unreferenced(&dir, markdowns, crate::image_gc::GRACE);
+        crate::image_gc::sweep_unreferenced(&dir, markdowns);
     }
 }
 
@@ -497,6 +499,7 @@ fn task_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<
                 my_day: param_bool(params, "myDay").unwrap_or(false),
                 planned_date: None,
                 due_date: None,
+                due_time: String::new(),
                 tags: Vec::new(),
                 emojis: Vec::new(),
             };
@@ -505,6 +508,14 @@ fn task_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<
             }
             if let Some(raw) = param_str(params, "dueDate") {
                 add.due_date = Some(crate::time::parse_date(&raw)?);
+            }
+            // 到期时刻：HH:MM 或 HH:MM:SS（秒舍掉），空串 = 只精确到天
+            if let Some(raw) = param_str(params, "dueTime") {
+                add.due_time = if raw.trim().is_empty() {
+                    String::new()
+                } else {
+                    crate::time::parse_clock(&raw)?
+                };
             }
             for raw in params
                 .get("tags")
@@ -841,6 +852,7 @@ fn task_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResu
                 my_day: param_bool(params, "myDay"),
                 planned_date: None,
                 due_date: None,
+                due_time: None,
                 add_tags: Vec::new(),
                 remove_tag_ids: Vec::new(),
                 replace_tags: None,
@@ -857,6 +869,14 @@ fn task_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResu
                 changes.due_date = Some(None);
             } else if let Some(raw) = param_str(params, "dueDate") {
                 changes.due_date = Some(Some(crate::time::parse_date(&raw)?));
+            }
+            // 到期时刻：HH:MM 或 HH:MM:SS（秒舍掉），空串 = 清除（回到只精确到天）
+            if let Some(raw) = param_str(params, "dueTime") {
+                changes.due_time = Some(if raw.trim().is_empty() {
+                    String::new()
+                } else {
+                    crate::time::parse_clock(&raw)?
+                });
             }
             for raw in params
                 .get("addTags")

@@ -803,7 +803,7 @@
 }
 
 .app-shell.mobile .ledger-month-step strong {
-  font-size: calc(var(--font-control) + 2px);
+  font-size: calc(var(--font-ledger) + 2px);
 }
 
 .app-shell.mobile .ledger-scroll {
@@ -827,11 +827,11 @@
 }
 
 .app-shell.mobile .ledger-cell-day {
-  font-size: calc(var(--font-control) - 5px);
+  font-size: calc(var(--font-ledger) - 5px);
 }
 
 .app-shell.mobile .ledger-cell-amounts em {
-  font-size: calc(var(--font-control) - 8px);
+  font-size: calc(var(--font-ledger) - 8px);
 }
 
 /* 统计：环与排行上下排，汇总卡数字小一档（三张卡在窄屏上并排） */
@@ -844,7 +844,7 @@
 }
 
 .app-shell.mobile .ledger-summary strong {
-  font-size: calc(var(--font-control) + 2px);
+  font-size: calc(var(--font-ledger) + 2px);
 }
 
 .app-shell.mobile .ledger-proportion {
@@ -872,7 +872,7 @@
 }
 
 .app-shell.mobile .ledger-net-value {
-  font-size: calc(var(--font-control) + 13px);
+  font-size: calc(var(--font-ledger) + 13px);
 }
 
 .app-shell.mobile .ledger-net-split {
@@ -927,7 +927,7 @@
 
 .app-shell.mobile .ledger-amount-value,
 .app-shell.mobile .ledger-amount-field input {
-  font-size: calc(var(--font-control) + 12px);
+  font-size: calc(var(--font-ledger) + 12px);
 }
 
 .app-shell.mobile .ledger-sheet-body {

@@ -7,19 +7,29 @@
    * 表单字段一律是平铺的 let 变量，不用 `{@const f = form}` 再 bind 到 `f.name`：
    * 那样改的是对象内部属性，Svelte 不会失效 form，保存按钮会一直停在 disabled。
    */
+  import { onMount } from "svelte";
+  import { addBackInterceptor } from "../platform";
   import { ArrowLeft, PenLine, Plus, Trash2, X } from "@lucide/svelte";
   import { appSettings } from "../stores";
   import { imeInset } from "../imeInset";
+  import { suppressGhostClick } from "../ghostClick";
   import { fieldKeydown } from "../shortcuts";
   import { ledgerAccent } from "../styles";
   import { categoryTree } from "../ledger";
-  import { LEDGER_ICON_CHOICES, ledgerIcon, softColor } from "../ledgerIcons";
+  import { LEDGER_ICON_CHOICES, LEDGER_ICON_GROUPS, ledgerIcon, softColor } from "../ledgerIcons";
   import { addLedgerCategory, deleteLedgerCategory, updateLedgerCategory } from "../actions";
   import type { LedgerBook, LedgerCategory, LedgerSide } from "../types";
 
   export let book: LedgerBook;
   export let side: LedgerSide = "expense";
   export let onClose: () => void = () => {};
+  /** R12：外部（记一笔面板的加号）可直接把管理器开在「添加」表单，并预设收支侧与归属大类。 */
+  export let startWithAdd = false;
+  export let startSide: LedgerSide | "" = "";
+  export let startParentId = "";
+
+  /** 图标分组 chips 里的「全部」哨兵：它不是 LEDGER_ICON_GROUPS 的成员，而是所有分组的并集。 */
+  const ALL_ICON_GROUP = "全部";
 
   /** 12 个预设色：日常收支场景够用，另有取色器兜底 */
   const COLORS = [
@@ -36,6 +46,7 @@
   let parentDraft = "";
   let busy = false;
   let nameInput: HTMLInputElement;
+  let activeGroup = ALL_ICON_GROUP;
 
   $: tree = categoryTree(book, side);
   $: accent = ledgerAccent($appSettings.ledger);
@@ -43,6 +54,28 @@
   $: formOpen = editingId !== null;
   $: fallbackColor = side === "income" ? "#2f9e6e" : "#f0862c";
   $: previewColor = colorDraft || fallbackColor;
+  /** 当前分组 chip 决定的图标网格内容：「全部」= 扁平并集，否则取该组的图标。 */
+  $: iconChoices =
+    activeGroup === ALL_ICON_GROUP
+      ? LEDGER_ICON_CHOICES
+      : LEDGER_ICON_GROUPS.find((group) => group.name === activeGroup)?.icons ?? LEDGER_ICON_CHOICES;
+
+  onMount(() => {
+    if (startWithAdd) {
+      if (startSide) side = startSide;
+      beginAdd(startParentId);
+    }
+    // 安卓返回键：这个浮层在最上面时先收自己（表单 → 列表 → 关），
+    // 否则返回会把底下的页面/记账面板弹掉，浮层却留在原地
+    return addBackInterceptor(() => {
+      if (formOpen) {
+        closeForm();
+        return true;
+      }
+      onClose();
+      return true;
+    });
+  });
 
   function switchSide(next: LedgerSide): void {
     if (next === side) return;
@@ -111,7 +144,10 @@
   }
 
   function handleBackdrop(event: PointerEvent): void {
-    if (event.target === event.currentTarget) onClose();
+    if (event.target !== event.currentTarget) return;
+    event.preventDefault();
+    suppressGhostClick({ x: event.clientX, y: event.clientY });
+    onClose();
   }
 
   function handleKeydown(event: KeyboardEvent): void {
@@ -188,8 +224,24 @@
 
         <div class="ledger-field-row ledger-field-column">
           <span>图标</span>
+          <div class="ledger-icon-groups" role="tablist" aria-label="图标分组">
+            <button
+              type="button"
+              class="ledger-icon-group"
+              class:active={activeGroup === ALL_ICON_GROUP}
+              on:click={() => (activeGroup = ALL_ICON_GROUP)}
+            >{ALL_ICON_GROUP}</button>
+            {#each LEDGER_ICON_GROUPS as group (group.name)}
+              <button
+                type="button"
+                class="ledger-icon-group"
+                class:active={activeGroup === group.name}
+                on:click={() => (activeGroup = group.name)}
+              >{group.name}</button>
+            {/each}
+          </div>
           <div class="ledger-icon-grid">
-            {#each LEDGER_ICON_CHOICES as name (name)}
+            {#each iconChoices as name (name)}
               {@const icon = ledgerIcon(name, name)}
               <button
                 type="button"

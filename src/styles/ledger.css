@@ -112,13 +112,12 @@
 
 /* ---------- 月份标题行（只有列表视图渲染；其余三个视图有自己的顶栏） ----------
    这一行是标题不是小字：月份比正文大一号、加粗、走主题色，收/支/结余跟在后面。
-   左对齐到标题文字（缩进 = 头部图标 38 + 图标与标题的间距 20）。 */
+   左对齐到卡片左边界（内容区左缘），不是标题文字的起点。 */
 .ledger-month-bar {
   display: flex;
   align-items: baseline;
   gap: 18px;
   margin: -14px 0 18px;
-  padding-left: 58px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -131,7 +130,7 @@
 .ledger-month-step strong {
   min-width: 5.5em;
   color: var(--accent);
-  font-size: calc(var(--font-control) + 4px);
+  font-size: calc(var(--font-ledger) + 4px);
   font-weight: 800;
   text-align: center;
 }
@@ -157,7 +156,7 @@
   display: inline-flex;
   gap: 14px;
   align-items: baseline;
-  font-size: calc(var(--font-control) - 3px);
+  font-size: calc(var(--font-ledger) - 3px);
 }
 
 .ledger-month-sums em {
@@ -204,14 +203,14 @@
 
 .ledger-month-divider span {
   color: var(--accent);
-  font-size: calc(var(--font-control) + 3px);
+  font-size: calc(var(--font-ledger) + 3px);
   font-weight: 800;
   letter-spacing: 0.02em;
 }
 
 .ledger-month-divider em {
   color: #9aa1ac;
-  font-size: calc(var(--font-control) - 5px);
+  font-size: calc(var(--font-ledger) - 5px);
   font-style: normal;
   font-variant-numeric: tabular-nums;
 }
@@ -252,7 +251,7 @@
 
 .ledger-date-day {
   color: var(--accent);
-  font-size: calc(var(--font-control) + 7px);
+  font-size: calc(var(--font-ledger) + 7px);
   font-variant-numeric: tabular-nums;
   font-weight: 800;
   line-height: 1;
@@ -260,7 +259,7 @@
 
 .ledger-date-week {
   color: #93989f;
-  font-size: calc(var(--font-control) - 5px);
+  font-size: calc(var(--font-ledger) - 5px);
   letter-spacing: 0.02em;
 }
 
@@ -270,7 +269,7 @@
   flex: 0 1 auto;
   margin: 0;
   color: #23272f;
-  font-size: calc(var(--font-control) + 1px);
+  font-size: calc(var(--font-ledger) + 1px);
   font-weight: 700;
   line-height: 1.4;
   text-overflow: ellipsis;
@@ -282,7 +281,7 @@
   gap: 10px;
   align-items: baseline;
   margin-left: auto;
-  font-size: calc(var(--font-control) - 4px);
+  font-size: calc(var(--font-ledger) - 4px);
   font-variant-numeric: tabular-nums;
 }
 
@@ -371,14 +370,14 @@
 
 .ledger-entry-text strong {
   color: #2b3038;
-  font-size: var(--font-control);
+  font-size: var(--font-ledger);
   font-weight: 600;
 }
 
 .ledger-entry-text em {
   margin-left: 8px;
   color: #93989f;
-  font-size: calc(var(--font-control) - 4px);
+  font-size: calc(var(--font-ledger) - 4px);
   font-style: normal;
 }
 
@@ -390,15 +389,23 @@
   overflow: hidden;
   flex: 0 1 auto;
   color: #9aa1ac;
-  font-size: calc(var(--font-control) - 5px);
+  font-size: calc(var(--font-ledger) - 5px);
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* 每一笔的时刻：比账户更淡一档，只是给同一天里的先后一个参照 */
+.ledger-entry-time {
+  color: #b6bcc6;
+  font-size: calc(var(--font-ledger) - 6px);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
 }
 
 .ledger-entry-amount {
   flex: 0 0 auto;
   color: #2b3038;
-  font-size: calc(var(--font-control) + 1px);
+  font-size: calc(var(--font-ledger) + 1px);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
 }
@@ -414,7 +421,7 @@
 .ledger-day-empty {
   padding: 14px 4px;
   color: #93989f;
-  font-size: var(--font-control);
+  font-size: var(--font-ledger);
 }
 
 /* ---------- 日历视图 ---------- */
@@ -439,7 +446,7 @@
 .ledger-calendar-bar strong {
   min-width: 8em;
   color: var(--accent);
-  font-size: calc(var(--font-control) + 2px);
+  font-size: calc(var(--font-ledger) + 2px);
   font-weight: 800;
   text-align: center;
 }
@@ -467,7 +474,7 @@
   justify-content: center;
   margin-bottom: 10px;
   color: #8b929e;
-  font-size: calc(var(--font-control) - 5px);
+  font-size: calc(var(--font-ledger) - 5px);
   font-variant-numeric: tabular-nums;
 }
 
@@ -488,7 +495,7 @@
 .ledger-calendar-head {
   padding-bottom: 3px;
   color: #9aa1ac;
-  font-size: calc(var(--font-control) - 5px);
+  font-size: calc(var(--font-ledger) - 5px);
   text-align: center;
 }
 
@@ -532,7 +539,7 @@
 }
 
 .ledger-cell-day {
-  font-size: calc(var(--font-control) - 3px);
+  font-size: calc(var(--font-ledger) - 3px);
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
 }
@@ -548,7 +555,7 @@
   max-width: 100%;
   overflow: hidden;
   color: #6b7280;
-  font-size: calc(var(--font-control) - 7px);
+  font-size: calc(var(--font-ledger) - 7px);
   font-style: normal;
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
@@ -573,13 +580,13 @@
 
 .ledger-day-head strong {
   color: var(--accent);
-  font-size: calc(var(--font-control) + 1px);
+  font-size: calc(var(--font-ledger) + 1px);
   font-weight: 800;
 }
 
 .ledger-day-head span {
   color: #93989f;
-  font-size: calc(var(--font-control) - 4px);
+  font-size: calc(var(--font-ledger) - 4px);
   font-variant-numeric: tabular-nums;
 }
 
@@ -603,7 +610,7 @@
 .ledger-panel-head h2 {
   margin: 0;
   color: #2b3038;
-  font-size: calc(var(--font-control) + 1px);
+  font-size: calc(var(--font-ledger) + 1px);
   font-weight: 700;
 }
 
@@ -622,7 +629,7 @@
   border-radius: 999px;
   background: rgb(255 255 255 / 90%);
   color: #5c6470;
-  font-size: calc(var(--font-control) - 4px);
+  font-size: calc(var(--font-ledger) - 4px);
   cursor: pointer;
   transition: border-color 0.12s ease, color 0.12s ease;
 }
@@ -647,7 +654,7 @@
   border-radius: 6px;
   background: transparent;
   color: var(--accent);
-  font-size: calc(var(--font-control) - 3px);
+  font-size: calc(var(--font-ledger) - 3px);
   opacity: 0.6;
   cursor: pointer;
   transition: background 0.12s ease, opacity 0.12s ease;
@@ -679,7 +686,7 @@
 .ledger-stats-period strong {
   min-width: 6.5em;
   color: var(--accent);
-  font-size: calc(var(--font-control) + 1px);
+  font-size: calc(var(--font-ledger) + 1px);
   font-weight: 800;
   text-align: center;
 }
@@ -720,18 +727,18 @@
 
 .ledger-summary span {
   color: #8b929e;
-  font-size: calc(var(--font-control) - 5px);
+  font-size: calc(var(--font-ledger) - 5px);
 }
 
+/* 钱数不许截断出省略号（读不出来的金额比小一号的字糟得多）：字号统一收一档，
+   还是放不下就由 fitAmount（fitText.ts）按内容一档一档缩到放得下为止。 */
 .ledger-summary strong {
-  overflow: hidden;
   color: #2b3038;
-  font-size: calc(var(--font-control) + 7px);
+  font-size: calc(var(--font-ledger) + 3px);
   font-variant-numeric: tabular-nums;
   font-weight: 800;
-  line-height: 1.15;
+  line-height: 1.2;
   white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
 .ledger-summary strong.in {
@@ -748,7 +755,7 @@
   align-items: center;
   margin-left: auto;
   color: #8b929e;
-  font-size: calc(var(--font-control) - 5px);
+  font-size: calc(var(--font-ledger) - 5px);
 }
 
 .ledger-legend i {
@@ -969,7 +976,7 @@
 .ledger-rank-text strong {
   overflow: hidden;
   color: #2b3038;
-  font-size: calc(var(--font-control) - 1px);
+  font-size: calc(var(--font-ledger) - 1px);
   font-weight: 600;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -977,7 +984,7 @@
 
 .ledger-rank-text em {
   color: #9aa1ac;
-  font-size: calc(var(--font-control) - 6px);
+  font-size: calc(var(--font-ledger) - 6px);
   font-style: normal;
   font-variant-numeric: tabular-nums;
 }
@@ -1002,41 +1009,259 @@
 .ledger-rank-amount {
   flex: 0 0 auto;
   color: #2b3038;
-  font-size: var(--font-control);
+  font-size: var(--font-ledger);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
 }
 
-.ledger-rank-children {
+.ledger-rank-go {
+  color: #c3c9d2;
+  flex: 0 0 auto;
+}
+
+/* ---------- 分类钻取（统计里点一个大类） ----------
+   桌面：锚在被点那一行下方的下拉面板；移动端：下半屏抽屉（复用 .ledger-sheet 的语言）。
+   两者都要盖在记账面板之上——记账面板挂在 App 层、DOM 里排在 main 之后，
+   同为 z-index 4000 时后画的赢，管理器/钻取面板会被压在下面。 */
+.ledger-view .editor-overlay {
+  z-index: 4200;
+}
+
+.ledger-drill-pop {
+  position: fixed;
+  z-index: 4200;
+  display: flex;
+  overflow: hidden;
+  width: 400px;
+  max-height: min(70vh, 470px);
+  flex-direction: column;
+  border: 1px solid #e5e5e5;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 18px 54px rgb(0 0 0 / 18%), 0 2px 8px rgb(0 0 0 / 8%);
+  animation: menu-fade-in 0.12s ease-out;
+}
+
+.ledger-drill {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.ledger-drill-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 11px 12px 11px 14px;
+  border-bottom: 1px solid #eceff3;
+  background: #fafbfc;
+}
+
+.ledger-drill-icon {
   display: grid;
-  gap: 3px;
-  margin: 0 0 6px;
-  padding: 4px 10px 4px 51px;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  color: var(--cat, var(--accent));
+}
+
+.ledger-drill-back {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 9px;
+  padding: 0;
+  background: #eef1f5;
+  color: #5c6470;
+  cursor: pointer;
+}
+
+.ledger-drill-back:hover {
+  background: #e3e7ee;
+  color: #2b3038;
+}
+
+.ledger-drill-title {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.ledger-drill-title strong {
+  overflow: hidden;
+  color: #1f2937;
+  font-size: var(--font-ledger);
+  font-weight: 700;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ledger-drill-title em {
+  color: #9aa1ac;
+  font-size: calc(var(--font-ledger) - 5px);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-drill-body {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 10px 12px 14px;
+}
+
+.ledger-drill-donut {
+  max-width: 420px;
+  margin: 0 auto 4px;
+}
+
+.ledger-drill-rows,
+.ledger-drill-entries {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
   list-style: none;
 }
 
-.ledger-rank-children li {
+.ledger-drill-row,
+.ledger-drill-entry {
   display: flex;
   gap: 10px;
-  align-items: baseline;
-  color: #5c6470;
-  font-size: calc(var(--font-control) - 4px);
+  align-items: center;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.ledger-rank-children span {
-  flex: 1 1 auto;
+.ledger-drill-row:hover,
+.ledger-drill-entry:hover {
+  background: #f6f7f9;
+}
+
+.ledger-drill-row-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 9px;
+  color: var(--cat, #7f8c8d);
+}
+
+.ledger-drill-row-text {
+  display: grid;
+  gap: 3px;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
-.ledger-rank-children em {
+.ledger-drill-row-text strong {
+  overflow: hidden;
+  color: #2b3038;
+  font-size: calc(var(--font-ledger) - 2px);
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ledger-drill-row-text em {
   color: #9aa1ac;
-  font-size: calc(var(--font-control) - 6px);
+  font-size: calc(var(--font-ledger) - 5px);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-drill-row-amount {
+  color: #2b3038;
+  font-size: calc(var(--font-ledger) - 2px);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+/* 账单明细：一笔一行，左边是日期与时分，点一下就去改它 */
+.ledger-drill-date {
+  display: grid;
+  gap: 1px;
+  width: 3.6em;
+  flex: 0 0 auto;
+}
+
+.ledger-drill-date strong {
+  color: #5c6470;
+  font-size: calc(var(--font-ledger) - 4px);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.ledger-drill-date em {
+  color: #9aa1ac;
+  font-size: calc(var(--font-ledger) - 6px);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-drill-note {
+  min-width: 0;
+  overflow: hidden;
+  flex: 1 1 auto;
+  color: #2b3038;
+  font-size: calc(var(--font-ledger) - 3px);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ledger-drill-note i {
+  color: #9aa1ac;
   font-style: normal;
 }
 
-.ledger-rank-children b {
+.ledger-drill-account {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  max-width: 32%;
+  overflow: hidden;
+  flex: 0 1 auto;
+  color: #9aa1ac;
+  font-size: calc(var(--font-ledger) - 5px);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ledger-drill-entry b {
   color: #2b3038;
+  font-size: calc(var(--font-ledger) - 2px);
   font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+.ledger-drill-entry b.in {
+  color: var(--ledger-in);
+}
+
+.ledger-drill-entry b.out {
+  color: var(--ledger-out);
+}
+
+.ledger-drill-empty {
+  margin: 18px 0;
+  color: #9aa1ac;
+  font-size: calc(var(--font-ledger) - 4px);
+  text-align: center;
 }
 
 /* ---------- 资产视图 ---------- */
@@ -1053,12 +1278,12 @@
 
 .ledger-net-label {
   color: #8b929e;
-  font-size: calc(var(--font-control) - 4px);
+  font-size: calc(var(--font-ledger) - 4px);
 }
 
 .ledger-net-value {
   color: var(--accent);
-  font-size: calc(var(--font-control) + 20px);
+  font-size: calc(var(--font-ledger) + 20px);
   font-variant-numeric: tabular-nums;
   font-weight: 800;
   line-height: 1.1;
@@ -1079,12 +1304,12 @@
 
 .ledger-net-split span {
   color: #9aa1ac;
-  font-size: calc(var(--font-control) - 5px);
+  font-size: calc(var(--font-ledger) - 5px);
 }
 
 .ledger-net-split b {
   color: #3d444e;
-  font-size: var(--font-control);
+  font-size: var(--font-ledger);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1139,7 +1364,7 @@
 .ledger-account-text strong {
   overflow: hidden;
   color: #2b3038;
-  font-size: var(--font-control);
+  font-size: var(--font-ledger);
   font-weight: 600;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -1148,7 +1373,7 @@
 .ledger-account-text em {
   overflow: hidden;
   color: #9aa1ac;
-  font-size: calc(var(--font-control) - 5px);
+  font-size: calc(var(--font-ledger) - 5px);
   font-style: normal;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -1157,7 +1382,7 @@
 .ledger-account-balance {
   flex: 0 0 auto;
   color: #2b3038;
-  font-size: calc(var(--font-control) + 1px);
+  font-size: calc(var(--font-ledger) + 1px);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
 }
@@ -1247,7 +1472,7 @@
   padding: 0;
   background: rgb(255 255 255 / 94%);
   color: var(--accent);
-  font-size: calc(var(--font-control) - 2px);
+  font-size: calc(var(--font-ledger) - 2px);
   font-weight: 700;
   cursor: pointer;
   box-shadow: 0 6px 18px rgb(31 41 55 / 14%);
@@ -1311,7 +1536,7 @@
   border-radius: 6px;
   background: transparent;
   color: #64748b;
-  font-size: calc(var(--font-control) - 2px);
+  font-size: calc(var(--font-ledger) - 2px);
   cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease;
 }
@@ -1328,7 +1553,7 @@
   overflow: hidden;
   flex: 1 1 auto;
   color: #64748b;
-  font-size: var(--font-control);
+  font-size: var(--font-ledger);
   white-space: nowrap;
   text-overflow: ellipsis;
   user-select: none;
@@ -1372,7 +1597,7 @@
   border-radius: 7px;
   background: transparent;
   color: var(--side, var(--accent));
-  font-size: calc(var(--font-control) - 4px);
+  font-size: calc(var(--font-ledger) - 4px);
   font-weight: 600;
   cursor: pointer;
 }
@@ -1412,7 +1637,7 @@
 .ledger-amount-cat em {
   overflow: hidden;
   color: #9aa1ac;
-  font-size: calc(var(--font-control) - 2px);
+  font-size: calc(var(--font-ledger) - 2px);
   font-style: normal;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -1433,7 +1658,7 @@
 
 .ledger-amount-symbol {
   color: #9aa1ac;
-  font-size: calc(var(--font-control) + 2px);
+  font-size: calc(var(--font-ledger) + 2px);
   font-weight: 600;
 }
 
@@ -1441,7 +1666,7 @@
   border: 0;
   background: transparent;
   color: #1f2937;
-  font-size: calc(var(--font-control) + 16px);
+  font-size: calc(var(--font-ledger) + 16px);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
   line-height: 1.2;
@@ -1456,7 +1681,7 @@
 .ledger-amount-value {
   flex: 1 1 auto;
   color: #1f2937;
-  font-size: calc(var(--font-control) + 16px);
+  font-size: calc(var(--font-ledger) + 16px);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
   line-height: 1.2;
@@ -1502,7 +1727,7 @@
 .ledger-sheet-hint {
   margin: 0;
   color: #9aa1ac;
-  font-size: calc(var(--font-control) - 5px);
+  font-size: calc(var(--font-ledger) - 5px);
   line-height: 1.5;
 }
 
@@ -1530,7 +1755,7 @@
   border-radius: 999px;
   background: #ffffff;
   color: #5c6470;
-  font-size: calc(var(--font-control) - 3px);
+  font-size: calc(var(--font-ledger) - 3px);
   white-space: nowrap;
   cursor: pointer;
   transition: border-color 0.12s ease, color 0.12s ease;
@@ -1553,6 +1778,28 @@
   place-items: center;
   border-radius: 50%;
   color: var(--cat, #7f8c8d);
+}
+
+/* 行末的加号：滑到最右边就是「加大类」，不用退出去找齿轮 → 分类管理 */
+.ledger-chip-add {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  flex: 0 0 auto;
+  align-self: center;
+  border: 1px dashed #d7dce3;
+  border-radius: 50%;
+  padding: 0;
+  background: #ffffff;
+  color: #9aa1ac;
+  cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+
+.ledger-chip-add:hover {
+  border-color: var(--side, var(--accent));
+  color: var(--side, var(--accent));
 }
 
 /* 子分类图标网格：格子够大，手指点得准，也不显得挤 */
@@ -1597,7 +1844,7 @@
   max-width: 100%;
   overflow: hidden;
   color: #5c6470;
-  font-size: calc(var(--font-control) - 5px);
+  font-size: calc(var(--font-ledger) - 5px);
   font-style: normal;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -1608,7 +1855,37 @@
   font-weight: 700;
 }
 
-/* 转账：转出 → 转入 两个大块 */
+/* 网格右下角的加号格子：在当前大类下直接加子分类 */
+.ledger-cat-tile.add .ledger-tile-icon.add {
+  border: 1px dashed #d7dce3;
+  background: transparent;
+  color: #9aa1ac;
+}
+
+.ledger-cat-tile.add em {
+  color: #9aa1ac;
+}
+
+.ledger-cat-tile.add:hover .ledger-tile-icon.add {
+  border-color: var(--side, var(--accent));
+  color: var(--side, var(--accent));
+}
+
+.ledger-cat-tile.add:hover em {
+  color: var(--side, var(--accent));
+}
+
+/* 转账：转出 → 转入 两个大块。
+   刻意不放进 .ledger-sheet-body——那块是滚动区，overflow 会把账户浮层裁掉，
+   看上去就是「浮层被上面的金额行盖住」。 */
+.ledger-transfer-block {
+  display: grid;
+  gap: 9px;
+  flex: 0 0 auto;
+  padding: 13px 16px;
+  overflow: visible;
+}
+
 .ledger-transfer-row {
   display: flex;
   gap: 10px;
@@ -1619,6 +1896,12 @@
   position: relative;
   min-width: 0;
   flex: 1 1 0;
+}
+
+/* 这一行在面板上半部，浮层朝下开：朝上正好压在金额行上 */
+.ledger-transfer-field .ledger-pop {
+  top: calc(100% + 8px);
+  bottom: auto;
 }
 
 .ledger-transfer-field > button {
@@ -1641,7 +1924,7 @@
 
 .ledger-transfer-field > button span {
   color: #9aa1ac;
-  font-size: calc(var(--font-control) - 4px);
+  font-size: calc(var(--font-ledger) - 4px);
 }
 
 .ledger-transfer-field > button strong {
@@ -1649,7 +1932,7 @@
   overflow: hidden;
   flex: 1 1 auto;
   color: #1f2937;
-  font-size: var(--font-control);
+  font-size: var(--font-ledger);
   font-weight: 600;
   text-align: left;
   white-space: nowrap;
@@ -1692,7 +1975,7 @@
   border-radius: 8px;
   background: #f8fafc;
   color: #475569;
-  font-size: calc(var(--font-control) - 3px);
+  font-size: calc(var(--font-ledger) - 3px);
   white-space: nowrap;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
@@ -1702,6 +1985,14 @@
 .ledger-meta-trigger:hover {
   background: #eef2f7;
   color: #334155;
+}
+
+.ledger-meta-clock {
+  margin-left: 2px;
+  color: #94a3b8;
+  font-size: calc(var(--font-ledger) - 4px);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
 }
 
 .ledger-meta-field.open .ledger-meta-trigger {
@@ -1729,7 +2020,7 @@
   border: 0;
   background: transparent;
   color: #1f2937;
-  font-size: calc(var(--font-control) - 3px);
+  font-size: calc(var(--font-ledger) - 3px);
   outline: none;
 }
 
@@ -1780,7 +2071,7 @@
   border-radius: 8px;
   background: transparent;
   color: #374151;
-  font-size: calc(var(--font-control) - 3px);
+  font-size: calc(var(--font-ledger) - 3px);
   cursor: pointer;
   text-align: left;
 }
@@ -1822,7 +2113,7 @@
   padding: 0;
   background: #ffffff;
   color: #1f2937;
-  font-size: calc(var(--font-control) + 2px);
+  font-size: calc(var(--font-ledger) + 2px);
   font-variant-numeric: tabular-nums;
   cursor: pointer;
   box-shadow: 0 1px 2px rgb(0 0 0 / 5%);
@@ -1838,7 +2129,7 @@
 .ledger-key.fn {
   background: #e9ecf1;
   color: #5c6470;
-  font-size: calc(var(--font-control) - 3px);
+  font-size: calc(var(--font-ledger) - 3px);
   box-shadow: none;
 }
 
@@ -1854,7 +2145,7 @@
   place-items: center;
   background: var(--side, var(--accent));
   color: #ffffff;
-  font-size: calc(var(--font-control) - 1px);
+  font-size: calc(var(--font-ledger) - 1px);
   font-weight: 700;
   box-shadow: 0 4px 14px rgb(0 0 0 / 14%);
 }
@@ -1879,7 +2170,7 @@
   display: inline-flex;
   gap: 6px;
   align-items: center;
-  font-size: calc(var(--font-control) - 2px);
+  font-size: calc(var(--font-ledger) - 2px);
 }
 
 .ledger-sheet-foot .settings-button.primary {
@@ -1892,7 +2183,7 @@
 
 .ledger-foot-hint {
   color: #9aa1ac;
-  font-size: calc(var(--font-control) - 4px);
+  font-size: calc(var(--font-ledger) - 4px);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1919,14 +2210,14 @@
 
 .ledger-manager-summary span {
   color: #8b929e;
-  font-size: calc(var(--font-control) - 5px);
+  font-size: calc(var(--font-ledger) - 5px);
 }
 
 .ledger-manager-summary strong,
 .ledger-manager-summary b {
   overflow: hidden;
   color: #1f2937;
-  font-size: calc(var(--font-control) + 1px);
+  font-size: calc(var(--font-ledger) + 1px);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -1949,7 +2240,7 @@
 .ledger-field-row > span {
   flex: 0 0 5em;
   color: #8b929e;
-  font-size: calc(var(--font-control) - 3px);
+  font-size: calc(var(--font-ledger) - 3px);
 }
 
 .ledger-field-row input[type="text"],
@@ -1961,7 +2252,7 @@
   border-radius: 10px;
   background: #ffffff;
   color: #1f2937;
-  font-size: var(--font-control);
+  font-size: var(--font-ledger);
   outline: none;
   transition: border-color 0.12s ease;
 }
@@ -1995,7 +2286,7 @@
   border-radius: 999px;
   background: #ffffff;
   color: #5c6470;
-  font-size: calc(var(--font-control) - 3px);
+  font-size: calc(var(--font-ledger) - 3px);
   cursor: pointer;
   transition: border-color 0.12s ease, color 0.12s ease;
 }
@@ -2008,6 +2299,44 @@
   border-color: var(--accent);
   color: var(--accent);
   font-weight: 700;
+}
+
+/* 图标分组：图标库扩到两百多个之后，不先按大类筛根本找不到（「全部」是默认档） */
+.ledger-icon-groups {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  margin-bottom: 7px;
+  padding: 2px;
+  scrollbar-width: none;
+}
+
+.ledger-icon-groups::-webkit-scrollbar {
+  display: none;
+}
+
+.ledger-icon-group {
+  flex: 0 0 auto;
+  padding: 4px 11px;
+  border: 1px solid #e8ebef;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #5c6470;
+  font-size: calc(var(--font-ledger) - 5px);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+
+.ledger-icon-group:hover {
+  border-color: #dfe3e8;
+}
+
+.ledger-icon-group.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 600;
 }
 
 .ledger-icon-grid {
@@ -2098,7 +2427,7 @@
 
 .ledger-form-preview em {
   color: #2b3038;
-  font-size: var(--font-control);
+  font-size: var(--font-ledger);
   font-style: normal;
   font-weight: 600;
 }
@@ -2125,13 +2454,13 @@
 
 .ledger-cat-group-head strong {
   color: #2b3038;
-  font-size: var(--font-control);
+  font-size: var(--font-ledger);
   font-weight: 700;
 }
 
 .ledger-cat-group-head em {
   color: #9aa1ac;
-  font-size: calc(var(--font-control) - 5px);
+  font-size: calc(var(--font-ledger) - 5px);
   font-style: normal;
 }
 
@@ -2163,7 +2492,7 @@
   border-radius: 999px;
   background: #fbfcfd;
   color: #4b5563;
-  font-size: calc(var(--font-control) - 4px);
+  font-size: calc(var(--font-ledger) - 4px);
   cursor: pointer;
   transition: border-color 0.12s ease, background 0.12s ease;
 }

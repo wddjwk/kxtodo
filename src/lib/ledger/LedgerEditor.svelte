@@ -3,20 +3,26 @@
    * 记账面板（记一笔 / 改一笔）：复用应用的 .editor-overlay 浮层——桌面居中对话框、
    * 移动端底部抽屉（主流记账 App 的同一条手感）。
    * 结构自上而下：类型页签 → 大额金额 → 分类（大类 chips + 子分类图标网格）→
-   * 日期/账户/备注 → 移动端数字键盘（桌面是「保存再记 / 记一笔」两个按钮）。
+   * 日期时刻/账户/备注 → 移动端数字键盘（桌面是「保存再记 / 记一笔」两个按钮）。
    *
    * **只有显式点保存才落盘**：关掉（X / 遮罩 / Esc / 移动端返回）一律丢弃草稿。
    * 卡片编辑器"关掉即保存"是为了防丢正文，账目照抄那条会凭空多出用户没确认过的记录。
+   *
+   * **三个按钮的语义是死的**：「记一笔 / 保存修改」= 落盘并关掉，「保存再记」= 落盘、
+   * 清空金额与备注、面板留着连着记。编辑已有的一笔时不给「保存再记」——改一笔账
+   * 之后再顺手记一笔是两件事，混在一个按钮上就是"点了保存又弹出来"的来源。
    */
   import { onMount } from "svelte";
   import {
-    ArrowLeftRight, CalendarDays, Check, ChevronRight, Delete, PenLine, Trash2, Wallet, X
+    ArrowLeftRight, CalendarDays, Check, ChevronRight, Delete, PenLine, Plus, Trash2, Wallet, X
   } from "@lucide/svelte";
-  import { appSettings, showToast, todayIso } from "../stores";
+  import { appSettings, showToast, todayIso, ledgerCategoryDraft } from "../stores";
   import { isMobile } from "../platform";
   import { imeInset } from "../imeInset";
   import { fieldKeydown } from "../shortcuts";
   import { clampPopoverToViewport } from "../popover";
+  import { suppressGhostClick } from "../ghostClick";
+  import { displayClock } from "../clock";
   import { ledgerAccent, uiScaleValue } from "../styles";
   import { categoryTree, formatCents, parseYuanToCents } from "../ledger";
   import { accountIconName, ledgerIcon, softColor, TRANSFER_ICON } from "../ledgerIcons";
@@ -37,11 +43,13 @@
   let toAccountId = existing?.toAccountId ?? book.accounts.find((item) => item.id !== accountId)?.id ?? "";
   let categoryId = existing?.categoryId ?? "";
   let date = existing?.date ?? ("date" in target ? target.date : todayIso());
+  /** HH:MM；新建时留空——core 落盘会按当前时刻补，不必在前端猜 */
+  let time = existing ? displayClock(existing.time) : "";
   let note = existing?.note ?? "";
   let busy = false;
   let closed = false;
   let openPicker: "" | "date" | "account" | "toAccount" = "";
-  let metaRowEl: HTMLDivElement;
+  let sheetEl: HTMLDivElement;
 
   /** 大类 chips 里当前展开的那一个；跟着已选分类走，没有就落在第一个大类 */
   let parentDraft = "";
@@ -110,10 +118,17 @@
     categoryId = categoryId === id ? "" : id;
   }
 
+  /** 分类行末尾的加号：分类管理长在 LedgerView 上、本面板挂在 App 层，
+   *  两棵不相干的子树只能靠 store 递话（与菜单系统 menu/submenu.ts 同一套路）。 */
+  function requestCategory(parentId: string): void {
+    openPicker = "";
+    ledgerCategoryDraft.set({ side, parentId });
+  }
+
   function togglePicker(name: typeof openPicker): void {
     openPicker = openPicker === name ? "" : name;
     if (openPicker) {
-      void clampPopoverToViewport(metaRowEl, uiScaleValue($appSettings.appearance.uiScale), ".ledger-pop");
+      void clampPopoverToViewport(sheetEl, uiScaleValue($appSettings.appearance.uiScale), ".ledger-pop");
     }
   }
 
@@ -148,22 +163,30 @@
     return Boolean(accountId);
   }
 
-  /** 真正落盘。keepOpen = 「保存再记」：清掉金额与备注，分类/账户/日期留着连记。 */
+  /** 真正落盘。keepOpen = 「保存再记」：清掉金额与备注，分类/账户/日期时刻留着连记。 */
   async function commit(keepOpen: boolean): Promise<void> {
     if (busy) return;
     busy = true;
+    const isTransfer = kind === "transfer";
+    // time 留空就不传：core 新建时按当前时刻补，改的时候沿用原值
+    const clock = time || undefined;
     let ok = false;
-    if (kind === "transfer") {
-      ok = await transferLedger({ from: accountId, to: toAccountId, amountCents: cents, date, note });
-    } else if (existing) {
+    if (existing) {
+      // 改一笔就是改这一笔——转账也走 modify（core 的 ledger.modify 认 kind/转入账户，
+      // 空串即清除）。早先这里按 kind 分派去 ledger.transfer，于是「改转账」变成了
+      // 「又记一笔新的转账」，旧的那笔还原封不动躺着。
       ok = await updateLedgerEntry(existing.id, {
         kind,
         amountCents: cents,
         accountId,
-        categoryId: categoryId || undefined,
+        toAccountId: isTransfer ? toAccountId : "",
+        categoryId: isTransfer ? "" : categoryId,
         date,
+        time: clock,
         note
       });
+    } else if (isTransfer) {
+      ok = await transferLedger({ from: accountId, to: toAccountId, amountCents: cents, date, time: clock, note });
     } else {
       ok = await addLedgerEntry({
         kind,
@@ -171,6 +194,7 @@
         accountId,
         categoryId: categoryId || undefined,
         date,
+        time: clock,
         note
       });
     }
@@ -185,8 +209,10 @@
     onClose();
   }
 
-  /** 显式点保存：不合法要给一句话，不能默默不动。 */
-  async function save(keepOpen: boolean): Promise<void> {
+  /** 显式点保存：不合法要给一句话，不能默默不动。
+   *  at = 这一下的指针坐标（移动端数字键盘走 pointerdown）：面板在 click 补发之前就没了，
+   *  得把那一下 click 吃掉；桌面按钮走的是 click，事件已经派发给按钮本身，不用吃。 */
+  async function save(keepOpen: boolean, at?: { x: number; y: number }): Promise<void> {
     if (cents <= 0) {
       showToast("金额要大于 0");
       return;
@@ -199,14 +225,17 @@
       showToast("请先选择账户");
       return;
     }
+    if (!keepOpen && at) suppressGhostClick(at);
     await commit(keepOpen);
   }
 
   /** 关闭（X / 点遮罩 / Esc / 移动端返回）：一律**不落盘**。
    *  记账与卡片编辑器刻意不同——卡片"关掉即保存"是防丢正文，而金额这里
-   *  自动落盘会凭空多出一堆用户没确认过的账，所以只有显式点「记一笔 / 保存」才写。 */
-  function closeEditor(): void {
+   *  自动落盘会凭空多出一堆用户没确认过的账，所以只有显式点「记一笔 / 保存」才写。
+   *  at 同上：只有点遮罩这一下需要吃掉补发的 click，Esc 与返回键不需要。 */
+  function closeEditor(at?: { x: number; y: number }): void {
     if (closed) return;
+    if (at) suppressGhostClick(at);
     closed = true;
     onClose();
   }
@@ -222,11 +251,18 @@
   }
 
   function handleBackdrop(event: PointerEvent): void {
-    if (event.target === event.currentTarget) closeEditor();
+    if (event.target !== event.currentTarget) return;
+    // 触屏上这一下的 click 会在面板消失之后才补发，不拦就会落到下面的卡片/「+」上
+    event.preventDefault();
+    closeEditor({ x: event.clientX, y: event.clientY });
   }
 
   function handleKeydown(event: KeyboardEvent): void {
     if (event.defaultPrevented) return;
+    // 分类管理/钻取面板是从这个面板里唤出的，DOM 上挂在 .ledger-view 里、z-index 更高。
+    // 两层的 keydown 都挂在 window 上，本面板注册得更早所以先跑——不让位的话一下 Esc
+    // 会把底下的记账面板也关掉，上面的管理器却留着（界面看起来"卡住"）。
+    if (document.querySelector(".ledger-view .editor-overlay, .ledger-drill-pop")) return;
     if (event.key === "Escape" && !event.isComposing && event.keyCode !== 229) {
       event.preventDefault();
       event.stopPropagation();
@@ -272,6 +308,7 @@
 >
   <div
     class="editor-dialog ledger-sheet"
+    bind:this={sheetEl}
     style={`--accent: ${accent}`}
     role="dialog"
     aria-label={existing ? "修改这一笔" : "记一笔"}
@@ -292,7 +329,7 @@
         {/each}
       </div>
       <div class="ledger-sheet-actions">
-        {#if $isMobile}
+        {#if $isMobile && !existing}
           <button type="button" class="ledger-head-text" title="保存并接着记下一笔" on:click={() => void save(true)}>
             保存再记
           </button>
@@ -302,7 +339,7 @@
             <Trash2 size={17} />
           </button>
         {/if}
-        <button type="button" class="ledger-icon-button" title="关闭（不保存这一笔）" aria-label="关闭" on:click={closeEditor}>
+        <button type="button" class="ledger-icon-button" title="关闭（不保存这一笔）" aria-label="关闭" on:click={() => closeEditor()}>
           <X size={18} />
         </button>
       </div>
@@ -348,8 +385,10 @@
       {/if}
     </div>
 
-    <div class="ledger-sheet-body">
-      {#if kind === "transfer"}
+    {#if kind === "transfer"}
+      <!-- 转账块刻意不放进滚动区：.ledger-sheet-body 的 overflow 会把账户浮层裁掉，
+           看起来就是「浮层被上面的金额行盖住」。 -->
+      <div class="ledger-transfer-block">
         <div class="ledger-transfer-row" on:click|stopPropagation>
           <div class="ledger-transfer-field" class:open={openPicker === "account"}>
             <button type="button" on:click={() => togglePicker("account")}>
@@ -390,7 +429,9 @@
           </div>
         </div>
         <p class="ledger-sheet-hint">转账只改两个账户的余额，不计入收支统计。</p>
-      {:else}
+      </div>
+    {:else}
+      <div class="ledger-sheet-body">
         <div class="ledger-parent-row">
           {#each tree as item (item.parent.id)}
             {@const color = item.parent.color || (side === "income" ? "#2f9e6e" : "#f0862c")}
@@ -406,8 +447,11 @@
               {item.parent.name}
             </button>
           {:else}
-            <p class="ledger-sheet-hint">还没有{side === "income" ? "收入" : "支出"}分类，去齿轮 → 分类管理里加一个。</p>
+            <p class="ledger-sheet-hint">还没有{side === "income" ? "收入" : "支出"}分类，点右边的加号加一个。</p>
           {/each}
+          <button type="button" class="ledger-chip-add" title="新增大类" aria-label="新增大类" on:click={() => requestCategory("")}>
+            <Plus size={16} />
+          </button>
         </div>
 
         <div class="ledger-tile-grid">
@@ -426,19 +470,35 @@
               <em>{tile.name}</em>
             </button>
           {/each}
+          <button
+            type="button"
+            class="ledger-cat-tile add"
+            title={openParent && openChildren.length > 0 ? `在「${openParentCategory?.name ?? ""}」下新增子分类` : "新增分类"}
+            on:click={() => requestCategory(openChildren.length > 0 ? openParent : "")}
+          >
+            <span class="ledger-tile-icon add"><Plus size={20} /></span>
+            <em>新增</em>
+          </button>
         </div>
-      {/if}
-    </div>
+      </div>
+    {/if}
 
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-    <div class="ledger-meta-row" bind:this={metaRowEl} on:click|stopPropagation>
+    <div class="ledger-meta-row" on:click|stopPropagation>
       <div class="ledger-meta-field" class:open={openPicker === "date"}>
-        <button type="button" class="ledger-meta-trigger" title="归属日期" on:click={() => togglePicker("date")}>
-          <CalendarDays size={15} />{dateLabel}
+        <button type="button" class="ledger-meta-trigger" title="归属日期与时刻" on:click={() => togglePicker("date")}>
+          <CalendarDays size={15} />{dateLabel}{#if time}<em class="ledger-meta-clock">{time}</em>{/if}
         </button>
         {#if openPicker === "date"}
           <div class="ledger-pop date">
-            <DatePicker value={date} on:select={(event) => { date = event.detail; openPicker = ""; }} on:clear={() => { date = today; openPicker = ""; }} />
+            <DatePicker
+              value={date}
+              {time}
+              withTime
+              on:select={(event) => { date = event.detail; openPicker = ""; }}
+              on:selectTime={(event) => { time = event.detail; }}
+              on:clear={() => { date = today; openPicker = ""; }}
+            />
           </div>
         {/if}
       </div>
@@ -483,7 +543,12 @@
         {#each ["1", "2", "3"] as key (key)}
           <button type="button" class="ledger-key" on:pointerdown|preventDefault={() => pressKey(key)}>{key}</button>
         {/each}
-        <button type="button" class="ledger-key save" disabled={busy} on:pointerdown|preventDefault={() => void save(false)}>
+        <button
+          type="button"
+          class="ledger-key save"
+          disabled={busy}
+          on:pointerdown|preventDefault={(event) => void save(false, { x: event.clientX, y: event.clientY })}
+        >
           <Check size={18} />{existing ? "保存" : "记一笔"}
         </button>
         <button type="button" class="ledger-key zero" on:pointerdown|preventDefault={() => pressKey("0")}>0</button>
@@ -495,7 +560,9 @@
           {#if cents > 0}{formatCents(cents)} 元{/if}
         </span>
         <span class="ledger-foot-spacer"></span>
-        <button type="button" class="settings-button" disabled={busy} on:click={() => void save(true)}>保存再记</button>
+        {#if !existing}
+          <button type="button" class="settings-button" disabled={busy} on:click={() => void save(true)}>保存再记</button>
+        {/if}
         <button type="button" class="settings-button primary" disabled={busy} on:click={() => void save(false)}>
           {existing ? "保存修改" : "记一笔"}
         </button>

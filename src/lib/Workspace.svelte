@@ -33,6 +33,7 @@
   import DatePicker from "./DatePicker.svelte";
   import ContextMenu from "./menu/ContextMenu.svelte";
   import MenuItem from "./menu/MenuItem.svelte";
+  import MonthPopover from "./MonthPopover.svelte";
   import MenuSeparator from "./menu/MenuSeparator.svelte";
   import MoveTargetTree from "./menu/MoveTargetTree.svelte";
   import ListMenu from "./workspace/ListMenu.svelte";
@@ -167,6 +168,8 @@
   let calViewMode: "month" | "week" = "month";
   let calYear = new Date().getFullYear();
   let calMonth = new Date().getMonth();
+  let calPopOpen = false;
+  let calLabelEl: HTMLElement;
   // The date whose completed tasks are mirrored in the main area (history view).
   // Always resets to today when leaving / re-entering My Day.
   let myDayViewDate = todayIso();
@@ -406,8 +409,9 @@
     void updateTaskAction(taskId, { myDay: true });
   }
 
-  function handleTaskSetDate(event: CustomEvent<{ id: string; date: string }>): void {
-    setTaskDate(event.detail.id, event.detail.date);
+  function handleTaskSetDate(event: CustomEvent<{ id: string; date: string; time?: string }>): void {
+    // 只改时刻时（卡片浮层里的滚轮）保持浮层开着，用户可能还要再拨一下
+    setTaskDate(event.detail.id, event.detail.date, event.detail.time, event.detail.time !== undefined);
   }
 
   function toggleSuggestions(): void {
@@ -627,15 +631,24 @@
     void setDiaryUiAction(event.detail.id, { expanded: event.detail.expanded });
   }
 
-  function setTaskDate(taskId: string, date: string): void {
+  /** 日期与时刻一起写：dueDate 与 plannedDate 同进同出（「添加日期」的老语义），
+   *  dueTime 精确到分钟。清日期时时刻跟着清；只给日期时沿用任务已有的时刻。 */
+  function setTaskDate(taskId: string, date: string, time?: string, keepMenu = false): void {
     const dateVal = date ? date.slice(0, 10) : null;
     const task = $appState.tasks.find((item) => item.id === taskId);
     void updateTaskAction(taskId, {
       dueDate: dateVal,
       plannedDate: dateVal,
-      myDay: dateVal === todayIso() ? true : task?.myDay
+      myDay: dateVal === todayIso() ? true : task?.myDay,
+      dueTime: dateVal ? (time ?? task?.dueTime ?? "") : ""
     });
-    taskMenu = null;
+    if (!keepMenu) taskMenu = null;
+  }
+
+  /** 菜单里拨时刻：还没有日期就落在今天（与「添加日期」的语义一致），菜单不关。 */
+  function setTaskTime(taskId: string, time: string): void {
+    const task = $appState.tasks.find((item) => item.id === taskId);
+    setTaskDate(taskId, task?.dueDate?.slice(0, 10) || todayIso(), time, true);
   }
 
   function openListMenu(event: MouseEvent): void {
@@ -855,9 +868,28 @@
       <section class="calendar-panel" on:click|stopPropagation>
         <div class="calendar-header">
           <button type="button" on:click={calPrev}><ChevronLeft size={16} /></button>
-          <span>{calYear}年{calMonth + 1}月</span>
+          <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions a11y_no_noninteractive_element_to_interactive_role -->
+          <span
+            bind:this={calLabelEl}
+            class="month-pop-anchor cal-title"
+            role="button"
+            tabindex="0"
+            title="点击直接选年月"
+            on:click={() => (calPopOpen = !calPopOpen)}
+          >{calYear}年{calMonth + 1}月</span>
           <button type="button" on:click={calNext}><ChevronRight size={16} /></button>
         </div>
+        <MonthPopover
+          open={calPopOpen}
+          anchor={calLabelEl}
+          year={calYear}
+          month={calMonth}
+          onSelect={(next) => {
+            calYear = next.year;
+            calMonth = next.month;
+          }}
+          onClose={() => (calPopOpen = false)}
+        />
         <div class="calendar-view-toggle">
           <button type="button" class:active={calViewMode === "month"} on:click={() => (calViewMode = "month")}>月</button>
           <button type="button" class:active={calViewMode === "week"} on:click={() => (calViewMode = "week")}>周</button>
@@ -1116,7 +1148,10 @@
         <div slot="submenu" class="task-menu-date">
           <DatePicker
             value={taskMenuTask.dueDate?.slice(0, 10) ?? ""}
+            time={taskMenuTask.dueTime ?? ""}
+            withTime
             on:select={(event) => setTaskDate(taskMenuTask.id, event.detail)}
+            on:selectTime={(event) => setTaskTime(taskMenuTask.id, event.detail)}
             on:clear={() => setTaskDate(taskMenuTask.id, "")}
           />
         </div>

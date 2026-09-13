@@ -21,6 +21,7 @@ import {
   createCategoryNode, createEntryNode, defaultBackground, createScheduledTask, DEFAULT_ENTRY_ICON
 } from "./defaults";
 import { nodeAndDescendantIds } from "./nodes";
+import { clockOf, composeTimestamp } from "./clock";
 import { isMobilePlatform } from "./capabilities";
 import { uiToPatch, uiToSpec, type ScheduleEntryV9 } from "./scheduleAdapter";
 
@@ -316,6 +317,8 @@ export type TaskDraft = {
   myDay?: boolean;
   plannedDate?: string;
   dueDate?: string;
+  /** 到期时刻 HH:MM；空 = 只精确到天 */
+  dueTime?: string;
   tags?: Tag[];
   emojis?: string[];
 };
@@ -332,6 +335,7 @@ export async function addTask(entryId: string, draft: TaskDraft): Promise<Task |
         myDay: draft.myDay ?? false,
         plannedDate: draft.plannedDate,
         dueDate: draft.dueDate,
+        dueTime: draft.dueTime,
         tags: (draft.tags ?? []).map((tag) => `${tag.color}:${tag.text ?? ""}`),
         emojis: draft.emojis ?? []
       });
@@ -344,6 +348,7 @@ export async function addTask(entryId: string, draft: TaskDraft): Promise<Task |
         myDay: draft.myDay ?? false,
         plannedDate: draft.plannedDate,
         dueDate: draft.dueDate,
+        dueTime: draft.dueTime,
         completedAt: draft.completed ? new Date().toISOString() : undefined,
         tags: draft.tags ?? [],
         emojis: draft.emojis ?? [],
@@ -366,6 +371,7 @@ export async function addTask(entryId: string, draft: TaskDraft): Promise<Task |
     myDay: draft.myDay ?? false,
     plannedDate: draft.plannedDate,
     dueDate: draft.dueDate,
+    dueTime: draft.dueTime,
     completedAt: draft.completed ? new Date().toISOString() : undefined,
     tags: draft.tags ?? [],
     emojis: draft.emojis ?? [],
@@ -385,6 +391,7 @@ export type TaskChanges = {
   entryId?: string;
   plannedDate?: string | null;
   dueDate?: string | null;
+  dueTime?: string | null;
 };
 
 function legacyUpdateTask(id: string, updater: (task: Task) => Task): void {
@@ -412,6 +419,7 @@ export async function updateTask(id: string, changes: TaskChanges): Promise<void
       if (changes.dueDate === null) params.clearDueDate = true;
       else params.dueDate = changes.dueDate;
     }
+    if (changes.dueTime !== undefined) params.dueTime = changes.dueTime ?? "";
     try {
       await coreDispatch("task.modify", params);
     } catch (error) {
@@ -433,6 +441,7 @@ export async function updateTask(id: string, changes: TaskChanges): Promise<void
     if (changes.entryId !== undefined) next.nodeId = changes.entryId;
     if (changes.plannedDate !== undefined) next.plannedDate = changes.plannedDate ?? undefined;
     if (changes.dueDate !== undefined) next.dueDate = changes.dueDate ?? undefined;
+    if (changes.dueTime !== undefined) next.dueTime = changes.dueTime ?? undefined;
     return next;
   });
 }
@@ -454,6 +463,7 @@ function legacyLocalTaskPatch(id: string, changes: TaskChanges): void {
       if (changes.entryId !== undefined) next.nodeId = changes.entryId;
       if (changes.plannedDate !== undefined) next.plannedDate = changes.plannedDate ?? undefined;
       if (changes.dueDate !== undefined) next.dueDate = changes.dueDate ?? undefined;
+      if (changes.dueTime !== undefined) next.dueTime = changes.dueTime ?? undefined;
       return next;
     })
   }));
@@ -711,6 +721,9 @@ export async function setUiColor(nodeId: string, color: string): Promise<boolean
 export type DiaryDraft = {
   /** 归属日期 YYYY-MM-DD；缺省为今天 */
   date?: string;
+  /** 时刻 HH:MM。日记没有独立的 time 字段：它落在 createdAt 的时钟部分
+   *  （Markdown 导出的 front-matter 也是这么 round-trip 的），core 侧同一条语义。 */
+  time?: string;
   title?: string;
   markdown?: string;
   mood?: string;
@@ -740,6 +753,11 @@ function applyDiaryChanges(entry: DiaryEntry, changes: DiaryChanges): DiaryEntry
   if (changes.mood !== undefined) next.mood = changes.mood;
   if (changes.weather !== undefined) next.weather = changes.weather;
   if (changes.tags !== undefined) next.tags = changes.tags;
+  // 时刻住在 createdAt 里（与 core 同一条语义）：改了日期或时刻就重写它，
+  // 时刻缺省沿用原来的，于是「只改日期」不会把写作时刻抹成 00:00。
+  if (changes.date !== undefined || changes.time !== undefined) {
+    next.createdAt = composeTimestamp(next.date, changes.time ?? clockOf(entry.createdAt));
+  }
   return next;
 }
 
@@ -750,6 +768,7 @@ export async function addDiaryEntry(draft: DiaryDraft): Promise<DiaryEntry | nul
     try {
       created = await coreDispatch<{ id: string; date: string }>("diary.add", {
         date: draft.date,
+        time: draft.time,
         title: draft.title ?? "",
         markdown: draft.markdown ?? "",
         mood: draft.mood ?? "",
@@ -782,7 +801,7 @@ export async function addDiaryEntry(draft: DiaryDraft): Promise<DiaryEntry | nul
     mood: draft.mood ?? "",
     weather: draft.weather ?? "",
     tags: draft.tags ?? [],
-    createdAt,
+    createdAt: draft.time ? composeTimestamp(draft.date ?? todayIso(), draft.time) : createdAt,
     updatedAt: createdAt
   };
   commitDiary([...diaries(), entry]);
@@ -796,6 +815,7 @@ export async function updateDiaryEntry(id: string, changes: DiaryChanges): Promi
   if (coreMode) {
     const params: Record<string, unknown> = { id };
     if (changes.date !== undefined) params.date = changes.date;
+    if (changes.time !== undefined) params.time = changes.time;
     if (changes.title !== undefined) params.title = changes.title;
     if (changes.markdown !== undefined) params.markdown = changes.markdown;
     if (changes.mood !== undefined) params.mood = changes.mood;
@@ -1030,6 +1050,7 @@ export async function transferLedger(input: {
   to: string;
   amountCents: number;
   date?: string;
+  time?: string;
   note?: string;
 }): Promise<boolean> {
   if (coreMode) {
@@ -1039,6 +1060,7 @@ export async function transferLedger(input: {
         to: input.to,
         amountCents: input.amountCents,
         date: input.date,
+        time: input.time,
         note: input.note ?? ""
       });
     } catch (error) {
@@ -1056,7 +1078,7 @@ export async function transferLedger(input: {
     accountId: input.from,
     toAccountId: input.to,
     date: input.date ?? todayIso(),
-    time: "",
+    time: input.time ?? "",
     note: input.note ?? "",
     createdAt,
     updatedAt: createdAt
@@ -2065,6 +2087,83 @@ export async function syncHistoryRemove(index: number): Promise<SyncHistoryEntry
     await report(error, "删除配对历史失败");
     return [];
   }
+}
+
+// ---------------------------------------------------------------------------
+// 存储清理（设置页的「释放空间」）
+// ---------------------------------------------------------------------------
+
+export type StorageCategory = { count: number; bytes: number };
+
+export type StorageUsage = {
+  dataDir: string;
+  totalBytes: number;
+  images: StorageCategory;
+  orphanImages: StorageCategory;
+  backgrounds: StorageCategory;
+  orphanBackgrounds: StorageCategory;
+  avatars: StorageCategory;
+  orphanAvatars: StorageCategory;
+  tempFiles: StorageCategory;
+  serverLogs: StorageCategory;
+  cleanableLogs: StorageCategory;
+  backups: StorageCategory;
+};
+
+export type StorageCleanResult = {
+  freedBytes: number;
+  removedImages: number;
+  removedBackgrounds: number;
+  removedAvatars: number;
+  removedTempFiles: number;
+  removedLogs: number;
+  warnings: string[];
+};
+
+/** 只读盘点：清之前先看看能清出多少（也是「已用空间」那一行的数据源）。 */
+export async function fetchStorageUsage(): Promise<StorageUsage | null> {
+  if (!coreMode) return null;
+  try {
+    const envelope = await coreDispatch<StorageUsage>("storage.usage", {});
+    return envelope.data;
+  } catch (error) {
+    await report(error, "读取存储占用失败");
+    return null;
+  }
+}
+
+/**
+ * 清理无引用的插图/背景/头像、崩溃残留的临时文件与旧服务器日志。
+ * 域数据、runtime/、服务器库与账户一概不碰（边界写在 core 的 ops_storage.rs 里）。
+ */
+export async function cleanStorage(): Promise<StorageCleanResult | null> {
+  if (!coreMode) {
+    return {
+      freedBytes: 0,
+      removedImages: 0,
+      removedBackgrounds: 0,
+      removedAvatars: 0,
+      removedTempFiles: 0,
+      removedLogs: 0,
+      warnings: []
+    };
+  }
+  try {
+    const envelope = await coreDispatch<StorageCleanResult>("storage.clean", {});
+    return envelope.data;
+  } catch (error) {
+    await report(error, "清理失败");
+    return null;
+  }
+}
+
+/** 字节数给人看：不足 1MB 显示 KB，再小就显示 B。 */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
 function flattenSettings(source: Settings): Array<[string, unknown]> {
