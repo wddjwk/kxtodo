@@ -315,3 +315,17 @@ export function showMobileList(): void {
   }
   mobileView.set("list");
 }
+
+/**
+ * 「返回上一级」的按钮口径（移动端页面左上角的返回箭头）：与安卓返回键同一条历史栈，
+ * 有层就退一层，没有层（已经在列表上）就什么都不做。Esc 那种"再点一次退出"的语义
+ * 刻意不给——按钮在列表页根本不渲染。
+ */
+export function goBackLevel(): void {
+  if (!get(isMobile) || typeof history === "undefined") return;
+  if (currentLayer() !== undefined) {
+    history.back();
+    return;
+  }
+  mobileView.set("list");
+}

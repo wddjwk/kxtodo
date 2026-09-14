@@ -50,9 +50,70 @@
 /* 只抬正文流里的直接子元素。**绝不要写成 `.ledger-view > *`**（diary.css 有过事故记录）：
    那条规则会把 `.context-menu` 的 fixed 与 `.ledger-fab-row` 的 absolute 全压成 relative。 */
 .ledger-view > .ledger-month-bar,
+.ledger-view > .ledger-search,
+.ledger-view > .ledger-search-sum,
 .ledger-view > .ledger-scroll {
   position: relative;
   z-index: 1;
+}
+
+/* ---------- 搜索记账（与日记的搜索框同一套观感） ---------- */
+
+.ledger-search {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: -8px 0 14px;
+  padding: 8px 13px;
+  border: 1px solid rgb(0 0 0 / 8%);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 84%);
+  color: #8b929e;
+}
+
+.ledger-search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: #23272f;
+  font-size: var(--font-ledger);
+  outline: none;
+}
+
+/* 搜索结果的收/支/结余汇总：灰色小字（与月份条同一条口径），
+   红绿只留给每一笔的金额 */
+.ledger-search-sum {
+  display: flex;
+  gap: 16px;
+  align-items: baseline;
+  margin: -6px 0 14px;
+  padding: 9px 14px;
+  border: 1px solid rgb(0 0 0 / 4%);
+  border-radius: 10px;
+  background: rgb(255 255 255 / 70%);
+  color: #93989f;
+  font-size: calc(var(--font-ledger) - 2px);
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-search-sum strong {
+  margin-right: 4px;
+  color: #5c6470;
+  font-weight: 700;
+}
+
+.ledger-search-sum em {
+  margin-left: auto;
+  color: #b6bcc6;
+  font-style: normal;
+}
+
+/* 搜索结果的一条账：日期头 + 那一笔（与按天卡片同一层皮，去掉间隔线） */
+.ledger-result-card .ledger-entry-list {
+  margin-top: 2px;
+  padding-top: 0;
+  border-top: 0;
 }
 
 /* ---------- 头部 ---------- */
@@ -175,8 +236,8 @@
   overflow-y: auto;
   scrollbar-gutter: stable;
   margin-right: -56px;
-  /* 底部留出浮动添加按钮的高度，最后一张卡片能滚到它上面来 */
-  padding: 0 51px 78px 0;
+  /* 底部留出浮动按钮列（今 + 记一笔）的高度，最后一张卡片能滚到它们上面来 */
+  padding: 0 51px 168px 0;
 }
 
 /* ---------- 按天卡片（一天一张，卡片里是当天每一笔，不折叠） ---------- */
@@ -322,25 +383,27 @@
   min-width: 0;
 }
 
-/* 无备注的 solo 布局：左右两列，左列（分类名+图片图标）垂直居中 */
+/* 无备注也无图的 solo 布局：两行两列的网格——分类名跨两行上下居中（跟图标一致），
+   右列上=金额、下=时刻/账户。两个包裹层用 display:contents 把自己从布局里去掉，
+   四个小块直接落进这张网格（结构因此与两行卡片完全共用，测试与语义都不变）。 */
 .ledger-entry-main.solo {
-  display: flex;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
+  gap: 2px 10px;
 }
 
-.ledger-entry-solo-name {
-  display: inline-flex;
-  gap: 5px;
-  align-items: center;
-  min-width: 0;
-  flex: 0 1 auto;
+.ledger-entry-main.solo .ledger-entry-solo-name,
+.ledger-entry-main.solo .ledger-entry-solo-side {
+  display: contents;
 }
 
-.ledger-entry-solo-name strong {
+.ledger-entry-main.solo .ledger-entry-solo-name strong {
   min-width: 0;
   overflow: hidden;
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  align-self: center;
   color: #2b3038;
   font-size: var(--font-ledger);
   font-weight: 600;
@@ -348,11 +411,17 @@
   text-overflow: ellipsis;
 }
 
-.ledger-entry-solo-side {
-  display: grid;
-  gap: 2px;
-  justify-items: end;
-  flex: 0 0 auto;
+.ledger-entry-main.solo .ledger-entry-amount {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+}
+
+.ledger-entry-main.solo .ledger-entry-meta {
+  grid-column: 2;
+  grid-row: 2;
+  margin-left: 0;
+  justify-self: end;
 }
 
 .ledger-entry-line strong {
@@ -396,36 +465,25 @@
   text-overflow: ellipsis;
 }
 
-/* 备注右侧的图片小图标：点它全屏看这条账的插图；多张时右下角标出张数 */
+/* 备注右侧的图片小图标：点它全屏看这条账的插图。图标与备注文字等高
+   （字号跟着 --font-ledger 走，不再写死一个 12px），比正文淡一档 */
 .ledger-entry-image {
-  position: relative;
   display: inline-grid;
   place-items: center;
   flex: 0 0 auto;
   color: #b6bcc6;
   cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
   transition: color 0.12s ease;
+}
+
+.ledger-entry-image svg {
+  width: calc(var(--font-ledger) - 3px);
+  height: calc(var(--font-ledger) - 3px);
 }
 
 .ledger-entry-image:hover {
   color: var(--accent);
-}
-
-.ledger-entry-image-count {
-  position: absolute;
-  top: -5px;
-  right: -8px;
-  min-width: 13px;
-  height: 13px;
-  padding: 0 3px;
-  border-radius: 7px;
-  background: var(--accent, #5c6470);
-  color: #ffffff;
-  font-size: 9px;
-  font-style: normal;
-  font-variant-numeric: tabular-nums;
-  line-height: 13px;
-  text-align: center;
 }
 
 .ledger-entry-meta {
@@ -449,17 +507,30 @@
   flex: 0 0 auto;
 }
 
+/* 账户一律带图标（普通一笔 =「图标 + 名」，转账 =「[转出图标]A ⟷ [转入图标]B」）；
+   图标与这一行的字号等高，转账两段之间夹一个小箭头 */
 .ledger-entry-account {
   display: inline-flex;
   gap: 4px;
   align-items: center;
-  max-width: 11em;
+  max-width: 16em;
   overflow: hidden;
   flex: 0 1 auto;
   color: #9aa1ac;
   font-size: calc(var(--font-ledger) - 5px);
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.ledger-entry-account svg {
+  width: calc(var(--font-ledger) - 5px);
+  height: calc(var(--font-ledger) - 5px);
+  flex: 0 0 auto;
+}
+
+.ledger-account-arrow {
+  color: #cdd3db;
+  flex: 0 0 auto;
 }
 
 .ledger-day-empty {
@@ -1520,11 +1591,17 @@
   text-align: center;
 }
 
-/* 放大查看（桌面）：居中浮窗，悬浮读数 */
+/* 放大查看（桌面）：居中浮窗，悬浮读数；按全屏按钮铺满窗口（仍在应用窗口内，不遮任务栏） */
 .ledger-sheet.ledger-trend-dialog {
   width: min(880px, 92%);
   height: auto;
   max-height: min(80vh, 640px);
+}
+
+.ledger-sheet.ledger-trend-dialog.expanded {
+  width: min(1400px, 96%);
+  height: 92vh;
+  max-height: 92vh;
 }
 
 .ledger-trend-dialog-body {
@@ -1556,10 +1633,17 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 14px 18px;
   border-radius: 14px;
   background: #ffffff;
   transform: translate(-50%, -50%) rotate(90deg);
+  /* 旋转 90° 之后系统栏落在旋转坐标系的横侧：物理上边（状态栏）= 旋转层的左内边距、
+     物理下边（手势条）= 右内边距；横屏刘海（inset-left/right）对应上下。不避让
+     的话整条标题栏会钻到状态栏底下——安全区坑的第四次踩点。 */
+  padding:
+    calc(14px + env(safe-area-inset-right, 0px) * var(--safe-inv, 1))
+    calc(18px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1))
+    calc(14px + env(safe-area-inset-left, 0px) * var(--safe-inv, 1))
+    calc(18px + env(safe-area-inset-top, 0px) * var(--safe-inv, 1));
 }
 
 .ledger-trend-rot-head {
@@ -1760,14 +1844,17 @@
 
 /* ---------- 浮动添加按钮 ---------- */
 
+/* 浮动按钮列：贴着右下角会压住最后一张卡片，整体上抬约一个半按钮高；
+   「今」在 + 的正上方（同一列、右对齐）——与日记的浮动按钮同一条口径。 */
 .ledger-fab-row {
   position: absolute;
   right: 30px;
-  bottom: 26px;
+  bottom: 104px;
   z-index: 40;
   display: flex;
+  flex-direction: column;
   gap: 10px;
-  align-items: center;
+  align-items: flex-end;
 }
 
 .ledger-fab {
@@ -1836,10 +1923,12 @@
   width: min(620px, 92%);
 }
 
-/* 桌面的记账对话框宽高各增约一个图标的尺寸：五排分类 + 行内二级搁板要舒展一点 */
+/* 桌面的记账对话框是正方形：高度跟着宽度走（aspect-ratio 让两者永远相等），
+   内容超出由分类区/主体自己滚——展开二级搁板不再让整个对话框跟着变高变矮。 */
 .ledger-sheet.ledger-editor-sheet {
   width: min(626px, 92%);
-  max-height: min(86vh, 846px);
+  aspect-ratio: 1 / 1;
+  max-height: min(626px, 92vh);
 }
 
 /* 放开裁剪后，圆角得由首尾两块自己带（否则头尾的方角会盖出对话框的圆角外） */

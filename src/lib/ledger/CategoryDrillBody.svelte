@@ -9,14 +9,13 @@
    * 自己没填颜色的按序号取调色板，行里的图标/进度条跟环同色。
    * 账单明细与列表视图同一套两行排版（图标跨两行 + 大字行 + 小字行）。
    */
-  import { ChevronLeft, ChevronRight, Image as ImageIcon, X } from "@lucide/svelte";
+  import { ChevronLeft, ChevronRight, X } from "@lucide/svelte";
   import { categoryStats, formatCents, paletteColor, sortEntries } from "../ledger";
   import type { LedgerDonutItem } from "../ledger";
   import { ledgerIcon, softColor } from "../ledgerIcons";
-  import { accountTypeIcon } from "../ledgerAccountTypes";
-  import { displayClock } from "../clock";
   import { monthDayLabel } from "../diary";
   import LedgerDonut from "./LedgerDonut.svelte";
+  import LedgerEntryRow from "./LedgerEntryRow.svelte";
   import type { LedgerBook, LedgerCategory, LedgerEntry, LedgerSide } from "../types";
 
   export let book: LedgerBook;
@@ -70,42 +69,6 @@
   function childPercent(cents: number): number {
     return totalCents > 0 ? Math.round((cents / totalCents) * 10000) / 100 : 0;
   }
-
-  function entryName(entry: LedgerEntry): string {
-    if (entry.kind === "transfer") return "转账";
-    const item = entry.categoryId ? book.categories.find((cat) => cat.id === entry.categoryId) : undefined;
-    return item?.name ?? "未分类";
-  }
-
-  function entryIconName(entry: LedgerEntry): string {
-    if (entry.kind === "transfer") return "ArrowLeftRight";
-    const item = entry.categoryId ? book.categories.find((cat) => cat.id === entry.categoryId) : undefined;
-    return item?.icon || (item ? "Package" : "Ellipsis");
-  }
-
-  function entryColor(entry: LedgerEntry): string {
-    if (entry.kind === "transfer") return "#7f8c8d";
-    const item = entry.categoryId ? book.categories.find((cat) => cat.id === entry.categoryId) : undefined;
-    return categoryColorOf(item);
-  }
-
-  function accountLabel(entry: LedgerEntry): string {
-    const from = book.accounts.find((item) => item.id === entry.accountId);
-    if (entry.kind !== "transfer") return from?.name ?? "";
-    const to = book.accounts.find((item) => item.id === entry.toAccountId);
-    return `${from?.name ?? "?"} → ${to?.name ?? "?"}`;
-  }
-
-  function accountIcon(entry: LedgerEntry): string {
-    const account = book.accounts.find((item) => item.id === entry.accountId);
-    return account?.icon || accountTypeIcon(account?.kind ?? "other");
-  }
-
-  function amountText(entry: LedgerEntry): string {
-    const value = formatCents(entry.amountCents);
-    if (entry.kind === "transfer") return value;
-    return `${entry.kind === "income" ? "+" : "-"}${value}`;
-  }
 </script>
 
 <div class="ledger-drill">
@@ -136,55 +99,14 @@
       {:else}
         <ul class="ledger-drill-entries">
           {#each entries as entry (entry.id)}
-            {@const accountText = accountLabel(entry)}
-            {@const clock = displayClock(entry.time)}
-            {@const eColor = entryColor(entry)}
             <li>
-              <!-- svelte-ignore a11y_no_static_element_interactions -->
-              <!-- svelte-ignore a11y_click_events_have_key_events -->
-              <div class="ledger-entry" title="点开修改这一笔" on:click={() => onEditEntry(entry.id)}>
-                <span class="ledger-entry-icon" style="--cat: {eColor}; background: {softColor(eColor)}">
-                  <svelte:component this={ledgerIcon(entryIconName(entry), "Ellipsis")} size={17} />
-                </span>
-                <span class="ledger-entry-main">
-                  <span class="ledger-entry-line">
-                    <strong>{monthDayLabel(entry.date)} · {entryName(entry)}</strong>
-                    <b
-                      class="ledger-entry-amount"
-                      class:in={entry.kind === "income"}
-                      class:out={entry.kind === "expense"}
-                    >{amountText(entry)}</b>
-                  </span>
-                  <span class="ledger-entry-sub">
-                    <em class="ledger-entry-note">
-                      {#if entry.note}{entry.note}{/if}
-                      {#if entry.images && entry.images.length > 0}
-                        <!-- svelte-ignore a11y_no_static_element_interactions -->
-                        <!-- svelte-ignore a11y_click_events_have_key_events -->
-                        <span
-                          class="ledger-entry-image"
-                          title="查看这条账的图片"
-                          on:click|stopPropagation={() => onImageView(entry.id)}
-                        >
-                          <ImageIcon size={12} />
-                          {#if entry.images.length > 1}<i class="ledger-entry-image-count">{entry.images.length}</i>{/if}
-                        </span>
-                      {/if}
-                    </em>
-                    <span class="ledger-entry-meta">
-                      {#if clock}<em class="ledger-entry-time">{clock}</em>{/if}
-                      {#if accountText}
-                        <em class="ledger-entry-account" title={accountText}>
-                          {#if entry.kind === "transfer"}
-                            <svelte:component this={ledgerIcon(accountIcon(entry), "Wallet")} size={11} />
-                          {/if}
-                          {accountText}
-                        </em>
-                      {/if}
-                    </span>
-                  </span>
-                </span>
-              </div>
+              <LedgerEntryRow
+                {book}
+                {entry}
+                datePrefix={`${monthDayLabel(entry.date)} · `}
+                on:edit={(event) => onEditEntry(event.detail)}
+                on:image={(event) => onImageView(event.detail)}
+              />
             </li>
           {/each}
         </ul>

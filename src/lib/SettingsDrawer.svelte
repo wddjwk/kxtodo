@@ -1105,6 +1105,14 @@
           on:change={(event) => updateFeature("sync", event.currentTarget.checked)}
         />
       </label>
+      <label class="toggle-row" title="移动端每个页面左上角显示一个返回箭头（与系统返回键同一条历史栈）。桌面无感。">
+        <span>左上角返回按钮</span>
+        <input
+          type="checkbox"
+          checked={$appSettings.features.mobileBack}
+          on:change={(event) => updateFeature("mobileBack", event.currentTarget.checked)}
+        />
+      </label>
     </div>
   </SettingsSection>
 

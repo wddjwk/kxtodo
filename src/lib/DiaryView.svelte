@@ -16,7 +16,9 @@
   } from "./diary";
   import DiaryCard from "./diary/DiaryCard.svelte";
   import DiaryEntryMenu from "./diary/DiaryEntryMenu.svelte";
+  import { swipeX } from "./swipe";
   import MenuItem from "./menu/MenuItem.svelte";
+  import MobileBack from "./MobileBack.svelte";
   import MonthPopover from "./MonthPopover.svelte";
   import ListMenu from "./workspace/ListMenu.svelte";
   import type { DiaryEntry, DiaryViewMode } from "./types";
@@ -200,6 +202,7 @@
 <main class="diary-view" style={mainStyle}>
   <section class="list-header">
     <div>
+      <MobileBack />
       <span class="header-icon"><NotebookPen size={34} /></span>
       <h1>日记</h1>
     </div>
@@ -275,7 +278,8 @@
       {/each}
 
     {:else if view === "calendar"}
-      <div class="diary-calendar">
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="diary-calendar" use:swipeX={{ onPrev: prevMonth, onNext: nextMonth }}>
         <div class="diary-calendar-bar">
           <button type="button" aria-label="上个月" on:click|stopPropagation={prevMonth}><ChevronLeft size={18} /></button>
           <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions a11y_no_noninteractive_element_to_interactive_role -->

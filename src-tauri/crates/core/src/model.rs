@@ -1486,6 +1486,9 @@ pub struct FeatureSettings {
     /// 编辑器 markdown 工具栏（特性开关，桌面；移动端常显不受它管）
     #[serde(rename = "editorToolbar", default = "default_true")]
     pub editor_toolbar: bool,
+    /// 移动端页面左上角返回按钮（特性开关，默认关；桌面无感）
+    #[serde(rename = "mobileBack", default)]
+    pub mobile_back: bool,
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
@@ -1497,6 +1500,7 @@ impl Default for FeatureSettings {
             show_category_badges: true,
             sync: true,
             editor_toolbar: true,
+            mobile_back: false,
             extra: Map::new(),
         }
     }

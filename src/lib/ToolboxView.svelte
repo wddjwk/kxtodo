@@ -7,6 +7,7 @@
    */
   import { ChevronLeft, Toolbox } from "@lucide/svelte";
   import type { Component } from "svelte";
+  import MobileBack from "./MobileBack.svelte";
   import { availableTools, type ToolDefinition } from "./tools/registry";
 
   let activeToolId: string | null = null;
@@ -33,6 +34,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <section class="toolbox-view" on:click|stopPropagation>
   <header class="toolbox-header">
+    <MobileBack />
     <span class="toolbox-header-icon"><Toolbox size={26} /></span>
     <strong class="toolbox-header-title">工具箱</strong>
   </header>

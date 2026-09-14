@@ -266,12 +266,12 @@ export const accent = derived(
 export const isSearching = derived(searchQuery, ($q) => $q.trim().length > 0);
 
 /**
- * 全局搜索的混排结果（任务 + 日记，按最近改动排序）。
+ * 全局搜索的混排结果（任务 + 日记 + 记账，按最近改动排序）。
  * 桌面在工作区渲染，移动端在侧栏搜索框下方的结果面板渲染——同一份数据，两处视图。
  */
 export const searchHits = derived(
-  [appState, diaryEntries, searchQuery],
-  ([$s, $d, $q]) => buildSearchHits($s, $d, $q)
+  [appState, diaryEntries, ledgerData, searchQuery],
+  ([$s, $d, $l, $q]) => buildSearchHits($s, $d, $l, $q)
 );
 
 // ---------------------------------------------------------------------------

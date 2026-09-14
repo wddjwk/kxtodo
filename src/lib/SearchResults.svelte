@@ -1,7 +1,8 @@
 <script lang="ts">
   import { ExternalLink, NotebookPen, PenLine, Trash2 } from "@lucide/svelte";
   import {
-    appState, appSettings, diaryEditor, editorTaskId, searchHits, searchQuery, showToast,
+    appState, appSettings, diaryEditor, editorTaskId, ledgerData, ledgerEditor, searchHits, searchQuery,
+    showToast,
     taskEmojiPicker, todayIso
   } from "./stores";
   import {
@@ -12,10 +13,11 @@
   } from "./actions";
   import { openExternalUrl } from "./backend";
   import { showMobileContent, showMobileDiary } from "./platform";
-  import { accentForNode, diaryAccent } from "./styles";
+  import { accentForNode, diaryAccent, ledgerAccent } from "./styles";
   import TaskCard from "./TaskCard.svelte";
   import DiaryCard from "./diary/DiaryCard.svelte";
   import DiaryEntryMenu from "./diary/DiaryEntryMenu.svelte";
+  import LedgerEntryCard from "./ledger/LedgerEntryCard.svelte";
   import ContextMenu from "./menu/ContextMenu.svelte";
   import MenuItem from "./menu/MenuItem.svelte";
   import MenuSeparator from "./menu/MenuSeparator.svelte";
@@ -44,6 +46,7 @@
   }
 
   $: diaryHitAccent = diaryAccent($appSettings.diary);
+  $: ledgerAccentColor = ledgerAccent($appSettings.ledger);
 
   function closeMenus(): void {
     taskMenu = null;
@@ -118,6 +121,13 @@
     diaryEditor.set({ id });
   }
 
+  // ---- 记账卡片 ----
+  /** 记账结果卡的点击：打开记账面板改这一笔（与日记编辑器同一条浮层机制）。 */
+  function openLedgerEntry(id: string): void {
+    closeMenus();
+    ledgerEditor.set({ id });
+  }
+
   function openDiaryMenu(event: CustomEvent<{ id: string; x: number; y: number }>): void {
     taskMenu = null;
     diaryMenu = { id: event.detail.id, x: event.detail.x, y: event.detail.y };
@@ -184,7 +194,7 @@
           on:pickEmoji={pickTaskEmoji}
         />
       </div>
-    {:else}
+    {:else if hit.kind === "diary"}
       <div class="search-hit" style={`--accent: ${diaryHitAccent}`}>
         <DiaryCard
           entry={hit.entry}
@@ -194,6 +204,14 @@
           on:edit={(event) => openDiaryEntry(event.detail)}
           on:context={openDiaryMenu}
           on:openLink={(event) => openLink(event.detail.href)}
+        />
+      </div>
+    {:else}
+      <div class="search-hit" style={`--accent: ${ledgerAccentColor}`}>
+        <LedgerEntryCard
+          book={$ledgerData}
+          entry={hit.entry}
+          on:edit={(event) => openLedgerEntry(event.detail)}
         />
       </div>
     {/if}

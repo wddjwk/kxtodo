@@ -111,8 +111,8 @@
   overflow-y: auto;
   scrollbar-gutter: stable;
   margin-right: -56px;
-  /* 底部留出浮动添加按钮的高度，最后一张卡片能滚到它上面来 */
-  padding: 0 51px 78px 0;
+  /* 底部留出浮动按钮列（今 + 写一篇）的高度，最后一张卡片能滚到它们上面来 */
+  padding: 0 51px 168px 0;
 }
 
 /* ---------- 列表视图：年份分隔 ---------- */
@@ -509,14 +509,17 @@
 
 /* ---------- 浮动添加按钮 ---------- */
 
+/* 浮动按钮列：贴着右下角会让「今」与 + 压住最后一张卡片，整体上抬约一个半按钮高；
+   「今」在 + 的正上方（同一列、右对齐），翻月时不用把手挪到别处。 */
 .diary-fab-row {
   position: absolute;
   right: 30px;
-  bottom: 26px;
+  bottom: 104px;
   z-index: 40;
   display: flex;
+  flex-direction: column;
   gap: 10px;
-  align-items: center;
+  align-items: flex-end;
 }
 
 .diary-fab {

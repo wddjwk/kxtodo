@@ -154,7 +154,8 @@ export const defaultSettings: Settings = {
   features: {
     showCategoryBadges: true,
     sync: true,
-    editorToolbar: true
+    editorToolbar: true,
+    mobileBack: false
   },
   diary: {
     view: "list",
@@ -1131,7 +1132,11 @@ export function normalizeSettings(raw: unknown): Settings {
       editorToolbar:
         typeof source?.features?.editorToolbar === "boolean"
           ? source.features.editorToolbar
-          : defaultSettings.features.editorToolbar
+          : defaultSettings.features.editorToolbar,
+      mobileBack:
+        typeof source?.features?.mobileBack === "boolean"
+          ? source.features.mobileBack
+          : defaultSettings.features.mobileBack
     },
     diary: {
       view: normalizeDiaryView(source?.diary?.view),

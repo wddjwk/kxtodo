@@ -71,6 +71,53 @@ export function sortEntries(entries: LedgerEntry[]): LedgerEntry[] {
   });
 }
 
+/**
+ * 记账搜索：分类名（二级命中时把大类名也算上）、备注、金额（含大类的名字对不上时也认）。
+ * 匹配规则与日记/任务各自那条同构（各自模块里一份），结果按时间倒序（最新在前）。
+ * 金额按「元」比对：查询里的逗号、空格先去掉，再与 12.34 / 1,234.56 / 1234 各种形态比。
+ */
+export function filterLedgerEntries(book: LedgerBook, query: string): LedgerEntry[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return sortEntries(book.entries);
+  const amountNeedle = needle.replaceAll(",", "").replace(/\s+/g, "");
+  return sortEntries(book.entries).filter((entry) => {
+    const category = entry.categoryId
+      ? book.categories.find((item) => item.id === entry.categoryId)
+      : undefined;
+    const parent = category?.parentId
+      ? book.categories.find((item) => item.id === category.parentId)
+      : undefined;
+    const haystack = [
+      entry.kind === "transfer" ? "转账" : "",
+      category?.name ?? "",
+      parent?.name ?? ""
+    ]
+      .join(" ")
+      .toLowerCase();
+    if (haystack.includes(needle)) return true;
+    if (entry.note.toLowerCase().includes(needle)) return true;
+    const amount = entry.amountCents / 100;
+    const forms = [
+      amount.toFixed(2),
+      formatCents(entry.amountCents).toLowerCase(),
+      String(amount),
+      Math.round(amount).toString()
+    ];
+    return forms.some((form) => form.includes(amountNeedle));
+  });
+}
+
+/** 一组流水（搜索结果）的收/支/结余合计——转账不计入，与统计口径一致。 */
+export function entriesTotals(entries: LedgerEntry[]): { income: number; expense: number } {
+  let income = 0;
+  let expense = 0;
+  for (const entry of entries) {
+    if (entry.kind === "income") income += entry.amountCents;
+    else if (entry.kind === "expense") expense += entry.amountCents;
+  }
+  return { income, expense };
+}
+
 export type LedgerDayGroup = {
   date: string;
   income: number;

@@ -9,7 +9,8 @@
     appState, appSettings, showToast,
     searchQuery, searchHits, selectedNode, visibleTasks, selectedBackground,
     accent, isSearching, todayIso, yesterdayIso, dateOnly,
-    taskEmojiPicker, editorTaskId, editorDraftNode, diaryEditor, diaryEntries, fileToDataUrl
+    taskEmojiPicker, editorTaskId, editorDraftNode, diaryEditor, diaryEntries, ledgerData, ledgerEditor,
+    fileToDataUrl
   } from "./stores";
   import {
     updateTask as updateTaskAction, deleteTask as deleteTaskAction,
@@ -21,14 +22,16 @@
   } from "./actions";
   import { pullToRefresh } from "./pullrefresh";
   import { taskMoveTargets } from "./nodes";
-  import { buildMainStyle } from "./styles";
+  import { buildMainStyle, ledgerAccent } from "./styles";
   import { hasMultipleMarkdownLines } from "./markdown";
   import { openExternalUrl, isTauriRuntime, saveMdImageFromDataUrl, mdImageUrl } from "./backend";
   import { imageCache, resolveImageSrc, mdImageCache, primeMdImageCache } from "./images";
   import IconGlyph from "./IconGlyph.svelte";
+  import MobileBack from "./MobileBack.svelte";
   import TaskCard from "./TaskCard.svelte";
   import DiaryCard from "./diary/DiaryCard.svelte";
   import DiaryEntryMenu from "./diary/DiaryEntryMenu.svelte";
+  import LedgerEntryCard from "./ledger/LedgerEntryCard.svelte";
   import ScheduledTasksView from "./ScheduledTasksView.svelte";
   import DatePicker from "./DatePicker.svelte";
   import ContextMenu from "./menu/ContextMenu.svelte";
@@ -256,6 +259,8 @@
       }));
   $: taskMenuTask = taskMenu ? $appState.tasks.find((task) => task.id === taskMenu?.taskId) : null;
   $: diaryMenuEntry = diaryMenu ? $diaryEntries.find((entry) => entry.id === diaryMenu?.id) ?? null : null;
+  /** 记账搜索结果的 --accent：工作区里拿不到 LedgerView 的内联主题色，从设置算一份 */
+  $: ledgerAccentColor = ledgerAccent($appSettings.ledger);
   $: hasTaskMoveTargets = taskMenu ? taskMoveTargets($appState.nodes, taskMenuTask?.nodeId ?? "").length > 0 : false;
   $: expandableTasks = $visibleTasks.filter((task) => hasMultipleMarkdownLines(task.markdown));
   $: allExpanded = expandableTasks.length > 0 && expandableTasks.every((task) => task.expanded);
@@ -627,6 +632,14 @@
     diaryEditor.set({ id });
   }
 
+  // ---- 搜索结果里的记账卡片 ----
+  /** 记账结果卡的点击：打开记账面板改这一笔（面板挂在 App 层，这里只递 id）。 */
+  function openLedgerEntry(id: string): void {
+    diaryMenu = null;
+    taskMenu = null;
+    ledgerEditor.set({ id });
+  }
+
   function handleDiaryExpand(event: CustomEvent<{ id: string; expanded: boolean }>): void {
     void setDiaryUiAction(event.detail.id, { expanded: event.detail.expanded });
   }
@@ -757,6 +770,7 @@
 <main class="workspace" style={mainStyle}>
   <section class="list-header">
     <div>
+      <MobileBack />
       <span class="header-icon">
         {#if $isSearching}
           <Search size={34} />
@@ -1022,7 +1036,7 @@
       </div>
     {/if}
     {#if $isSearching}
-      <!-- 全局搜索：任务卡（todo / 一般）与日记卡按「最近改动」混排在一条列表里 -->
+      <!-- 全局搜索：任务卡（todo / 一般）、日记卡与记账卡按「最近改动」混排在一条列表里 -->
       {#each $searchHits as hit (hit.key)}
         {#if hit.kind === "task"}
           <TaskCard
@@ -1041,7 +1055,7 @@
             on:removeEmoji={(e) => removeEmojiFromTask(e.detail.id, e.detail.index)}
             on:pickEmoji={(e) => openEmojiPickerAt(e.detail.id, e.detail.index)}
           />
-        {:else}
+        {:else if hit.kind === "diary"}
           <DiaryCard
             entry={hit.entry}
             today={todayIso()}
@@ -1051,6 +1065,15 @@
             on:context={openDiaryMenu}
             on:openLink={openTaskLink}
           />
+        {:else}
+          <!-- 记账结果：按日期归属条目的主题色画（记账页自己的 accent） -->
+          <div class="search-hit" style={`--accent: ${ledgerAccentColor}`}>
+            <LedgerEntryCard
+              book={$ledgerData}
+              entry={hit.entry}
+              on:edit={(event) => openLedgerEntry(event.detail)}
+            />
+          </div>
         {/if}
       {/each}
     {:else}

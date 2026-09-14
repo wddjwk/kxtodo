@@ -160,12 +160,13 @@ export type LedgerBook = {
 };
 
 /**
- * 全局搜索的一条命中：任务卡片（todo / 一般卡片按所属条目的 cardStyle）或日记卡片。
- * 结果界面按这个 union 混排，两种卡片各走各的组件。
+ * 全局搜索的一条命中：任务卡片（todo / 一般卡片按所属条目的 cardStyle）、日记卡片
+ * 或一条账。结果界面按这个 union 混排，三种卡片各走各的组件。
  */
 export type SearchHit =
   | { kind: "task"; key: string; task: Task; cardStyle: CardStyle }
-  | { kind: "diary"; key: string; entry: DiaryEntry };
+  | { kind: "diary"; key: string; entry: DiaryEntry }
+  | { kind: "ledger"; key: string; entry: LedgerEntry };
 
 export type ProfileSettings = {
   displayName: string;
@@ -266,6 +267,8 @@ export type Settings = {
     showCategoryBadges: boolean;
     sync: boolean;
     editorToolbar: boolean;
+    /** 移动端页面左上角的返回箭头（默认关，桌面无感） */
+    mobileBack: boolean;
   };
   /** 日记偏好。view 是本机状态；主题色与背景跟着设置同步走（外观该多端一致）。 */
   diary: {

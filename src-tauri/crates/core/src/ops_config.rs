@@ -378,6 +378,12 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         is_map: false,
     },
     FieldMeta {
+        path: "features.mobileBack",
+        kind: "boolean",
+        description: "移动端页面左上角返回按钮（特性开关，默认关；桌面无感）",
+        is_map: false,
+    },
+    FieldMeta {
         path: "diary.view",
         kind: "enum(list|calendar|group)",
         description: "日记视图（本机偏好，不跨设备同步）",
@@ -537,6 +543,7 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "features.showCategoryBadges" => json!(settings.features.show_category_badges),
         "features.sync" => json!(settings.features.sync),
         "features.editorToolbar" => json!(settings.features.editor_toolbar),
+        "features.mobileBack" => json!(settings.features.mobile_back),
         "diary.view" => json!(settings.diary.view.as_str()),
         "diary.accent" => json!(settings.diary.accent),
         "diary.backgroundColor" => json!(settings.diary.background_color),
@@ -1057,6 +1064,9 @@ pub fn set_value(
         "features.editorToolbar" => {
             settings.features.editor_toolbar = expect_bool(path, &value)?;
         }
+        "features.mobileBack" => {
+            settings.features.mobile_back = expect_bool(path, &value)?;
+        }
         "diary.view" => {
             let raw = expect_string(path, &value)?;
             settings.diary.view = DiaryView::parse(&raw)
@@ -1304,6 +1314,7 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         }
         "features.sync" => target.features.sync = defaults.features.sync,
         "features.editorToolbar" => target.features.editor_toolbar = defaults.features.editor_toolbar,
+        "features.mobileBack" => target.features.mobile_back = defaults.features.mobile_back,
         "diary.view" => target.diary.view = defaults.diary.view,
         "diary.accent" => target.diary.accent = defaults.diary.accent.clone(),
         "diary.backgroundColor" => {

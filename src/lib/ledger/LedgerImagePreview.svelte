@@ -1,15 +1,21 @@
 <script lang="ts">
   /**
-   * 记账条目插图的全屏查看罩子：多张图左右翻页（键盘 ←→ 也行）。
+   * 记账条目插图的全屏查看罩子：多张图左右翻页（键盘 ←→、移动端左右滑都行）。
    * editable（从记账编辑器里点开）时右上角多两个按钮：+ 继续添加、垃圾桶删除当前这张
    * ——三个按钮同一套圆形半透明风格。删除只作用于草稿/由调用方落盘，本组件不写数据。
    * 与 markdown 图全屏同一套语言（深色底、contain、移动端吃状态栏安全区），
    * 但独立成组件——记账的图片不在 markdown 画布里，markdownControls 那套接不到它。
+   *
+   * **点击必须 stopPropagation**：App 的 app-shell 上挂着「点空白关所有浮层」，
+   * 翻页按钮的 click 冒泡上去会把整个罩子连同自己一起收掉——列表里看图时
+   * 「点右箭头就退出、永远看不了第二张」就是这么来的（编辑器里那份没这问题，
+   * 因为它的祖先`.ledger-sheet`对 click 做了 stopPropagation，两处表现因此不一致）。
    */
   import { onMount } from "svelte";
   import { ChevronLeft, ChevronRight, Plus, Trash2, X } from "@lucide/svelte";
   import { addBackInterceptor } from "../platform";
   import { suppressGhostClick } from "../ghostClick";
+  import { swipeX } from "../swipe";
 
   export let items: { src: string; title: string }[] = [];
   export let index = 0;
@@ -62,7 +68,13 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="ledger-image-overlay" on:pointerdown={handleBackdrop} on:contextmenu|preventDefault|stopPropagation>
+<div
+  class="ledger-image-overlay"
+  on:pointerdown={handleBackdrop}
+  on:click|stopPropagation
+  on:contextmenu|preventDefault|stopPropagation
+  use:swipeX={{ onPrev: () => step(-1), onNext: () => step(1) }}
+>
   {#if item}
     <img class="ledger-image-stage" src={item.src} alt={item.title} />
   {/if}

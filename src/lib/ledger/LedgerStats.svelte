@@ -254,9 +254,29 @@
       popOpen = "";
     }
   }
+
+  /**
+   * 自定义起止 / 周锚点的 DatePicker 浮层：点别处要自己收起来，不能非要再点一下日期
+   * （月份浮层自己有这套逻辑，见 MonthPopover）。捕获阶段监听——面板内很多地方对
+   * pointerdown 做了 stopPropagation。
+   */
+  function closeOnOutside(event: PointerEvent): void {
+    if (popOpen !== "from" && popOpen !== "to" && popOpen !== "week") return;
+    const node = event.target as Node | null;
+    if (!node || !rootEl) return;
+    const zones =
+      popOpen === "week"
+        ? [".ledger-stats-period", ".ledger-week-pop"]
+        : [".ledger-custom-field.open"];
+    for (const selector of zones) {
+      const zone = rootEl.querySelector(selector);
+      if (zone?.contains(node)) return;
+    }
+    popOpen = "";
+  }
 </script>
 
-<svelte:window on:keydown={handleKeydown} />
+<svelte:window on:keydown={handleKeydown} on:pointerdown|capture={closeOnOutside} />
 
 <div class="ledger-stats" bind:this={rootEl}>
   <div class="ledger-stats-bar">

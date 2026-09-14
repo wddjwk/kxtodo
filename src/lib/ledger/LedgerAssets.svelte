@@ -2,12 +2,13 @@
   /**
    * 资产视图：净资产汇总卡 + 总资产趋势 + 账户列表（点行去改账户）+ 转账/添加入口。
    * 余额一律现场推导（期初 + 流水），不存现值——改历史账目不用回头修余额。
-   * 趋势块桌面并排在净资产右侧、移动端纵排夹在净资产与资金账户之间；
-   * 点它放大（桌面浮窗悬浮读数、移动端横屏全屏）。
+   * 趋势块桌面并排在净资产右侧、移动端纵排夹在净资产与资金账户之间（带简单横纵坐标）；
+   * 点它先开放大视图（桌面浮窗 / 移动端竖屏浮层，都能读数），全屏按钮才是真全屏。
    */
   import { createEventDispatcher } from "svelte";
   import { ArrowLeftRight, Maximize2, Plus } from "@lucide/svelte";
   import { assetsOverview, assetsTrend, formatCents } from "../ledger";
+  import { isMobile } from "../platform";
   import {
     ledgerIcon, softColor
   } from "../ledgerIcons";
@@ -69,7 +70,8 @@
         <Maximize2 class="ledger-trend-zoom" size={15} />
       </span>
     </header>
-    <AssetsTrend points={trend} />
+    <!-- 卡片里的图也要带横纵坐标（简单几档），字号按窄容器补，否则缩得看不清 -->
+    <AssetsTrend points={trend} axes axisFont={$isMobile ? 18 : 13} />
   </section>
 </div>
 

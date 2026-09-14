@@ -44,39 +44,54 @@ fn latest_version() -> Result<String, String> {
         .ok_or_else(|| "latest release 缺少 tag_name".to_string())
 }
 
-/// GitHub 直连失败时回退的下载代理：把完整 GitHub 链接拼在它后面即可。
-/// （实测该代理只接受 github.com 的下载链接，api.github.com 会 403，
-///  所以版本检查仍然直连 API，只有**下载**走回退。）
-const GITHUB_PROXY: &str = "https://ghfast.top/";
+/// 下载通道（官方直连 + 六个加速代理）的清单与测速在 `kxtodo_core::update_fetch`：
+/// 用法是把完整的 github.com 链接拼在代理域名后面（api.github.com 这些代理不接受，
+/// 所以版本检查仍直连 API，只有**下载**走这条多通道选路）。
 
 /// 下载到 `<path>.part` 再原子改名落位：半截产物绝不会顶上正在跑的二进制。
-/// 直连失败（连不上/截断/体积不对）会清掉残留后换代理重试，两条路都失败则一起报出来。
+/// 先把官方直连与各加速代理一起测速，挑最快的一条下载；失败按速度顺序换下一条，
+/// 官方直连留在候选表里兜底（测速失败也留着试一把）。全都失败则把每条的原因一起报出来。
 fn download_to(path: &std::path::Path) -> Result<(), String> {
+    use kxtodo_core::update_fetch::{download_routes, rank_routes_with_speeds, speed_label};
+
     let part = path.with_extension("part");
-    if let Err(direct_error) = stream_to(GITHUB_LATEST_ASSET, &part) {
+    let agent = agent();
+    println!("测速选择下载通道（官方直连 + {} 个加速代理）…", kxtodo_core::update_fetch::GITHUB_PROXY_PREFIXES.len());
+    let ranked = rank_routes_with_speeds(&agent, &download_routes(GITHUB_LATEST_ASSET));
+    for (speed, route) in &ranked {
+        println!("  通道 {}：{}", route.label, speed_label(*speed));
+    }
+    let mut errors: Vec<String> = Vec::new();
+    for (index, (_, route)) in ranked.iter().enumerate() {
         let _ = std::fs::remove_file(&part);
-        let proxied = format!("{GITHUB_PROXY}{GITHUB_LATEST_ASSET}");
-        println!("GitHub 直连失败（{direct_error}），改用代理重试：{proxied}");
-        stream_to(&proxied, &part).map_err(|proxy_error| {
-            let _ = std::fs::remove_file(&part);
-            format!(
-                "下载 kxtodo-server 失败\n  直连：{direct_error}\n  代理（{GITHUB_PROXY}）：{proxy_error}"
-            )
-        })?;
+        if index > 0 {
+            println!("上一个通道失败，改用 {} 重试", route.label);
+        }
+        println!("下载 kxtodo-server（{}）…", route.label);
+        match stream_to(&route.url, &part) {
+            Ok(()) => {
+                if path.exists() {
+                    let _ = std::fs::remove_file(path);
+                }
+                std::fs::rename(&part, path).map_err(|error| {
+                    let _ = std::fs::remove_file(&part);
+                    format!("新版本落位失败：{error}")
+                })?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755));
+                }
+                return Ok(());
+            }
+            Err(error) => errors.push(format!("{}：{error}", route.label)),
+        }
     }
-    if path.exists() {
-        let _ = std::fs::remove_file(path);
-    }
-    std::fs::rename(&part, path).map_err(|error| {
-        let _ = std::fs::remove_file(&part);
-        format!("新版本落位失败：{error}")
-    })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755));
-    }
-    Ok(())
+    let _ = std::fs::remove_file(&part);
+    Err(format!(
+        "下载 kxtodo-server 失败，所有通道都不可用\n  {}",
+        errors.join("\n  ")
+    ))
 }
 
 /// 流式下载并打进度（每 10% 一行）。体积不对或下载被截断都算失败，`.part` 由调用方清理。

@@ -7,6 +7,7 @@
   import { ChevronLeft, ChevronRight } from "@lucide/svelte";
   import { calendarWeekdayHeaders, shiftMonth } from "../diary";
   import { compactCents, dayGroup, ledgerCalendarCells, monthTotals } from "../ledger";
+  import { swipeX } from "../swipe";
   import MonthPopover from "../MonthPopover.svelte";
   import LedgerDayCard from "./LedgerDayCard.svelte";
   import type { LedgerBook } from "../types";
@@ -36,7 +37,14 @@
   $: group = dayGroup(book.entries, selectedDate);
 </script>
 
-<div class="ledger-calendar">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+  class="ledger-calendar"
+  use:swipeX={{
+    onPrev: () => dispatch("month", shiftMonth(cursor, -1)),
+    onNext: () => dispatch("month", shiftMonth(cursor, 1))
+  }}
+>
   <div class="ledger-calendar-bar">
     <button type="button" aria-label="上个月" on:click|stopPropagation={() => dispatch("month", shiftMonth(cursor, -1))}>
       <ChevronLeft size={18} />

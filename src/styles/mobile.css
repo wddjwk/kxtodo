@@ -54,6 +54,33 @@
 .app-shell.mobile .ledger-scroll {
   margin-right: 0;
   padding-right: 0;
+  /* 桌面用 stable 给滚动条预留槽位；移动端不画滚动条也就没有槽位，卡片左右等距 */
+  scrollbar-gutter: auto;
+}
+
+/* 移动端一律不画滚动条：触屏本来就是覆盖式滚动条，露出来只是噪音
+   （桌面不动，那边滚动条是给鼠标用的）。顺带把横向滑动一并禁掉——
+   横向能滑通常意味着有东西宽出了屏幕，该修的是宽度，不是加一条滚动条。 */
+.app-shell.mobile,
+.app-shell.mobile * {
+  scrollbar-width: none;
+}
+
+.app-shell.mobile *::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.app-shell.mobile .task-list,
+.app-shell.mobile .scheduled-list,
+.app-shell.mobile .diary-scroll,
+.app-shell.mobile .ledger-scroll,
+.app-shell.mobile .search-results,
+.app-shell.mobile .toolbox-view,
+.app-shell.mobile .settings-drawer,
+.app-shell.mobile .ledger-sheet-body {
+  overflow-x: hidden;
 }
 
 .app-shell.mobile.view-list .workspace {
@@ -200,9 +227,11 @@
   gap: 10px;
 }
 
+/* 齿轮与日记/记账头部左侧的视图切换段控等高平齐：段控 = 3px 内边距 + 1px 描边 +
+   32px 按钮 = 40px，齿轮照这个尺寸来，点下去的那圈底色才对得上段控的高度。 */
 .app-shell.mobile .header-actions > button {
-  width: 32px;
-  height: 32px;
+  width: 40px;
+  height: 40px;
 }
 
 /* 齿轮下拉面板：锚在齿轮按钮下方右对齐（header-actions 是 absolute 包含块）。
@@ -479,8 +508,8 @@
 }
 
 .app-shell.mobile .diary-scroll {
-  /* 底部再多留一点：浮动添加按钮 + 手势导航条 */
-  padding-bottom: 96px;
+  /* 底部多留一点：浮动按钮列（今 + 写一篇）+ 手势导航条 */
+  padding-bottom: 190px;
 }
 
 /* 卡片编辑走双击/长按菜单，笔形按钮连同它的位置一起让给正文（与任务卡片同一套规则） */
@@ -530,7 +559,7 @@
 
 .app-shell.mobile .diary-fab-row {
   right: 16px;
-  bottom: calc(16px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
+  bottom: calc(97px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
 }
 
 .app-shell.mobile .diary-fab {
@@ -635,7 +664,11 @@
 }
 
 /* 移动端点固定分组的行是「进入下一屏」，选中态在内容页里根本看不见，
-   返回后残留的左侧蓝色高亮条只会让人困惑——不画它（行底色保留，桌面不变） */
+   返回后残留的选中底色与左侧蓝色高亮条只会让人困惑——两样都不画（桌面不变） */
+.app-shell.mobile .nav-row.selected {
+  background: transparent;
+}
+
 .app-shell.mobile .nav-row.selected .active-rail {
   background: transparent;
 }
@@ -667,7 +700,7 @@
 
 .app-shell.mobile .ledger-fab-row {
   right: 16px;
-  bottom: calc(16px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
+  bottom: calc(97px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
 }
 
 .app-shell.mobile .ledger-fab {
@@ -719,7 +752,7 @@
 }
 
 .app-shell.mobile .ledger-scroll {
-  padding-bottom: 96px;
+  padding-bottom: 190px;
 }
 
 /* 日历：窄屏整宽铺开、格子矮一点，一屏放下六行；格子里是数额不是热力块 */
@@ -751,20 +784,20 @@
   padding: 13px 13px;
 }
 
-/* 段控紧凑化：移动端是「月/年/总/自定义 + 支/收/结余」，两排都必须收进一屏
-   （桌面五个周期词 + 三个两字词在 390px 上必超屏，超了还会把下面的弹层带出界） */
+/* 段控字号回到桌面那一档（移动端只是去掉了「周」、把三个两字词收成一个字，
+   收窄之后 360px 上也放得下；早前一档档缩到 -5px 缩过头了） */
 .app-shell.mobile .ledger-stats-bar {
   gap: 6px;
 }
 
 .app-shell.mobile .ledger-segmented {
-  padding: 2px;
+  padding: 3px;
   min-width: 0;
 }
 
 .app-shell.mobile .ledger-segmented button {
-  padding: 4px 8px;
-  font-size: calc(var(--font-ledger) - 5px);
+  padding: 5px 12px;
+  font-size: calc(var(--font-ledger) - 2px);
   white-space: nowrap;
 }
 
@@ -812,10 +845,16 @@
 
 /* ---------- 记账面板 / 分类管理 / 账户管理：底部抽屉 ----------
    遮罩底对齐，抽屉贴底、只圆上面两个角，底部安全区垫在抽屉自己身上
-   （垫在遮罩上会让抽屉浮起来，露出底下的一条缝）。 */
+   （垫在遮罩上会让抽屉浮起来，露出底下的一条缝）。
+   **必须是 flex 不是 grid**：grid 的自动行会被超高内容撑到内容高度，
+   抽屉的 max-height:94% 就按那个被撑大的行算（行越大抽屉越高），整块面板
+   跑到屏幕外、底下的颜色与预览永远滚不到；flex 容器的定高（inset:0）让
+   百分比按视口算，抽屉封顶、内容在 .ledger-sheet-body 里滚到底。 */
 .app-shell.mobile .ledger-overlay {
-  align-items: end;
-  justify-items: stretch;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: stretch;
   padding: calc(env(safe-area-inset-top, 0px) * var(--safe-inv, 1)) 0 0;
 }
 
@@ -826,6 +865,8 @@
   max-width: none;
   height: auto;
   max-height: 94%;
+  /* 关掉 flex 子项的自动最小尺寸：不关的话 max-height 会被内容的最小高度顶开 */
+  min-height: 0;
   padding-bottom: calc(env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
   border-width: 1px 0 0;
   border-radius: 18px 18px 0 0;

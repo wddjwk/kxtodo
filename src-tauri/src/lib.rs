@@ -1238,20 +1238,17 @@ fn update_agent() -> ureq::Agent {
         .build()
 }
 
-/// GitHub 直连失败时的下载回退代理：把完整 GitHub 链接直接拼在它后面
-/// （`https://ghfast.top/https://github.com/…/KXToDo.exe`）。
-/// 只用于**下载**：版本检查仍直连 api.github.com（实测该代理不接受 api 域名，返回 403）。
-const UPDATE_PROXY_PREFIX: &str = "https://ghfast.top/";
-
 /// 制品体积下限。真实产物最小的也有 20MB 上下，而错误页/JSON 响应只有几 KB——
-/// 用体积当场拦下明显存坏的下载，好让调用方换代理重试。
+/// 用体积当场拦下明显存坏的下载，好让调用方换通道重试。
 const MIN_ARTIFACT_BYTES: u64 = 1_000_000;
 
-/// 下载一个更新制品：先直连 GitHub，失败（连不上/中断/体积明显不对）就静默换加速代理重试。
+/// 下载一个更新制品：先把官方直连与各加速代理一起测速，**挑最快的一条**下载；
+/// 失败就按速度顺序换下一条，官方直连永远留在候选表里兜底（测速失败也留着试一把）。
+/// 代理的用法是把完整 github.com 链接拼在域名后面（见 core::update_fetch）。
 ///
-/// 换代理时进度条从 0 重新计，并且每次尝试前先清掉上一次留下的 `.part`——
+/// 换通道时进度条从 0 重新计，并且每次尝试前先清掉上一次留下的 `.part`——
 /// 半截临时文件会让「已下载体积」和体积自检都失真。
-/// 两条路都失败时把两个原因一起报出来。
+/// 全部通道都失败时，把每条通道的原因与选路顺序一起报出来。
 fn update_download_file(
     app: &AppHandle,
     agent: &ureq::Agent,
@@ -1259,11 +1256,25 @@ fn update_download_file(
     url: &str,
     dest: &std::path::Path,
 ) -> Result<(), String> {
-    match stream_update_file(app, agent, stage, url, dest, "") {
-        Ok(()) => Ok(()),
-        Err(direct_error) => {
-            remove_part_file(dest);
-            let proxied = format!("{UPDATE_PROXY_PREFIX}{url}");
+    update_emit(
+        app,
+        "update://progress",
+        serde_json::json!({
+            "stage": stage,
+            "received": 0,
+            "total": 0,
+            "percent": 0,
+            "note": "正在测速选择最快的下载通道…"
+        }),
+    );
+    let routes = kxtodo_core::update_fetch::rank_routes(
+        agent,
+        &kxtodo_core::update_fetch::download_routes(url),
+    );
+    let mut errors: Vec<String> = Vec::new();
+    for (index, route) in routes.iter().enumerate() {
+        remove_part_file(dest);
+        if index > 0 {
             update_emit(
                 app,
                 "update://progress",
@@ -1272,18 +1283,19 @@ fn update_download_file(
                     "received": 0,
                     "total": 0,
                     "percent": 0,
-                    "note": "GitHub 直连失败，改用加速代理重试"
+                    "note": format!("上一个通道失败，改用 {} 重试", route.label)
                 }),
             );
-            stream_update_file(app, agent, stage, &proxied, dest, "加速代理").map_err(
-                |proxy_error| {
-                    format!(
-                        "下载 {stage} 失败\n  直连：{direct_error}\n  代理（{UPDATE_PROXY_PREFIX}）：{proxy_error}"
-                    )
-                },
-            )
+        }
+        match stream_update_file(app, agent, stage, &route.url, dest, &route.label) {
+            Ok(()) => return Ok(()),
+            Err(error) => errors.push(format!("{}：{error}", route.label)),
         }
     }
+    Err(format!(
+        "下载 {stage} 失败，所有通道都不可用\n  {}",
+        errors.join("\n  ")
+    ))
 }
 
 /// 制品的 `.part` 临时文件路径（与 `stream_update_file` 同一口径）。

@@ -87,6 +87,8 @@
   color: #64748b;
   font-size: var(--font-control);
   cursor: pointer;
+  /* 点下去只让滑块平移，不要 WebView 那层蓝色点击遮罩 */
+  -webkit-tap-highlight-color: transparent;
   transition: color 0.16s ease;
 }
 

@@ -124,7 +124,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   // 齿轮面板 → 记账菜单（三点菜单唤不出就是这条链断在冒泡上）
   await page.click(".ledger-view .header-actions > button[title='更多操作']");
   await page.waitForSelector(".ledger-gear-panel", { timeout: 5000 });
-  check("齿轮面板打开", (await page.$$(".ledger-gear-panel .menu-item-button")).length === 3);
+  check("齿轮面板打开", (await page.$$(".ledger-gear-panel .menu-item-button")).length === 4);
   await page.click(".ledger-gear-panel .menu-item-button:has-text('记账菜单')");
   await page.waitForSelector(".context-menu", { timeout: 5000 });
   const listMenuText = await page.textContent(".context-menu");

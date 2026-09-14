@@ -12,6 +12,9 @@
   export let points: AssetTrendPoint[] = [];
   export let axes = false;
   export let interactive = false;
+  /** 刻度文字大小（SVG 用户单位）：SVG 是整体缩放的，同一份 viewBox 画在不同宽度的
+   *  容器里，字号要跟着容器宽度补——卡片里的图窄，字就得按比例放大，否则缩成蚂蚁。 */
+  export let axisFont = 12;
 
   const W = 640;
   const H = 240;
@@ -128,7 +131,13 @@
     <svg class="ledger-line-chart ledger-trend-chart" viewBox="0 0 {W} {H}" role="img" aria-label="总资产趋势">
       {#each yTicks as value (value)}
         <line class="ledger-chart-grid" x1={padLeft} x2={W - PAD_RIGHT} y1={pointY(value)} y2={pointY(value)} />
-        <text class="ledger-chart-axis" x={padLeft - 8} y={pointY(value) + 4} text-anchor="end">{axisLabel(value)}</text>
+        <text
+          class="ledger-chart-axis"
+          style="font-size: {axisFont}px"
+          x={padLeft - 8}
+          y={pointY(value) + axisFont * 0.36}
+          text-anchor="end"
+        >{axisLabel(value)}</text>
       {/each}
       {#if lo < 0 && hi > 0}
         <line class="ledger-chart-zero" x1={padLeft} x2={W - PAD_RIGHT} y1={pointY(0)} y2={pointY(0)} />
@@ -140,7 +149,13 @@
         <circle class="ledger-chart-dot ledger-trend-dot" cx={pointX(hoverIndex ?? 0)} cy={pointY(hoverPoint.cents)} r="3.8" />
       {/if}
       {#each xTickIndexes as index (index)}
-        <text class="ledger-chart-axis" x={pointX(index)} y={H - 8} text-anchor="middle">{xLabel(points[index].date)}</text>
+        <text
+          class="ledger-chart-axis"
+          style="font-size: {axisFont}px"
+          x={pointX(index)}
+          y={H - 8}
+          text-anchor="middle"
+        >{xLabel(points[index].date)}</text>
       {/each}
     </svg>
     {#if interactive && hoverPoint}

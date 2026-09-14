@@ -90,6 +90,12 @@ async function seedBook(page) {
       {
         id: "v075-g", kind: "income", amountCents: 50000, accountId: account,
         date: dates.d20, note: "二十天前", createdAt: new Date().toISOString()
+      },
+      // 既没备注也没图：只有这种才走 solo 布局（v0.7.6 起「有备注或有图」都走两行）
+      {
+        id: "v075-h", kind: "expense", amountCents: 3300, accountId: account,
+        categoryId: children[0]?.id ?? "", date: dates.today, time: "08:05", note: "",
+        createdAt: new Date().toISOString()
       }
     ];
     localStorage.setItem(key, JSON.stringify(book));
@@ -116,9 +122,9 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   check("月份条收/支/结余与周几同灰", monthSumColor === weekColor, `${monthSumColor} vs ${weekColor}`);
   check("卡片头收/支与周几同灰", cardSumColor === weekColor, `${cardSumColor} vs ${weekColor}`);
 
-  // 2. 无备注条目：分类名与图标一样上下居中；有备注的保持两行
+  // 2. 无备注无图条目：分类名与图标一样上下居中（solo）；有备注或有图的都是两行
   const solo = page.locator(".ledger-entry:has(.ledger-entry-main.solo)").first();
-  check("无备注条目走 solo 布局", (await page.$$(".ledger-entry-main.solo")).length >= 1);
+  check("无备注无图条目走 solo 布局", (await page.$$(".ledger-entry-main.solo")).length >= 1);
   const soloIcon = await solo.locator(".ledger-entry-icon").boundingBox();
   const soloName = await solo.locator(".ledger-entry-solo-name strong").boundingBox();
   check(
@@ -131,14 +137,28 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
     "有备注条目仍是两行",
     (await page.$$(".ledger-entry:has-text('早餐') .ledger-entry-sub")).length === 1
   );
-
-  // 3. 多图角标 + 旧单图折叠
-  const countText = await page.textContent(".ledger-entry:has(.ledger-entry-image-count) .ledger-entry-image-count");
-  check("多图条目带数量角标", countText?.trim() === "2", countText ?? "");
+  // 13.1：没备注但有图的条目走两行，图片图标落在备注区（不是分类名旁边）
+  // （用时刻认这一笔：金额显示成 -56.00，「5600」在界面上找不到）
+  const imageOnly = ".ledger-entry:has-text('18:40')";
   check(
-    "旧的单数 image 字段被折叠（旧图条目也有图片图标、无角标）",
-    (await page.$$(".ledger-entry:has-text('旧图') .ledger-entry-image")).length === 1 &&
-      (await page.$$(".ledger-entry:has-text('旧图') .ledger-entry-image-count")).length === 0
+    "无备注但有图的条目也走两行",
+    (await page.$$(`${imageOnly} .ledger-entry-sub .ledger-entry-image`)).length === 1 &&
+      (await page.$$(`${imageOnly} .ledger-entry-main.solo`)).length === 0
+  );
+
+  // 3. 图片图标：只在备注区、不带数量角标（角标只在编辑器里，v0.7.6）
+  check(
+    "有图的条目都只有一个图片图标",
+    (await page.$$(".ledger-entry .ledger-entry-image")).length >= 2,
+    String((await page.$$(".ledger-entry .ledger-entry-image")).length)
+  );
+  check(
+    "列表里的图片图标不带数量角标（v0.7.6）",
+    (await page.$$(".ledger-entry .ledger-entry-image-count")).length === 0
+  );
+  check(
+    "旧的单数 image 字段被折叠（旧图条目也有图片图标）",
+    (await page.$$(".ledger-entry:has-text('旧图') .ledger-entry-image")).length === 1
   );
 
   // 8. 卡片右上角加号常驻
@@ -175,7 +195,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   // 多图按钮状态：改带两张图的那笔
   await page.keyboard.press("Escape");
   await page.waitForSelector(".ledger-editor-sheet", { state: "detached", timeout: 8000 });
-  await page.click(".ledger-entry:has(.ledger-entry-image-count)");
+  await page.click(".ledger-entry:has(.ledger-entry-image)");
   await page.waitForSelector(".ledger-editor-sheet", { timeout: 8000 });
   check("编辑器图片按钮点亮", (await page.$$(".ledger-meta-plain.has-image")).length === 1);
   check(
@@ -223,7 +243,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.waitForSelector(".ledger-net-card", { timeout: 8000 });
   check("资产视图 FAB 是添加账户", ((await page.getAttribute(".ledger-fab", "title")) ?? "") === "添加账户");
 
-  // 11. 趋势卡与净资产并排 + 浮窗放大 + 悬浮读数
+  // 11. 趋势卡与净资产并排 + 浮窗放大 + 悬浮读数 + 全屏按钮（v0.7.6 两段式）
   const netBox = await page.locator(".ledger-net-card").boundingBox();
   const trendBox = await page.locator(".ledger-trend-card").boundingBox();
   check(
@@ -233,6 +253,10 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
     `${trendBox?.x} vs ${netBox?.x}+${netBox?.width}`
   );
   check("趋势曲线画出来了", (await page.$$(".ledger-trend-card .ledger-trend-line")).length === 1);
+  check(
+    "卡片里的趋势图带横纵坐标（v0.7.6）",
+    (await page.$$(".ledger-trend-card .ledger-chart-axis")).length >= 4
+  );
   await page.click(".ledger-trend-card");
   await page.waitForSelector(".ledger-trend-dialog", { timeout: 8000 });
   const dialogWidth = await page.$eval(".ledger-trend-dialog", (el) => el.offsetWidth);
@@ -244,7 +268,17 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
     "趋势浮窗悬浮显示数额",
     ((await page.textContent(".ledger-trend-dialog .ledger-chart-tip")) ?? "").includes("总资产")
   );
-  await page.click(".ledger-trend-dialog .ledger-icon-button");
+  // 全屏按钮：铺满窗口（不是关掉浮窗）
+  const expandedBefore = await page.$eval(".ledger-trend-dialog", (el) => el.offsetHeight);
+  await page.click(".ledger-trend-dialog .ledger-icon-button[title='全屏查看']");
+  await page.waitForTimeout(150);
+  const expandedAfter = await page.$eval(".ledger-trend-dialog", (el) => el.offsetHeight);
+  check(
+    "桌面全屏按钮把浮窗铺满窗口",
+    expandedAfter > expandedBefore + 60 && (await page.$(".ledger-trend-dialog")) !== null,
+    `${expandedBefore} → ${expandedAfter}`
+  );
+  await page.click(".ledger-trend-dialog .ledger-icon-button[title='关闭']");
   await page.waitForSelector(".ledger-trend-dialog", { state: "detached", timeout: 8000 });
 
   // FAB → 添加账户表单 → 自定义类型（带图标/颜色、可编辑/删除）
@@ -502,7 +536,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.keyboard.press("Escape");
   await page.waitForSelector(".ledger-manager", { state: "detached", timeout: 8000 });
 
-  // 11. 移动端趋势块纵排在净资产与资金账户之间 + 横屏全屏
+  // 11. 移动端趋势块纵排在净资产与资金账户之间；点开是「内容视图」，全屏按钮才横屏
   const mNet = await page.locator(".ledger-net-card").boundingBox();
   const mTrend = await page.locator(".ledger-trend-card").boundingBox();
   const mAccounts = await page.locator(".ledger-panel:has-text('资金账户')").boundingBox();
@@ -513,6 +547,22 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
     `${mNet?.y} → ${mTrend?.y} → ${mAccounts?.y}`
   );
   await page.locator(".ledger-trend-card").tap();
+  // v0.7.6 两段式：先给竖屏浮层（带坐标轴），点全屏按钮才转横屏
+  await page.waitForSelector(".ledger-trend-dialog", { timeout: 8000 });
+  check("全屏前没有横屏层", (await page.$$(".ledger-trend-full")).length === 0);
+  check(
+    "移动浮层里的图带横纵坐标",
+    (await page.$$(".ledger-trend-dialog .ledger-chart-axis")).length >= 4
+  );
+  const mChartBox = await page.locator(".ledger-trend-dialog .ledger-chart-box").boundingBox();
+  await page.locator(".ledger-trend-dialog .ledger-chart-box").tap({ position: { x: 60, y: 30 } });
+  await page.waitForSelector(".ledger-trend-dialog .ledger-chart-tip", { timeout: 3000 });
+  check(
+    "移动端点按显示读数",
+    ((await page.textContent(".ledger-trend-dialog .ledger-chart-tip")) ?? "").includes("总资产"),
+    `box ${mChartBox?.width}x${mChartBox?.height}`
+  );
+  await page.click(".ledger-trend-dialog .ledger-icon-button[title='全屏查看（横屏）']");
   await page.waitForSelector(".ledger-trend-full", { timeout: 8000 });
   // 旋转 90° 的元素 bbox 是轴对齐外接框（铺满屏幕）：横屏与否看布局宽高
   const rot = await page.$eval(".ledger-trend-rot", (el) => [el.offsetWidth, el.offsetHeight]);
@@ -522,8 +572,12 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
     `${rot[0]}x${rot[1]}`
   );
   check("横屏层里有曲线", (await page.$$(".ledger-trend-full .ledger-trend-line")).length === 1);
-  await page.click(".ledger-trend-rot-head .ledger-image-tool");
+  // 退出全屏回浮层，再关浮层
+  await page.click(".ledger-trend-rot-head .ledger-image-tool[title='退出全屏']");
   await page.waitForSelector(".ledger-trend-full", { state: "detached", timeout: 8000 });
+  check("退出全屏回竖屏浮层", (await page.$$(".ledger-trend-dialog")).length === 1);
+  await page.click(".ledger-trend-dialog .ledger-icon-button[title='关闭']");
+  await page.waitForSelector(".ledger-trend-dialog", { state: "detached", timeout: 8000 });
 
   check("移动端没有页面错误", errors.length === 0, errors.join(" | ").slice(0, 300));
   await context.close();

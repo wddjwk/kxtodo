@@ -35,5 +35,6 @@ pub mod schema;
 pub mod skills;
 pub mod sync;
 pub mod time;
+pub mod update_fetch;
 
 pub use error::CoreError;

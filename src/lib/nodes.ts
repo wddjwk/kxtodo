@@ -1,6 +1,7 @@
-import type { AppNode, AppState, CardStyle, DiaryEntry, ListBackground, SearchHit, Task } from "./types";
+import type { AppNode, AppState, CardStyle, DiaryEntry, LedgerBook, ListBackground, SearchHit, Task } from "./types";
 import { defaultBackground, emptySchedulerState } from "./defaults";
 import { filterDiaries } from "./diary";
+import { filterLedgerEntries } from "./ledger";
 
 export function descendantEntryIds(rootId: string, nodes: AppNode[]): Set<string> {
   const ids = new Set<string>();
@@ -97,10 +98,11 @@ export function buildVisibleTasks(state: AppState, node: AppNode | undefined, qu
 }
 
 /**
- * 全局搜索的混排结果：任务（含已完成）与日记按「最近改动」排在一条列表里。
- * 匹配规则复用各自那条（任务的 `buildVisibleTasks`、日记的 `filterDiaries`），不另写一份。
+ * 全局搜索的混排结果：任务（含已完成）、日记与记账按「最近改动」排在一条列表里。
+ * 匹配规则复用各自那条（任务的 `buildVisibleTasks`、日记的 `filterDiaries`、
+ * 记账的 `filterLedgerEntries`），不另写一份。
  */
-export function buildSearchHits(state: AppState, diaries: DiaryEntry[], query: string): SearchHit[] {
+export function buildSearchHits(state: AppState, diaries: DiaryEntry[], ledger: LedgerBook, query: string): SearchHit[] {
   if (!query.trim()) return [];
   const cardStyleByNode = new Map<string, CardStyle>(
     state.nodes.filter((node) => node.cardStyle === "card").map((node) => [node.id, "card"])
@@ -116,14 +118,16 @@ export function buildSearchHits(state: AppState, diaries: DiaryEntry[], query: s
       kind: "diary" as const,
       key: `diary-${entry.id}`,
       entry
+    })),
+    ...filterLedgerEntries(ledger, query).map((entry) => ({
+      kind: "ledger" as const,
+      key: `ledger-${entry.id}`,
+      entry
     }))
   ];
   const touched = (item: { updatedAt?: string; createdAt: string }): string => item.updatedAt || item.createdAt;
-  return hits.sort((a, b) => {
-    const left = a.kind === "task" ? touched(a.task) : touched(a.entry);
-    const right = b.kind === "task" ? touched(b.task) : touched(b.entry);
-    return right.localeCompare(left);
-  });
+  const stampOf = (hit: SearchHit): string => (hit.kind === "task" ? touched(hit.task) : touched(hit.entry));
+  return hits.sort((a, b) => stampOf(b).localeCompare(stampOf(a)));
 }
 
 export function moveTargetOptions(sourceId: string, nodes: AppNode[]): Array<{ id: string; name: string }> {

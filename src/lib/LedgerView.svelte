@@ -5,23 +5,28 @@
    * 桌面 ledger-open 式互斥、移动端历史栈一层；外观走 settings.ledger。
    * 列表视图的组织单位是**天**——一天一张卡片，卡片里是当天每一笔（不折叠）。
    */
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import {
     CalendarDays, ChartPie, ChevronLeft, ChevronRight,
-    List as ListIcon, MoreHorizontal, Plus, Settings as SettingsIcon, Tags, Wallet
+    List as ListIcon, MoreHorizontal, Plus, Search, Settings as SettingsIcon, Tags, Wallet, X
   } from "@lucide/svelte";
   import { appSettings, ledgerData, ledgerEditor, ledgerCategoryDraft } from "./stores";
   import { setConfig } from "./actions";
   import { buildMainStyle, ledgerAccent, ledgerBackground } from "./styles";
   import { imageCache, resolveImageSrc } from "./images";
   import { monthOf, shiftMonth, todayDate, type MonthCursor } from "./diary";
-  import { compactCents, monthDayGroups, monthTotals, assetsTrend, LEDGER_IMAGE_NODE } from "./ledger";
+  import {
+    compactCents, entriesTotals, filterLedgerEntries, monthDayGroups, monthTotals,
+    assetsTrend, LEDGER_IMAGE_NODE
+  } from "./ledger";
   import type { AssetTrendPoint } from "./ledger";
   import { mdImageUrl } from "./backend";
   import MenuItem from "./menu/MenuItem.svelte";
+  import MobileBack from "./MobileBack.svelte";
   import MonthPopover from "./MonthPopover.svelte";
   import ListMenu from "./workspace/ListMenu.svelte";
   import LedgerDayCard from "./ledger/LedgerDayCard.svelte";
+  import LedgerEntryCard from "./ledger/LedgerEntryCard.svelte";
   import LedgerCalendar from "./ledger/LedgerCalendar.svelte";
   import LedgerStats from "./ledger/LedgerStats.svelte";
   import LedgerAssets from "./ledger/LedgerAssets.svelte";
@@ -74,6 +79,10 @@
 
   let cursor: MonthCursor = monthOf(todayDate());
   let selectedDate = todayDate();
+  /** 搜索记账：齿轮面板里的「搜索记账」开关那一条输入框；有查询词时整页让给结果 */
+  let searchOpen = false;
+  let searchInput: HTMLInputElement;
+  let query = "";
   // 分钟级 tick：记账页常常一直开着，跨天后「今天」必须自己跟上（与日记同一套路）
   let dayTick = 0;
 
@@ -97,6 +106,11 @@
 
   /** 列表视图只展示 cursor 一个月：滚到底整屏换成上一个月，滚到顶下拉换回下一个月 */
   $: sections = [{ key: `${cursor.year}-${cursor.month}`, groups: monthDayGroups(book.entries, cursor) }];
+
+  /** 搜索态：有查询词时整页换成「单条卡片 + 收支结余汇总」 */
+  $: searching = searchOpen && query.trim().length > 0;
+  $: searchResults = searching ? filterLedgerEntries(book, query) : [];
+  $: searchTotals = searching ? entriesTotals(searchResults) : { income: 0, expense: 0 };
 
   /** 记账按钮落在哪一天：日历视图跟着选中的日期，其余视图永远是今天 */
   $: focusDate = view === "calendar" ? selectedDate : today;
@@ -134,6 +148,16 @@
     if (mode === "calendar") cursor = monthOf(selectedDate);
     if (mode === "list") resetScroll();
     void setConfig("ledger.view", mode);
+  }
+
+  /** 搜索输入框的开合（齿轮面板里那一条，与日记同一套）；收起时清词回到正常视图 */
+  function toggleSearch(): void {
+    searchOpen = !searchOpen;
+    showGear = false;
+    entryMenu = null;
+    listMenuAt = null;
+    if (!searchOpen) query = "";
+    void tick().then(() => searchInput?.focus());
   }
 
   /** 齿轮面板与其它头部浮层互斥（与日记/工作区同一套开合规则）。 */
@@ -192,16 +216,23 @@
     ledgerEditor.set({ id });
   }
 
-  /** 点条目小字行的图片图标：全屏看这条账的插图（图走 markdown 插图的 ledger 伪条目通道）。 */
+  /**
+   * 点条目小字行的图片图标：全屏看这条账的插图（图走 markdown 插图的 ledger 伪条目通道）。
+   * 逐张独立解析（allSettled）：缺一张图不该把整个查看器弄没——只展示解析得出来的那些。
+   */
   async function openEntryImage(id: string): Promise<void> {
     const entry = book.entries.find((item) => item.id === id);
-    const images = entry?.images ?? [];
-    if (images.length === 0) return;
+    const names = entry?.images ?? [];
+    if (names.length === 0) return;
+    const title = entry?.note || entry?.date || "";
     try {
-      const title = entry?.note || entry?.date || "";
-      preview = await Promise.all(
-        images.map(async (name) => ({ src: await mdImageUrl(LEDGER_IMAGE_NODE, name), title }))
+      const settled = await Promise.allSettled(
+        names.map((name) => mdImageUrl(LEDGER_IMAGE_NODE, name))
       );
+      const resolved = settled.flatMap((result) =>
+        result.status === "fulfilled" && result.value ? [{ src: result.value, title }] : []
+      );
+      preview = resolved.length > 0 ? resolved : null;
     } catch {
       preview = null;
     }
@@ -230,7 +261,7 @@
   /** 列表视图的换月：滚到底 = 整屏换成上一个月（时间近的在上面），滚到顶下拉 = 换回下一个月。
    *  向上以当前真实月为顶——再新就是还没发生的月份，翻过去只有空屏。 */
   function handleScroll(): void {
-    if (view !== "list" || paging || !scrollEl) return;
+    if (view !== "list" || searching || paging || !scrollEl) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollEl;
     if (!edgeArmed) {
       if (scrollTop > 120 && scrollHeight - scrollTop - clientHeight > 120) edgeArmed = true;
@@ -262,6 +293,7 @@
 <main class="ledger-view" style={mainStyle}>
   <section class="list-header">
     <div>
+      <MobileBack />
       <span class="header-icon"><Wallet size={34} /></span>
       <h1>记账</h1>
     </div>
@@ -290,6 +322,7 @@
 
       {#if showGear}
         <div class="header-menu-panel ledger-gear-panel" role="menu" tabindex="-1">
+          <MenuItem icon={searchOpen ? X : Search} label={searchOpen ? "关闭搜索" : "搜索记账"} onSelect={toggleSearch} />
           <MenuItem icon={Tags} label="分类管理" onSelect={openCategories} />
           <MenuItem icon={Wallet} label="账户与转账" onSelect={() => openAccounts("list")} />
           <MenuItem icon={MoreHorizontal} label="记账菜单" onSelect={openListMenuFromGear} />
@@ -298,7 +331,25 @@
     </div>
   </section>
 
-  {#if view === "list"}
+  {#if searchOpen}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <label class="ledger-search" on:click|stopPropagation>
+      <Search size={16} />
+      <input bind:this={searchInput} bind:value={query} type="text" placeholder="搜索分类、备注或金额" />
+    </label>
+  {/if}
+
+  {#if searching}
+    <!-- 搜索结果的收/支/结余：转账不计入，与统计口径一致 -->
+    <div class="ledger-search-sum">
+      <span><strong>收</strong>{compactCents(searchTotals.income)}</span>
+      <span><strong>支</strong>{compactCents(searchTotals.expense)}</span>
+      <span><strong>结余</strong>{compactCents(searchTotals.income - searchTotals.expense)}</span>
+      <em>{searchResults.length} 笔</em>
+    </div>
+  {/if}
+
+  {#if view === "list" && !searching}
     <div class="ledger-month-bar">
       <span class="ledger-month-step">
         <button type="button" aria-label="上个月" on:click|stopPropagation={() => changeMonth(shiftMonth(cursor, -1))}>
@@ -335,7 +386,25 @@
   {/if}
 
   <section class="ledger-scroll" bind:this={scrollEl} on:scroll={handleScroll}>
-    {#if view === "list"}
+    {#if searching}
+      <!-- 搜索结果：每一条一张单笔卡片（不按天成卡，也不带当天的收/支） -->
+      {#each searchResults as entry (entry.id)}
+        <LedgerEntryCard
+          {book}
+          {entry}
+          selected={entryMenu?.id === entry.id}
+          on:edit={(event) => openEditor(event.detail)}
+          on:image={(event) => void openEntryImage(event.detail)}
+          on:context={(event) => {
+            entryMenu = event.detail;
+            showGear = false;
+            listMenuAt = null;
+          }}
+        />
+      {:else}
+        <div class="ledger-day-empty">没有匹配「{query.trim()}」的账。</div>
+      {/each}
+    {:else if view === "list"}
       {#if book.entries.length === 0}
         <div class="empty-state">
           <strong>还没有记账</strong>

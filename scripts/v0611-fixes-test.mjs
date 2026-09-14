@@ -78,7 +78,7 @@ const cardInfo = await page.evaluate(() => {
     titled: [...card.querySelectorAll(".toggle-row")].every((row) => Boolean(row.getAttribute("title")))
   };
 });
-check("特性开关是一整块灰卡三行开关", cardInfo !== null && cardInfo.rows === 3 && cardInfo.muted === 0, JSON.stringify(cardInfo));
+check("特性开关是一整块灰卡多行开关", cardInfo !== null && cardInfo.rows >= 3 && cardInfo.muted === 0, JSON.stringify(cardInfo));
 check("开关说明在 title 悬浮提示里", cardInfo !== null && cardInfo.titled);
 check("灰卡有底色", cardInfo !== null && cardInfo.bg !== "rgba(0, 0, 0, 0)", cardInfo?.bg);
 await page.locator("button.settings-backdrop").click();
