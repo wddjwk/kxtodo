@@ -9,7 +9,7 @@ import type {
   LedgerSide
 } from "./types";
 import type { MonthCursor } from "./diary";
-import { isoOf, shiftDays } from "./diary";
+import { isoOf, shiftDays, todayDate } from "./diary";
 
 /** 记账条目的插图走 markdown 插图同一条通道，伪条目 id = ledger（与日记的 diary 同款）。 */
 export const LEDGER_IMAGE_NODE = "ledger";
@@ -35,15 +35,20 @@ export function formatCents(cents: number): string {
   return `${sign}${grouped}.${frac}`;
 }
 
-/** 元（用户输入）→ 分；非法或负数返回 null。第三位小数四舍五入。 */
+/** 元（用户输入）→ 分；非法返回 null。第三位小数四舍五入。
+ *  允许负数（账户的期初/当前金额可以是负的，信用卡尤其如此）；
+ *  记账金额是否必须为正在调用方另拦（与 core parse_cents 同口径）。 */
 export function parseYuanToCents(raw: string): number | null {
   const text = raw.trim().replace(/,/g, "");
-  if (text === "" || !/^\d+(\.\d{1,4})?$/.test(text)) return null;
-  const [whole, frac = ""] = text.split(".");
+  if (text === "" || !/^[+-]?\d+(\.\d{1,4})?$/.test(text)) return null;
+  const negative = text.startsWith("-");
+  const unsigned = negative || text.startsWith("+") ? text.slice(1) : text;
+  const [whole, frac = ""] = unsigned.split(".");
   const padded = `${frac}000`.slice(0, 3);
   const cents = Number.parseInt(whole, 10) * 100 + Number.parseInt(padded.slice(0, 2), 10);
   const third = Number.parseInt(padded.slice(2, 3), 10);
-  return cents + (third >= 5 ? 1 : 0);
+  const value = cents + (third >= 5 ? 1 : 0);
+  return negative ? -value : value;
 }
 
 /** 一笔账的带符号展示：支出 -、收入 +、转账按转出方向记 -。 */
@@ -393,6 +398,77 @@ export function assetsOverview(book: LedgerBook): LedgerAssets {
     if (item.account.kind === "credit" && item.balance < 0) liabilities += -item.balance;
   }
   return { net, assets: net + liabilities, liabilities, perAccount };
+}
+
+export type AssetTrendPoint = { date: string; cents: number };
+
+/**
+ * 总资产随时间的变化：从最早的一天（首笔流水或首个账户创建日）扫到今天。
+ * 横坐标自适应——按跨度取采样步长，点数封顶 maxPoints（标签不会太密，首尾都落点）。
+ * 每个点是**当天结束时**的总资产，口径与 assetsOverview 完全一致
+ * （净资产 + 信用类账户负余额的负债），不另立第二套算法。
+ */
+export function assetsTrend(book: LedgerBook, maxPoints = 90): AssetTrendPoint[] {
+  if (book.accounts.length === 0) return [];
+  const to = todayDate();
+  let from = to;
+  for (const entry of book.entries) {
+    if (entry.date < from) from = entry.date;
+  }
+  for (const account of book.accounts) {
+    const created = (account.createdAt ?? "").slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(created) && created < from) from = created;
+  }
+  const spanDays =
+    Math.round(
+      (new Date(`${to}T00:00:00`).getTime() - new Date(`${from}T00:00:00`).getTime()) / 86_400_000
+    ) + 1;
+  const step = Math.max(1, Math.ceil(spanDays / maxPoints));
+
+  const sorted = [...book.entries].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  const balances = new Map<string, number>();
+  for (const account of book.accounts) balances.set(account.id, account.initialCents);
+  let cursorIndex = 0;
+
+  function applyThrough(date: string): void {
+    while (cursorIndex < sorted.length && sorted[cursorIndex].date <= date) {
+      const entry = sorted[cursorIndex];
+      cursorIndex += 1;
+      const fromBalance = balances.get(entry.accountId) ?? 0;
+      if (entry.kind === "income") {
+        balances.set(entry.accountId, fromBalance + entry.amountCents);
+      } else if (entry.kind === "expense") {
+        balances.set(entry.accountId, fromBalance - entry.amountCents);
+      } else {
+        balances.set(entry.accountId, fromBalance - entry.amountCents);
+        if (entry.toAccountId) {
+          balances.set(entry.toAccountId, (balances.get(entry.toAccountId) ?? 0) + entry.amountCents);
+        }
+      }
+    }
+  }
+
+  function totalAt(): number {
+    let net = 0;
+    let liabilities = 0;
+    for (const account of book.accounts) {
+      const balance = balances.get(account.id) ?? 0;
+      net += balance;
+      if (account.kind === "credit" && balance < 0) liabilities += -balance;
+    }
+    return net + liabilities;
+  }
+
+  const points: AssetTrendPoint[] = [];
+  // 起点前一格给「只有期初」的水平段：曲线从左缘就有值，不是凭空冒出来
+  points.push({ date: shiftDays(from, -step), cents: totalAt() });
+  for (let date = from; date < to; date = shiftDays(date, step)) {
+    applyThrough(date);
+    points.push({ date, cents: totalAt() });
+  }
+  applyThrough(to);
+  points.push({ date: to, cents: totalAt() });
+  return points;
 }
 
 /** 两级分类树：大类（含子分类），按 order 排。 */

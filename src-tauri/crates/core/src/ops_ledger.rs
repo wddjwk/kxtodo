@@ -19,8 +19,8 @@ use crate::envelope::Meta;
 use crate::error::{CoreError, CoreResult};
 use crate::ids::gen_id;
 use crate::model::{
-    default_account_kind, LedgerAccount, LedgerCategory, LedgerEntry, LedgerFile, LedgerKind,
-    LedgerSide, ACCOUNT_KIND_CREDIT, LEDGER_IMAGE_NODE,
+    default_account_kind, LedgerAccount, LedgerAccountType, LedgerCategory, LedgerEntry,
+    LedgerFile, LedgerKind, LedgerSide, ACCOUNT_KIND_CREDIT, LEDGER_IMAGE_NODE,
 };
 use crate::repo::Domain;
 use crate::time::{now_iso, parse_date, today_local};
@@ -45,6 +45,10 @@ pub fn ledger_dispatch(
         "accountAdd" => ledger_account_add(inv, ctx, meta),
         "accountModify" => ledger_account_modify(inv, ctx, meta),
         "accountRemove" => ledger_account_remove(inv, ctx, meta),
+        "accountTypes" => ledger_account_types(inv, ctx, meta),
+        "accountTypeAdd" => ledger_account_type_add(inv, ctx, meta),
+        "accountTypeModify" => ledger_account_type_modify(inv, ctx, meta),
+        "accountTypeRemove" => ledger_account_type_remove(inv, ctx, meta),
         "categories" => ledger_categories(inv, ctx, meta),
         "categoryAdd" => ledger_category_add(inv, ctx, meta),
         "categoryModify" => ledger_category_modify(inv, ctx, meta),
@@ -75,6 +79,9 @@ fn ledger_write_confirmation(action: &str, inv: &Invocation) -> CoreResult<()> {
         "modify" => "修改账本里的一笔",
         "accountAdd" => "新增资金账户",
         "accountModify" => "修改资金账户",
+        "accountTypeAdd" => "新增账户类型",
+        "accountTypeModify" => "修改账户类型",
+        "accountTypeRemove" => "删除账户类型",
         "categoryAdd" => "新增记账分类",
         "categoryModify" => "修改记账分类",
         // 只读动作与内部已有确认门的动作（remove/accountRemove/categoryRemove/import）直接放行
@@ -308,7 +315,7 @@ fn entry_view(file: &LedgerFile, entry: &LedgerEntry) -> Value {
         "date": entry.date,
         "time": entry.time,
         "note": entry.note,
-        "image": entry.image,
+        "images": entry.images,
         "createdAt": entry.created_at,
         "updatedAt": entry.updated_at,
     })
@@ -408,7 +415,7 @@ struct EntryDraft {
     date: String,
     time: String,
     note: String,
-    image: Option<String>,
+    images: Vec<String>,
 }
 
 fn validate_entry(file: &LedgerFile, draft: &EntryDraft) -> CoreResult<()> {
@@ -532,22 +539,39 @@ fn draft_from_params(file: &LedgerFile, params: &Value, base: Option<&LedgerEntr
     let note = param_str(params, "note")
         .map(|text| text.trim().to_string())
         .unwrap_or_else(|| base.map(|item| item.note.clone()).unwrap_or_default());
-    let image = match param_str(params, "image") {
-        Some(raw) => {
-            let name = raw.trim().to_string();
-            if name.is_empty() {
-                None // 空串 = 清除附图
-            } else {
+    let images = match params.get("images") {
+        Some(Value::Array(list)) => {
+            let mut names: Vec<String> = Vec::new();
+            for item in list {
+                let Some(raw) = item.as_str() else {
+                    return Err(CoreError::validation(
+                        "LEDGER_IMAGE_NAME_INVALID",
+                        "images 必须是文件名字符串数组",
+                    ));
+                };
+                let name = raw.trim().to_string();
+                if name.is_empty() {
+                    continue; // 空串跳过（modify 传空数组 = 清除全部附图）
+                }
                 if !is_safe_image_name(&name) {
                     return Err(CoreError::validation(
                         "LEDGER_IMAGE_NAME_INVALID",
                         format!("无效附图文件名 `{name}`"),
                     ));
                 }
-                Some(name)
+                if !names.contains(&name) {
+                    names.push(name);
+                }
             }
+            names
         }
-        None => base.and_then(|item| item.image.clone()),
+        Some(other) if !other.is_null() => {
+            return Err(CoreError::validation(
+                "LEDGER_IMAGE_NAME_INVALID",
+                "images 必须是文件名字符串数组",
+            ));
+        }
+        _ => base.map(|item| item.images.clone()).unwrap_or_default(),
     };
     Ok(EntryDraft {
         kind,
@@ -558,7 +582,7 @@ fn draft_from_params(file: &LedgerFile, params: &Value, base: Option<&LedgerEntr
         date,
         time,
         note,
-        image,
+        images,
     })
 }
 
@@ -567,14 +591,14 @@ fn draft_from_params(file: &LedgerFile, params: &Value, base: Option<&LedgerEntr
 // ---------------------------------------------------------------------------
 
 /// 记账侧保存后的附图清理（v0.7.4）：对着**写入后**的账本扫 `img/data/ledger/`，删掉
-/// 没有任何一笔账再引用的图片（只跟本地写，见 `image_gc`）。引用集合 = 各条目的 `image`
-/// 字段（裸文件名），不是 markdown。清理失败一律吞掉——绝不让保存本身因为清理而失败。
+/// 没有任何一笔账再引用的图片（只跟本地写，见 `image_gc`）。引用集合 = 各条目 `images`
+/// 列表的并集（裸文件名），不是 markdown。清理失败一律吞掉——绝不让保存本身因为清理而失败。
 fn sweep_ledger_images(ctx: &ExecContext, file: &LedgerFile) {
     let dir = ctx.repo.layout.entry_img_dir(LEDGER_IMAGE_NODE);
     let referenced: HashSet<String> = file
         .entries
         .iter()
-        .filter_map(|entry| entry.image.clone())
+        .flat_map(|entry| entry.images.iter().cloned())
         .collect();
     crate::image_gc::sweep_unreferenced_by_names(&dir, &referenced);
 }
@@ -603,7 +627,8 @@ fn ledger_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResul
                     date: draft.date.clone(),
                     time: draft.time.clone(),
                     note: draft.note.clone(),
-                    image: draft.image.clone(),
+                    images: draft.images.clone(),
+                    legacy_image: None,
                     created_at: now.clone(),
                     updated_at: None,
                     extra: Map::new(),
@@ -747,7 +772,7 @@ fn ledger_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRe
                 entry.date = draft.date.clone();
                 entry.time = draft.time.clone();
                 entry.note = draft.note.clone();
-                entry.image = draft.image.clone();
+                entry.images = draft.images.clone();
                 entry.updated_at = Some(now.clone());
             }
             sort_entries(&mut file.entries);
@@ -942,11 +967,28 @@ fn ledger_account_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -
                 None => None,
             };
             let initial = cents_param(params, "initial")?;
+            let balance = cents_param(params, "balance")?;
+            if initial.is_some() && balance.is_some() {
+                return Err(CoreError::validation(
+                    "LEDGER_PARAM_CONFLICT",
+                    "--initial（期初余额）与 --balance（当前余额）只能给一个",
+                ));
+            }
             let position = file
                 .accounts
                 .iter()
                 .position(|item| item.id == id)
                 .ok_or_else(|| account_not_found(&id))?;
+            // 直设当前余额：期初 = 目标余额 − 流水推导和（口径与 ledger balance 完全一致），
+            // 于是推导出来的余额恰好等于用户要的数。先算好再进可变借用。
+            let balance_initial = match balance {
+                Some(value) => {
+                    let derived_flows = account_balance_cents(file, &id)
+                        .saturating_sub(file.accounts[position].initial_cents);
+                    Some(value.saturating_sub(derived_flows))
+                }
+                None => None,
+            };
             {
                 let account = &mut file.accounts[position];
                 if let Some(raw) = param_str(params, "name") {
@@ -965,6 +1007,9 @@ fn ledger_account_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -
                     account.note = raw.trim().to_string();
                 }
                 if let Some(value) = initial {
+                    account.initial_cents = value;
+                }
+                if let Some(value) = balance_initial {
                     account.initial_cents = value;
                 }
                 if let Some(value) = params.get("order").and_then(Value::as_f64) {
@@ -1022,6 +1067,170 @@ fn ledger_account_remove(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -
         |file| {
             file.accounts.retain(|item| item.id != id);
             file.meta.record_tombstone(&id, "ledgerAccount", &now);
+            Ok(json!({ "removed": 1 }))
+        },
+    )?;
+    apply_write_outcome(meta, Domain::Ledger, &outcome);
+    notify_host(ctx, Domain::Ledger, outcome.revision, vec![id.clone()]);
+    Ok(json!({ "removed": 1, "revision": outcome.revision }))
+}
+
+// ---------------------------------------------------------------------------
+// account types（自定义账户类型，v0.7.5）
+// ---------------------------------------------------------------------------
+
+fn find_account_type<'a>(file: &'a LedgerFile, id: &str) -> Option<&'a LedgerAccountType> {
+    file.account_types.iter().find(|item| item.id == id)
+}
+
+fn account_type_not_found(name: &str) -> CoreError {
+    CoreError::validation(
+        "LEDGER_ACCOUNT_TYPE_NOT_FOUND",
+        format!("账户类型 `{name}` 不存在"),
+    )
+    .with_hint("先运行 kxtodo-cli ledger account-types 查看现有类型")
+}
+
+fn account_type_view(item: &LedgerAccountType) -> Value {
+    json!({
+        "id": item.id,
+        "name": item.name,
+        "icon": item.icon,
+        "color": item.color,
+        "createdAt": item.created_at,
+        "updatedAt": item.updated_at,
+    })
+}
+
+fn ledger_account_types(_inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
+    let file = ctx.repo.load_ledger()?;
+    set_read_revision(meta, Domain::Ledger, file.meta.revision);
+    let items: Vec<Value> = file.account_types.iter().map(account_type_view).collect();
+    Ok(json!({ "total": items.len(), "items": items }))
+}
+
+fn ledger_account_type_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
+    let params = &inv.params;
+    let name = required_str(params, "name")?;
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err(CoreError::validation(
+            "LEDGER_ACCOUNT_TYPE_NAME_EMPTY",
+            "账户类型名不能为空",
+        ));
+    }
+    let icon = param_str(params, "icon").unwrap_or_default();
+    let color = param_str(params, "color").unwrap_or_default();
+    let now = now_iso();
+    let type_id = gen_id("latype");
+    let (file, outcome) = ctx.repo.write_ledger(
+        inv.controls.if_revision,
+        inv.controls.idempotency_key.as_deref(),
+        &inv.command,
+        |file| {
+            if file.account_types.iter().any(|item| item.name == name) {
+                return Err(CoreError::validation(
+                    "LEDGER_ACCOUNT_TYPE_EXISTS",
+                    format!("账户类型 `{name}` 已存在"),
+                ));
+            }
+            let item = LedgerAccountType {
+                id: type_id.clone(),
+                name: name.clone(),
+                icon: icon.trim().to_string(),
+                color: color.trim().to_string(),
+                created_at: now.clone(),
+                updated_at: None,
+                extra: Map::new(),
+            };
+            file.account_types.push(item.clone());
+            Ok(idem_summary(&account_type_view(&item)))
+        },
+    )?;
+    apply_write_outcome(meta, Domain::Ledger, &outcome);
+    notify_host(ctx, Domain::Ledger, outcome.revision, vec![]);
+    if outcome.replayed {
+        return Ok(outcome.replay_summary.clone().unwrap_or(Value::Null));
+    }
+    let item = find_account_type(&file, &type_id)
+        .ok_or_else(|| account_type_not_found(&name))?
+        .clone();
+    Ok(account_type_view(&item))
+}
+
+fn ledger_account_type_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
+    let params = &inv.params;
+    let id = required_str(params, "id")?;
+    let now = now_iso();
+    let (file, outcome) = ctx.repo.write_ledger(
+        inv.controls.if_revision,
+        inv.controls.idempotency_key.as_deref(),
+        &inv.command,
+        |file| {
+            if find_account_type(file, &id).is_none() {
+                return Err(account_type_not_found(&id));
+            }
+            if let Some(raw) = param_str(params, "name") {
+                let name = raw.trim().to_string();
+                if name.is_empty() {
+                    return Err(CoreError::validation(
+                        "LEDGER_ACCOUNT_TYPE_NAME_EMPTY",
+                        "账户类型名不能为空",
+                    ));
+                }
+                if file
+                    .account_types
+                    .iter()
+                    .any(|item| item.name == name && item.id != id)
+                {
+                    return Err(CoreError::validation(
+                        "LEDGER_ACCOUNT_TYPE_EXISTS",
+                        format!("账户类型 `{name}` 已存在"),
+                    ));
+                }
+            }
+            let item = file
+                .account_types
+                .iter_mut()
+                .find(|item| item.id == id)
+                .ok_or_else(|| account_type_not_found(&id))?;
+            if let Some(raw) = param_str(params, "name") {
+                item.name = raw.trim().to_string();
+            }
+            if let Some(raw) = param_str(params, "icon") {
+                item.icon = raw.trim().to_string();
+            }
+            if let Some(raw) = param_str(params, "color") {
+                item.color = raw.trim().to_string();
+            }
+            item.updated_at = Some(now.clone());
+            Ok(idem_summary(&account_type_view(item)))
+        },
+    )?;
+    apply_write_outcome(meta, Domain::Ledger, &outcome);
+    notify_host(ctx, Domain::Ledger, outcome.revision, vec![id.clone()]);
+    if outcome.replayed {
+        return Ok(outcome.replay_summary.clone().unwrap_or(Value::Null));
+    }
+    let item = find_account_type(&file, &id)
+        .ok_or_else(|| account_type_not_found(&id))?
+        .clone();
+    Ok(account_type_view(&item))
+}
+
+fn ledger_account_type_remove(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
+    let id = required_str(&inv.params, "id")?;
+    // 名下有账户在用也允许删：账户的 kind 是自由字符串，类型删了字符串原样留着
+    let (_, outcome) = ctx.repo.write_ledger(
+        inv.controls.if_revision,
+        inv.controls.idempotency_key.as_deref(),
+        &inv.command,
+        |file| {
+            if find_account_type(file, &id).is_none() {
+                return Err(account_type_not_found(&id));
+            }
+            file.account_types.retain(|item| item.id != id);
+            file.meta.record_tombstone(&id, "ledgerAccountType", &now_iso());
             Ok(json!({ "removed": 1 }))
         },
     )?;
@@ -1840,7 +2049,8 @@ fn ledger_import(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRe
                     date,
                     time: item.time.clone(),
                     note: item.note.clone(),
-                    image: None,
+                    images: Vec::new(),
+                    legacy_image: None,
                     created_at: now.clone(),
                     updated_at: None,
                     extra: Map::new(),

@@ -2,7 +2,9 @@
   /**
    * 记账的一天 = 一张卡片。标题行 = 日期 + 周几 + 右端当天收/支与「在这天记一笔」；
    * 每一笔占两行：图标跨两行，大字行 = 分类名 + 带符号金额（左右对齐），
-   * 小字行 = 备注（有插图时跟一个图片图标）+ 右端时刻与账户。
+   * 小字行 = 备注（有插图时跟一个图片图标，多张带数量角标）+ 右端时刻与账户。
+   * **没有备注时**分类名跟图标一样上下居中（金额与时刻/账户仍在右侧叠两行），
+   * 否则左半边会空出一块，读起来像缺了一行。
    * 所有展示记账条目的地方（列表 / 日历选中日 / 钻取账单明细）都是这一套排版。
    */
   import { createEventDispatcher } from "svelte";
@@ -72,7 +74,7 @@
 
   function accountIcon(entry: LedgerEntry): string {
     const account = book.accounts.find((item) => item.id === entry.accountId);
-    return account?.icon || accountTypeIcon(account?.kind ?? "other");
+    return account?.icon || accountTypeIcon(account?.kind ?? "other", book.accountTypes);
   }
 
   function amountText(entry: LedgerEntry): string {
@@ -114,8 +116,8 @@
     <h3 class="ledger-card-title" title={dayLabel}>{dayTitle}</h3>
     <span class="ledger-date-week">{weekday}</span>
     <span class="ledger-card-sums">
-      <em class="in" title="当天收入">收 {compactCents(group.income)}</em>
-      <em class="out" title="当天支出">支 {compactCents(group.expense)}</em>
+      <em title="当天收入">收 {compactCents(group.income)}</em>
+      <em title="当天支出">支 {compactCents(group.expense)}</em>
     </span>
     <button class="ledger-card-add" type="button" title="在这天记一笔" on:click|stopPropagation={addHere}>
       <Plus size={15} />
@@ -128,6 +130,7 @@
       {@const icon = ledgerIcon(entryIcon(entry), "Ellipsis")}
       {@const accountText = accountLabel(entry)}
       {@const clock = displayClock(entry.time)}
+      {@const images = entry.images ?? []}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <div
@@ -140,39 +143,79 @@
         <span class="ledger-entry-icon" style="--cat: {color}; background: {softColor(color)}">
           <svelte:component this={icon} size={17} />
         </span>
-        <span class="ledger-entry-main">
-          <span class="ledger-entry-line">
-            <strong>{entryName(entry)}</strong>
-            <b class="ledger-entry-amount" class:in={entry.kind === "income"} class:out={entry.kind === "expense"}>
-              {amountText(entry)}
-            </b>
+        {#if entry.note}
+          <span class="ledger-entry-main">
+            <span class="ledger-entry-line">
+              <strong>{entryName(entry)}</strong>
+              <b class="ledger-entry-amount" class:in={entry.kind === "income"} class:out={entry.kind === "expense"}>
+                {amountText(entry)}
+              </b>
+            </span>
+            <span class="ledger-entry-sub">
+              <em class="ledger-entry-note">
+                {entry.note}
+                {#if images.length > 0}
+                  <!-- svelte-ignore a11y_no_static_element_interactions -->
+                  <!-- svelte-ignore a11y_click_events_have_key_events -->
+                  <span
+                    class="ledger-entry-image"
+                    title="查看这条账的图片"
+                    on:click|stopPropagation={() => dispatch("image", entry.id)}
+                  >
+                    <ImageIcon size={12} />
+                    {#if images.length > 1}<i class="ledger-entry-image-count">{images.length}</i>{/if}
+                  </span>
+                {/if}
+              </em>
+              <span class="ledger-entry-meta">
+                {#if clock}<em class="ledger-entry-time" title="记账时刻">{clock}</em>{/if}
+                {#if accountText}
+                  <em class="ledger-entry-account" title={accountText}>
+                    {#if entry.kind === "transfer"}
+                      <svelte:component this={ledgerIcon(accountIcon(entry), "Wallet")} size={11} />
+                    {/if}
+                    {accountText}
+                  </em>
+                {/if}
+              </span>
+            </span>
           </span>
-          <span class="ledger-entry-sub">
-            <em class="ledger-entry-note">
-              {#if entry.note}{entry.note}{/if}
-              {#if entry.image}
+        {:else}
+          <!-- 无备注：分类名上下居中（跟图标一致），右侧金额与时刻/账户仍分两行 -->
+          <span class="ledger-entry-main solo">
+            <span class="ledger-entry-solo-name">
+              <strong>{entryName(entry)}</strong>
+              {#if images.length > 0}
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <!-- svelte-ignore a11y_click_events_have_key_events -->
                 <span
                   class="ledger-entry-image"
                   title="查看这条账的图片"
                   on:click|stopPropagation={() => dispatch("image", entry.id)}
-                ><ImageIcon size={12} /></span>
-              {/if}
-            </em>
-            <span class="ledger-entry-meta">
-              {#if clock}<em class="ledger-entry-time" title="记账时刻">{clock}</em>{/if}
-              {#if accountText}
-                <em class="ledger-entry-account" title={accountText}>
-                  {#if entry.kind === "transfer"}
-                    <svelte:component this={ledgerIcon(accountIcon(entry), "Wallet")} size={11} />
-                  {/if}
-                  {accountText}
-                </em>
+                >
+                  <ImageIcon size={12} />
+                  {#if images.length > 1}<i class="ledger-entry-image-count">{images.length}</i>{/if}
+                </span>
               {/if}
             </span>
+            <span class="ledger-entry-solo-side">
+              <b class="ledger-entry-amount" class:in={entry.kind === "income"} class:out={entry.kind === "expense"}>
+                {amountText(entry)}
+              </b>
+              <span class="ledger-entry-meta">
+                {#if clock}<em class="ledger-entry-time" title="记账时刻">{clock}</em>{/if}
+                {#if accountText}
+                  <em class="ledger-entry-account" title={accountText}>
+                    {#if entry.kind === "transfer"}
+                      <svelte:component this={ledgerIcon(accountIcon(entry), "Wallet")} size={11} />
+                    {/if}
+                    {accountText}
+                  </em>
+                {/if}
+              </span>
+            </span>
           </span>
-        </span>
+        {/if}
       </div>
     {/each}
   </div>

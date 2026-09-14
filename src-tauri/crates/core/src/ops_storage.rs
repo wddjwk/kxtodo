@@ -174,7 +174,7 @@ fn scan(ctx: &ExecContext) -> CoreResult<Scan> {
         for id in dir_ids {
             let dir = layout.entry_img_dir(&id);
             // 引用集合：现存节点 = 归属它的任务 markdown；diary = 全部日记；
-            // ledger = 全部账目的 image 字段（裸文件名，不是 markdown）；
+            // ledger = 全部账目 images 列表的并集（裸文件名，不是 markdown）；
             // 都不是 = 目录整个是孤儿（条目删掉后同步/崩溃留下的残骸）
             let referenced: HashSet<String> = if id == DIARY_IMAGE_NODE {
                 let markdowns: Vec<&str> = diary
@@ -187,7 +187,7 @@ fn scan(ctx: &ExecContext) -> CoreResult<Scan> {
                 ledger
                     .entries
                     .iter()
-                    .filter_map(|entry| entry.image.clone())
+                    .flat_map(|entry| entry.images.iter().cloned())
                     .collect()
             } else if node_ids.contains(id.as_str()) {
                 let markdowns: Vec<&str> = data

@@ -136,7 +136,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   check("备注输入框没有边框", noteInputBorder === "0px", noteInputBorder);
   check("桌面金额是可输入的大字", (await page.$$(".ledger-amount-plain input")).length === 1);
   check("meta 行是纯文字按钮", (await page.$$(".ledger-meta-plain")).length >= 3);
-  check("加图片按钮在 meta 行", (await page.$$(".ledger-meta-plain[title='给这条账加一张图片']")).length === 1);
+  check("加图片按钮在 meta 行", (await page.$$(".ledger-meta-plain[title='给这条账添加图片（可多选）']")).length === 1);
   check("一级分类是圆形图标", (await page.$$(".ledger-cat-grid .ledger-cat-round")).length >= 5);
   const roundBox = await page.locator(".ledger-cat-grid .ledger-cat-round").first().boundingBox();
   check(
@@ -176,10 +176,10 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   check("白块里有三标签行", (await page.$$(".ledger-summary-labels span")).length === 3);
   check("白块里有三数额", (await page.$$(".ledger-summary strong")).length === 3);
 
-  await page.click(".ledger-side-switch button:has-text('收支')");
+  await page.click(".ledger-side-switch button:has-text('结余')");
   await page.waitForTimeout(300);
-  check("收支侧画两条曲线", (await page.$$(".ledger-line.in")).length === 1 && (await page.$$(".ledger-line.out")).length === 1);
-  check("收支趋势标题", ((await page.textContent(".ledger-panel-head h2")) ?? "").includes("收支趋势"));
+  check("结余侧画三条曲线（v0.7.5）", (await page.$$(".ledger-line.in")).length === 1 && (await page.$$(".ledger-line.out")).length === 1 && (await page.$$(".ledger-line.bal")).length === 1);
+  check("收支结余趋势标题", ((await page.textContent(".ledger-panel-head h2")) ?? "").includes("收支结余趋势"));
   await page.click(".ledger-side-switch button:has-text('支出')");
   await page.waitForTimeout(200);
 
@@ -239,9 +239,10 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   check("备注在名称下面、类型上面", nameIndex >= 0 && noteIndex > nameIndex && kindIndex > noteIndex, `${nameIndex}/${noteIndex}/${kindIndex}`);
   check("类型 chips 含预置", (formText ?? "").includes("支付宝") && (formText ?? "").includes("公积金"), (formText ?? "").slice(0, 80));
   await page.click(".ledger-choice:has-text('类型')");
-  await page.waitForSelector(".ledger-kind-custom", { timeout: 5000 });
-  await page.fill(".ledger-kind-custom", "饭票");
-  await page.click(".ledger-sheet-body button:has-text('确定')");
+  await page.waitForSelector(".ledger-type-form", { timeout: 5000 });
+  await page.fill(".ledger-type-form input[placeholder='例如 校园卡']", "饭票");
+  await page.click(".ledger-type-form button:has-text('添加类型')");
+  await page.waitForSelector(".ledger-type-form", { state: "detached", timeout: 8000 });
   await page.waitForTimeout(200);
   check("自定义类型成为当前类型", ((await page.textContent(".ledger-sheet-body")) ?? "").includes("饭票"));
   await page.click(".ledger-icon-group:has-text('电子支付')");

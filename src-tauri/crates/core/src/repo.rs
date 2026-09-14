@@ -569,13 +569,16 @@ impl Repository {
             file.seed_defaults();
             return Ok(file);
         }
-        serde_json::from_value(value).map_err(|error| {
+        let mut file: LedgerFile = serde_json::from_value(value).map_err(|error| {
             CoreError::new(
                 crate::error::ErrorKind::Io,
                 "DATA_CORRUPTED",
                 format!("ledger.json 结构无效：{error}"),
             )
-        })
+        })?;
+        // 加载归一的唯一点：v0.7.4 的旧单图字段折进 images（只读不写）
+        file.fold_legacy_images();
+        Ok(file)
     }
 
     pub fn lookup_schedule_idempotency(

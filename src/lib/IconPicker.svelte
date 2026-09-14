@@ -1,18 +1,24 @@
 <script lang="ts">
+  /**
+   * 图标 / 表情选择器（分组与条目的「选择图标」、任务的「添加表情」、两个编辑器共用）。
+   * v0.7.5：简笔画从 28 个零散预设换成与记账共用的分组目录（LEDGER_ICON_GROUPS，
+   * 20 组两百多个）——分组 chips + 图标格子与记账管理器同一套视觉语言；
+   * 选中的简笔画存 lucide 的 PascalCase 名字（IconGlyph 认它，旧的 kebab 名照旧渲染）。
+   * emoji-picker-element 的滚动区在 shadow DOM 里，外部样式表够不着——挂载后注入
+   * 一段样式把滚动条藏掉（「选 emoji 不要展示滚动条」）。
+   */
   import "emoji-picker-element";
+  import { onMount } from "svelte";
+  import { X } from "@lucide/svelte";
   import IconGlyph from "./IconGlyph.svelte";
+  import { LEDGER_ICON_GROUPS } from "./ledgerIcons";
 
   export let selected = "";
   export let mode: "icon" | "emoji" = "icon";
   export let onPick: (icon: string) => void;
   export let onClose: () => void;
 
-  const iconPresets = [
-    "list", "lightbulb", "notebook", "folder", "file", "book", "bookmark",
-    "code", "cpu", "wrench", "inbox", "tag", "archive", "briefcase",
-    "check-square", "gift", "lock", "heart", "music", "home", "bell",
-    "brain", "camera", "car", "palette", "plane", "rocket", "shopping-cart"
-  ];
+  const ALL_GROUP = "全部";
 
   const iconEmojiPresets = ["💡", "✅", "📝", "📌", "📚", "🎁", "🔐", "🎧", "🚗", "🛒", "❤️", "⭐"];
 
@@ -23,6 +29,16 @@
     "📊", "📈", "📉", "🏆", "🥇", "🥈", "🥉", "⭐",
     "💡", "🔑", "📌", "📎", "🗂️", "📁", "🔔", "💤"
   ];
+
+  let iconGroup = ALL_GROUP;
+  let pickerEl: HTMLElement;
+
+  $: iconChoices =
+    iconGroup === ALL_GROUP
+      ? LEDGER_ICON_GROUPS.flatMap((group) => [...group.icons]).filter(
+          (name, index, all) => all.indexOf(name) === index
+        )
+      : LEDGER_ICON_GROUPS.find((group) => group.name === iconGroup)?.icons ?? [];
 
   function handleEmojiClick(event: CustomEvent<{ unicode: string }>): void {
     if (event.detail?.unicode) {
@@ -35,37 +51,79 @@
       onClose();
     }
   }
+
+  function handleKeydown(event: KeyboardEvent): void {
+    if (event.key !== "Escape" || event.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    event.stopPropagation();
+    onClose();
+  }
+
+  onMount(() => {
+    // shadow DOM 里的滚动条只能注进去藏（外层样式表够不着）
+    const host = pickerEl?.querySelector("emoji-picker");
+    const root = host?.shadowRoot;
+    if (root && !root.querySelector("#kx-no-scrollbar")) {
+      const style = document.createElement("style");
+      style.id = "kx-no-scrollbar";
+      style.textContent =
+        "* { scrollbar-width: none !important; } *::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }";
+      root.appendChild(style);
+    }
+    window.addEventListener("keydown", handleKeydown, true);
+    return () => window.removeEventListener("keydown", handleKeydown, true);
+  });
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="icon-picker-backdrop" on:click={handleBackdropClick} on:contextmenu|preventDefault|stopPropagation>
-  <div class="icon-picker" on:click|stopPropagation>
+  <div class="icon-picker" bind:this={pickerEl} on:click|stopPropagation>
     <header>
       <strong>{mode === "icon" ? "选择图标" : "选择表情"}</strong>
-      <button type="button" on:click={onClose}>×</button>
+      <button type="button" class="icon-picker-close" title="关闭" aria-label="关闭" on:click={onClose}>
+        <X size={17} />
+      </button>
     </header>
 
     {#if mode === "icon"}
-      <div class="icon-grid" aria-label="标准图标">
-        {#each iconPresets as preset}
-          <button class:selected={selected === preset} type="button" title={preset} on:click={() => onPick(preset)}>
-            <IconGlyph icon={preset} size={21} />
+      <div class="icon-group-chips" role="tablist" aria-label="图标分组">
+        <button
+          type="button"
+          role="tab"
+          class="icon-group-chip"
+          class:active={iconGroup === ALL_GROUP}
+          on:click={() => (iconGroup = ALL_GROUP)}
+        >{ALL_GROUP}</button>
+        {#each LEDGER_ICON_GROUPS as group (group.name)}
+          <button
+            type="button"
+            role="tab"
+            class="icon-group-chip"
+            class:active={iconGroup === group.name}
+            on:click={() => (iconGroup = group.name)}
+          >{group.name}</button>
+        {/each}
+      </div>
+      <div class="icon-grid" aria-label="简笔画图标">
+        {#each iconChoices as name (name)}
+          <button type="button" class:selected={selected === name} title={name} on:click={() => onPick(name)}>
+            <IconGlyph icon={name} size={20} />
           </button>
         {/each}
       </div>
 
       <div class="picker-section-label">常用表情</div>
       <div class="emoji-grid" aria-label="常用表情">
-        {#each iconEmojiPresets as emoji}
-          <button class:selected={selected === emoji} type="button" on:click={() => onPick(emoji)}>{emoji}</button>
+        {#each iconEmojiPresets as emoji (emoji)}
+          <button type="button" class:selected={selected === emoji} on:click={() => onPick(emoji)}>{emoji}</button>
         {/each}
       </div>
     {:else}
       <div class="picker-section-label">常用</div>
       <div class="emoji-grid emoji-grid-wide" aria-label="常用表情">
-        {#each taskEmojiPresets as emoji}
-          <button class:selected={selected === emoji} type="button" on:click={() => onPick(emoji)}>{emoji}</button>
+        {#each taskEmojiPresets as emoji (emoji)}
+          <button type="button" class:selected={selected === emoji} on:click={() => onPick(emoji)}>{emoji}</button>
         {/each}
       </div>
     {/if}

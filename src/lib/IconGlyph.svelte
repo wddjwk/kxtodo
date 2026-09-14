@@ -33,12 +33,15 @@
     Tag,
     Wrench
   } from "@lucide/svelte";
+  import { LEDGER_ICONS } from "./ledgerIcons";
 
   export let icon = "list";
   export let size = 22;
   export let strokeWidth = 1.8;
 
-  $: isEmoji = !knownIcons.has(icon);
+  /** 记账图标库（PascalCase，两百多个）：图标选择器复用那份目录后，节点也会存这类名字 */
+  $: ledgerComponent = LEDGER_ICONS[icon] ?? null;
+  $: isEmoji = !knownIcons.has(icon) && !ledgerComponent;
 
   const knownIcons = new Set([
     "archive",
@@ -140,6 +143,8 @@
   <Archive {size} {strokeWidth} />
 {:else if icon === "lightbulb"}
   <Lightbulb {size} {strokeWidth} />
+{:else if ledgerComponent}
+  <svelte:component this={ledgerComponent} {size} {strokeWidth} />
 {:else}
   <List {size} {strokeWidth} />
 {/if}

@@ -2,8 +2,9 @@
  * 固定导航（我的一天 / 计划内 / 收藏 / 日记 / 记账 / 定时任务 / 工具箱）的目录。
  *
  * 前四个是 `kind:"system"` 的节点（id 与 defaults.ts 的种子节点一致），后三个不是节点：
- * 日记/记账各是一个领域，工具箱只在移动端出现。它们共用一套可见性与展示方式配置
- * （`appearance.navItems` / `appearance.navLayout`），所以 id 必须在这一处对齐。
+ * 日记/记账各是一个领域，工具箱是注册表驱动的整页视图（v0.7.5 起两端都有）。
+ * 它们共用一套可见性与展示方式配置（`appearance.navItems` / `appearance.navLayout`），
+ * 所以 id 必须在这一处对齐。
  */
 
 export type NavItemId = "my-day" | "planned" | "important" | "diary" | "ledger" | "scheduled" | "toolbox";

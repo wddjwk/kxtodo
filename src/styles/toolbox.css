@@ -1,0 +1,195 @@
+/* toolbox.css — 工具箱（两端整页视图）。
+   架构：工具注册在 src/lib/tools/registry.ts（可用性按平台、实现按组件懒加载），
+   ToolboxView 只是壳（列表 + 子视图宿主 + 返回）。共享的卡片/子视图样式在下面的
+   非scoped 段；移动端容器（absolute 整页 + 安全区）在 mobile.css 的 .app-shell.mobile
+   段里覆盖；这里补桌面容器与「占主区域时藏工作区」的互斥规则。 */
+
+/* 工具箱占着主区域时把任务工作区藏起来——它仍然挂着（不销毁），与日记/记账同口径。 */
+.app-shell.toolbox-open .workspace {
+  display: none;
+}
+
+/* 全局搜索的混排结果只渲染在工作区里：搜索态要把主区域让回工作区。 */
+.app-shell.toolbox-open.searching .workspace {
+  display: flex;
+}
+
+.app-shell.toolbox-open.searching .toolbox-view {
+  display: none;
+}
+
+/* 桌面容器：与日记/记账同一套盒子算法（主区域左上 12px 圆角 + 同内边距），
+   内容宽度收着——工具卡拉满宽屏会很难看 */
+.app-shell:not(.mobile) .toolbox-view {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 18px;
+  padding: 44px 56px 54px;
+  border-radius: 12px 0 0 0;
+  background: #f0f0f0;
+  overflow-y: auto;
+}
+
+.app-shell:not(.mobile) .toolbox-list,
+.app-shell:not(.mobile) .toolbox-sub-host {
+  width: 100%;
+  max-width: 720px;
+}
+
+/* ---------- 壳与卡片（两端共享；mobile.css 的容器段在级联后面，专管移动端覆盖） ---------- */
+
+.toolbox-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolbox-header-icon {
+  display: grid;
+  place-items: center;
+  color: #2564cf;
+}
+
+.toolbox-header-title {
+  font-size: 22px;
+  font-weight: 800;
+  color: #1f1f1f;
+}
+
+.toolbox-list {
+  display: grid;
+  gap: 12px;
+}
+
+.toolbox-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #ffffff;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease-out, border-color 0.12s ease-out;
+}
+
+.toolbox-card:hover {
+  background: #f2f4f7;
+  border-color: #dde1e6;
+}
+
+.toolbox-card:active {
+  background: #e9edf2;
+}
+
+.toolbox-card-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  border-radius: 10px;
+  color: #2564cf;
+  background: rgb(37 100 207 / 10%);
+}
+
+.toolbox-card-text {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.toolbox-card-text strong {
+  font-size: 16px;
+  color: #1f2937;
+}
+
+.toolbox-card-text span {
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.toolbox-sub-host {
+  display: grid;
+  gap: 14px;
+  justify-items: start;
+  align-content: start;
+}
+
+.toolbox-sub-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 10px;
+  margin-left: -10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #2564cf;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.toolbox-sub-back:hover {
+  background: rgb(0 0 0 / 6%);
+}
+
+.toolbox-sub {
+  display: grid;
+  gap: 14px;
+  justify-items: start;
+  align-content: start;
+  width: 100%;
+}
+
+.toolbox-sub-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #1f2937;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.toolbox-field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #374151;
+  font-size: 15px;
+}
+
+.toolbox-results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  width: 100%;
+}
+
+.toolbox-result-chip {
+  padding: 10px 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #1f2937;
+  font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.toolbox-empty {
+  margin: 8px 0;
+  color: #8b929e;
+  font-size: 14px;
+}

@@ -292,6 +292,9 @@ fn ledger_writes_without_yes_are_gated_and_touch_nothing() {
     env.err(&["ledger", "account-add", "--name", "零钱"], 10);
     env.err(&["ledger", "category-add", "--name", "咖啡"], 10);
     env.err(&["ledger", "transfer", "--from", "现金", "--to", "微信", "--amount", "1"], 10);
+    env.err(&["ledger", "account-type-add", "--name", "公积金"], 10);
+    env.err(&["ledger", "account-type-modify", "--id", "latype-xxxx", "--name", "医保"], 10);
+    env.err(&["ledger", "account-type-remove", "--id", "latype-xxxx"], 10);
 
     // 带上 --yes 才落账
     add(&env, &["--amount", "12", "--account", "现金"]);
@@ -309,4 +312,69 @@ fn ledger_writes_without_yes_are_gated_and_touch_nothing() {
     env.ok(&["ledger", "categories"]);
     env.ok(&["ledger", "stats"]);
     env.ok(&["ledger", "balance"]);
+    env.ok(&["ledger", "account-types"]);
+}
+
+/// 自定义账户类型（v0.7.5）：增/改/删走 ops 层的完整往返；删掉仍被账户引用的类型
+/// 是允许的（账户 kind 是自由字符串，原样保留）；名字唯一；未知 id 报 NOT_FOUND。
+#[test]
+fn account_type_crud_round_trip() {
+    let env = TestEnv::fresh();
+    assert_eq!(env.ok(&["ledger", "account-types"])["total"], 0, "首跑没有自定义类型");
+
+    let created = env.ok(&[
+        "ledger", "account-type-add", "--name", "公积金", "--icon", "PiggyBank", "--color", "#7f8fa6", "--yes",
+    ]);
+    let id = created["id"].as_str().unwrap().to_string();
+    assert!(id.starts_with("latype-"), "类型 id 用 latype- 前缀：{id}");
+    assert_eq!(created["name"], "公积金");
+    assert_eq!(created["icon"], "PiggyBank");
+    assert_eq!(created["color"], "#7f8fa6");
+
+    // 落盘进 ledger.json 的 accountTypes（同步实体同源）
+    let file = env.read_file("ledger.json");
+    assert_eq!(file["accountTypes"][0]["id"], serde_json::json!(id));
+
+    // 重名被拒；空名被拒
+    let dup = env.err(&["ledger", "account-type-add", "--name", "公积金", "--yes"], 2);
+    assert_eq!(dup["code"], "LEDGER_ACCOUNT_TYPE_EXISTS");
+    let empty = env.err(&["ledger", "account-type-add", "--name", "  ", "--yes"], 2);
+    assert_eq!(empty["code"], "LEDGER_ACCOUNT_TYPE_NAME_EMPTY");
+
+    // 改名/改图标
+    let modified = env.ok(&[
+        "ledger", "account-type-modify", "--id", &id, "--name", "医保", "--icon", "HeartPulse", "--yes",
+    ]);
+    assert_eq!(modified["name"], "医保");
+    assert_eq!(modified["icon"], "HeartPulse");
+    assert_eq!(modified["color"], "#7f8fa6", "没给的字段不动");
+    assert!(modified["updatedAt"].is_string(), "修改要抬 updatedAt（同步 LWW 的比较键）");
+
+    // 账户在用也允许删：kind 字符串原样保留
+    let account = env.ok(&["ledger", "account-add", "--name", "医保账户", "--kind", "医保", "--yes"]);
+    env.ok(&["ledger", "account-type-remove", "--id", &id, "--yes"]);
+    assert_eq!(env.ok(&["ledger", "account-types"])["total"], 0);
+    let accounts = env.ok(&["ledger", "accounts"]);
+    let kept = accounts["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"].as_str() == Some(account["id"].as_str().unwrap()))
+        .unwrap();
+    assert_eq!(kept["kind"], "医保", "删类型不动账户的 kind");
+
+    // 删除写同步墓碑
+    let file = env.read_file("ledger.json");
+    let tombstoned = file["_meta"]["tombstones"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tomb| tomb["id"].as_str() == Some(id.as_str()) && tomb["type"] == "ledgerAccountType");
+    assert!(tombstoned, "删除类型要写 ledgerAccountType 墓碑");
+
+    // 未知 id
+    let missing = env.err(&["ledger", "account-type-modify", "--id", "latype-nope", "--name", "x", "--yes"], 2);
+    assert_eq!(missing["code"], "LEDGER_ACCOUNT_TYPE_NOT_FOUND");
+    let missing = env.err(&["ledger", "account-type-remove", "--id", "latype-nope", "--yes"], 2);
+    assert_eq!(missing["code"], "LEDGER_ACCOUNT_TYPE_NOT_FOUND");
 }

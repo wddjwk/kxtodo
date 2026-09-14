@@ -1,12 +1,21 @@
 <script lang="ts">
   /**
-   * 统计视图：顶行两个段控（左 = 周期 周/月/年/总/自定义，右 = 侧 支出/收入/收支），
+   * 统计视图：顶行两个段控（左 = 周期，右 = 侧 支出/收入/结余），
    * 下面一整块白底圆角卡 = 可点周期标签 + 三标签 + 三数额，再往下是趋势与分类占比。
    * 曲线手写 SVG（描边动画），环抽成了 LedgerDonut（钻取面板复用同一份）——
    * 不引图表库，包体积与风格都不值，server 管理台的活动曲线就是先例。
    *
-   * 侧选「收支」时趋势把收/支两条线画在同一张图上（共用纵轴此时才成立：
-   * 用户明确要对照两者）；分类占比仍按支出画（占比环的语义是"钱花在哪"）。
+   * **段控是分平台的（v0.7.5）**：桌面「周/月/年/总/自定义 + 支出/收入/结余」；
+   * 移动端去掉「周」且文案收短（月/年/总/自定义 + 支/收/结余）——五个词加三个词
+   * 在 390px 上必超屏，超出去的不只是段控自己，下面的周期标签与弹层也跟着出界。
+   *
+   * **侧选「结余」时趋势画三条线**：收入（绿）/ 支出（红）/ 结余=收-支（黑），
+   * 纵轴此时按有符号区间自适应（结余可以是负的）。分类占比仍按支出画
+   * （占比环的语义是"钱花在哪一类"）。
+   *
+   * **趋势图可读数**：桌面悬浮、移动端点按——最近的桶上画标记线与圆点，
+   * 顶部浮出该桶的日期与各条数值。
+   *
    * 排行里点一个大类派发 drill 让上层弹出钻取面板（移动端下半屏、桌面端锚定下拉）。
    */
   import { createEventDispatcher } from "svelte";
@@ -19,6 +28,10 @@
   import { ledgerIcon } from "../ledgerIcons";
   import { fitAmount } from "../fitText";
   import { todayDate } from "../diary";
+  import { appSettings } from "../stores";
+  import { isMobile } from "../platform";
+  import { uiScaleValue } from "../styles";
+  import { clampPopoverToViewport } from "../popover";
   import LedgerDonut from "./LedgerDonut.svelte";
   import MonthPopover from "../MonthPopover.svelte";
   import DatePicker from "../DatePicker.svelte";
@@ -41,7 +54,8 @@
     };
   }>();
 
-  type Side = LedgerSide | "both";
+  /** 结余 = 收支同图再叠一条收-支的曲线（v0.7.4 的「收支」两条线升级而来） */
+  type Side = LedgerSide | "balance";
 
   const MODES: Array<{ id: StatsMode; label: string }> = [
     { id: "week", label: "周" },
@@ -50,6 +64,12 @@
     { id: "total", label: "总" },
     { id: "custom", label: "自定义" }
   ];
+  const SIDE_LABELS: Record<Side, { full: string; short: string }> = {
+    expense: { full: "支出", short: "支" },
+    income: { full: "收入", short: "收" },
+    balance: { full: "结余", short: "结余" }
+  };
+  const SIDES: Side[] = ["expense", "income", "balance"];
 
   let mode: StatsMode = "month";
   let side: Side = "expense";
@@ -59,9 +79,13 @@
   let customTo = todayDate();
   let popOpen: "" | "month" | "week" | "from" | "to" = "";
   let periodEl: HTMLElement;
-  let fromEl: HTMLElement;
-  let toEl: HTMLElement;
+  let rootEl: HTMLElement;
+  let chartBox: HTMLElement;
+  /** 趋势图上正在读数的桶（桌面悬浮 / 移动点按）；null = 没在读 */
+  let hoverIndex: number | null = null;
 
+  $: modes = $isMobile ? MODES.filter((item) => item.id !== "week") : MODES;
+  $: sideText = (key: Side) => ($isMobile ? SIDE_LABELS[key].short : SIDE_LABELS[key].full);
   $: bounds = statsBounds(entries, mode, cursor, weekAnchor, customFrom, customTo);
   $: periodLabel = statsPeriodLabel(mode, bounds, cursor);
   // 曲线、占比、排行都吃同一个窗口——早前占比拿全量数据配当期汇总，两个数字对不上
@@ -69,13 +93,15 @@
   $: series = statsSeries(entries, bounds);
   $: totalIncome = series.reduce((sum, point) => sum + point.income, 0);
   $: totalExpense = series.reduce((sum, point) => sum + point.expense, 0);
-  /** 侧 = 收支时占比环仍画支出：环的语义是"钱花在哪一类" */
+  /** 侧 = 结余时占比环仍画支出：环的语义是"钱花在哪一类" */
   let catSide: LedgerSide = "expense";
-  $: catSide = side === "both" ? "expense" : side;
+  $: catSide = side === "balance" ? "expense" : side;
   $: stats = categoryStats(book, rangeEntries, catSide).filter((item) => item.cents > 0);
   $: statsTotal = stats.reduce((sum, item) => sum + item.cents, 0);
+  // 桶类型看键长：month 桶的键是 "2026-09"（7 位），day 桶是 "2026-09-14"。
+  // 早前判反了（>7 当 month），day 桶被按月格式化，横轴整排「NaN月」。
   let bucket: "day" | "month" = "day";
-  $: bucket = series.length > 0 && series[0].key.length > 7 ? "month" : "day";
+  $: bucket = series.length > 0 && series[0].key.length === 7 ? "month" : "day";
 
   function colorOf(categoryId: string, index: number): string {
     const category = book.categories.find((item) => item.id === categoryId);
@@ -90,42 +116,80 @@
     color: colorOf(item.categoryId, index)
   }));
 
-  // --- 曲线几何 ---
+  // --- 曲线几何（纵轴按可见曲线自适应：结余可以是负的） ---
   const W = 680;
   const H = 220;
   const PAD_X = 40;
   const PAD_TOP = 18;
   const PAD_BOTTOM = 28;
-  $: peak = Math.max(
-    1,
-    ...series.map((point) => (side === "income" ? point.income : side === "expense" ? point.expense : Math.max(point.income, point.expense)))
-  );
+  const COLOR_IN = "#2f9e6e";
+  const COLOR_OUT = "#e0654f";
+  const COLOR_BAL = "#2b3038";
+
+  function balanceOf(point: { income: number; expense: number }): number {
+    return point.income - point.expense;
+  }
+
+  /** 当前侧要画的曲线（名字 / 取值 / 颜色），结余侧是三条 */
+  $: lines =
+    side === "expense"
+      ? [{ key: "expense" as const, name: "支出", color: COLOR_OUT, value: (p: { income: number; expense: number }) => p.expense }]
+      : side === "income"
+        ? [{ key: "income" as const, name: "收入", color: COLOR_IN, value: (p: { income: number; expense: number }) => p.income }]
+        : [
+            { key: "expense" as const, name: "支出", color: COLOR_OUT, value: (p: { income: number; expense: number }) => p.expense },
+            { key: "income" as const, name: "收入", color: COLOR_IN, value: (p: { income: number; expense: number }) => p.income },
+            { key: "balance" as const, name: "结余", color: COLOR_BAL, value: balanceOf }
+          ];
+
+  $: visibleValues = series.flatMap((point) => lines.map((line) => line.value(point)));
+  $: hi = Math.max(1, ...visibleValues);
+  $: lo = side === "balance" ? Math.min(0, ...visibleValues) : 0;
   $: stepX = series.length > 1 ? (W - PAD_X * 2) / (series.length - 1) : 0;
   function pointX(index: number): number {
     return PAD_X + index * stepX;
   }
   function pointY(cents: number): number {
-    return H - PAD_BOTTOM - (cents / peak) * (H - PAD_TOP - PAD_BOTTOM);
+    const span = hi - lo || 1;
+    return H - PAD_BOTTOM - ((cents - lo) / span) * (H - PAD_TOP - PAD_BOTTOM);
   }
-  function linePath(key: "income" | "expense"): string {
+  function linePath(value: (point: { income: number; expense: number }) => number): string {
     return series
-      .map((point, index) => `${index === 0 ? "M" : "L"}${pointX(index).toFixed(1)},${pointY(point[key]).toFixed(1)}`)
+      .map((point, index) => `${index === 0 ? "M" : "L"}${pointX(index).toFixed(1)},${pointY(value(point)).toFixed(1)}`)
       .join(" ");
   }
-  function areaPath(key: "income" | "expense"): string {
+  function areaPath(value: (point: { income: number; expense: number }) => number): string {
     if (series.length === 0) return "";
-    const base = (H - PAD_BOTTOM).toFixed(1);
-    return `${linePath(key)} L${pointX(series.length - 1).toFixed(1)},${base} L${pointX(0).toFixed(1)},${base} Z`;
+    const base = pointY(Math.max(0, lo));
+    return `${linePath(value)} L${pointX(series.length - 1).toFixed(1)},${base.toFixed(1)} L${pointX(0).toFixed(1)},${base.toFixed(1)} Z`;
   }
   function axisLabel(value: number): string {
     // 金额单位是分：1 万元 = 1_000_000 分
-    if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}万`;
+    if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}万`;
     return compactCents(value);
   }
-  $: axisValues = [peak, peak / 2, 0];
+  $: axisValues = [hi, (hi + lo) / 2, lo];
   $: tickIndexes = series
     .map((_, index) => index)
     .filter((index) => index % Math.max(1, Math.ceil(series.length / 8)) === 0);
+
+  /** 悬浮/点按读数：把视口横坐标换算成最近的桶 */
+  function readAt(clientX: number): void {
+    if (!chartBox || series.length === 0) return;
+    const rect = chartBox.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const viewX = ((clientX - rect.left) / rect.width) * W;
+    const index = Math.round((viewX - PAD_X) / (stepX || 1));
+    hoverIndex = Math.min(series.length - 1, Math.max(0, index));
+  }
+
+  $: hoverPoint = hoverIndex !== null ? series[hoverIndex] : null;
+  $: hoverTitle = hoverPoint
+    ? bucket === "month"
+      ? `${hoverPoint.key.slice(0, 4)}年${Number(hoverPoint.key.slice(5, 7))}月`
+      : hoverPoint.key.replaceAll("-", "/")
+    : "";
+  $: tipLeft = hoverIndex !== null ? Math.min(88, Math.max(12, (pointX(hoverIndex) / W) * 100)) : 0;
 
   function step(delta: number): void {
     popOpen = "";
@@ -157,6 +221,18 @@
     side = next;
   }
 
+  /** 自定义起止的 DatePicker 浮层：窄屏上锚点靠右时会伸出屏幕，开出来后收进视口 */
+  function toggleCustomPop(which: "from" | "to"): void {
+    popOpen = popOpen === which ? "" : which;
+    if (popOpen) {
+      void clampPopoverToViewport(
+        rootEl,
+        uiScaleValue($appSettings.appearance.uiScale),
+        `.ledger-custom-field.open .ledger-pop`
+      );
+    }
+  }
+
   function drill(item: { categoryId: string }, anchor: HTMLElement): void {
     popOpen = "";
     dispatch("drill", { categoryId: item.categoryId, side: catSide, from: bounds.from, to: bounds.to, periodLabel, anchor });
@@ -165,6 +241,10 @@
   function slash(date: string): string {
     return date.replaceAll("-", "/");
   }
+
+  // 周期/侧/区间一变，图整个重画：读数标记不能留在旧位置
+  $: chartKey = `${mode}-${side}-${bounds.from}-${bounds.to}`;
+  $: if (chartKey) hoverIndex = null;
 
   function handleKeydown(event: KeyboardEvent): void {
     if (event.key !== "Escape" || event.isComposing || event.keyCode === 229) return;
@@ -178,19 +258,21 @@
 
 <svelte:window on:keydown={handleKeydown} />
 
-<div class="ledger-stats">
+<div class="ledger-stats" bind:this={rootEl}>
   <div class="ledger-stats-bar">
     <div class="ledger-segmented" role="tablist" aria-label="统计范围">
-      {#each MODES as item (item.id)}
+      {#each modes as item (item.id)}
         <button type="button" role="tab" class:active={mode === item.id} on:click|stopPropagation={() => switchMode(item.id)}>
           {item.label}
         </button>
       {/each}
     </div>
     <div class="ledger-segmented ledger-side-switch" role="tablist" aria-label="收支两侧">
-      <button type="button" role="tab" class:active={side === "expense"} on:click|stopPropagation={() => switchSide("expense")}>支出</button>
-      <button type="button" role="tab" class:active={side === "income"} on:click|stopPropagation={() => switchSide("income")}>收入</button>
-      <button type="button" role="tab" class:active={side === "both"} on:click|stopPropagation={() => switchSide("both")}>收支</button>
+      {#each SIDES as key (key)}
+        <button type="button" role="tab" class:active={side === key} on:click|stopPropagation={() => switchSide(key)}>
+          {sideText(key)}
+        </button>
+      {/each}
     </div>
   </div>
 
@@ -200,11 +282,10 @@
         <span class="ledger-custom-field" class:open={popOpen === "from"}>
           <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions a11y_no_noninteractive_element_to_interactive_role -->
           <strong
-            bind:this={fromEl}
             role="button"
             tabindex="0"
             title="起始日期"
-            on:click|stopPropagation={() => (popOpen = popOpen === "from" ? "" : "from")}
+            on:click|stopPropagation={() => toggleCustomPop("from")}
           >{slash(bounds.from)}</strong>
           {#if popOpen === "from"}
             <div class="ledger-pop date">
@@ -223,11 +304,10 @@
         <span class="ledger-custom-field" class:open={popOpen === "to"}>
           <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions a11y_no_noninteractive_element_to_interactive_role -->
           <strong
-            bind:this={toEl}
             role="button"
             tabindex="0"
             title="结束日期"
-            on:click|stopPropagation={() => (popOpen = popOpen === "to" ? "" : "to")}
+            on:click|stopPropagation={() => toggleCustomPop("to")}
           >{slash(bounds.to)}</strong>
           {#if popOpen === "to"}
             <div class="ledger-pop date">
@@ -306,30 +386,64 @@
 
   <section class="ledger-panel">
     <header class="ledger-panel-head">
-      <h2>{side === "expense" ? "支出趋势" : side === "income" ? "收入趋势" : "收支趋势"}</h2>
+      <h2>{side === "expense" ? "支出趋势" : side === "income" ? "收入趋势" : "收支结余趋势"}</h2>
       <span class="ledger-legend">
-        {#if side !== "income"}<i class="out"></i>支出{/if}
-        {#if side !== "expense"}<i class="in"></i>收入{/if}
+        {#each lines as line (line.key)}
+          <i style="background: {line.color}"></i>{line.name}
+        {/each}
       </span>
     </header>
-    {#key `${mode}-${side}-${bounds.from}-${bounds.to}`}
-      <svg class="ledger-line-chart" viewBox="0 0 {W} {H}" role="img" aria-label="收支趋势曲线">
-        {#each axisValues as value (value)}
-          <line class="ledger-chart-grid" x1={PAD_X} x2={W - PAD_X} y1={pointY(value)} y2={pointY(value)} />
-          <text class="ledger-chart-axis" x={PAD_X - 8} y={pointY(value) + 4} text-anchor="end">{axisLabel(value)}</text>
-        {/each}
-        {#if side !== "both"}
-          {@const key = side === "income" ? "income" : "expense"}
-          <path class="ledger-line-area {key === "income" ? "in" : "out"}" d={areaPath(key)} />
+    {#key chartKey}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <div
+        class="ledger-chart-box"
+        bind:this={chartBox}
+        on:mousemove={(event) => { if (!$isMobile) readAt(event.clientX); }}
+        on:mouseleave={() => { if (!$isMobile) hoverIndex = null; }}
+        on:click|stopPropagation={(event) => { if ($isMobile) readAt(event.clientX); }}
+      >
+        <svg class="ledger-line-chart" viewBox="0 0 {W} {H}" role="img" aria-label="收支趋势曲线">
+          {#each axisValues as value (value)}
+            <line class="ledger-chart-grid" x1={PAD_X} x2={W - PAD_X} y1={pointY(value)} y2={pointY(value)} />
+            <text class="ledger-chart-axis" x={PAD_X - 8} y={pointY(value) + 4} text-anchor="end">{axisLabel(value)}</text>
+          {/each}
+          {#if lo < 0}
+            <line class="ledger-chart-zero" x1={PAD_X} x2={W - PAD_X} y1={pointY(0)} y2={pointY(0)} />
+          {/if}
+          {#if side !== "balance" && lines.length === 1}
+            <path class="ledger-line-area {lines[0].key === "income" ? "in" : "out"}" d={areaPath(lines[0].value)} />
+          {/if}
+          {#each lines as line (line.key)}
+            <path class="ledger-line {line.key === "income" ? "in" : line.key === "expense" ? "out" : "bal"}" d={linePath(line.value)} />
+          {/each}
+          {#if hoverPoint}
+            <line class="ledger-chart-marker" x1={pointX(hoverIndex ?? 0)} x2={pointX(hoverIndex ?? 0)} y1={PAD_TOP - 6} y2={H - PAD_BOTTOM} />
+            {#each lines as line (line.key)}
+              <circle
+                class="ledger-chart-dot"
+                cx={pointX(hoverIndex ?? 0)}
+                cy={pointY(line.value(hoverPoint))}
+                r="3.6"
+                fill={line.color}
+              />
+            {/each}
+          {/if}
+          {#each tickIndexes as index (index)}
+            <text class="ledger-chart-axis" x={pointX(index)} y={H - 8} text-anchor="middle">
+              {bucket === "day" ? Number(series[index].key.slice(8)) : `${Number(series[index].key.slice(5, 7))}月`}
+            </text>
+          {/each}
+        </svg>
+        {#if hoverPoint}
+          <div class="ledger-chart-tip" style="left: {tipLeft}%">
+            <strong>{hoverTitle}</strong>
+            {#each lines as line (line.key)}
+              <span><i style="background: {line.color}"></i>{line.name} {formatCents(line.value(hoverPoint))}</span>
+            {/each}
+          </div>
         {/if}
-        {#if side !== "income"}<path class="ledger-line out" d={linePath("expense")} />{/if}
-        {#if side !== "expense"}<path class="ledger-line in" d={linePath("income")} />{/if}
-        {#each tickIndexes as index (index)}
-          <text class="ledger-chart-axis" x={pointX(index)} y={H - 8} text-anchor="middle">
-            {bucket === "day" ? Number(series[index].key.slice(8)) : `${Number(series[index].key.slice(5))}月`}
-          </text>
-        {/each}
-      </svg>
+      </div>
     {/key}
   </section>
 

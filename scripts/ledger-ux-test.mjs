@@ -94,8 +94,8 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   check("支出金额带负号", entryAmount?.trim() === "-30.50", entryAmount ?? "");
   const daySum = await page.textContent(".ledger-card-sums");
   check("卡片头给出当天合计", daySum?.includes("30.5") ?? false, daySum ?? "");
-  check("一笔两行：大字行 + 小字行", (await page.$$(".ledger-entry .ledger-entry-line")).length === 1);
-  check("小字行带时刻或账户", (await page.$$(".ledger-entry .ledger-entry-sub .ledger-entry-meta em")).length >= 1);
+  check("无备注的一笔走 solo 布局（v0.7.5）", (await page.$$(".ledger-entry .ledger-entry-main.solo")).length === 1);
+  check("solo 布局右侧带时刻或账户", (await page.$$(".ledger-entry .ledger-entry-solo-side .ledger-entry-meta em")).length >= 1);
 
   // v0.7.2：月份行是标题级的一行（只有列表视图有），卡片是单列（没有左侧日期栏外壳）
   check("列表视图有月份标题行", (await page.$$(".ledger-month-bar")).length === 1);
@@ -189,6 +189,8 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   check("汇总卡给出本期支出", summary?.includes("30.50") ?? false, (summary ?? "").replace(/\s+/g, " ").slice(0, 60));
 
   // v0.7.2：饼图引线标出分类；点一片放大并把它的名字与金额放进环心
+  // v0.7.5：环有出场动画（旋转+错帧描边），动画没跑完时坐标在动，先等它停
+  await page.waitForTimeout(1400);
   const slice = page.locator(".ledger-donut-slice circle").first();
   const ring = await slice.boundingBox();
   await page.mouse.click(ring.x + ring.width / 2, ring.y + 8);
@@ -335,7 +337,11 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   const cardsAfter = (await page.$$(".ledger-card")).length;
   check("换月后渲染的是那个月的卡片", cardsAfter >= 1, String(cardsAfter));
 
-  // 滚回中间再滚到顶 = 换回较新的一个月
+  // 滚回中间再滚到顶 = 换回较新的一个月。
+  // 先等换月的 60ms paging 窗口过去：窗口内的滚动事件一律被吞（防连翻），
+  // 窗口结束时 scrollTop 又被程序归 0——太早滚中间会丢掉 re-arm 事件，
+  // 之后「滚到顶」因为值没变化根本不发 scroll，前翻永远不触发。
+  await page.waitForTimeout(150);
   await page.evaluate(() => {
     const el = document.querySelector(".ledger-scroll");
     if (el) el.scrollTop = Math.max(200, el.scrollHeight / 2);

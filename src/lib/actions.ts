@@ -5,7 +5,8 @@
 // ---------------------------------------------------------------------------
 
 import { get } from "svelte/store";
-import type { AppNode, AppState, CardStyle, DiaryEntry, LedgerAccount, LedgerAccountKind, LedgerBook, LedgerCategory, LedgerEntry, LedgerKind, LedgerSide, ListBackground, ScheduledTask, SchedulerState, Settings, SyncMode, Tag, TagColor, Task } from "./types";
+import type { AppNode, AppState, CardStyle, DiaryEntry, LedgerAccount, LedgerAccountKind, LedgerAccountType, LedgerBook, LedgerCategory, LedgerEntry, LedgerKind, LedgerSide, ListBackground, ScheduledTask, SchedulerState, Settings, SyncMode, Tag, TagColor, Task } from "./types";
+import { accountBalance } from "./ledger";
 import {
   appState, appSettings, commit, commitDiary, commitLedger, commitScheduler, commitSettings,
   coreMode, createDiaryId, createTaskId, diaryEntries, editBaseUpdatedAt, ledgerData, markEditStart, clearEditBase, rebaseEditBase,
@@ -988,7 +989,7 @@ export type LedgerEntryDraft = {
   date?: string;
   time?: string;
   note?: string;
-  image?: string;
+  images?: string[];
 };
 
 export type LedgerEntryChanges = Partial<LedgerEntryDraft>;
@@ -1020,7 +1021,7 @@ export async function addLedgerEntry(draft: LedgerEntryDraft): Promise<boolean> 
         date: draft.date,
         time: draft.time,
         note: draft.note ?? "",
-        image: draft.image ?? null
+        images: draft.images ?? []
       });
     } catch (error) {
       await report(error, "记账失败");
@@ -1040,7 +1041,7 @@ export async function addLedgerEntry(draft: LedgerEntryDraft): Promise<boolean> 
     date: draft.date ?? todayIso(),
     time: draft.time ?? "",
     note: draft.note ?? "",
-    image: draft.image,
+    images: draft.images,
     createdAt,
     updatedAt: createdAt
   };
@@ -1055,7 +1056,7 @@ export async function transferLedger(input: {
   date?: string;
   time?: string;
   note?: string;
-  image?: string;
+  images?: string[];
 }): Promise<boolean> {
   if (coreMode) {
     try {
@@ -1066,7 +1067,7 @@ export async function transferLedger(input: {
         date: input.date,
         time: input.time,
         note: input.note ?? "",
-        image: input.image ?? null
+        images: input.images ?? []
       });
     } catch (error) {
       await report(error, "转账失败");
@@ -1085,7 +1086,7 @@ export async function transferLedger(input: {
     date: input.date ?? todayIso(),
     time: input.time ?? "",
     note: input.note ?? "",
-    image: input.image,
+    images: input.images,
     createdAt,
     updatedAt: createdAt
   };
@@ -1104,7 +1105,7 @@ export async function updateLedgerEntry(id: string, changes: LedgerEntryChanges)
     if (changes.date !== undefined) params.date = changes.date;
     if (changes.time !== undefined) params.time = changes.time;
     if (changes.note !== undefined) params.note = changes.note;
-    if (changes.image !== undefined) params.image = changes.image;
+    if (changes.images !== undefined) params.images = changes.images;
     try {
       await coreDispatch("ledger.modify", params);
     } catch (error) {
@@ -1145,6 +1146,10 @@ export type LedgerAccountDraft = {
   icon?: string;
   color?: string;
   initialCents?: number;
+  /** 直设「当前余额」（分）：与 initialCents 互斥。余额永远 = 期初 + 流水现场推导，
+   *  所以直设余额实际写的是期初 = 目标余额 − 流水净额（core 与 legacy 同一条口径），
+   *  不存第二个余额字段——这是用户主动对账的动作，不是转账式的加减。 */
+  balanceCents?: number;
   note?: string;
 };
 
@@ -1156,7 +1161,7 @@ export async function addLedgerAccount(draft: LedgerAccountDraft): Promise<boole
         kind: draft.kind ?? null,
         icon: draft.icon ?? "",
         color: draft.color ?? "",
-        initial: draft.initialCents !== undefined ? draft.initialCents / 100 : null,
+        initial: draft.initialCents ?? null,
         note: draft.note ?? ""
       });
     } catch (error) {
@@ -1191,7 +1196,10 @@ export async function updateLedgerAccount(
     if (changes.kind !== undefined) params.kind = changes.kind;
     if (changes.icon !== undefined) params.icon = changes.icon;
     if (changes.color !== undefined) params.color = changes.color;
-    if (changes.initialCents !== undefined) params.initial = changes.initialCents / 100;
+    // core 的金额参数把 JSON 整数按分解释（小数才按元）：GUI 一律发整数分，
+    // 与 amountCents 同口径——早前发 initialCents/100，整数元会被当成分、缩小一百倍
+    if (changes.balanceCents !== undefined) params.balance = changes.balanceCents;
+    else if (changes.initialCents !== undefined) params.initial = changes.initialCents;
     if (changes.note !== undefined) params.note = changes.note;
     try {
       await coreDispatch("ledger.accountModify", params);
@@ -1203,9 +1211,17 @@ export async function updateLedgerAccount(
     return true;
   }
   const next = book();
-  next.accounts = next.accounts.map((account) =>
-    account.id === id ? { ...account, ...changes, updatedAt: new Date().toISOString() } : account
-  );
+  next.accounts = next.accounts.map((account) => {
+    if (account.id !== id) return account;
+    const patch: Partial<LedgerAccount> = { ...changes, updatedAt: new Date().toISOString() };
+    if (changes.balanceCents !== undefined) {
+      // 余额 = 期初 + 流水净额：把「当前余额」直设成新值，等价于反算期初
+      const flow = accountBalance(next, id) - account.initialCents;
+      patch.initialCents = changes.balanceCents - flow;
+    }
+    delete (patch as Partial<LedgerAccountDraft>).balanceCents;
+    return { ...account, ...patch };
+  });
   commitLedger(next);
   return true;
 }
@@ -1312,6 +1328,82 @@ export async function deleteLedgerCategory(id: string): Promise<boolean> {
   next.entries = next.entries.map((entry) =>
     entry.categoryId && gone.has(entry.categoryId) ? { ...entry, categoryId: undefined } : entry
   );
+  commitLedger(next);
+  return true;
+}
+
+export type LedgerAccountTypeDraft = {
+  name: string;
+  icon?: string;
+  color?: string;
+};
+
+export async function addLedgerAccountType(draft: LedgerAccountTypeDraft): Promise<boolean> {
+  if (coreMode) {
+    try {
+      await coreDispatch("ledger.accountTypeAdd", {
+        name: draft.name,
+        icon: draft.icon ?? "",
+        color: draft.color ?? ""
+      });
+    } catch (error) {
+      await report(error, "添加账户类型失败");
+      return false;
+    }
+    await ledgerWritten();
+    return true;
+  }
+  const type: LedgerAccountType = {
+    id: ledgerLocalId("latype"),
+    name: draft.name,
+    icon: draft.icon ?? "",
+    color: draft.color ?? "",
+    createdAt: new Date().toISOString()
+  };
+  commitLedger({ ...book(), accountTypes: [...book().accountTypes, type] });
+  return true;
+}
+
+export async function updateLedgerAccountType(
+  id: string,
+  changes: Partial<LedgerAccountTypeDraft>
+): Promise<boolean> {
+  if (coreMode) {
+    const params: Record<string, unknown> = { id };
+    if (changes.name !== undefined) params.name = changes.name;
+    if (changes.icon !== undefined) params.icon = changes.icon;
+    if (changes.color !== undefined) params.color = changes.color;
+    try {
+      await coreDispatch("ledger.accountTypeModify", params);
+    } catch (error) {
+      await report(error, "修改账户类型失败");
+      return false;
+    }
+    await ledgerWritten();
+    return true;
+  }
+  const next = book();
+  next.accountTypes = next.accountTypes.map((type) =>
+    type.id === id ? { ...type, ...changes, updatedAt: new Date().toISOString() } : type
+  );
+  commitLedger(next);
+  return true;
+}
+
+/** 删类型只删这条「建议」：已建账户的 kind 字符串不受影响（账户自带图标与颜色）。 */
+export async function deleteLedgerAccountType(id: string): Promise<boolean> {
+  if (coreMode) {
+    try {
+      await coreDispatch("ledger.accountTypeRemove", { id });
+    } catch (error) {
+      await report(error, "删除账户类型失败");
+      return false;
+    }
+    await ledgerWritten();
+    return true;
+  }
+  const next = book();
+  next.accountTypes = next.accountTypes.filter((type) => type.id !== id);
   commitLedger(next);
   return true;
 }

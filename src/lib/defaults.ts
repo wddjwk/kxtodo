@@ -6,6 +6,7 @@ import type {
   DiaryViewMode,
   LedgerAccount,
   LedgerAccountKind,
+  LedgerAccountType,
   LedgerBook,
   LedgerCategory,
   LedgerEntry,
@@ -740,6 +741,12 @@ function normalizeLedgerEntry(raw: unknown): LedgerEntry | null {
     typeof item.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(item.date)
       ? item.date
       : localDateOf(typeof item.createdAt === "string" ? item.createdAt : "");
+  // v0.7.4 的旧数据是单数 image 字段：折叠进 images（用户真实账本里的图不能丢）
+  const images = Array.isArray(item.images)
+    ? item.images.filter((name): name is string => typeof name === "string" && name !== "")
+    : typeof item.image === "string" && item.image !== ""
+      ? [item.image]
+      : [];
   return {
     id: item.id,
     kind,
@@ -753,25 +760,42 @@ function normalizeLedgerEntry(raw: unknown): LedgerEntry | null {
     date,
     time: typeof item.time === "string" ? item.time : "",
     note: typeof item.note === "string" ? item.note : "",
-    image: typeof item.image === "string" && item.image !== "" ? item.image : undefined,
+    images: images.length > 0 ? images : undefined,
     createdAt: typeof item.createdAt === "string" ? item.createdAt : now(),
+    updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : undefined
+  };
+}
+
+function normalizeLedgerAccountType(raw: unknown): LedgerAccountType | null {
+  const item = raw as Record<string, unknown> | undefined;
+  if (!item || typeof item.id !== "string" || item.id === "") return null;
+  const name = typeof item.name === "string" ? item.name.trim() : "";
+  if (name === "") return null;
+  return {
+    id: item.id,
+    name,
+    icon: typeof item.icon === "string" ? item.icon : "",
+    color: typeof item.color === "string" ? item.color : "",
+    createdAt: typeof item.createdAt === "string" ? item.createdAt : undefined,
     updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : undefined
   };
 }
 
 /**
  * 规范化 ledger.json（独立的第五个领域文件）。
- * 返回整本账：账户 / 分类 / 流水三张表一起给 store，视图层不再各自解析。
+ * 返回整本账：账户 / 分类 / 流水 / 自定义账户类型一起给 store，视图层不再各自解析。
  */
 export function normalizeLedger(raw: unknown): {
   accounts: LedgerAccount[];
   categories: LedgerCategory[];
   entries: LedgerEntry[];
+  accountTypes: LedgerAccountType[];
 } {
   const source = raw as Record<string, unknown> | undefined;
   const accounts = Array.isArray(source?.accounts) ? source?.accounts : [];
   const categories = Array.isArray(source?.categories) ? source?.categories : [];
   const entries = Array.isArray(source?.entries) ? source?.entries : [];
+  const accountTypes = Array.isArray(source?.accountTypes) ? source.accountTypes : [];
   return {
     accounts: accounts
       .map(normalizeLedgerAccount)
@@ -779,7 +803,10 @@ export function normalizeLedger(raw: unknown): {
     categories: categories
       .map(normalizeLedgerCategory)
       .filter((item): item is LedgerCategory => item !== null),
-    entries: entries.map(normalizeLedgerEntry).filter((item): item is LedgerEntry => item !== null)
+    entries: entries.map(normalizeLedgerEntry).filter((item): item is LedgerEntry => item !== null),
+    accountTypes: accountTypes
+      .map(normalizeLedgerAccountType)
+      .filter((item): item is LedgerAccountType => item !== null)
   };
 }
 
@@ -912,7 +939,7 @@ export function seedLedgerBook(): LedgerBook {
   group("income", "inc", 5, "退款", "RotateCcw", "#7f8c8d", [["退款报销", "ReceiptText"]]);
   group("income", "inc", 6, "其他", "Ellipsis", "#95a5a6", [["杂项", "CircleDot"]]);
 
-  return { accounts, categories, entries: [] };
+  return { accounts, categories, entries: [], accountTypes: [] };
 }
 
 export function normalizeSettings(raw: unknown): Settings {

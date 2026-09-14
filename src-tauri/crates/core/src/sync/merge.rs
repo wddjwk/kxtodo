@@ -142,12 +142,12 @@ pub fn diary_entity_stamp(diary: &DiaryFile, id: &str) -> Option<String> {
         .map(|tomb| tomb.updated_at.clone())
 }
 
-/// 记账域的三种实体_kind_（流水 / 账户 / 分类）走同一套同步机制。
+/// 记账域的四种实体_kind_（流水 / 账户 / 分类 / 账户类型）走同一套同步机制。
 pub fn is_ledger_kind(kind: &str) -> bool {
-    matches!(kind, "ledger" | "ledgerAccount" | "ledgerCategory")
+    matches!(kind, "ledger" | "ledgerAccount" | "ledgerCategory" | "ledgerAccountType")
 }
 
-/// 本地实体的版本戳（ledger 域：三种实体各自的活实体或墓碑）。
+/// 本地实体的版本戳（ledger 域：四种实体各自的活实体或墓碑）。
 pub fn ledger_entity_stamp(ledger: &LedgerFile, kind: &str, id: &str) -> Option<String> {
     let updated = |created: &str, updated: &Option<String>| {
         updated.clone().unwrap_or_else(|| created.to_string())
@@ -165,6 +165,11 @@ pub fn ledger_entity_stamp(ledger: &LedgerFile, kind: &str, id: &str) -> Option<
             .map(|item| updated(&item.created_at, &item.updated_at)),
         "ledgerCategory" => ledger
             .categories
+            .iter()
+            .find(|item| item.id == id)
+            .map(|item| updated(&item.created_at, &item.updated_at)),
+        "ledgerAccountType" => ledger
+            .account_types
             .iter()
             .find(|item| item.id == id)
             .map(|item| updated(&item.created_at, &item.updated_at)),
@@ -249,6 +254,10 @@ fn ledger_account_payload(account: &crate::model::LedgerAccount) -> Value {
 
 fn ledger_category_payload(category: &crate::model::LedgerCategory) -> Value {
     serde_json::to_value(category).unwrap_or(Value::Null)
+}
+
+fn ledger_account_type_payload(item: &crate::model::LedgerAccountType) -> Value {
+    serde_json::to_value(item).unwrap_or(Value::Null)
 }
 
 fn schedule_payload(entry: &crate::model::ScheduleEntry) -> Value {
@@ -428,6 +437,20 @@ pub fn extract_entities(
                 seq: 0,
             });
         }
+        for account_type in &ledger.account_types {
+            out.push(EntityRecord {
+                kind: "ledgerAccountType".to_string(),
+                id: account_type.id.clone(),
+                updated_at: account_type
+                    .updated_at
+                    .clone()
+                    .unwrap_or_else(|| account_type.created_at.clone()),
+                updated_by: device_id.to_string(),
+                deleted: false,
+                data: ledger_account_type_payload(account_type),
+                seq: 0,
+            });
+        }
         for tomb in &ledger.meta.tombstones {
             if is_ledger_kind(&tomb.kind) {
                 out.push(EntityRecord {
@@ -545,6 +568,7 @@ pub fn apply_ledger_record(record: &EntityRecord, ledger: &mut LedgerFile) -> Re
             "ledger" => ledger.entries.retain(|item| item.id != record.id),
             "ledgerAccount" => ledger.accounts.retain(|item| item.id != record.id),
             "ledgerCategory" => ledger.categories.retain(|item| item.id != record.id),
+            "ledgerAccountType" => ledger.account_types.retain(|item| item.id != record.id),
             _ => return Err(format!("未知 ledger 实体类型 {}", record.kind)),
         }
         ledger
@@ -554,8 +578,10 @@ pub fn apply_ledger_record(record: &EntityRecord, ledger: &mut LedgerFile) -> Re
     }
     match record.kind.as_str() {
         "ledger" => {
-            let entry: crate::model::LedgerEntry =
+            let mut entry: crate::model::LedgerEntry =
                 serde_json::from_value(record.data.clone()).map_err(|e| e.to_string())?;
+            // 旧版本设备的载荷可能还带单图 "image" 字段：折进 images 再落盘
+            entry.fold_legacy_image();
             ledger.entries.retain(|item| item.id != entry.id);
             ledger.entries.push(entry);
         }
@@ -570,6 +596,12 @@ pub fn apply_ledger_record(record: &EntityRecord, ledger: &mut LedgerFile) -> Re
                 serde_json::from_value(record.data.clone()).map_err(|e| e.to_string())?;
             ledger.categories.retain(|item| item.id != category.id);
             ledger.categories.push(category);
+        }
+        "ledgerAccountType" => {
+            let account_type: crate::model::LedgerAccountType =
+                serde_json::from_value(record.data.clone()).map_err(|e| e.to_string())?;
+            ledger.account_types.retain(|item| item.id != account_type.id);
+            ledger.account_types.push(account_type);
         }
         other => return Err(format!("未知 ledger 实体类型 {other}")),
     }
@@ -828,6 +860,8 @@ pub fn normalize_ledger_orders(ledger: &mut LedgerFile) {
             .then_with(|| cmp_f64(a.order, b.order))
             .then_with(|| a.id.cmp(&b.id))
     });
+    // 账户类型没有排序语义：按 id 定序即可（确定性）
+    ledger.account_types.sort_by(|a, b| a.id.cmp(&b.id));
 }
 
 pub fn normalize_schedule_orders(schedule: &mut ScheduleFile) {
@@ -1258,5 +1292,115 @@ mod tests {
             crate::model::DiaryView::Calendar,
             "本机选的视图不能被远端载荷抹掉"
         );
+    }
+
+    fn account_type(id: &str, name: &str, ts: &str) -> crate::model::LedgerAccountType {
+        crate::model::LedgerAccountType {
+            id: id.to_string(),
+            name: name.to_string(),
+            icon: String::new(),
+            color: String::new(),
+            created_at: ts.to_string(),
+            updated_at: Some(ts.to_string()),
+            extra: Map::new(),
+        }
+    }
+
+    #[test]
+    fn ledger_account_type_lww_and_tombstone() {
+        let mut local = LedgerFile {
+            account_types: vec![account_type("latype-1", "公积金", "2026-09-01T00:00:00.000Z")],
+            ..Default::default()
+        };
+
+        // 账本范围内被提取为 ledgerAccountType 实体
+        let entities = extract_entities(
+            &empty_data(),
+            &DiaryFile::default(),
+            &local,
+            &SettingsFile::default(),
+            &ScheduleFile::default(),
+            &Scopes {
+                data: false,
+                settings: false,
+                schedules: false,
+                diary: false,
+                ledger: true,
+            },
+            "dev-a",
+        );
+        let entity = entities
+            .iter()
+            .find(|e| e.kind == "ledgerAccountType")
+            .expect("账户类型随「账本」范围同步");
+        assert_eq!(entity.id, "latype-1");
+        assert_eq!(entity.data["name"], json!("公积金"));
+
+        // 两台设备改同一个类型：戳更新的远端胜出
+        let remote = record(
+            "ledgerAccountType",
+            "latype-1",
+            "2026-09-02T00:00:00.000Z",
+            "dev-b",
+            serde_json::to_value(account_type("latype-1", "医保", "2026-09-02T00:00:00.000Z"))
+                .unwrap(),
+        );
+        let stamp = ledger_entity_stamp(&local, "ledgerAccountType", "latype-1");
+        assert!(remote_wins(&remote, stamp.as_deref().map(|ts| (ts, "dev-a"))));
+        apply_ledger_record(&remote, &mut local).unwrap();
+        normalize_ledger_orders(&mut local);
+        assert_eq!(local.account_types.len(), 1, "同 id 替换不叠加");
+        assert_eq!(local.account_types[0].name, "医保");
+
+        // 本地更新时远端的旧版本被忽略
+        let stale = record(
+            "ledgerAccountType",
+            "latype-1",
+            "2026-09-01T12:00:00.000Z",
+            "dev-b",
+            serde_json::to_value(account_type("latype-1", "旧名", "2026-09-01T12:00:00.000Z"))
+                .unwrap(),
+        );
+        let stamp = ledger_entity_stamp(&local, "ledgerAccountType", "latype-1");
+        assert!(!remote_wins(&stale, stamp.as_deref().map(|ts| (ts, "dev-a"))));
+
+        // 远端墓碑 → 删除 + 记在 ledger 域自己的 _meta 里
+        let tomb = EntityRecord {
+            kind: "ledgerAccountType".to_string(),
+            id: "latype-1".to_string(),
+            updated_at: "2026-09-03T00:00:00.000Z".to_string(),
+            updated_by: "dev-b".to_string(),
+            deleted: true,
+            data: Value::Null,
+            seq: 3,
+        };
+        apply_ledger_record(&tomb, &mut local).unwrap();
+        assert!(local.account_types.is_empty());
+        assert_eq!(local.meta.tombstones.len(), 1);
+        assert_eq!(local.meta.tombstones[0].kind, "ledgerAccountType");
+
+        // 墓碑（9-03）压过旧的远端活实体（9-02）→ 不复活
+        let stamp = ledger_entity_stamp(&local, "ledgerAccountType", "latype-1");
+        assert_eq!(stamp.as_deref(), Some("2026-09-03T00:00:00.000Z"), "对账水位读得到墓碑戳");
+        assert!(!remote_wins(&remote, stamp.as_deref().map(|ts| (ts, "dev-b"))));
+    }
+
+    #[test]
+    fn ledger_entry_legacy_image_folds_on_apply() {
+        let mut local = LedgerFile::default();
+        // 老版本设备的载荷还带单图 "image" 键
+        let payload = json!({
+            "id": "ledger-1",
+            "kind": "expense",
+            "amountCents": 1200,
+            "accountId": "lacc-01",
+            "date": "2026-09-08",
+            "image": "md-legacy.png",
+            "createdAt": "2026-09-08T00:00:00.000Z"
+        });
+        apply_ledger_record(&record("ledger", "ledger-1", "2026-09-08T00:00:00.000Z", "dev-old", payload), &mut local)
+            .unwrap();
+        assert_eq!(local.entries[0].images, vec!["md-legacy.png".to_string()]);
+        assert!(local.entries[0].legacy_image.is_none());
     }
 }

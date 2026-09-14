@@ -626,6 +626,7 @@ fn run_sync_inner(
                 // 全新设备：丢掉内存里的种子账户/分类，直接落服务端内容
                 file.accounts.clear();
                 file.categories.clear();
+                file.account_types.clear();
                 file.entries.clear();
             }
             applied = merge_ledger_records(file, &records_snapshot, &state_snapshot, &mut warnings);
@@ -699,7 +700,7 @@ fn run_sync_inner(
         let local_ts = match record.kind.as_str() {
             "node" | "task" => data_entity_stamp(&data_after, &record.id),
             "diary" => diary_entity_stamp(&diary_after, &record.id),
-            "ledger" | "ledgerAccount" | "ledgerCategory" => {
+            kind if crate::sync::merge::is_ledger_kind(kind) => {
                 ledger_entity_stamp(&ledger_after, &record.kind, &record.id)
             }
             "schedule" => schedule_entity_stamp(&schedule_after, &record.id),
@@ -900,7 +901,7 @@ fn resolve_conflict(
                 Ok(json!({}))
             });
         }
-        "ledger" | "ledgerAccount" | "ledgerCategory" => {
+        kind if crate::sync::merge::is_ledger_kind(kind) => {
             let records = vec![remote.clone()];
             let _ = repo.write_ledger(None, None, "sync.conflict", |file| {
                 merge_ledger_records(file, &records, &state_snapshot, &mut warnings);

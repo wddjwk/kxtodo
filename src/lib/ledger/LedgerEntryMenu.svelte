@@ -58,8 +58,12 @@
 
 <ContextMenu {x} {y} minWidth={216} onClose={close}>
   <MenuItem icon={PenLine} label="编辑这一笔" onSelect={edit} />
-  {#if entry.image}
-    <MenuItem icon={ImageIcon} label="查看图片" onSelect={viewImage} />
+  {#if entry.images && entry.images.length > 0}
+    <MenuItem
+      icon={ImageIcon}
+      label={entry.images.length > 1 ? `查看图片（${entry.images.length} 张）` : "查看图片"}
+      onSelect={viewImage}
+    />
   {/if}
   <MenuItem icon={CalendarDays} label="修改日期">
     <div slot="submenu" class="task-menu-date">

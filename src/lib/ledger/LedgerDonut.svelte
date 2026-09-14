@@ -103,13 +103,15 @@
 </script>
 
 <svg class="ledger-donut" viewBox="0 0 460 260" role="img" aria-label="分类占比环">
-  <circle class="ledger-donut-track" cx={CX} cy={CY} r={R} fill="none" stroke-width={RING} />
-  {#each segments as segment (segment.id)}
-    <g
-      class="ledger-donut-slice"
-      class:focus={segment.id === focusId}
-      style="--dx: {segment.dx.toFixed(2)}px; --dy: {segment.dy.toFixed(2)}px"
-    >
+  <!-- 出场动效（CSS）：整环慢慢转出来 + 每片按序号错帧从 0 描边展开 -->
+  <g class="ledger-donut-ring" style="--circ: {CIRC.toFixed(2)}">
+    <circle class="ledger-donut-track" cx={CX} cy={CY} r={R} fill="none" stroke-width={RING} />
+    {#each segments as segment, index (segment.id)}
+      <g
+        class="ledger-donut-slice"
+        class:focus={segment.id === focusId}
+        style="--dx: {segment.dx.toFixed(2)}px; --dy: {segment.dy.toFixed(2)}px; --i: {index}"
+      >
       <circle
         cx={CX}
         cy={CY}
@@ -131,8 +133,9 @@
           }
         }}
       />
-    </g>
-  {/each}
+      </g>
+    {/each}
+  </g>
   {#each labels as label (label.id)}
     <polyline
       class="ledger-donut-leader"

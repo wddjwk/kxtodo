@@ -45,6 +45,17 @@
   margin-bottom: 18px;
 }
 
+/* 滚动条补偿负边距是桌面的技巧（滚动条贴窗口右缘、卡片不被它压住）：
+   移动端是覆盖式滚动条，负边距只会把整个滚动区往右顶出屏幕——
+   凡是按它算宽度或锚定位置的浮层（统计的选日日历）就跟着出界。一律清零。 */
+.app-shell.mobile .task-list,
+.app-shell.mobile .scheduled-list,
+.app-shell.mobile .diary-scroll,
+.app-shell.mobile .ledger-scroll {
+  margin-right: 0;
+  padding-right: 0;
+}
+
 .app-shell.mobile.view-list .workspace {
   display: none;
 }
@@ -428,7 +439,7 @@
   margin: 8px 0;
 }
 
-/* ---------- 工具箱（移动端专属整页视图） ---------- */
+/* ---------- 工具箱（移动端整页容器；共享样式在 toolbox.css） ---------- */
 
 .app-shell.mobile .toolbox-view {
   position: absolute;
@@ -443,145 +454,6 @@
     16px;
   background: #f0f0f0;
   overflow-y: auto;
-}
-
-.toolbox-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.toolbox-header-icon {
-  display: grid;
-  place-items: center;
-  color: #2564cf;
-}
-
-.toolbox-header-title {
-  font-size: 22px;
-  font-weight: 800;
-  color: #1f1f1f;
-}
-
-.toolbox-list {
-  display: grid;
-  gap: 12px;
-}
-
-.toolbox-card {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 16px;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  background: #ffffff;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.12s ease-out, border-color 0.12s ease-out;
-}
-
-.toolbox-card:hover {
-  background: #f2f4f7;
-  border-color: #dde1e6;
-}
-
-.toolbox-card:active {
-  background: #e9edf2;
-}
-
-.toolbox-card-icon {
-  display: grid;
-  place-items: center;
-  width: 42px;
-  height: 42px;
-  flex: 0 0 42px;
-  border-radius: 10px;
-  color: #2564cf;
-  background: rgb(37 100 207 / 10%);
-}
-
-.toolbox-card-text {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-
-.toolbox-card-text strong {
-  font-size: 16px;
-  color: #1f2937;
-}
-
-.toolbox-card-text span {
-  font-size: 13px;
-  color: #6b7280;
-}
-
-.toolbox-sub {
-  display: grid;
-  gap: 14px;
-  justify-items: start;
-  align-content: start;
-}
-
-.toolbox-sub-back {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 8px 10px;
-  margin-left: -10px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: #2564cf;
-  font-size: 15px;
-  cursor: pointer;
-}
-
-.toolbox-sub-back:hover {
-  background: rgb(0 0 0 / 6%);
-}
-
-.toolbox-sub-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: #1f2937;
-  font-size: 17px;
-  font-weight: 700;
-}
-
-.toolbox-field-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  width: 100%;
-  padding: 12px 14px;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  background: #ffffff;
-  color: #374151;
-  font-size: 15px;
-}
-
-.toolbox-results {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  width: 100%;
-}
-
-.toolbox-result-chip {
-  padding: 10px 16px;
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  background: #ffffff;
-  color: #1f2937;
-  font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
-  font-size: 20px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
 }
 
 /* ---------- 日记（移动端整页视图） ---------- */
@@ -684,6 +556,34 @@
   grid-template-columns: repeat(5, 34px);
 }
 
+/* 图标/表情选择器：移动端贴底抽屉式，内部只留一层滚动（格子放开、整面板滚） */
+.app-shell.mobile .icon-picker-backdrop {
+  align-items: end;
+  justify-items: stretch;
+}
+
+.app-shell.mobile .icon-picker {
+  width: 100%;
+  max-width: none;
+  max-height: 88vh;
+  border-radius: 18px 18px 0 0;
+  padding: 14px 14px calc(16px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
+}
+
+.app-shell.mobile .icon-grid {
+  overflow: visible;
+  max-height: none;
+}
+
+.app-shell.mobile .emoji-grid,
+.app-shell.mobile .emoji-grid-wide {
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+}
+
+.app-shell.mobile .emoji-picker {
+  height: 320px;
+}
+
 /* ---------- 全局搜索的结果面板（移动端） ----------
    搜索结果本来只渲染在工作区里，而移动端首屏是列表视图、工作区 display:none，
    于是安卓上搜什么都「没反应」。这里让侧栏在搜索态把导航与树收起来，
@@ -732,6 +632,12 @@
 
 .app-shell.mobile .system-nav::-webkit-scrollbar {
   display: none;
+}
+
+/* 移动端点固定分组的行是「进入下一屏」，选中态在内容页里根本看不见，
+   返回后残留的左侧蓝色高亮条只会让人困惑——不画它（行底色保留，桌面不变） */
+.app-shell.mobile .nav-row.selected .active-rail {
+  background: transparent;
 }
 
 /* 记账同日记：整页一层，由历史栈的 ledger 层驱动。 */
@@ -845,6 +751,23 @@
   padding: 13px 13px;
 }
 
+/* 段控紧凑化：移动端是「月/年/总/自定义 + 支/收/结余」，两排都必须收进一屏
+   （桌面五个周期词 + 三个两字词在 390px 上必超屏，超了还会把下面的弹层带出界） */
+.app-shell.mobile .ledger-stats-bar {
+  gap: 6px;
+}
+
+.app-shell.mobile .ledger-segmented {
+  padding: 2px;
+  min-width: 0;
+}
+
+.app-shell.mobile .ledger-segmented button {
+  padding: 4px 8px;
+  font-size: calc(var(--font-ledger) - 5px);
+  white-space: nowrap;
+}
+
 .app-shell.mobile .ledger-summary strong {
   font-size: calc(var(--font-ledger) + 2px);
 }
@@ -868,7 +791,12 @@
   padding-left: 41px;
 }
 
-/* 资产：净资产字号收一档，三段汇总允许换行 */
+/* 资产：净资产字号收一档，三段汇总允许换行；趋势块纵排夹在净资产与资金账户之间 */
+.app-shell.mobile .ledger-assets-top {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
 .app-shell.mobile .ledger-net-card {
   padding: 16px 18px;
 }
@@ -928,9 +856,10 @@
   font-size: calc(var(--font-ledger) + 8px);
 }
 
-/* 记账抽屉高度恒定：分类区自己滚动，图标多少都不撑高或缩矮浮窗（高度飘着手感就飘） */
+/* 记账抽屉高度恒定，且分类区正好露出五排图标：分类区自己滚动，
+   图标多了滚动、少了也不缩矮浮窗（高度飘着手感就飘） */
 .app-shell.mobile .ledger-editor-sheet {
-  height: min(78vh, 640px);
+  height: min(92vh, 780px);
 }
 
 /* 转账没有分类区：定高会在键盘上方留一大块空白，收回 auto */
@@ -940,11 +869,14 @@
 
 .app-shell.mobile .ledger-cat-zone {
   flex: 1 1 auto;
+  max-height: none;
   padding: 10px 10px 4px;
 }
 
+/* 列数固定 5（与 LedgerEditor 里算「行尾」的 cols 一致）：
+   二级阴影区要插在大类所在行的行尾之后，auto-fill 的不确定列数算不出行尾 */
 .app-shell.mobile .ledger-cat-grid {
-  grid-template-columns: repeat(auto-fill, minmax(58px, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .app-shell.mobile .ledger-note-row {
@@ -958,7 +890,15 @@
 }
 
 .app-shell.mobile .ledger-sheet-body {
-  padding: 11px 12px;
+  padding: 11px 12px 20px;
+}
+
+/* 半屏抽屉里只许有一层滚动：表单里的图标网格在移动端完全展开（嵌套的
+   自滚区在触屏上把手势吃掉，外层表单永远滚不到最后一行——「添加账户看不到
+   底部的账户名称预览」就是它），滚动统一交给面板主体 */
+.app-shell.mobile .ledger-sheet-body .ledger-icon-grid {
+  overflow: visible;
+  max-height: none;
 }
 
 .app-shell.mobile .ledger-keypad {

@@ -15,7 +15,8 @@
   import { buildMainStyle, ledgerAccent, ledgerBackground } from "./styles";
   import { imageCache, resolveImageSrc } from "./images";
   import { monthOf, shiftMonth, todayDate, type MonthCursor } from "./diary";
-  import { compactCents, monthDayGroups, monthTotals, LEDGER_IMAGE_NODE } from "./ledger";
+  import { compactCents, monthDayGroups, monthTotals, assetsTrend, LEDGER_IMAGE_NODE } from "./ledger";
+  import type { AssetTrendPoint } from "./ledger";
   import { mdImageUrl } from "./backend";
   import MenuItem from "./menu/MenuItem.svelte";
   import MonthPopover from "./MonthPopover.svelte";
@@ -29,6 +30,7 @@
   import CategoryManager from "./ledger/CategoryManager.svelte";
   import AccountManager from "./ledger/AccountManager.svelte";
   import LedgerImagePreview from "./ledger/LedgerImagePreview.svelte";
+  import AssetsTrendViewer from "./ledger/AssetsTrendViewer.svelte";
   import type { LedgerSide, LedgerViewMode } from "./types";
 
   const VIEWS: Array<{ mode: LedgerViewMode; label: string; icon: typeof ListIcon }> = [
@@ -64,8 +66,11 @@
   let monthLabelEl: HTMLElement;
   /** 从记账面板的加号过来时，分类管理直接停在新增表单上（可带预置大类） */
   let categoryStart: { side: LedgerSide; parentId: string } | null = null;
-  /** 条目插图的全屏查看（点卡片小字行里的图片图标） */
-  let preview: { src: string; title: string } | null = null;
+  /** 条目插图的全屏查看（点卡片小字行里的图片图标）；一条账可以有多张 */
+  let preview: { src: string; title: string }[] | null = null;
+  /** 总资产趋势的放大查看：viewer 必须挂在本层——挂在 .ledger-scroll 里的话，
+   *  滚动区自己是个 z-index:1 的 stacking context，4600 的全屏层会被 FAB 盖住 */
+  let trendView: AssetTrendPoint[] | null = null;
 
   let cursor: MonthCursor = monthOf(todayDate());
   let selectedDate = todayDate();
@@ -108,6 +113,7 @@
     drill = null;
     monthPopOpen = false;
     preview = null;
+    trendView = null;
   }
 
   /** 记账面板里的加号：面板挂在 App 层，只能靠 store 把「要加分类」递到这一页来。 */
@@ -189,10 +195,13 @@
   /** 点条目小字行的图片图标：全屏看这条账的插图（图走 markdown 插图的 ledger 伪条目通道）。 */
   async function openEntryImage(id: string): Promise<void> {
     const entry = book.entries.find((item) => item.id === id);
-    if (!entry?.image) return;
+    const images = entry?.images ?? [];
+    if (images.length === 0) return;
     try {
-      const src = await mdImageUrl(LEDGER_IMAGE_NODE, entry.image);
-      preview = { src, title: entry.note || entry.date };
+      const title = entry?.note || entry?.date || "";
+      preview = await Promise.all(
+        images.map(async (name) => ({ src: await mdImageUrl(LEDGER_IMAGE_NODE, name), title }))
+      );
     } catch {
       preview = null;
     }
@@ -387,6 +396,7 @@
         on:editAccount={(event) => openAccountEdit(event.detail)}
         on:addAccount={() => openAccounts("add")}
         on:transfer={() => openAccounts("transfer")}
+        on:openTrend={() => (trendView = assetsTrend(book))}
       />
     {/if}
   </section>
@@ -438,7 +448,11 @@
   {/if}
 
   {#if preview}
-    <LedgerImagePreview src={preview.src} title={preview.title} onClose={() => (preview = null)} />
+    <LedgerImagePreview items={preview} onClose={() => (preview = null)} />
+  {/if}
+
+  {#if trendView}
+    <AssetsTrendViewer points={trendView} onClose={() => (trendView = null)} />
   {/if}
 
   {#if showCategories}
@@ -469,7 +483,13 @@
     {#if showTodayButton}
       <button class="ledger-fab-today" type="button" title="回到本月" on:click|stopPropagation={jumpToToday}>今</button>
     {/if}
-    <button class="ledger-fab" type="button" title="记一笔" aria-label="记一笔" on:click|stopPropagation={() => createEntry()}>
+    <button
+      class="ledger-fab"
+      type="button"
+      title={view === "assets" ? "添加账户" : "记一笔"}
+      aria-label={view === "assets" ? "添加账户" : "记一笔"}
+      on:click|stopPropagation={() => (view === "assets" ? openAccounts("add") : createEntry())}
+    >
       <Plus size={24} />
     </button>
   </div>

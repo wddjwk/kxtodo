@@ -247,6 +247,9 @@ pub fn risk_for(command: &str) -> &'static str {
         | "ledger.accountAdd"
         | "ledger.accountModify"
         | "ledger.accountRemove"
+        | "ledger.accountTypeAdd"
+        | "ledger.accountTypeModify"
+        | "ledger.accountTypeRemove"
         | "ledger.categoryAdd"
         | "ledger.categoryModify"
         | "ledger.categoryRemove" => "high-risk-write",

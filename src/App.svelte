@@ -5,7 +5,7 @@
   import {
     appSettings, appState, showSettings, searchQuery, isSearching,
     taskEmojiPicker, editorTaskId, appVersion, showToast,
-    isHydrated, diaryOpen, diaryEditor, editorDraftNode, ledgerOpen, ledgerEditor, ledgerData,
+    isHydrated, diaryOpen, diaryEditor, editorDraftNode, ledgerOpen, ledgerEditor, ledgerData, toolboxOpen,
     hydrate as hydrateStores
   } from "./lib/stores";
   import { replaceTaskEmojis, selectNode as selectNodeAction, syncNow as syncNowAction } from "./lib/actions";
@@ -36,6 +36,8 @@
   $: diaryVisible = $isMobile ? $mobileView === "diary" : $diaryOpen;
   /** 记账占着主区域：与日记同一条口径（移动端看历史栈，桌面看 ledgerOpen）。 */
   $: ledgerVisible = $isMobile ? $mobileView === "ledger" : $ledgerOpen;
+  /** 工具箱占着主区域（v0.7.5 起桌面也有）：同一条口径。 */
+  $: toolboxVisible = $isMobile ? $mobileView === "toolbox" : $toolboxOpen;
 
   $: emojiPickerTask = $taskEmojiPicker
     ? $appState.tasks.find((t) => t.id === $taskEmojiPicker?.taskId) ?? null
@@ -137,6 +139,7 @@
   class:view-ledger={$isMobile && $mobileView === "ledger"}
   class:diary-open={!$isMobile && $diaryOpen}
   class:ledger-open={!$isMobile && $ledgerOpen}
+  class:toolbox-open={!$isMobile && $toolboxOpen}
   class:searching={$isSearching}
   class:view-settings={$isMobile && $showSettings}
   style={appShellStyle}
@@ -159,7 +162,7 @@
       <LedgerView bind:this={ledgerViewRef} />
     {/if}
 
-    {#if $isMobile && $mobileView === "toolbox"}
+    {#if toolboxVisible}
       <ToolboxView />
     {/if}
 

@@ -16,7 +16,8 @@ export const caps = {
   // 全平台应用内更新：Android 走 APK 安装器（apk）；桌面（Windows/Linux）统一“下载新制品→替换→重启”（desktop）。
   updateChannel: (mobile ? "apk" : "desktop") as "apk" | "desktop",
   nativeFileDialogs: !mobile,
-  toolbox: mobile,
+  // 工具箱整页两端都有（v0.7.5）：单个工具的平台差异在 tools/registry.ts 的 available 里表达
+  toolbox: true,
   desktop: !mobile,
   // 图像走 dataURL 的两类环境（asset 协议取不到子资源）：
   // - 部分 Linux 的 WebKitGTK 对 asset 协议子资源根本不发请求（strace 实测零次文件打开）；

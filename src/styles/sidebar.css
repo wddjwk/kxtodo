@@ -498,21 +498,24 @@
   z-index: 5000;
   display: grid;
   place-items: center;
-  background: rgb(0 0 0 / 18%);
+  background: rgb(15 23 42 / 32%);
+  backdrop-filter: blur(3px);
+  animation: editor-fade-in 0.14s ease-out;
 }
 
 .icon-picker {
   width: 520px;
   max-width: calc(var(--app-width, 100vw) - 48px);
-  max-height: 640px;
+  max-height: min(640px, calc(var(--app-height, 100vh) - 48px));
   overflow-y: auto;
   overflow-x: hidden;
-  border: 1px solid #dedede;
-  border-radius: 14px;
+  border: 1px solid rgb(0 0 0 / 6%);
+  border-radius: 16px;
   background: white;
-  padding: 16px;
-  box-shadow: 0 20px 60px rgb(0 0 0 / 20%);
+  padding: 16px 18px;
+  box-shadow: 0 24px 64px rgb(0 0 0 / 22%), 0 4px 16px rgb(0 0 0 / 10%);
   scrollbar-width: none;
+  animation: editor-pop-in 0.16s ease-out;
 }
 
 .icon-picker::-webkit-scrollbar {
@@ -527,73 +530,142 @@
 }
 
 .icon-picker header strong {
+  color: #1f2937;
   font-size: 15px;
+  font-weight: 700;
 }
 
-.icon-picker header button {
+.icon-picker-close {
   display: grid;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   place-items: center;
   border: 0;
-  border-radius: 6px;
+  border-radius: 8px;
+  padding: 0;
   background: transparent;
-  font-size: 20px;
+  color: #64748b;
   cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 
-.icon-picker header button:hover {
-  background: #f0f0f0;
+.icon-picker-close:hover {
+  background: #eef1f5;
+  color: #1f2937;
 }
 
 .picker-section-label {
-  margin: 8px 0 6px;
-  color: #888;
+  margin: 10px 0 6px;
+  color: #8b929e;
   font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* 简笔画的分组 chips：与记账管理器的图标分组同一套观感 */
+.icon-group-chips {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  margin-bottom: 10px;
+  padding: 2px;
+  scrollbar-width: none;
+}
+
+.icon-group-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.icon-group-chip {
+  flex: 0 0 auto;
+  padding: 5px 12px;
+  border: 1px solid #e8ebef;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #5c6470;
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+
+.icon-group-chip:hover {
+  border-color: #dfe3e8;
+  background: #f8fafc;
+}
+
+.icon-group-chip.active {
+  border-color: #2564cf;
+  background: #2564cf;
+  color: #ffffff;
   font-weight: 600;
 }
 
 .icon-grid,
 .emoji-grid {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
   gap: 6px;
   margin-bottom: 6px;
 }
 
+/* 图标格子多（两百多个）：桌面在自己那块滚（鼠标滚轮没嵌套问题），
+   移动端由 mobile.css 放开、整面板单层滚动 */
+.icon-grid {
+  overflow-y: auto;
+  max-height: 264px;
+  padding: 2px;
+  scrollbar-width: none;
+}
+
+.icon-grid::-webkit-scrollbar {
+  display: none;
+}
+
+.emoji-grid {
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+}
+
 .emoji-grid-wide {
-  grid-template-columns: repeat(10, 1fr);
+  grid-template-columns: repeat(10, minmax(0, 1fr));
 }
 
 .icon-grid button,
 .emoji-grid button {
   display: grid;
-  height: 36px;
+  height: 42px;
   place-items: center;
-  border: 1px solid #e5e5e5;
-  border-radius: 8px;
-  background: #fbfbfb;
-  font-size: 18px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  padding: 0;
+  background: #f6f7f9;
+  color: #46505f;
+  font-size: 19px;
   cursor: pointer;
-  transition: border-color 100ms, background 100ms;
+  transition: background 100ms ease, border-color 100ms ease, color 100ms ease;
 }
 
 .icon-grid button:hover,
 .emoji-grid button:hover {
-  border-color: #b8d4f0;
-  background: #f0f7ff;
+  border-color: #e2e8f0;
+  background: #eef1f5;
 }
 
 .icon-grid button.selected,
 .emoji-grid button.selected {
   border-color: #2564cf;
-  background: #edf5ff;
+  background: #ffffff;
+  color: #2564cf;
+  box-shadow: 0 0 0 1px rgb(37 100 207 / 22%);
 }
 
 .emoji-picker {
   width: 100%;
   height: 300px;
-  --border-radius: 10px;
+  --border-radius: 12px;
+  --border-size: 0;
+  --background: #ffffff;
+  --category-font-size: 13px;
 }
 
 /* 拖拽到空白区（root 末尾）指示 */

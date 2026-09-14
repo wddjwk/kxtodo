@@ -328,7 +328,7 @@ check("desktop shell not mobile", (await dpage.locator(".app-shell.mobile").coun
 check("desktop shows both panes", (await dpage.locator(".sidebar").isVisible()) && (await dpage.locator(".workspace").isVisible()));
 const dnav = await dpage.locator(".system-nav").innerText();
 check("desktop nav keeps scheduled", dnav.includes("定时任务"));
-check("desktop nav has no toolbox row", !dnav.includes("工具箱"));
+check("desktop nav keeps toolbox row (v0.7.5)", dnav.includes("工具箱"));
 check("desktop header has no gear button", (await dpage.locator('.header-actions button[aria-label="更多操作"]').count()) === 0);
 check("desktop header keeps list menu button", (await dpage.locator('.header-actions button[title="列表菜单"]').count()) === 1);
 // desktop right-click on a task card still opens menu

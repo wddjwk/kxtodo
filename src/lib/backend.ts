@@ -65,7 +65,7 @@ export async function saveDiary(entries: DiaryEntry[]): Promise<void> {
 }
 
 export async function loadLedger(): Promise<unknown> {
-  return readLocal(ledgerKey, { accounts: [], categories: [], entries: [] });
+  return readLocal(ledgerKey, { accounts: [], categories: [], entries: [], accountTypes: [] });
 }
 
 export async function saveLedger(book: LedgerBook): Promise<void> {
@@ -392,6 +392,20 @@ export async function pickImageFile(): Promise<string | null> {
     filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"] }]
   });
   return typeof selected === "string" ? selected : null;
+}
+
+/** 多选版本（记账条目的多图）：返回选中的路径列表；移动端无原生对话框，返回空数组。 */
+export async function pickImageFiles(): Promise<string[]> {
+  if (!isTauriRuntime || !caps.nativeFileDialogs) {
+    return [];
+  }
+  const selected = await open({
+    multiple: true,
+    directory: false,
+    filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"] }]
+  });
+  if (typeof selected === "string") return [selected];
+  return Array.isArray(selected) ? selected.filter((item): item is string => typeof item === "string") : [];
 }
 
 export async function pickExecutableFile(): Promise<string | null> {

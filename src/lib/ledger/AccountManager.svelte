@@ -16,7 +16,7 @@
   import { suppressGhostClick } from "../ghostClick";
   import { fieldKeydown } from "../shortcuts";
   import { ledgerAccent } from "../styles";
-  import { assetsOverview, formatCents, parseYuanToCents } from "../ledger";
+  import { accountBalance, assetsOverview, formatCents, parseYuanToCents } from "../ledger";
   import {
     LEDGER_ACCOUNT_ICON_GROUPS, ledgerIcon, softColor
   } from "../ledgerIcons";
@@ -24,9 +24,10 @@
     ACCOUNT_TYPE_PRESETS, accountTypeColor, accountTypeIcon, accountTypeLabel
   } from "../ledgerAccountTypes";
   import {
-    addLedgerAccount, deleteLedgerAccount, transferLedger, updateLedgerAccount
+    addLedgerAccount, addLedgerAccountType, deleteLedgerAccount, deleteLedgerAccountType,
+    transferLedger, updateLedgerAccount, updateLedgerAccountType
   } from "../actions";
-  import type { LedgerBook } from "../types";
+  import type { LedgerAccountType, LedgerBook } from "../types";
 
   export let book: LedgerBook;
   export let onClose: () => void = () => {};
@@ -51,12 +52,13 @@
   let kindDraft = "cash";
   let iconDraft = "";
   let colorDraft = "";
-  let initialDraft = "";
+  /** 新建 = 期初余额；编辑 = 当前金额（保存后余额直接变成这个数） */
+  let amountDraft = "";
   let noteDraft = "";
   let busy = false;
-  /** 自定义类型：加号展开一行输入，回车/确认即成为当前类型 */
-  let kindCustomOpen = false;
-  let kindCustomText = "";
+  /** 自定义账户类型的小表单：typeForm.id 空串 = 新建，否则是编辑既有类型 */
+  let typeFormOpen = false;
+  let typeForm = { id: "", name: "", icon: "", color: "" };
   let iconGroup = ALL_ICON_GROUP;
 
   let fromId = book.accounts[0]?.id ?? "";
@@ -68,9 +70,10 @@
   $: assets = assetsOverview(book);
   $: accent = ledgerAccent($appSettings.ledger);
   $: transferCents = parseYuanToCents(transferText) ?? 0;
-  /** 类型候选：预置 + 已有账户用过的 + 当前草稿（自定义类型不能从 chips 上消失） */
+  /** 类型候选：预置 + 账本里持久化的自定义类型 + 已有账户用过的 + 当前草稿 */
   $: kindChoices = [...new Set([
     ...ACCOUNT_TYPE_PRESETS.map((item) => item.kind),
+    ...book.accountTypes.map((item) => item.name),
     ...book.accounts.map((item) => item.kind),
     kindDraft
   ])];
@@ -78,9 +81,9 @@
     iconGroup === ALL_ICON_GROUP
       ? LEDGER_ACCOUNT_ICON_GROUPS.flatMap((group) => [...group.icons])
       : LEDGER_ACCOUNT_ICON_GROUPS.find((group) => group.name === iconGroup)?.icons ?? [];
-  /** 表单预览：没手选颜色/图标就退回该类型的默认值 */
-  $: previewColor = colorDraft || accountTypeColor(kindDraft);
-  $: previewIcon = iconDraft || accountTypeIcon(kindDraft);
+  /** 表单预览：没手选颜色/图标就退回该类型（预置或自定义）的默认值 */
+  $: previewColor = colorDraft || accountTypeColor(kindDraft, book.accountTypes);
+  $: previewIcon = iconDraft || accountTypeIcon(kindDraft, book.accountTypes);
 
   if (editId) {
     const target = book.accounts.find((item) => item.id === editId);
@@ -95,10 +98,9 @@
     kindDraft = "cash";
     iconDraft = "";
     colorDraft = "";
-    initialDraft = "";
+    amountDraft = "";
     noteDraft = "";
-    kindCustomOpen = false;
-    kindCustomText = "";
+    typeFormOpen = false;
     panel = "form";
   }
 
@@ -110,10 +112,11 @@
     kindDraft = target.kind;
     iconDraft = target.icon;
     colorDraft = target.color;
-    initialDraft = target.initialCents ? (target.initialCents / 100).toString() : "";
+    // 编辑的是「当前金额」（余额 = 期初 + 流水，现场推导）：对齐用户看到的数，
+    // 保存时 core 把差额折回期初——余额永远只有推导这一个来源，不存第二份
+    amountDraft = formatCents(accountBalance(book, target.id));
     noteDraft = target.note;
-    kindCustomOpen = false;
-    kindCustomText = "";
+    typeFormOpen = false;
     panel = "form";
   }
 
@@ -146,20 +149,49 @@
 
   /** 选账户类型时顺手把图标换回该类型的默认（用户已手选过就不动） */
   function pickKind(kind: string): void {
-    const wasDefault = !iconDraft || iconDraft === accountTypeIcon(kindDraft);
+    const wasDefault = !iconDraft || iconDraft === accountTypeIcon(kindDraft, book.accountTypes);
     kindDraft = kind;
-    kindCustomOpen = false;
+    typeFormOpen = false;
     if (wasDefault) iconDraft = "";
   }
 
-  function confirmCustomKind(): void {
-    const kind = kindCustomText.trim();
-    if (!kind) {
-      kindCustomOpen = false;
+  /** 类型行末的加号 / 自定义 chip 上的铅笔：打开类型小表单（新建或编辑） */
+  function openTypeForm(type: LedgerAccountType | null): void {
+    typeForm = type
+      ? { id: type.id, name: type.name, icon: type.icon, color: type.color }
+      : { id: "", name: "", icon: "", color: "" };
+    typeFormOpen = true;
+  }
+
+  async function saveTypeForm(): Promise<void> {
+    if (!typeFormOpen || busy) return;
+    const name = typeForm.name.trim();
+    if (!name) {
+      showToast("类型名称不能为空");
       return;
     }
-    kindCustomText = "";
-    pickKind(kind);
+    busy = true;
+    const draft = { name, icon: typeForm.icon, color: typeForm.color };
+    const ok = typeForm.id
+      ? await updateLedgerAccountType(typeForm.id, draft)
+      : await addLedgerAccountType(draft);
+    busy = false;
+    if (!ok) return;
+    typeFormOpen = false;
+    // 建好即选中：账户跟着用上这个类型的图标与颜色默认值
+    pickKind(name);
+  }
+
+  /** 删类型只删这条「建议」：已建账户的 kind 字符串与图标颜色都不受影响 */
+  async function removeTypeForm(): Promise<void> {
+    if (!typeFormOpen || !typeForm.id || busy) return;
+    busy = true;
+    const ok = await deleteLedgerAccountType(typeForm.id);
+    busy = false;
+    if (!ok) return;
+    const gone = typeForm.name;
+    typeFormOpen = false;
+    if (kindDraft === gone) kindDraft = "cash";
   }
 
   async function saveForm(): Promise<void> {
@@ -169,10 +201,10 @@
       showToast("账户名称不能为空");
       return;
     }
-    const trimmed = initialDraft.trim();
-    const initialCents = trimmed === "" ? 0 : parseYuanToCents(trimmed);
-    if (initialCents === null) {
-      showToast("期初余额要是一个金额（可以是 0）");
+    const trimmed = amountDraft.trim();
+    const amountCents = trimmed === "" ? null : parseYuanToCents(trimmed);
+    if (trimmed !== "" && amountCents === null) {
+      showToast("金额要是一个数字（可以是负数）");
       return;
     }
     busy = true;
@@ -181,10 +213,13 @@
       kind: kindDraft,
       icon: iconDraft,
       color: colorDraft,
-      initialCents,
       note: noteDraft.trim()
     };
-    const ok = editingId ? await updateLedgerAccount(editingId, draft) : await addLedgerAccount(draft);
+    // 编辑：余额直设成新值（core 把差额折回期初，流水与统计都不动）；留空 = 不改金额
+    // 新建：这就是期初余额
+    const ok = editingId
+      ? await updateLedgerAccount(editingId, amountCents === null ? draft : { ...draft, balanceCents: amountCents })
+      : await addLedgerAccount({ ...draft, initialCents: amountCents ?? 0 });
     busy = false;
     if (!ok) return;
     backToList();
@@ -300,8 +335,8 @@
         </div>
 
         {#each assets.perAccount as item (item.account.id)}
-          {@const iconName = item.account.icon || accountTypeIcon(item.account.kind)}
-          {@const color = item.account.color || accountTypeColor(item.account.kind)}
+          {@const iconName = item.account.icon || accountTypeIcon(item.account.kind, book.accountTypes)}
+          {@const color = item.account.color || accountTypeColor(item.account.kind, book.accountTypes)}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <div class="ledger-account-row" role="button" tabindex="0" on:click={() => beginEdit(item.account.id)}>
             <span class="ledger-account-icon" style="--cat: {color}; background: {softColor(color)}">
@@ -403,40 +438,137 @@
           <span>类型</span>
           <div class="ledger-choice-row">
             {#each kindChoices as kind (kind)}
+              {@const customType = book.accountTypes.find((item) => item.name === kind)}
               <button type="button" class="ledger-choice" class:active={kindDraft === kind} on:click={() => pickKind(kind)}>
-                <svelte:component this={ledgerIcon(accountTypeIcon(kind), "Wallet")} size={14} />
+                <span class="ledger-choice-icon" style="color: {accountTypeColor(kind, book.accountTypes)}">
+                  <svelte:component this={ledgerIcon(accountTypeIcon(kind, book.accountTypes), "Wallet")} size={14} />
+                </span>
                 {accountTypeLabel(kind)}
+                {#if customType}
+                  <!-- svelte-ignore a11y_no_static_element_interactions -->
+                  <span
+                    class="ledger-choice-edit"
+                    role="button"
+                    tabindex="0"
+                    title="编辑或删除这个自定义类型"
+                    on:click|stopPropagation={() => openTypeForm(customType)}
+                    on:keydown|stopPropagation={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        openTypeForm(customType);
+                      }
+                    }}
+                  ><PenLine size={12} /></span>
+                {/if}
               </button>
             {/each}
-            {#if kindCustomOpen}
-              <input
-                class="ledger-kind-custom"
-                type="text"
-                maxlength="10"
-                placeholder="自定义类型名"
-                bind:value={kindCustomText}
-                on:keydown={(event) => {
-                  if (event.key === "Enter" && !event.isComposing) {
-                    event.preventDefault();
-                    confirmCustomKind();
-                  }
-                }}
-              />
-              <button type="button" class="ledger-choice active" on:click={confirmCustomKind}>确定</button>
-            {:else}
-              <button
-                type="button"
-                class="ledger-choice"
-                title="自定义账户类型"
-                on:click={() => (kindCustomOpen = true)}
-              ><Plus size={14} />类型</button>
-            {/if}
+            <button
+              type="button"
+              class="ledger-choice"
+              title="自定义账户类型（可挑图标与颜色，之后能改能删）"
+              on:click={() => openTypeForm(null)}
+            ><Plus size={14} />类型</button>
           </div>
+
+          {#if typeFormOpen}
+            <!-- 自定义类型的小表单：类型持久化在账本里，之后建账户直接选 -->
+            <div class="ledger-type-form">
+              <label class="ledger-field-row">
+                <span>名称</span>
+                <input
+                  bind:value={typeForm.name}
+                  type="text"
+                  maxlength="10"
+                  placeholder="例如 校园卡"
+                  on:keydown={fieldKeydown}
+                />
+              </label>
+              <div class="ledger-field-row ledger-field-column">
+                <span>图标</span>
+                <div class="ledger-icon-groups" role="tablist" aria-label="类型图标分组">
+                  <button
+                    type="button"
+                    class="ledger-icon-group"
+                    class:active={iconGroup === ALL_ICON_GROUP}
+                    on:click={() => (iconGroup = ALL_ICON_GROUP)}
+                  >{ALL_ICON_GROUP}</button>
+                  {#each LEDGER_ACCOUNT_ICON_GROUPS as group (group.name)}
+                    <button
+                      type="button"
+                      class="ledger-icon-group"
+                      class:active={iconGroup === group.name}
+                      on:click={() => (iconGroup = group.name)}
+                    >{group.name}</button>
+                  {/each}
+                </div>
+                <div class="ledger-icon-grid">
+                  {#each iconChoices as name (name)}
+                    {@const icon = ledgerIcon(name, name)}
+                    <button
+                      type="button"
+                      class="ledger-icon-cell"
+                      class:active={typeForm.icon === name}
+                      title={name}
+                      on:click={() => (typeForm.icon = typeForm.icon === name ? "" : name)}
+                    >
+                      <svelte:component this={icon} size={18} />
+                    </button>
+                  {/each}
+                </div>
+              </div>
+              <div class="ledger-field-row ledger-field-column">
+                <span>颜色</span>
+                <div class="ledger-color-row">
+                  {#each COLORS as color (color)}
+                    <button
+                      type="button"
+                      class="ledger-color-dot"
+                      class:active={typeForm.color === color}
+                      style="background: {color}"
+                      title={color}
+                      on:click={() => (typeForm.color = typeForm.color === color ? "" : color)}
+                    ></button>
+                  {/each}
+                  <label class="ledger-color-custom" title="自定义颜色">
+                    <input
+                      type="color"
+                      value={typeForm.color || "#7f8c8d"}
+                      on:input={(event) => (typeForm.color = event.currentTarget.value)}
+                    />
+                  </label>
+                </div>
+              </div>
+              <div class="ledger-type-form-actions">
+                {#if typeForm.id}
+                  <button type="button" class="settings-button danger" disabled={busy} on:click={() => void removeTypeForm()}>
+                    <Trash2 size={14} />删除类型
+                  </button>
+                {/if}
+                <span class="ledger-foot-spacer"></span>
+                <button type="button" class="settings-button" on:click={() => (typeFormOpen = false)}>取消</button>
+                <button
+                  type="button"
+                  class="settings-button primary"
+                  disabled={busy || !typeForm.name.trim()}
+                  on:click={() => void saveTypeForm()}
+                >{typeForm.id ? "保存类型" : "添加类型"}</button>
+              </div>
+            </div>
+          {/if}
         </div>
 
         <label class="ledger-field-row">
-          <span>期初余额</span>
-          <input bind:value={initialDraft} type="text" inputmode="decimal" placeholder="0.00" on:keydown={fieldKeydown} />
+          <span>{editingId ? "当前金额" : "期初余额"}</span>
+          <input
+            bind:value={amountDraft}
+            type="text"
+            inputmode="decimal"
+            placeholder="0.00"
+            title={editingId
+              ? "保存后账户余额直接变成这个数：差额自动折进期初，流水与统计一概不动（可以为负，信用卡尤其如此）"
+              : "开始记账之前账户里已有的钱（可以为负）"}
+            on:keydown={fieldKeydown}
+          />
         </label>
 
         <div class="ledger-field-row ledger-field-column">

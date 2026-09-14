@@ -158,14 +158,17 @@
                   <span class="ledger-entry-sub">
                     <em class="ledger-entry-note">
                       {#if entry.note}{entry.note}{/if}
-                      {#if entry.image}
+                      {#if entry.images && entry.images.length > 0}
                         <!-- svelte-ignore a11y_no_static_element_interactions -->
                         <!-- svelte-ignore a11y_click_events_have_key_events -->
                         <span
                           class="ledger-entry-image"
                           title="查看这条账的图片"
                           on:click|stopPropagation={() => onImageView(entry.id)}
-                        ><ImageIcon size={12} /></span>
+                        >
+                          <ImageIcon size={12} />
+                          {#if entry.images.length > 1}<i class="ledger-entry-image-count">{entry.images.length}</i>{/if}
+                        </span>
                       {/if}
                     </em>
                     <span class="ledger-entry-meta">

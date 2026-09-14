@@ -131,10 +131,10 @@ fn ledger_write_sweeps_ledger_images() {
     // 记一笔带附图：引用 ledger/keep.png（ensure_initialized 已种下账户「现金」）
     let entry = env.dispatch(
         "ledger.add",
-        json!({ "amount": "12", "account": "现金", "date": "2026-09-08", "image": "keep.png" }),
+        json!({ "amount": "12", "account": "现金", "date": "2026-09-08", "images": ["keep.png"] }),
     );
     let entry_id = entry["id"].as_str().unwrap().to_string();
-    assert_eq!(entry["image"], "keep.png", "附图裸文件名回显");
+    assert_eq!(entry["images"], json!(["keep.png"]), "附图裸文件名回显");
 
     let img_dir = env
         .dir

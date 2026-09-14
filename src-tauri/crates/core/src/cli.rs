@@ -4,7 +4,7 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -801,7 +801,7 @@ pub enum LedgerAction {
     AccountAdd(LedgerAccountAddArgs),
     /// 修改资金账户（Risk: high-risk-write）
     #[command(
-        long_about = "Risk: high-risk-write\n\n改名/改类型/改图标颜色/改期初余额；改期初会整体平移该账户余额。\n未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger accountModify --id lacc-xxxx --name 工资卡 --yes"
+        long_about = "Risk: high-risk-write\n\n改名/改类型/改图标颜色/改期初余额；改期初会整体平移该账户余额。\n--balance 直设当前余额（自动反推期初 = 目标余额 − 流水推导和），与 --initial 互斥。\n未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：\n  kxtodo-cli ledger account-modify --id lacc-xxxx --name 工资卡 --yes\n  kxtodo-cli ledger account-modify --id lacc-xxxx --balance 1234.56 --yes"
     )]
     #[command(name = "account-modify")]
     AccountModify(LedgerAccountModifyArgs),
@@ -811,6 +811,30 @@ pub enum LedgerAction {
     )]
     #[command(name = "account-remove")]
     AccountRemove(LedgerIdArgs),
+    /// 列出自定义账户类型（Risk: read）
+    #[command(
+        long_about = "Risk: read\n\n自定义账户类型（账本级实体，随「账本」范围同步）；账户的 kind 是自由字符串，类型表只承担图标/颜色的展示约定。\n\n示例：kxtodo-cli ledger account-types"
+    )]
+    #[command(name = "account-types")]
+    AccountTypes,
+    /// 新增自定义账户类型（Risk: high-risk-write）
+    #[command(
+        long_about = "Risk: high-risk-write\n\n--name 必填且唯一；--icon 从 ledger icon-list 的账户目录（accountIcons）里挑，--color 给 #rrggbb。\n未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger account-type-add --name 公积金 --icon PiggyBank --color \"#7f8fa6\" --yes"
+    )]
+    #[command(name = "account-type-add")]
+    AccountTypeAdd(LedgerAccountTypeAddArgs),
+    /// 修改自定义账户类型（Risk: high-risk-write）
+    #[command(
+        long_about = "Risk: high-risk-write\n\n改名/改图标/改颜色；只动给了的字段。改名不影响已用旧名的账户（kind 存的是字符串）。\n未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger account-type-modify --id latype-xxxx --name 医保 --yes"
+    )]
+    #[command(name = "account-type-modify")]
+    AccountTypeModify(LedgerAccountTypeModifyArgs),
+    /// 删除自定义账户类型（Risk: high-risk-write）
+    #[command(
+        long_about = "Risk: high-risk-write\n\n删除类型并写同步墓碑；名下有账户在用也允许删（账户的 kind 字符串原样保留）。\n未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger account-type-remove --id latype-xxxx --yes"
+    )]
+    #[command(name = "account-type-remove")]
+    AccountTypeRemove(LedgerIdArgs),
     /// 列出两级分类（Risk: read）
     #[command(
         long_about = "Risk: read\n\n--side expense|income 只看一侧；输出含 parentId（空 = 大类）。\n\n示例：kxtodo-cli ledger categories --side expense"
@@ -894,9 +918,10 @@ pub struct LedgerAddArgs {
     /// 备注
     #[arg(long, value_name = "text")]
     pub note: Option<String>,
-    /// 附图文件名（img/data/ledger/ 下的裸文件名；不含路径分隔符）
-    #[arg(long, value_name = "file")]
-    pub image: Option<String>,
+    /// 附图文件名（img/data/ledger/ 下的裸文件名；可重复传多张）
+    #[arg(long = "image", value_name = "file", action = ArgAction::Append)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
 }
 
 #[derive(Debug, Args, Serialize)]
@@ -920,6 +945,10 @@ pub struct LedgerTransferArgs {
     /// 备注
     #[arg(long, value_name = "text")]
     pub note: Option<String>,
+    /// 附图文件名（可重复传多张）
+    #[arg(long = "image", value_name = "file", action = ArgAction::Append)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
 }
 
 #[derive(Debug, Args, Serialize)]
@@ -978,9 +1007,10 @@ pub struct LedgerModifyArgs {
     /// 新备注
     #[arg(long, value_name = "text")]
     pub note: Option<String>,
-    /// 新附图文件名（传空串清除附图）
-    #[arg(long, value_name = "file")]
-    pub image: Option<String>,
+    /// 新附图文件名（可重复传多张；整体替换现有列表，传一个空串清除全部附图）
+    #[arg(long = "image", value_name = "file", action = ArgAction::Append)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
 }
 
 #[derive(Debug, Args, Serialize)]
@@ -1027,9 +1057,43 @@ pub struct LedgerAccountModifyArgs {
     /// 新期初余额（元）
     #[arg(long, value_name = "yuan")]
     pub initial: Option<String>,
+    /// 直设当前余额（元）：自动反推期初 = 目标余额 − 流水推导和；与 --initial 互斥
+    #[arg(long, value_name = "yuan")]
+    pub balance: Option<String>,
     /// 新备注
     #[arg(long, value_name = "text")]
     pub note: Option<String>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerAccountTypeAddArgs {
+    /// 类型名（唯一）
+    #[arg(long, value_name = "name")]
+    pub name: String,
+    /// 图标名（ledger icon-list 账户目录里的 lucide 名）
+    #[arg(long, value_name = "icon")]
+    pub icon: Option<String>,
+    /// 颜色 #rrggbb
+    #[arg(long, value_name = "color")]
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerAccountTypeModifyArgs {
+    /// 稳定 ID
+    #[arg(long, value_name = "id")]
+    pub id: String,
+    /// 新名字（唯一）
+    #[arg(long, value_name = "name")]
+    pub name: Option<String>,
+    /// 新图标
+    #[arg(long, value_name = "icon")]
+    pub icon: Option<String>,
+    /// 新颜色
+    #[arg(long, value_name = "color")]
+    pub color: Option<String>,
 }
 
 #[derive(Debug, Args, Serialize)]
@@ -2260,6 +2324,10 @@ fn build_ledger_invocation(action: &LedgerAction) -> CoreResult<Invocation> {
         LedgerAction::AccountAdd(args) => ("ledger.accountAdd", serialize_args(args)),
         LedgerAction::AccountModify(args) => ("ledger.accountModify", serialize_args(args)),
         LedgerAction::AccountRemove(args) => ("ledger.accountRemove", serialize_args(args)),
+        LedgerAction::AccountTypes => ("ledger.accountTypes", serde_json::json!({})),
+        LedgerAction::AccountTypeAdd(args) => ("ledger.accountTypeAdd", serialize_args(args)),
+        LedgerAction::AccountTypeModify(args) => ("ledger.accountTypeModify", serialize_args(args)),
+        LedgerAction::AccountTypeRemove(args) => ("ledger.accountTypeRemove", serialize_args(args)),
         LedgerAction::Categories(args) => ("ledger.categories", serialize_args(args)),
         LedgerAction::CategoryAdd(args) => ("ledger.categoryAdd", serialize_args(args)),
         LedgerAction::CategoryModify(args) => ("ledger.categoryModify", serialize_args(args)),

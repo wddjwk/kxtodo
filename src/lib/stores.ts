@@ -152,10 +152,13 @@ export const diaryEditor = writable<DiaryEditorTarget | null>(null);
 export const ledgerData = writable<LedgerBook>({
   accounts: [],
   categories: [],
-  entries: []
+  entries: [],
+  accountTypes: []
 });
 /** 记账视图是否打开（桌面端）。移动端由 `mobileView === "ledger"` 驱动，见 platform.ts。 */
 export const ledgerOpen = writable(false);
+/** 工具箱是否占着主区域（桌面端，v0.7.5）。移动端由 `mobileView === "toolbox"` 驱动。 */
+export const toolboxOpen = writable(false);
 /**
  * 正在记的那一笔：`{ id }` 改已有的一笔，`{ date, kind }` 新记一笔（保存时才落盘）。
  * null = 面板关闭。

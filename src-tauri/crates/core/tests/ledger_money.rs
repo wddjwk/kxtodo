@@ -293,29 +293,40 @@ fn account_kind_is_free_form_and_credit_drives_liabilities() {
     assert_eq!(balance["assetsCents"], 0, "总资产 = 净资产 + 负债");
 }
 
-/// 条目的附图字段（v0.7.4）：add/modify 存取、空串清除、危险文件名被拒。
+/// 条目的附图字段（v0.7.5 起多图）：add/modify 整表存取、替换、清除、危险文件名被拒。
 #[test]
-fn entry_image_field_round_trip() {
+fn entry_images_field_round_trip() {
     let env = TestEnv::fresh();
     let entry = add(
         &env,
-        &["--amount", "12", "--account", "现金", "--date", "2026-09-08", "--image", "md-1-1.png"],
+        &[
+            "--amount", "12", "--account", "现金", "--date", "2026-09-08",
+            "--image", "md-1-1.png", "--image", "md-2-2.png",
+        ],
     );
-    assert_eq!(entry["image"], "md-1-1.png");
+    assert_eq!(entry["images"], serde_json::json!(["md-1-1.png", "md-2-2.png"]));
     let id = entry["id"].as_str().unwrap().to_string();
-    assert_eq!(env.ok(&["ledger", "get", "--id", &id])["image"], "md-1-1.png");
+    assert_eq!(
+        env.ok(&["ledger", "get", "--id", &id])["images"],
+        serde_json::json!(["md-1-1.png", "md-2-2.png"])
+    );
 
-    // 落盘的 JSON 里就是裸文件名（同步 payload 同源）
+    // 落盘的 JSON 里是 images 数组（同步 payload 同源），旧的单图 image 键不再写出
     let file = env.read_file("ledger.json");
-    assert_eq!(file["entries"][0]["image"], "md-1-1.png");
+    assert_eq!(file["entries"][0]["images"], serde_json::json!(["md-1-1.png", "md-2-2.png"]));
+    assert!(file["entries"][0].get("image").is_none());
 
     // 不带 --image 的 modify 保留原图
     let touched = env.ok(&["ledger", "modify", "--id", &id, "--note", "换了备注", "--yes"]);
-    assert_eq!(touched["image"], "md-1-1.png");
+    assert_eq!(touched["images"], serde_json::json!(["md-1-1.png", "md-2-2.png"]));
 
-    // 空串 = 清除
+    // 给了就是整表替换
+    let replaced = env.ok(&["ledger", "modify", "--id", &id, "--image", "md-3-3.png", "--yes"]);
+    assert_eq!(replaced["images"], serde_json::json!(["md-3-3.png"]));
+
+    // 空串 = 清除全部
     let cleared = env.ok(&["ledger", "modify", "--id", &id, "--image", "", "--yes"]);
-    assert!(cleared["image"].is_null());
+    assert_eq!(cleared["images"], serde_json::json!([]));
 
     // 路径穿越等危险名字在写入口就被拒
     let error = env.err(
@@ -323,6 +334,83 @@ fn entry_image_field_round_trip() {
         2,
     );
     assert_eq!(error["code"], "LEDGER_IMAGE_NAME_INVALID");
+}
+
+/// v0.7.4 的旧单图数据（"image" 键）加载时折进 images（唯一的兼容例外），
+/// 下一次写盘后旧键消失、数据不丢。
+#[test]
+fn legacy_single_image_folds_into_images_on_load() {
+    let env = TestEnv::fresh();
+    env.write_file(
+        "ledger.json",
+        &serde_json::json!({
+            "schemaVersion": 1,
+            "accounts": [
+                { "id": "lacc-01", "name": "现金", "kind": "cash", "initialCents": 0, "order": 1, "createdAt": "2026-09-01T00:00:00.000Z" }
+            ],
+            "categories": [],
+            "entries": [
+                {
+                    "id": "ledger-old",
+                    "kind": "expense",
+                    "amountCents": 1200,
+                    "accountId": "lacc-01",
+                    "date": "2026-09-08",
+                    "image": "md-legacy.png",
+                    "createdAt": "2026-09-08T00:00:00.000Z"
+                }
+            ]
+        }),
+    );
+
+    // 读口径已经折好
+    let got = env.ok(&["ledger", "get", "--id", "ledger-old"]);
+    assert_eq!(got["images"], serde_json::json!(["md-legacy.png"]));
+
+    // 任意一次写盘后：旧键不再落盘，images 保住数据
+    env.ok(&["ledger", "modify", "--id", "ledger-old", "--note", "补个备注", "--yes"]);
+    let file = env.read_file("ledger.json");
+    assert_eq!(file["entries"][0]["images"], serde_json::json!(["md-legacy.png"]));
+    assert!(file["entries"][0].get("image").is_none(), "新写入只序列化 images");
+}
+
+/// 直设当前余额（v0.7.5）：期初 100 + 支出 30 + 收入 50 + 转入 20 → 推导 140；
+/// accountModify balance=200 → 期初变 160、推导恰好 200；后续新账目照常推导；统计不受影响。
+#[test]
+fn account_modify_balance_back_solves_initial() {
+    let env = TestEnv::fresh();
+    env.ok(&["ledger", "account-modify", "--id", "lacc-01", "--initial", "100", "--yes"]);
+    add(&env, &["--amount", "30", "--account", "现金", "--category", "午餐", "--date", "2026-09-01"]);
+    add(
+        &env,
+        &["--kind", "income", "--amount", "50", "--account", "现金", "--category", "工资薪金", "--date", "2026-09-02"],
+    );
+    env.ok(&[
+        "ledger", "transfer", "--from", "微信", "--to", "现金", "--amount", "20", "--date", "2026-09-03", "--yes",
+    ]);
+    assert_eq!(balance_cents(&env, "现金"), 14000, "推导 = 100 − 30 + 50 + 20");
+
+    let modified = env.ok(&["ledger", "account-modify", "--id", "lacc-01", "--balance", "200", "--yes"]);
+    assert_eq!(modified["initialCents"], 16000, "期初 = 200 − 流水推导和 40");
+    assert_eq!(modified["balanceCents"], 20000);
+    assert_eq!(balance_cents(&env, "现金"), 20000, "直设后推导余额恰好是目标值");
+
+    // 之后的新账目照常在新期初上推导
+    add(&env, &["--amount", "25", "--account", "现金", "--category", "晚餐", "--date", "2026-09-04"]);
+    assert_eq!(balance_cents(&env, "现金"), 17500);
+
+    // 统计口径不受直设余额影响（期初不是收支）
+    let stats = stats(&env, "2026-09");
+    assert_eq!(stats["totals"]["expenseCents"], 5500);
+    assert_eq!(stats["totals"]["incomeCents"], 5000);
+    assert_eq!(stats["totals"]["transferCents"], 2000);
+
+    // --initial 与 --balance 互斥
+    let error = env.err(
+        &["ledger", "account-modify", "--id", "lacc-01", "--initial", "1", "--balance", "2", "--yes"],
+        2,
+    );
+    assert_eq!(error["code"], "LEDGER_PARAM_CONFLICT");
 }
 
 /// icon-list 输出双目录：分类口径（total/groups/icons）不动，账户目录另给一份。

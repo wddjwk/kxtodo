@@ -125,8 +125,8 @@ export type LedgerEntry = {
   /** HH:MM:SS；空 = 只记到天 */
   time: string;
   note: string;
-  /** 这条账的插图文件名（img/data/ledger/ 下）；空 = 没有 */
-  image?: string;
+  /** 这条账的插图文件名列表（img/data/ledger/ 下）；缺省/空 = 没有 */
+  images?: string[];
   createdAt: string;
   updatedAt?: string;
 };
@@ -139,11 +139,24 @@ export type LedgerEditorTarget =
   | { id: string }
   | { date: string; kind: LedgerKind };
 
-/** 整本账：账户 / 分类 / 流水三张表（ledger.json 的前端形态）。 */
+/** 用户自定义的账户类型（预置表之外的）：带图标与颜色，可编辑/删除，随账本同步。
+ *  账户自己的 kind 仍是自由字符串——删掉类型不影响已建的账户。 */
+export type LedgerAccountType = {
+  id: string;
+  name: string;
+  /** lucide 图标名（账户图标目录）；空 = Wallet */
+  icon: string;
+  color: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+/** 整本账：账户 / 分类 / 流水 / 自定义账户类型（ledger.json 的前端形态）。 */
 export type LedgerBook = {
   accounts: LedgerAccount[];
   categories: LedgerCategory[];
   entries: LedgerEntry[];
+  accountTypes: LedgerAccountType[];
 };
 
 /**

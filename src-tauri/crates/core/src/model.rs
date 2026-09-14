@@ -442,6 +442,27 @@ pub struct LedgerCategory {
     pub extra: Map<String, Value>,
 }
 
+/// 自定义账户类型（v0.7.5）：账本级实体，随「账本」范围同步。
+/// 账户的 `kind` 仍是自由字符串——删掉类型不影响已用它的账户（kind 原样保留）。
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LedgerAccountType {
+    pub id: String,
+    pub name: String,
+    /// lucide 图标名；空 = 前端取默认
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub icon: String,
+    /// #rrggbb；空 = 前端取默认色
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub color: String,
+    #[serde(rename = "createdAt", default)]
+    pub created_at: String,
+    #[serde(rename = "updatedAt", skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
+}
+
 /// 一笔账。金额恒为正的**整数分**（i64）——浮点累加在统计里会 drift，
 /// 而分是记账的最小单位，整数加减永远精确。
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -468,10 +489,15 @@ pub struct LedgerEntry {
     pub time: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
-    /// 附图裸文件名（v0.7.4，存放于 `img/data/ledger/`，走条目插图通道同步）；
-    /// None = 没有附图。图片本体不进 Excel 导出，只随实体同步。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub image: Option<String>,
+    /// 附图裸文件名列表（存放于 `img/data/ledger/`，走条目插图通道同步）；
+    /// 空 = 没有附图。图片本体不进 Excel 导出，只随实体同步。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
+    /// v0.7.4 的单图旧字段：只读不写，加载时折进 `images`（唯一的兼容例外，
+    /// 见 `fold_legacy_image`）；新写入一律只序列化 `images`。
+    #[serde(default, rename = "image", skip_serializing)]
+    #[schemars(skip)]
+    pub legacy_image: Option<String>,
     #[serde(rename = "createdAt", default)]
     pub created_at: String,
     #[serde(rename = "updatedAt", skip_serializing_if = "Option::is_none")]
@@ -479,6 +505,22 @@ pub struct LedgerEntry {
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
+}
+
+impl LedgerEntry {
+    /// 旧单图字段折进多图列表：images 为空且 legacy 有值时 images = [legacy]。
+    pub fn fold_legacy_image(&mut self) {
+        if self.images.is_empty() {
+            if let Some(name) = self.legacy_image.take() {
+                let name = name.trim().to_string();
+                if !name.is_empty() {
+                    self.images = vec![name];
+                }
+            }
+        } else {
+            self.legacy_image = None;
+        }
+    }
 }
 
 /// ledger.json：记账是独立的第五个领域文件。
@@ -495,6 +537,9 @@ pub struct LedgerFile {
     pub accounts: Vec<LedgerAccount>,
     #[serde(default)]
     pub categories: Vec<LedgerCategory>,
+    /// 自定义账户类型（v0.7.5）
+    #[serde(rename = "accountTypes", default, skip_serializing_if = "Vec::is_empty")]
+    pub account_types: Vec<LedgerAccountType>,
     #[serde(default)]
     pub entries: Vec<LedgerEntry>,
     #[serde(flatten)]
@@ -503,6 +548,13 @@ pub struct LedgerFile {
 }
 
 impl LedgerFile {
+    /// 加载归一的唯一点：把 v0.7.4 条目的旧单图字段折进 `images`。
+    pub fn fold_legacy_images(&mut self) {
+        for entry in &mut self.entries {
+            entry.fold_legacy_image();
+        }
+    }
+
     /// 首跑种子：一套覆盖日常收支场景的默认账户与两级分类。
     ///
     /// 只在 ledger.json 不存在时调用（`repo::ensure_initialized`）。子分类不存颜色——

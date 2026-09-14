@@ -160,21 +160,11 @@
   font-size: calc(var(--font-ledger) - 3px);
 }
 
+/* 收/支/结余一律灰色小字（与卡片标题行的周几同色）：红绿留给每笔的金额，
+   汇总行五颜六色反而抢了正文的语义 */
 .ledger-month-sums em {
-  color: #8b929e;
+  color: #93989f;
   font-style: normal;
-}
-
-.ledger-month-sums em.in {
-  color: var(--ledger-in);
-}
-
-.ledger-month-sums em.out {
-  color: var(--ledger-out);
-}
-
-.ledger-month-sums em.net {
-  color: #5c6470;
 }
 
 /* ---------- 滚动区 ---------- */
@@ -250,15 +240,8 @@
   color: #93989f;
 }
 
-.ledger-card-sums em.in {
-  color: var(--ledger-in);
-}
-
-.ledger-card-sums em.out {
-  color: var(--ledger-out);
-}
-
-/* 「在这天记一笔」：桌面 hover 才露出来，移动端常显（mobile.css） */
+/* 「在这天记一笔」：常驻显示（藏起来卡片右上角看着缺一角），hover 时再提亮；
+   移动端在 mobile.css 里另有常显规则 */
 .ledger-card-add {
   display: grid;
   width: 26px;
@@ -270,7 +253,7 @@
   padding: 0;
   background: transparent;
   color: #8b929e;
-  opacity: 0;
+  opacity: 0.55;
   cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease, opacity 0.12s ease;
 }
@@ -292,7 +275,8 @@
 }
 
 /* 一笔两行：图标跨两行居左，大字行 = 分类名 + 金额（左右对齐），
-   小字行 = 备注（+图片图标）+ 时刻/账户（左右对齐）。 */
+   小字行 = 备注（+图片图标）+ 时刻/账户（左右对齐）。
+   没有备注时换 solo 布局：分类名跟图标一样上下居中，右侧金额与时刻/账户仍分两行。 */
 .ledger-entry {
   display: flex;
   gap: 11px;
@@ -338,6 +322,39 @@
   min-width: 0;
 }
 
+/* 无备注的 solo 布局：左右两列，左列（分类名+图片图标）垂直居中 */
+.ledger-entry-main.solo {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ledger-entry-solo-name {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.ledger-entry-solo-name strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #2b3038;
+  font-size: var(--font-ledger);
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ledger-entry-solo-side {
+  display: grid;
+  gap: 2px;
+  justify-items: end;
+  flex: 0 0 auto;
+}
+
 .ledger-entry-line strong {
   min-width: 0;
   overflow: hidden;
@@ -379,8 +396,9 @@
   text-overflow: ellipsis;
 }
 
-/* 备注右侧的图片小图标：点它全屏看这条账的插图 */
+/* 备注右侧的图片小图标：点它全屏看这条账的插图；多张时右下角标出张数 */
 .ledger-entry-image {
+  position: relative;
   display: inline-grid;
   place-items: center;
   flex: 0 0 auto;
@@ -391,6 +409,23 @@
 
 .ledger-entry-image:hover {
   color: var(--accent);
+}
+
+.ledger-entry-image-count {
+  position: absolute;
+  top: -5px;
+  right: -8px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent, #5c6470);
+  color: #ffffff;
+  font-size: 9px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  line-height: 13px;
+  text-align: center;
 }
 
 .ledger-entry-meta {
@@ -868,6 +903,71 @@
   stroke: var(--ledger-out);
 }
 
+/* 结余 = 收-支，可以是负的：黑色（近正文色），与红绿两条并读 */
+.ledger-line.bal {
+  stroke: #2b3038;
+}
+
+/* 负值区间的零线：结余掉到 0 以下时给一条参照 */
+.ledger-chart-zero {
+  stroke: rgb(0 0 0 / 22%);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+/* 读数：桌面悬浮 / 移动点按，标记线 + 各曲线上的圆点 + 顶部浮签 */
+.ledger-chart-box {
+  position: relative;
+}
+
+.ledger-chart-marker {
+  stroke: rgb(0 0 0 / 18%);
+  stroke-width: 1;
+}
+
+.ledger-chart-dot {
+  stroke: #ffffff;
+  stroke-width: 1.6;
+}
+
+.ledger-chart-tip {
+  position: absolute;
+  top: 2px;
+  z-index: 5;
+  display: grid;
+  gap: 2px;
+  padding: 6px 10px;
+  border: 1px solid rgb(0 0 0 / 5%);
+  border-radius: 9px;
+  background: rgb(255 255 255 / 96%);
+  box-shadow: 0 6px 18px rgb(31 41 55 / 12%);
+  font-size: calc(var(--font-ledger) - 5px);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  animation: menu-fade-in 0.1s ease-out;
+}
+
+.ledger-chart-tip strong {
+  color: #5c6470;
+  font-weight: 600;
+}
+
+.ledger-chart-tip span {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  color: #2b3038;
+}
+
+.ledger-chart-tip i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 3px;
+}
+
 .ledger-line-area {
   opacity: 0.1;
   animation: ledger-fade 0.9s ease-out;
@@ -924,6 +1024,45 @@
 
 .ledger-donut-track {
   stroke: #f1f3f6;
+}
+
+/* ---------- 占比环的出场动效（首次挂载跑一次；数据变了不重放） ----------
+   整环慢慢转出来 + 每片按序号错帧从 0 描边展开 = 标准的饼图入场。
+   描边动画只写 from 帧：to 就是属性上的最终弧长，backwards 填充让延迟期停在 0。 */
+.ledger-donut-ring {
+  transform-box: view-box;
+  transform-origin: 230px 130px;
+  animation: ledger-donut-intro 0.85s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+@keyframes ledger-donut-intro {
+  from { transform: rotate(-140deg) scale(0.78); opacity: 0; }
+  55% { opacity: 1; }
+  to { transform: rotate(0deg) scale(1); opacity: 1; }
+}
+
+.ledger-donut-slice circle {
+  animation: ledger-donut-draw 0.7s ease-out backwards;
+  animation-delay: calc(var(--i, 0) * 55ms);
+}
+
+@keyframes ledger-donut-draw {
+  from { stroke-dasharray: 0 var(--circ, 452.39); }
+}
+
+.ledger-donut-leader,
+.ledger-donut-tag {
+  animation: ledger-donut-fade 0.5s ease 0.55s backwards;
+}
+
+.ledger-donut-label,
+.ledger-donut-value,
+.ledger-donut-note {
+  animation: ledger-donut-fade 0.45s ease 0.4s backwards;
+}
+
+@keyframes ledger-donut-fade {
+  from { opacity: 0; }
 }
 
 /* 点中的那一片沿自己的中角被"拉出来"（--dx/--dy 由组件按中角算好），环同时加粗。
@@ -1313,6 +1452,152 @@
 
 /* ---------- 资产视图 ---------- */
 
+/* 顶行 = 净资产卡 + 总资产趋势并排（移动端纵排、趋势夹在净资产与资金账户之间） */
+.ledger-assets-top {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: 14px;
+  align-items: stretch;
+  margin-bottom: 14px;
+}
+
+.ledger-assets-top .ledger-net-card {
+  margin-bottom: 0;
+}
+
+.ledger-trend-card {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0;
+  cursor: pointer;
+}
+
+.ledger-trend-card .ledger-panel-head {
+  margin-bottom: 6px;
+}
+
+.ledger-trend-zoom {
+  color: #b6bcc6;
+  transition: color 0.12s ease;
+}
+
+.ledger-trend-card:hover .ledger-trend-zoom {
+  color: var(--accent);
+}
+
+.ledger-trend-chart {
+  display: block;
+  width: 100%;
+  max-height: 100%;
+  height: auto;
+}
+
+.ledger-trend-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 2400;
+  stroke-dashoffset: 2400;
+  animation: ledger-draw 0.9s ease-out forwards;
+}
+
+.ledger-trend-area {
+  fill: var(--accent);
+  opacity: 0.09;
+  animation: ledger-fade 0.9s ease-out;
+}
+
+.ledger-trend-dot {
+  fill: var(--accent);
+}
+
+.ledger-trend-empty {
+  padding: 30px 10px;
+  color: #9aa1ac;
+  font-size: calc(var(--font-ledger) - 4px);
+  text-align: center;
+}
+
+/* 放大查看（桌面）：居中浮窗，悬浮读数 */
+.ledger-sheet.ledger-trend-dialog {
+  width: min(880px, 92%);
+  height: auto;
+  max-height: min(80vh, 640px);
+}
+
+.ledger-trend-dialog-body {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  padding: 14px 16px 18px;
+}
+
+.ledger-trend-dialog-body .ledger-chart-box {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+/* 放大查看（移动端）：整层旋转 90° 横屏看大图，宽高由组件按遮罩实测给出 */
+.ledger-trend-full {
+  position: fixed;
+  inset: 0;
+  z-index: 4600;
+  background: rgb(12 14 18 / 92%);
+  animation: menu-fade-in 0.12s ease-out;
+}
+
+.ledger-trend-rot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 18px;
+  border-radius: 14px;
+  background: #ffffff;
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+
+.ledger-trend-rot-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.ledger-trend-rot-head strong {
+  min-width: 0;
+  flex: 1 1 auto;
+  color: #2b3038;
+  font-size: calc(var(--font-ledger) + 1px);
+  font-weight: 700;
+}
+
+.ledger-trend-rot-head .ledger-image-tool {
+  background: rgb(0 0 0 / 5%);
+  color: #5c6470;
+}
+
+.ledger-trend-rot-head .ledger-image-tool:hover {
+  background: rgb(0 0 0 / 9%);
+}
+
+.ledger-trend-rot-body {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.ledger-trend-rot-body .ledger-chart-box {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
 .ledger-net-card {
   display: grid;
   gap: 6px;
@@ -1551,6 +1836,12 @@
   width: min(620px, 92%);
 }
 
+/* 桌面的记账对话框宽高各增约一个图标的尺寸：五排分类 + 行内二级搁板要舒展一点 */
+.ledger-sheet.ledger-editor-sheet {
+  width: min(626px, 92%);
+  max-height: min(86vh, 846px);
+}
+
 /* 放开裁剪后，圆角得由首尾两块自己带（否则头尾的方角会盖出对话框的圆角外） */
 .ledger-sheet-foot,
 .ledger-keypad {
@@ -1654,12 +1945,14 @@
 }
 
 /* 分类区：圆形图标 + 名字的网格，点大类在它所在行下面展开一块全宽阴影的二级区。
-   移动端抽屉高度恒定，靠这块自己滚动（滚动条藏起来）。 */
+   移动端抽屉高度恒定，靠这块自己滚动（滚动条藏起来）。
+   列数是死的（桌面 7 / 移动 5，mobile.css 覆盖）：二级区要插在「大类所在行的行尾」
+   那个格子之后才能落在紧挨着的下一行，auto-fill 的不确定列数算不出行尾。 */
 .ledger-cat-zone {
   flex: 0 1 auto;
   min-height: 0;
   overflow-y: auto;
-  max-height: 340px;
+  max-height: 406px;
   padding: 12px 14px 6px;
   scrollbar-width: none;
 }
@@ -1670,7 +1963,7 @@
 
 .ledger-cat-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(62px, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 8px 4px;
 }
 
@@ -1739,9 +2032,11 @@
   color: var(--side, var(--accent));
 }
 
-/* 二级分类展开块：跟一级同样的排列逻辑，只是加一块阴影底把它和一级区分开 */
+/* 二级分类展开块：网格里的整宽子项，自动落到「大类所在行」的下一行；
+   跟一级同样的排列逻辑，只是加一块阴影底把它和一级区分开 */
 .ledger-cat-sub {
-  margin: 8px -4px 10px;
+  grid-column: 1 / -1;
+  margin: 2px -6px 4px;
   padding: 10px 6px;
   border-radius: 12px;
   background: rgb(0 0 0 / 4%);
@@ -1983,7 +2278,26 @@
 }
 
 .ledger-meta-plain.has-image {
+  position: relative;
   color: var(--accent);
+}
+
+/* 多张图时按钮右下角的数量角标 */
+.ledger-image-badge {
+  position: absolute;
+  top: -3px;
+  right: -8px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--side, var(--accent));
+  color: #ffffff;
+  font-size: 9.5px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  line-height: 14px;
+  text-align: center;
 }
 
 .ledger-meta-plain.danger:hover {
@@ -2279,16 +2593,45 @@
   font-weight: 700;
 }
 
-/* 自定义账户类型的行内输入：嵌在 chips 行里，宽度收住不撑破换行 */
-.ledger-kind-custom {
-  width: 7.5em;
-  padding: 6px 10px;
-  border: 1px solid var(--accent);
-  border-radius: 999px;
-  background: #ffffff;
-  color: #1f2937;
-  font-size: calc(var(--font-ledger) - 3px);
-  outline: none;
+/* 自定义账户类型的行内小表单：chips 行下面的一块阴影搁板（与编辑器二级分类区同一语言），
+   名称 + 图标目录 + 颜色 + 动作按钮；类型持久化在账本里，chip 上的铅笔可再编辑/删除 */
+.ledger-type-form {
+  display: grid;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 12px;
+  background: rgb(0 0 0 / 4%);
+}
+
+.ledger-type-form-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ledger-choice-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+
+.ledger-choice-edit {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  margin-left: 2px;
+  padding: 2px;
+  border-radius: 6px;
+  color: #9aa1ac;
+  opacity: 0.6;
+  cursor: pointer;
+  transition: color 0.12s ease, opacity 0.12s ease, background 0.12s ease;
+}
+
+.ledger-choice-edit:hover {
+  background: rgb(0 0 0 / 6%);
+  color: var(--accent);
+  opacity: 1;
 }
 
 /* 图标分组：图标库扩到两百多个之后，不先按大类筛根本找不到（「全部」是默认档） */
@@ -2516,7 +2859,9 @@
 }
 
 /* ---------- 条目插图的全屏查看 ----------
-   盖在一切浮层之上（记账面板 4000 / 管理器与钻取 4200），深色底 + contain。 */
+   盖在一切浮层之上（记账面板 4000 / 管理器与钻取 4200），深色底 + contain。
+   img 的 min-width/min-height:0 必须写：grid 子项的「自动最小尺寸」是内容尺寸，
+   百分比 max-width 压不住它——大图会把格子撑出容器，桌面上表现成「图片展示不全」。 */
 
 .ledger-image-overlay {
   position: fixed;
@@ -2533,6 +2878,8 @@
 }
 
 .ledger-image-stage {
+  min-width: 0;
+  min-height: 0;
   max-width: 100%;
   max-height: 100%;
   border-radius: 6px;
@@ -2540,10 +2887,17 @@
   user-select: none;
 }
 
-.ledger-image-close {
+/* 右上角一排：添加 / 删除（编辑态才有）/ 关闭，同一套圆形半透明按钮 */
+.ledger-image-actions {
   position: absolute;
   top: calc(10px + env(safe-area-inset-top, 0px) * var(--safe-inv, 1));
   right: 12px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ledger-image-tool {
   display: grid;
   width: 38px;
   height: 38px;
@@ -2557,6 +2911,51 @@
   transition: background 0.12s ease;
 }
 
-.ledger-image-close:hover {
+.ledger-image-tool:hover {
   background: rgb(255 255 255 / 24%);
+}
+
+.ledger-image-tool.danger:hover {
+  background: rgb(192 57 43 / 55%);
+}
+
+.ledger-image-nav {
+  position: absolute;
+  top: 50%;
+  left: 10px;
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  padding: 0;
+  background: rgb(255 255 255 / 12%);
+  color: #ffffff;
+  cursor: pointer;
+  transform: translateY(-50%);
+  transition: background 0.12s ease;
+}
+
+.ledger-image-nav.next {
+  left: auto;
+  right: 10px;
+}
+
+.ledger-image-nav:hover {
+  background: rgb(255 255 255 / 24%);
+}
+
+.ledger-image-counter {
+  position: absolute;
+  bottom: calc(14px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
+  left: 50%;
+  padding: 3px 12px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 12%);
+  color: rgb(255 255 255 / 88%);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  transform: translateX(-50%);
+  user-select: none;
 }

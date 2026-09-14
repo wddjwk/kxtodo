@@ -6,7 +6,7 @@
   import {
     appState, appSettings, showToast, showSettings,
     searchQuery, listCounts, isSearching,
-    now, safeFileName, appVersion, diaryOpen, diaryEditor, ledgerOpen, ledgerEditor
+    now, safeFileName, appVersion, diaryOpen, diaryEditor, ledgerOpen, ledgerEditor, toolboxOpen
   } from "./stores";
   import {
     selectNode as selectNodeAction, toggleCategory as toggleCategoryAction,
@@ -53,6 +53,8 @@
   $: diaryActive = $isMobile ? $mobileView === "diary" : $diaryOpen;
   // 记账同日记：不是节点，高亮跟着「谁占着主区域」走
   $: ledgerActive = $isMobile ? $mobileView === "ledger" : $ledgerOpen;
+  // 工具箱 v0.7.5 起两端都有，高亮同一条口径
+  $: toolboxActive = $isMobile ? $mobileView === "toolbox" : $toolboxOpen;
 
   /**
    * 固定导航的每一行：四个系统节点（我的一天/计划内/收藏/定时任务）与三条不是节点的
@@ -77,9 +79,9 @@
       return [{ id, label: "记账", component: Wallet, selected: ledgerActive, count: 0, onSelect: openLedger }];
     }
     if (id === "toolbox") {
-      // 工具箱是移动端专属的能力位
+      // 工具箱两端都有（v0.7.5）；caps 过滤保留着——将来某端不放工具箱时只动 capabilities
       return caps.toolbox
-        ? [{ id, label: "工具箱", component: Toolbox, selected: $mobileView === "toolbox", count: 0, onSelect: showMobileToolbox }]
+        ? [{ id, label: "工具箱", component: Toolbox, selected: toolboxActive, count: 0, onSelect: openToolbox }]
         : [];
     }
     // 移动端没有调度引擎：定时任务这一行不给
@@ -91,7 +93,8 @@
         id,
         label: node.name,
         glyph: node.icon,
-        selected: !diaryActive && !ledgerActive && $appState.selectedNodeId === node.id && !$isSearching,
+        selected:
+          !diaryActive && !ledgerActive && !toolboxActive && $appState.selectedNodeId === node.id && !$isSearching,
         count: $listCounts[node.id] ?? 0,
         onSelect: () => selectNode(node.id)
       }
@@ -128,6 +131,7 @@
     diaryOpen.set(false);
     ledgerEditor.set(null);
     ledgerOpen.set(false);
+    toolboxOpen.set(false);
     void selectNodeAction(id);
     treeMenu = null;
     emptyAreaMenu = null;
@@ -142,6 +146,7 @@
     iconPickerListId = null;
     ledgerEditor.set(null);
     ledgerOpen.set(false);
+    toolboxOpen.set(false);
     if ($isMobile) {
       showMobileDiary();
       return;
@@ -156,11 +161,29 @@
     iconPickerListId = null;
     diaryEditor.set(null);
     diaryOpen.set(false);
+    toolboxOpen.set(false);
     if ($isMobile) {
       showMobileLedger();
       return;
     }
     ledgerOpen.set(true);
+  }
+
+  /** 工具箱与日记/记账同一条互斥：谁占主区域，另外两个收起 */
+  function openToolbox(): void {
+    searchQuery.set("");
+    treeMenu = null;
+    emptyAreaMenu = null;
+    iconPickerListId = null;
+    diaryEditor.set(null);
+    diaryOpen.set(false);
+    ledgerEditor.set(null);
+    ledgerOpen.set(false);
+    if ($isMobile) {
+      showMobileToolbox();
+      return;
+    }
+    toolboxOpen.set(true);
   }
 
   function toggleCategory(id: string): void {
