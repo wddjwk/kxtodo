@@ -244,6 +244,15 @@
   background: rgb(0 0 0 / 6%);
 }
 
+/* 触屏还会给可点元素补一层蓝色点按高亮（tap highlight）——日记/记账整页各自
+   关掉了（`.diary-view button` / `.ledger-view button`），工作区（含计划内与
+   自定义条目）没关，于是同一枚齿轮在那边点下去多一层蓝罩子。这里按头部按钮
+   统一关掉，观感对齐。 */
+.app-shell.mobile .list-header button,
+.app-shell.mobile .header-actions > button {
+  -webkit-tap-highlight-color: transparent;
+}
+
 /* 齿轮下拉面板：锚在齿轮按钮下方右对齐（header-actions 是 absolute 包含块）。
    坐标在缩放 shell 内部，无需除以 uiScale。 */
 .app-shell.mobile .header-menu-panel {
@@ -260,6 +269,14 @@
   background: #ffffff;
   box-shadow: 0 16px 50px rgb(0 0 0 / 16%), 0 2px 8px rgb(0 0 0 / 8%);
   animation: menu-fade-in 0.1s ease-out;
+}
+
+/* 日记/记账的齿轮面板宽度自适应：固定 168px 比最长的一条（「账户与转账」）宽出
+   半截，看着空旷。max-content 让面板只比最长条目略宽一点（条目自己 nowrap）。 */
+.app-shell.mobile .diary-gear-panel,
+.app-shell.mobile .ledger-gear-panel {
+  width: max-content;
+  min-width: 0;
 }
 
 .app-shell.mobile .header-menu-panel .menu-item-button {
@@ -910,9 +927,14 @@
   height: min(92vh, 780px);
 }
 
-/* 转账没有分类区：定高会在键盘上方留一大块空白，收回 auto */
+/* 转账没有分类区：定高会在键盘上方留一大块空白，收回 auto。
+   **aspect-ratio 也必须收回**：桌面那份对话框写着 626 / 582，height:auto 时它
+   按宽度反算高度（手机上一屏只有 0.93×屏宽），内容（转账两块 + 备注/账户行 +
+   数字键盘）比这个盒子高得多，又因为抽屉 overflow:visible 而整块漏到屏幕外——
+   表现就是转账视图的键盘显示不全（收入/支出有定高，所以没事）。 */
 .app-shell.mobile .ledger-editor-sheet.ledger-transfer-sheet {
   height: auto;
+  aspect-ratio: auto;
 }
 
 .app-shell.mobile .ledger-cat-zone {

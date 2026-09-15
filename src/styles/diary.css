@@ -628,7 +628,10 @@
   z-index: 2200;
   display: grid;
   gap: 2px;
-  min-width: 176px;
+  /* 宽度自适应：固定 176px 比最长的一条宽出半截，看着空旷（条目自己 nowrap，
+     max-content 只比最长条目略宽一点） */
+  width: max-content;
+  min-width: 0;
   padding: 6px;
   border: 1px solid #e5e5e5;
   border-radius: 12px;

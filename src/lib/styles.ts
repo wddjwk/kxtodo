@@ -1,4 +1,5 @@
 import type { AppNode, ListBackground, Settings } from "./types";
+import type { ImeViewport } from "./imeViewport";
 import { defaultBackground, defaultSettings } from "./defaults";
 
 const DEFAULT_ACCENT = "#2564cf";
@@ -133,21 +134,38 @@ export function buildAppShellStyle(appearance: Settings["appearance"]): string {
   ].join("; ");
 }
 
-export function buildMobileShellStyle(appearance: Settings["appearance"]): string {
+/**
+ * 移动端 shell 的尺寸变量。
+ *
+ * `ime` 是输入法把可见区域压小后的视觉视口（见 imeViewport.ts）：键盘弹起时
+ * 布局视口（100vh）并不缩，shell 会把「添加事项」输入框留在键盘底下、浏览器
+ * 只能把整个视觉视口往上顶。这时把 shell 收矮到可见区域（高度除以 uiScale 换回
+ * 逻辑像素）并跟随那次平移，页面就没有可顶的东西了。
+ */
+export function buildMobileShellStyle(
+  appearance: Settings["appearance"],
+  ime: ImeViewport = { active: false, height: 0, offset: 0 }
+): string {
   const scale = uiScaleValue(appearance.uiScale);
   const editorFontSize = fontSizeValue(appearance.editorFontSize, defaultSettings.appearance.editorFontSize, 14, 26);
   const tagFontSize = fontSizeValue(appearance.tagFontSize, defaultSettings.appearance.tagFontSize, 11, 30);
-  return [
+  const lines = [
     `--ui-scale: ${scale}`,
     `--editor-font-size: ${editorFontSize}px`,
     `--tag-font-size: ${tagFontSize}px`,
     `--app-width: ${100 / scale}vw`,
-    `--app-height: ${100 / scale}vh`,
+    `--app-height: ${ime.active ? ime.height / scale : 100 / scale}${ime.active ? "px" : "vh"}`,
     /* 安全区补偿系数：shell 被 transform 缩放后，env(safe-area-inset-*) 的物理像素
         clearance 需乘以 1/scale 才能在缩放后的逻辑坐标系里保持实际视觉尺寸。 */
     `--safe-inv: ${1 / scale}`,
     ...fontVars(appearance)
-  ].join("; ");
+  ];
+  // 平移量是布局视口里的 CSS 像素：父容器（#app）没有缩放，直接写 offset。
+  // 必须把 scale 一起写回来（内联 transform 会覆盖 base.css 里那条）。
+  if (ime.active && ime.offset > 0) {
+    lines.push(`transform: translateY(${ime.offset}px) scale(${scale})`);
+  }
+  return lines.join("; ");
 }
 
 export function buildSettingsDrawerStyle(appearance: Settings["appearance"]): string {

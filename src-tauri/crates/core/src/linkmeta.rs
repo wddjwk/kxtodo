@@ -29,10 +29,13 @@ const USER_AGENT: &str =
 const CACHE_FILE: &str = "linkmeta.json";
 /// 缓存条数上限：超了丢最早写入的那一半（重新抓一次而已）
 const CACHE_CAP: usize = 500;
+/// 缓存格式版本：v2 起带网页图标。旧条目没有 icon，命中也没有图标可用——
+/// 直接当缓存作废，让它们重新抓一次（缓存本来就是纯缓存，丢了重抓即可）
+const CACHE_VERSION: u32 = 2;
 const TITLE_MAX: usize = 200;
 const DESC_MAX: usize = 400;
 
-/// 一个链接的元数据。`title` / `description` 都可能为空串（页面没写）。
+/// 一个链接的元数据。`title` / `description` / `icon` 都可能为空串（页面没写）。
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct LinkMeta {
     /// 规范化后的链接（去掉 fragment）
@@ -41,10 +44,16 @@ pub struct LinkMeta {
     pub site: String,
     pub title: String,
     pub description: String,
+    /// 网页自己的图标（`<link rel="icon">`；没声明就试 `<origin>/favicon.ico`）。
+    /// 前端直接当 `<img src>` 用，取不到就回退默认的链接图标。
+    #[serde(default)]
+    pub icon: String,
 }
 
 #[derive(Default, Serialize, Deserialize)]
 struct CacheFile {
+    #[serde(default)]
+    version: u32,
     entries: HashMap<String, LinkMeta>,
 }
 
@@ -73,7 +82,10 @@ fn load_cache(state: &mut CacheState, dir: &Path) {
         return;
     };
     if let Ok(file) = serde_json::from_str::<CacheFile>(&raw) {
-        state.entries = file.entries;
+        // 旧版本缓存（没有 icon）整份作废：不然升级上来的用户永远拿不到网页图标
+        if file.version >= CACHE_VERSION {
+            state.entries = file.entries;
+        }
     }
 }
 
@@ -85,6 +97,7 @@ fn save_cache(state: &CacheState) {
         return;
     }
     let Ok(raw) = serde_json::to_string(&CacheFile {
+        version: CACHE_VERSION,
         entries: state.entries.clone(),
     }) else {
         return;
@@ -216,12 +229,14 @@ fn fetch(url: &Url) -> CoreResult<LinkMeta> {
     let site = extract_meta_content(&html, &["og:site_name"])
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| host_of(url));
+    let icon = extract_icon(&html, url);
 
     Ok(LinkMeta {
         url: url.to_string(),
         site,
         title: truncate(&title, TITLE_MAX),
         description: truncate(&description, DESC_MAX),
+        icon,
     })
 }
 
@@ -248,6 +263,53 @@ fn sniff_charset(buffer: &[u8], content_type: &str) -> String {
         }
     }
     "utf-8".to_string()
+}
+
+/// 网页图标：`<link rel="icon" href="…">`（含 shortcut icon / apple-touch-icon），
+/// 相对地址按页面 URL 解成绝对地址；页面没声明就试同源的 `/favicon.ico`
+/// （绝大多数站点都有，加载不出来由前端回退默认的链接图标）。
+fn extract_icon(html: &str, page: &Url) -> String {
+    let lower = html.to_ascii_lowercase();
+    let mut cursor = 0;
+    let mut fallback = String::new();
+    while let Some(offset) = lower[cursor..].find("<link") {
+        let start = cursor + offset;
+        let Some(tag_end) = lower[start..].find('>').map(|value| start + value) else {
+            break;
+        };
+        cursor = tag_end + 1;
+        let attrs = parse_attrs(&html[start..tag_end]);
+        let rel = attrs.get("rel").map(|value| value.to_ascii_lowercase()).unwrap_or_default();
+        if !rel.split_whitespace().any(|token| token == "icon" || token == "apple-touch-icon") {
+            continue;
+        }
+        let Some(href) = attrs.get("href").filter(|value| !value.trim().is_empty()) else {
+            continue;
+        };
+        let Ok(resolved) = page.join(href.trim()) else {
+            continue;
+        };
+        if !matches!(resolved.scheme(), "http" | "https") {
+            continue;
+        }
+        let value = resolved.to_string();
+        // 优先 rel 里带 icon 且不是 apple-touch 的那条（后者常是 180×180 的大图，
+        // 卡片里的小圆点用不上），没有就先用 apple 的占位
+        if rel.split_whitespace().any(|token| token == "icon") {
+            return value;
+        }
+        if fallback.is_empty() {
+            fallback = value;
+        }
+    }
+    if !fallback.is_empty() {
+        return fallback;
+    }
+    format!(
+        "{}://{}/favicon.ico",
+        page.scheme(),
+        page.host_str().unwrap_or("")
+    )
 }
 
 /// `<title>…</title>`
@@ -487,5 +549,32 @@ mod tests {
         let gbk = b"<title>\xbf\xec\xc0\xd6</title>";
         let (decoded, _, _) = encoding_rs::GBK.decode(gbk);
         assert_eq!(extract_title(&decoded).unwrap(), "快乐");
+    }
+
+    #[test]
+    fn icons_from_link_tags_with_fallbacks() {
+        let page = Url::parse("https://news.example.com/a/b?c=1").unwrap();
+        // 相对地址按页面解成绝对地址
+        assert_eq!(
+            extract_icon(r#"<link rel="icon" href="/static/logo.png">"#, &page),
+            "https://news.example.com/static/logo.png"
+        );
+        assert_eq!(
+            extract_icon(r#"<link rel="shortcut icon" href="../fav.png">"#, &page),
+            "https://news.example.com/fav.png"
+        );
+        // apple-touch-icon 只当兜底，别抢 rel=icon 的位置
+        assert_eq!(
+            extract_icon(
+                r#"<link rel="apple-touch-icon" href="/big.png"><link rel="icon" href="/small.png">"#,
+                &page
+            ),
+            "https://news.example.com/small.png"
+        );
+        // 没声明 icon：试同源的 /favicon.ico
+        assert_eq!(
+            extract_icon(r#"<link rel="stylesheet" href="/a.css">"#, &page),
+            "https://news.example.com/favicon.ico"
+        );
     }
 }

@@ -6,6 +6,7 @@
 //! v0.6.1：P2P 落地（p2p）——iroh 承载 + 账户派生的 pkarr 设备目录 + 枢纽规则。
 
 pub mod crypto;
+pub mod credentials;
 pub mod discovery;
 pub mod endpoint;
 pub mod engine;

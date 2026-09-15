@@ -1052,9 +1052,13 @@ fn shortcut_from_string(raw: &str) -> Result<Shortcut, String> {
 #[cfg(desktop)]
 fn toggle_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
-        let visible = window.is_visible().unwrap_or(false);
+        // **判据是「在最前面吗」而不是「可见吗」**：被别的窗口挡住时窗口照样是
+        // 「可见」的，旧逻辑只看 is_visible 的话，用户看不见它、按一下快捷键却是
+        // 把它隐藏起来——得按两次才回到前台。改成「已在前台就收起，否则拉到最前」，
+        // 隐藏状态与被挡住的状态走同一条路（都先 show + 聚焦）。
+        let focused = window.is_focused().unwrap_or(false);
         let minimized = window.is_minimized().unwrap_or(false);
-        if visible && !minimized {
+        if focused && !minimized {
             let _ = window.hide();
         } else {
             let _ = window.show();

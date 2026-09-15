@@ -5,8 +5,10 @@
 // 4 总资产趋势：点图直接读数（不拉浮窗），只有全屏按钮进全屏；坐标标签互不覆盖；
 // 5 选择图标：「常用图标」（最近使用、表情与简笔画混排、最多两行）置顶，简笔画区固定五行自滚不显滚动条；
 // 6 移动端总资产三块靠右对齐（桌面靠左）；
-// 7 超链接自动解析标题：裸链接换成网页标题（30 字截断），手写的 [文字](链接) 不动；
-// 8 超链接渲染为卡片（站点 + 复制链接 / 标题 / 正文预览），开关默认关。
+// 7 超链接自动解析标题：裸链接换成网页标题（31 字截断），手写的 [文字](链接) 不动；
+// 8 超链接渲染为卡片（站点 + 复制按钮 / 标题 / 正文预览）。
+// v0.7.8 起：标题上限 60 字、卡片默认开、复制按钮只有图标，「标题/卡片」合成一组
+// 「超链接渲染样式」开关（本套只做最小适配，细则由 v078-fixes-test.mjs 覆盖）。
 // 用法：node scripts/v077-fixes-test.mjs（需先 npm run dev）。
 import { chromium } from "playwright-core";
 
@@ -209,7 +211,8 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.waitForTimeout(600);
   check("内联标签编辑里 Esc 关编辑器（2）", (await page.$$(".editor-overlay")).length === 0);
 
-  // 7 + 8 超链接：默认只自动解析标题
+  // 7 + 8 超链接：先只看「标题」档（显式关掉卡片，v0.7.8 起卡片是默认档）
+  await setFeatures(page, { linkCards: false, autoLinkTitle: true });
   await seedLinkTask(page, MARKDOWN);
   const links = await page.$$eval(".task-card .markdown-content a", (els) =>
     els.map((el) => ({ text: el.textContent.trim(), href: el.getAttribute("href") ?? "" }))
@@ -218,14 +221,11 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   const written = links.find((item) => item.href.endsWith("/other"));
   check(
     "裸链接自动换成网页标题（7）",
-    bare !== undefined &&
-      bare.text.startsWith("示例站点的一篇很长很长的文章标题") &&
-      bare.text.endsWith("…") &&
-      [...bare.text].length <= 31,
+    bare !== undefined && bare.text.startsWith("示例站点的一篇很长很长的文章标题") && [...bare.text].length <= 61,
     bare?.text
   );
   check("手写的 [我的文字](链接) 不动（7）", written?.text === "我的文字", written?.text);
-  check("默认不出卡片（8）", (await page.$$(".task-card .kx-link-card")).length === 0);
+  check("关掉卡片档就不出卡片（8）", (await page.$$(".task-card .kx-link-card")).length === 0);
 
   // 8 打开「渲染超链接为卡片」
   await setFeatures(page, { linkCards: true });
@@ -236,17 +236,23 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
       site: el.querySelector(".kx-link-card-site")?.textContent ?? "",
       title: el.querySelector(".kx-link-card-title")?.textContent ?? "",
       desc: el.querySelector(".kx-link-card-desc")?.textContent ?? "",
-      copy: el.querySelector(".kx-link-card-copy")?.textContent ?? "",
-      icon: Boolean(el.querySelector(".kx-link-card-head svg")),
+      copyIcon: Boolean(el.querySelector(".kx-link-card-copy svg")),
+      copyText: (el.querySelector(".kx-link-card-copy")?.textContent ?? "").trim(),
+      icon: Boolean(el.querySelector(".kx-link-card-head svg, .kx-link-card-favicon img, img.kx-link-card-favicon")),
       href: el.querySelector(".kx-link-card-main")?.getAttribute("href") ?? ""
     }))
   );
   check("卡片模式：两种链接都成卡片（8）", cards.length === 2, String(cards.length));
   check(
-    "卡片有 站点/标题/摘要/复制按钮/链接图标（8）",
+    "卡片有 站点/标题/摘要/图标/复制按钮（8）",
     cards.every(
       (item) =>
-        item.site === "示例站" && item.title.length > 0 && item.desc.length > 0 && item.copy === "复制链接" && item.icon
+        item.site === "示例站" &&
+        item.title.length > 0 &&
+        item.desc.length > 0 &&
+        item.copyIcon &&
+        item.copyText === "" &&
+        item.icon
     ),
     JSON.stringify(cards[0] ?? {})
   );

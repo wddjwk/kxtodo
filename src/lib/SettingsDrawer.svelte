@@ -266,6 +266,9 @@
   let adminSecretVisible = false;
   /** 已配对后点「修改」展开账户输入框：本机做服务器时账户就建在自己的库里，必须能改 */
   let accountEditing = false;
+  /** 同步账户的长度下限（与 core 的 ops_sync::check_credentials 同口径） */
+  const SYNC_USERNAME_MIN = 4;
+  const SYNC_SECRET_MIN = 6;
   /** 秒级 ticker：只用于「下次同步」倒计时显示 */
   let clock = Date.now();
   let clockTimer: number | undefined;
@@ -386,6 +389,18 @@
       : syncMode === "lan"
         ? lanHost || Boolean(lanPeer)
         : true);
+
+  /** 同步账户的长度下限（用户名 ≥ 4、密码 ≥ 6，与 core 同口径）；
+   *  不够就返回一句给用户看的话，够则空串。 */
+  function credentialProblem(): string {
+    if ([...syncForm.username.trim()].length < SYNC_USERNAME_MIN) {
+      return `同步用户名至少 ${SYNC_USERNAME_MIN} 位`;
+    }
+    if ([...syncForm.secret].length < SYNC_SECRET_MIN) {
+      return `同步密码至少 ${SYNC_SECRET_MIN} 位`;
+    }
+    return "";
+  }
   // 倒计时：让「自动同步间隔到底有没有生效」一眼可见
   $: nextSyncText = !syncPaired || syncPaused
     ? ""
@@ -656,6 +671,13 @@
    */
   async function startSync(): Promise<void> {
     if (syncBusy) return;
+    // 长度下限与 core 的 ops_sync::check_credentials 同口径：这里先给一句人话，
+    // 不必等一次网络往返（core 那边仍然把关，CLI/Agent 走的也是同一条）
+    const problem = credentialProblem();
+    if (problem) {
+      showToast(problem);
+      return;
+    }
     syncBusy = true;
     try {
       const ok = await syncPairAction({
@@ -1113,22 +1135,29 @@
           on:change={(event) => updateFeature("mobileBack", event.currentTarget.checked)}
         />
       </label>
-      <label class="toggle-row" title="正文里的裸链接（如 https://x.com/a）自动抓取网页标题，按 [标题](链接) 渲染。用户手写的 [文字](链接) 一律不动。">
-        <span>自动解析超链接标题</span>
-        <input
-          type="checkbox"
-          checked={$appSettings.features.autoLinkTitle}
-          on:change={(event) => updateFeature("autoLinkTitle", event.currentTarget.checked)}
-        />
-      </label>
-      <label class="toggle-row" title="正文里的超链接渲染成一张预览卡片（站点 + 复制链接 / 标题 / 正文预览）。抓不到网页信息时退回普通链接。">
-        <span>渲染超链接为卡片</span>
-        <input
-          type="checkbox"
-          checked={$appSettings.features.linkCards}
-          on:change={(event) => updateFeature("linkCards", event.currentTarget.checked)}
-        />
-      </label>
+      <!-- 超链接渲染样式：两个档位合成一组（卡片优先，见 linkPreview.ts::modeFor） -->
+      <div
+        class="toggle-row link-style-row"
+        title="超链接的渲染样式。「标题」：裸链接（文字就是地址本身）自动抓网页标题，按 [标题](链接) 渲染，最长 60 字；用户手写的 [文字](链接) 一律不动。「卡片」：所有超链接渲染成一张预览卡（网页图标 + 站点 / 标题 / 正文预览，最多两行 + 悬浮复制按钮）。两个都勾时按卡片渲染；抓不到网页信息就退回原样链接。"
+      >
+        <span>超链接渲染样式</span>
+        <span class="link-style-choices">
+          <label title="裸链接自动解析网页标题（最长 60 字）">
+            <input
+              type="checkbox"
+              checked={$appSettings.features.autoLinkTitle}
+              on:change={(event) => updateFeature("autoLinkTitle", event.currentTarget.checked)}
+            />标题
+          </label>
+          <label title="所有超链接渲染成预览卡片">
+            <input
+              type="checkbox"
+              checked={$appSettings.features.linkCards}
+              on:change={(event) => updateFeature("linkCards", event.currentTarget.checked)}
+            />卡片
+          </label>
+        </span>
+      </div>
     </div>
   </SettingsSection>
 
@@ -1560,11 +1589,11 @@
         {/if}
         <label class="settings-row">
           用户名
-          <input bind:value={syncForm.username} placeholder="账户名" />
+          <input bind:value={syncForm.username} placeholder="账户名（至少 4 位）" />
         </label>
         <label class="settings-row">
           密码
-          <input type="password" bind:value={syncForm.secret} placeholder="派生加密密钥，丢失无法找回" />
+          <input type="password" bind:value={syncForm.secret} placeholder="至少 6 位，派生加密密钥" />
         </label>
       {/if}
 

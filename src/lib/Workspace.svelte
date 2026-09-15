@@ -107,6 +107,9 @@
   /** 搜索结果里的日记卡片菜单（与 taskMenu 互斥） */
   let diaryMenu: { id: string; x: number; y: number } | null = null;
   let listMenuAt: { x: number; y: number } | null = null;
+  /** 菜单是三点按钮开的（true）还是齿轮面板转过来的（false）——前者的按钮要能 toggle */
+  let listMenuFromButton = false;
+  let listMenuButtonEl: HTMLButtonElement;
   let tagInputText = "";
   let selectedTagColor: TagColor = "yellow";
   let editingTagIdInMenu = "";
@@ -262,7 +265,13 @@
   /** 记账搜索结果的 --accent：工作区里拿不到 LedgerView 的内联主题色，从设置算一份 */
   $: ledgerAccentColor = ledgerAccent($appSettings.ledger);
   $: hasTaskMoveTargets = taskMenu ? taskMoveTargets($appState.nodes, taskMenuTask?.nodeId ?? "").length > 0 : false;
-  $: expandableTasks = $visibleTasks.filter((task) => hasMultipleMarkdownLines(task.markdown));
+  // 可展开集合 = 多行的 ∪ 卡片量出来「显示不全」的（单行超长也要折行，也算折叠块）。
+  // 卡片在 TaskCard 里量，量完把自己的结论报上来（measure 事件）。
+  // **必须在这条语句里直接读 measuredExpandable**：Svelte 不跟踪函数调用里的依赖，
+  // 写成 `filter(isExpandable)` 的话注册表更新了这条语句也不会重算（按钮不跟着变）。
+  $: expandableTasks = $visibleTasks.filter(
+    (task) => hasMultipleMarkdownLines(task.markdown) || measuredExpandable.get(task.id) === true
+  );
   $: allExpanded = expandableTasks.length > 0 && expandableTasks.every((task) => task.expanded);
   $: allCollapsed = expandableTasks.every((task) => !task.expanded);
   $: if (!taskMenu) { tagInputText = ""; selectedTagColor = "yellow"; editingTagIdInMenu = ""; editingTagTextInMenu = ""; }
@@ -456,20 +465,36 @@
     showHeaderMenu = false;
     const rect = gearButtonEl?.getBoundingClientRect();
     if (!rect) return;
+    listMenuFromButton = false;
     listMenuAt = { x: rect.right, y: rect.bottom + 6 };
     showSuggestions = false;
     showCalendar = false;
     taskMenu = null;
   }
 
-  /** 展开全部 / 收起全部（两个独立动作，非 toggle）。 */
+  /** 展开全部 / 收起全部（两个独立动作，非 toggle）。
+   *  可展开的判据是**卡片自己量出来的**（多行 ∪ 单行超长要折行），不是光看 markdown 行数。 */
   function expandAll(expanded: boolean): void {
-    const ids = $visibleTasks
-      .filter((task) => !expanded || hasMultipleMarkdownLines(task.markdown))
-      .map((task) => task.id);
+    const ids = $visibleTasks.filter((task) => !expanded || isExpandable(task)).map((task) => task.id);
     if (ids.length > 0) {
       void setItemsUiAction(ids, expanded);
     }
+  }
+
+  /** 卡片量出来的可展开性（单行超长的那批）——由 TaskCard 的 measure 事件维护。 */
+  let measuredExpandable = new Map<string, boolean>();
+
+  function handleCardMeasure(event: CustomEvent<{ id: string; canExpand: boolean }>): void {
+    const { id, canExpand } = event.detail;
+    if (measuredExpandable.get(id) === canExpand) return;
+    const next = new Map(measuredExpandable);
+    next.set(id, canExpand);
+    measuredExpandable = next;
+  }
+
+  /** 这张卡片有没有可展开的内容：多行，或者卡片量出来「折叠态显示不全」。 */
+  function isExpandable(task: Task): boolean {
+    return hasMultipleMarkdownLines(task.markdown) || measuredExpandable.get(task.id) === true;
   }
 
   /** 展开/收起一张卡片。`expanded` 由卡片自己量出来（单行但显示不全也算可展开）；
@@ -477,7 +502,7 @@
   function toggleTaskExpansion(taskId: string, expanded?: boolean): void {
     const task = $appState.tasks.find((item) => item.id === taskId);
     if (!task) return;
-    const next = expanded ?? (hasMultipleMarkdownLines(task.markdown) ? !task.expanded : false);
+    const next = expanded ?? (isExpandable(task) ? !task.expanded : false);
     void setItemUiAction(taskId, { expanded: next });
   }
 
@@ -664,8 +689,16 @@
     setTaskDate(taskId, task?.dueDate?.slice(0, 10) || todayIso(), time, true);
   }
 
+  /** 桌面三点按钮：**支持 toggle**——菜单已经开着（且是它开的）时再点一次就收起。
+   *  ContextMenu 拿到了这个按钮作 anchor，点它身上不会被「点外面」抢先关掉，
+   *  所以这里的判断看到的是真实状态（不是刚被关掉的空值）。 */
   function openListMenu(event: MouseEvent): void {
+    if (listMenuAt && listMenuFromButton) {
+      listMenuAt = null;
+      return;
+    }
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    listMenuFromButton = true;
     listMenuAt = { x: rect.right, y: rect.bottom + 6 };
     showSuggestions = false;
     showCalendar = false;
@@ -853,6 +886,7 @@
         {/if}
 
         <button
+          bind:this={listMenuButtonEl}
           type="button"
           title="列表菜单"
           on:mousedown|preventDefault|stopPropagation={openListMenu}
@@ -963,6 +997,7 @@
       x={listMenuAt.x}
       y={listMenuAt.y}
       xAlign="right"
+      anchor={listMenuFromButton ? listMenuButtonEl : null}
       node={$selectedNode}
       {isScheduled}
       {isPlanned}
@@ -1046,6 +1081,7 @@
             selected={taskMenu?.taskId === hit.task.id}
             on:toggle={(event) => toggleCompletion(event.detail)}
             on:expand={(event) => toggleTaskExpansion(event.detail.id, event.detail.expanded)}
+            on:measure={handleCardMeasure}
             on:edit={(event) => openTaskEditor(event.detail)}
             on:context={openTaskMenu}
             on:openLink={openTaskLink}
@@ -1091,6 +1127,7 @@
           selected={taskMenu?.taskId === row.task.id}
           on:toggle={(event) => toggleCompletion(event.detail)}
           on:expand={(event) => toggleTaskExpansion(event.detail.id, event.detail.expanded)}
+          on:measure={handleCardMeasure}
           on:edit={(event) => openTaskEditor(event.detail)}
           on:context={openTaskMenu}
           on:openLink={openTaskLink}
@@ -1118,6 +1155,7 @@
               selected={taskMenu?.taskId === task.id}
               on:toggle={(event) => toggleCompletion(event.detail)}
               on:expand={(event) => toggleTaskExpansion(event.detail.id, event.detail.expanded)}
+              on:measure={handleCardMeasure}
               on:edit={(event) => openTaskEditor(event.detail)}
               on:context={openTaskMenu}
               on:openLink={openTaskLink}

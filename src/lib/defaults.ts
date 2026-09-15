@@ -157,7 +157,8 @@ export const defaultSettings: Settings = {
     editorToolbar: true,
     mobileBack: false,
     autoLinkTitle: true,
-    linkCards: false
+    // v0.7.8 起默认渲染为卡片（特性开关里「超链接渲染样式」的默认档）
+    linkCards: true
   },
   diary: {
     view: "list",

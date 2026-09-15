@@ -258,8 +258,30 @@
     showAccounts = true;
   }
 
-  /** 列表视图的换月：滚到底 = 整屏换成上一个月（时间近的在上面），滚到顶下拉 = 换回下一个月。
-   *  向上以当前真实月为顶——再新就是还没发生的月份，翻过去只有空屏。 */
+  /** 列表视图的换月：滚到底 = 整屏换成上一个月（时间近的在上面），滚到顶 = 换回下一个月。
+   *  向上以当前真实月为顶——再新就是还没发生的月份，翻过去只有空屏。
+   *
+   *  **换月有冷却**：一次连续手势只翻一个月（滚轮的惯性事件、触摸拖动在换月后还停在
+   *  边缘，不冷却会一路翻下去）。冷却只管**手势路径**——滚到底那条路径有自己的
+   *  「先滚回中间再武装」（edgeArmed）节流，再叠一层冷却会把正常的一次前翻也吞掉。 */
+  let edgeCooldownUntil = 0;
+  const EDGE_COOLDOWN_MS = 420;
+
+  /** `dir`：-1 = 更早的月份，1 = 更新的月份。返回是否真的换了。 */
+  function switchMonthBy(dir: -1 | 1): boolean {
+    if (paging) return false;
+    if (dir === 1 && cursor.year === thisMonth.year && cursor.month === thisMonth.month) return false;
+    paging = true;
+    edgeArmed = false;
+    edgeCooldownUntil = Date.now() + EDGE_COOLDOWN_MS;
+    cursor = shiftMonth(cursor, dir);
+    window.setTimeout(() => {
+      paging = false;
+      if (scrollEl) scrollEl.scrollTop = 0;
+    }, 60);
+    return true;
+  }
+
   function handleScroll(): void {
     if (view !== "list" || searching || paging || !scrollEl) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollEl;
@@ -268,23 +290,55 @@
       return;
     }
     if (scrollHeight - scrollTop - clientHeight < 60) {
-      paging = true;
-      edgeArmed = false;
-      cursor = shiftMonth(cursor, -1);
-      window.setTimeout(() => {
-        paging = false;
-        if (scrollEl) scrollEl.scrollTop = 0;
-      }, 60);
+      switchMonthBy(-1);
     } else if (scrollTop < 60) {
-      if (cursor.year === thisMonth.year && cursor.month === thisMonth.month) return;
-      paging = true;
-      edgeArmed = false;
-      cursor = shiftMonth(cursor, 1);
-      window.setTimeout(() => {
-        paging = false;
-        if (scrollEl) scrollEl.scrollTop = 0;
-      }, 60);
+      switchMonthBy(1);
     }
+  }
+
+  /**
+   * 边缘手势换月（滚轮 / 触摸拖动）。
+   *
+   * **光靠 scroll 事件不够**：容器已经停在边缘时再往下/上拉根本不会触发 scroll，
+   * 而刚换过月、或这一整个月的内容还没铺满一屏（连一个滚动条都没有）时，用户正
+   * 处在「想看上一个/下一个月」的那个边缘上——从前的表现就是「往上滑不换月」。
+   * 这里直接读手势意图：贴顶且手势朝上 = 换到更近的月，贴底且手势朝下 = 换到更早的月。
+   */
+  const EDGE_SWIPE_PX = 42;
+
+  function edgeIntent(dy: number): void {
+    if (view !== "list" || searching || !scrollEl) return;
+    if (Date.now() < edgeCooldownUntil) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollEl;
+    if (dy > EDGE_SWIPE_PX) {
+      if (scrollTop <= 2) switchMonthBy(1);
+      return;
+    }
+    if (dy < -EDGE_SWIPE_PX && scrollHeight - scrollTop - clientHeight <= 2) {
+      switchMonthBy(-1);
+    }
+  }
+
+  function handleWheel(event: WheelEvent): void {
+    if (event.deltaY === 0) return;
+    edgeIntent(-event.deltaY);
+  }
+
+  let touchStartY = 0;
+
+  function handleTouchStart(event: TouchEvent): void {
+    touchStartY = event.touches[0]?.clientY ?? 0;
+  }
+
+  function handleTouchMove(event: TouchEvent): void {
+    const touch = event.touches[0];
+    if (!touch) return;
+    const dy = touch.clientY - touchStartY;
+    if (Math.abs(dy) < EDGE_SWIPE_PX) return;
+    const before = `${cursor.year}-${cursor.month}`;
+    edgeIntent(dy);
+    // 真换了月就把手势锚点挪到当前触点：同一次长拖不再被算作第二次意图
+    if (`${cursor.year}-${cursor.month}` !== before) touchStartY = touch.clientY;
   }
 </script>
 
@@ -385,7 +439,14 @@
     />
   {/if}
 
-  <section class="ledger-scroll" bind:this={scrollEl} on:scroll={handleScroll}>
+  <section
+    class="ledger-scroll"
+    bind:this={scrollEl}
+    on:scroll={handleScroll}
+    on:wheel={handleWheel}
+    on:touchstart={handleTouchStart}
+    on:touchmove={handleTouchMove}
+  >
     {#if searching}
       <!-- 搜索结果：每一条一张单笔卡片（不按天成卡，也不带当天的收/支） -->
       {#each searchResults as entry (entry.id)}

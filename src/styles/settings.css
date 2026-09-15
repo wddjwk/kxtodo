@@ -327,6 +327,22 @@
   accent-color: #2564cf;
 }
 
+/* 「超链接渲染样式」这类一格两档的行：右侧两个勾选框并排（各自可单独开关） */
+.link-style-choices {
+  display: inline-flex;
+  gap: 16px;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.link-style-choices label {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
 .shortcut-row {
   display: grid;
   grid-template-columns: 1fr 130px;

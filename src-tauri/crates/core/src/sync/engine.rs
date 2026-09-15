@@ -1083,6 +1083,11 @@ pub fn pair_device(
     })?;
     // 登录成功才记历史：设置页「历史」按钮据此一键回填方式/地址或主机名/用户名/密码
     crate::sync::history::remember(&repo.layout, &request)?;
+    // 明文凭据留档（runtime/sync-credentials.json）：忘记密码时的最后兜底。
+    // 刻意吞掉错误——留档是附加能力，写不进去（磁盘满、权限怪）不该让配对失败。
+    if let Err(error) = crate::sync::credentials::remember(&repo.layout, &request) {
+        eprintln!("[kxtodo] 同步凭据留档失败（不影响配对）：{error}");
+    }
 
     let mut state = SyncStateFile::fresh(device_id.clone());
     state.token = token;

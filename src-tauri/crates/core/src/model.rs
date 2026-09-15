@@ -1489,12 +1489,13 @@ pub struct FeatureSettings {
     /// 移动端页面左上角返回按钮（特性开关，默认关；桌面无感）
     #[serde(rename = "mobileBack", default)]
     pub mobile_back: bool,
-    /// 超链接自动解析标题（特性开关，默认开）：裸链接抓网页标题，按 [标题](链接) 渲染；
-    /// 用户手写的 [文字](链接) 一律不动。
+    /// 超链接渲染样式的「标题」档（特性开关，默认开）：裸链接抓网页标题，
+    /// 按 [标题](链接) 渲染；用户手写的 [文字](链接) 一律不动。
     #[serde(rename = "autoLinkTitle", default = "default_true")]
     pub auto_link_title: bool,
-    /// 超链接渲染为预览卡片（特性开关，默认关）：抓不到元数据就退回原样链接。
-    #[serde(rename = "linkCards", default)]
+    /// 超链接渲染样式的「卡片」档（特性开关，默认开）：所有超链接渲染成预览卡；
+    /// 抓不到元数据就退回原样链接。
+    #[serde(rename = "linkCards", default = "default_true")]
     pub link_cards: bool,
     #[serde(flatten)]
     #[schemars(skip)]
@@ -1509,7 +1510,7 @@ impl Default for FeatureSettings {
             editor_toolbar: true,
             mobile_back: false,
             auto_link_title: true,
-            link_cards: false,
+            link_cards: true,
             extra: Map::new(),
         }
     }

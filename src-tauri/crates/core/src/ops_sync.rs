@@ -20,6 +20,27 @@ fn param_str(params: &Value, key: &str) -> Option<String> {
     params.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
+/// 同步账户的长度下限（用户点名：用户名 ≥ 4、密码 ≥ 6）。
+/// 太短的名字/密码在局域网里撞车概率高、也不好记，配对这一道门直接挡住。
+pub const USERNAME_MIN: usize = 4;
+pub const SECRET_MIN: usize = 6;
+
+fn check_credentials(username: &str, secret: &str) -> CoreResult<()> {
+    if username.trim().chars().count() < USERNAME_MIN {
+        return Err(CoreError::validation(
+            "SYNC_USERNAME_TOO_SHORT",
+            format!("同步用户名至少 {USERNAME_MIN} 位"),
+        ));
+    }
+    if secret.chars().count() < SECRET_MIN {
+        return Err(CoreError::validation(
+            "SYNC_SECRET_TOO_SHORT",
+            format!("同步密码至少 {SECRET_MIN} 位"),
+        ));
+    }
+    Ok(())
+}
+
 /// 「开始同步」表单 → 配对目标。三种通信方式共用一个按钮，所以按模式取对应的字段。
 fn pair_request(params: &Value, current: &SyncSettings) -> CoreResult<endpoint::PairRequest> {
     let mode = match param_str(params, "mode") {
@@ -38,6 +59,7 @@ fn pair_request(params: &Value, current: &SyncSettings) -> CoreResult<endpoint::
     let secret = param_str(params, "secret")
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| CoreError::validation("MISSING_PARAM", "缺少 --secret（同步密码）"))?;
+    check_credentials(&username, &secret)?;
     let server_url = param_str(params, "serverUrl").unwrap_or_else(|| current.server_url.clone());
     let lan_peer = param_str(params, "lanPeer").unwrap_or_else(|| current.lan_peer.clone());
     match mode {

@@ -279,7 +279,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   check("存储空间说明清理边界", (storageText ?? "").includes("一概不动"));
 
   // 同步账户不再用资料里的显示名预填（默认资料名是 Example User）
-  const usernameInput = await page.$("input[placeholder='账户名']");
+  const usernameInput = await page.$("input[placeholder^='账户名']");
   check("同步账户表单在", Boolean(usernameInput));
   if (usernameInput) {
     const username = await usernameInput.inputValue();

@@ -51,6 +51,8 @@
   export let onSortMode: (mode: SortMode) => void = () => {};
   export let onRenameRequest: () => void = () => {};
   export let onClose: () => void = () => {};
+  /** 唤起菜单的按钮（可选）：点到它身上时由按钮自己 toggle 收起（见 ContextMenu） */
+  export let anchor: HTMLElement | null = null;
   /**
    * 日记模式：日记不是节点，背景与主题色来自 `settings.diary`（由调用方以
    * `background` / `accentColor` 覆盖进来），导出导入走 zip 而不是 JSON。
@@ -626,7 +628,7 @@
   }
 </script>
 
-<ContextMenu {x} {y} {xAlign} minWidth={300} onClose={handleClose}>
+<ContextMenu {x} {y} {xAlign} minWidth={300} {anchor} onClose={handleClose}>
   {#if syncReady}
     <MenuItem icon={RefreshCw} label={syncing ? "同步中…" : "立即同步"} onSelect={() => { onClose(); void runSync(); }} />
   {/if}

@@ -20,6 +20,9 @@
   const dispatch = createEventDispatcher<{
     toggle: string;
     expand: { id: string; expanded: boolean };
+    /** 量出来的「可展开性」报给列表：「展开全部/收起全部」要知道
+     *  单行超长（要折行）的卡片也算可展开，光看 markdown 行数是漏的 */
+    measure: { id: string; canExpand: boolean };
     edit: string;
     context: { id: string; x: number; y: number };
     openLink: { href: string; title: string };
@@ -58,6 +61,14 @@
     ? `${formatDate(task.dueDate)}${task.dueTime ? ` ${task.dueTime}` : ""}`
     : "";
   $: canExpand = hasMultipleMarkdownLines(task.markdown) || titleOverflow;
+  // 把可展开性同步给列表：**延后一个微任务**再派发——首次检查发生在组件挂载期间，
+  // 同步派发会让父组件在渲染途中改状态。
+  let reportedExpand: boolean | null = null;
+  $: if (canExpand !== reportedExpand) {
+    reportedExpand = canExpand;
+    const value = canExpand;
+    void Promise.resolve().then(() => dispatch("measure", { id: task.id, canExpand: value }));
+  }
   // 展开态只认存储值：canExpand 是量出来的易失值（列表增减导致滚动条出现/消失、
   // 宽度一变标题溢出判定就翻转），拿它门控渲染会出现「动了别的任务这张卡自己展开」。
   // canExpand 只留给手势/按钮当「有没有内容可展开」的判据。

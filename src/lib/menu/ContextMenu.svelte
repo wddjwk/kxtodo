@@ -12,6 +12,9 @@
   /** x 锚点对齐方式：left = 菜单左缘贴 x；right = 菜单右缘贴 x。 */
   export let xAlign: "left" | "right" = "left";
   export let minWidth = 232;
+  /** 唤起菜单的那个按钮（可选）：点到它身上时不由「点外面」来关，
+   *  交给按钮自己的 toggle 逻辑——否则点击先关后开，永远关不掉。 */
+  export let anchor: HTMLElement | null = null;
   export let onClose: () => void = () => {};
 
   let menuEl: HTMLElement;
@@ -89,8 +92,14 @@
     return target instanceof Node && Boolean(menuEl?.contains(target));
   }
 
+  function isAnchor(target: EventTarget | null): boolean {
+    return Boolean(anchor && target instanceof Node && anchor.contains(target));
+  }
+
   function handlePointerDown(event: PointerEvent): void {
-    if (!isInside(event.target)) onClose();
+    if (isInside(event.target)) return;
+    if (isAnchor(event.target)) return;
+    onClose();
   }
 
   function handleKeydown(event: KeyboardEvent): void {

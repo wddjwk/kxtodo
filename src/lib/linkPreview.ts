@@ -23,10 +23,12 @@ export type LinkMeta = {
   site: string;
   title: string;
   description: string;
+  /** 网页自己的图标；空串 = 用默认的链接图标 */
+  icon?: string;
 };
 
-/** 标题上限：超了补省略号（用户点名 30 字） */
-const TITLE_MAX = 30;
+/** 标题上限：超了补省略号（用户点名 60 字） */
+const TITLE_MAX = 60;
 /** 并发闸门：同时最多抓这么多条 */
 const MAX_INFLIGHT = 4;
 /** 失败结果的重试间隔（成功结果本会话不再重抓） */
@@ -69,9 +71,31 @@ async function fetchInPage(url: string): Promise<LinkMeta | null> {
       pick("meta[property='og:description']") || pick("meta[name='description']");
     const site = pick("meta[property='og:site_name']") || hostOf(url);
     if (!title && !description) return null;
-    return { url, site, title, description };
+    return { url, site, title, description, icon: iconInPage(doc, url) };
   } catch {
     return null;
+  }
+}
+
+/** 网页图标（浏览器预览版）：`<link rel="icon">` 优先，否则同源 /favicon.ico */
+function iconInPage(doc: Document, url: string): string {
+  try {
+    const base = new URL(url);
+    const links = [...doc.querySelectorAll("link[rel]")];
+    let fallback = "";
+    for (const link of links) {
+      const rel = (link.getAttribute("rel") ?? "").toLowerCase().split(/\s+/);
+      if (!rel.includes("icon") && !rel.includes("apple-touch-icon")) continue;
+      const href = (link.getAttribute("href") ?? "").trim();
+      if (!href) continue;
+      const resolved = new URL(href, base);
+      if (!/^https?:$/.test(resolved.protocol)) continue;
+      if (rel.includes("icon")) return resolved.toString();
+      if (!fallback) fallback = resolved.toString();
+    }
+    return fallback || `${base.origin}/favicon.ico`;
+  } catch {
+    return "";
   }
 }
 
@@ -148,7 +172,7 @@ function modeFor(anchor: HTMLAnchorElement, features: { autoLinkTitle: boolean; 
   return "none";
 }
 
-function linkIcon(): SVGSVGElement {
+function iconSvg(paths: string[]): SVGSVGElement {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("fill", "none");
@@ -157,15 +181,30 @@ function linkIcon(): SVGSVGElement {
   svg.setAttribute("stroke-linecap", "round");
   svg.setAttribute("stroke-linejoin", "round");
   svg.setAttribute("aria-hidden", "true");
-  for (const d of [
-    "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71",
-    "M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"
-  ]) {
+  for (const d of paths) {
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     path.setAttribute("d", d);
     svg.appendChild(path);
   }
   return svg;
+}
+
+function linkIcon(): SVGSVGElement {
+  return iconSvg([
+    "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71",
+    "M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"
+  ]);
+}
+
+function copyIcon(): SVGSVGElement {
+  return iconSvg([
+    "M10 8h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2z",
+    "M4 16a2 2 0 0 1-1.7-3.05l.7-1.2A2 2 0 0 1 4.7 11H6"
+  ]);
+}
+
+function checkIcon(): SVGSVGElement {
+  return iconSvg(["M4 12.5l5 5L20 6.5"]);
 }
 
 function line(className: string, text: string): HTMLSpanElement {
@@ -175,7 +214,8 @@ function line(className: string, text: string): HTMLSpanElement {
   return el;
 }
 
-/** 把一条链接换成预览卡片：站点 + 复制按钮 / 标题 / 正文预览。
+/** 把一条链接换成预览卡片：站点行（[网页图标] 站点 + 悬浮在右上角的复制按钮）/
+ *  标题（最多两行）/ 正文预览（最多两行）。
  *  标题与摘要一律走 textContent——网页内容是不可信输入，绝不拼 HTML。 */
 function renderCard(anchor: HTMLAnchorElement, meta: LinkMeta): void {
   const href = anchor.getAttribute("href") ?? meta.url;
@@ -190,27 +230,48 @@ function renderCard(anchor: HTMLAnchorElement, meta: LinkMeta): void {
   main.dataset.kxLink = "card";
   const head = document.createElement("span");
   head.className = "kx-link-card-head";
-  head.appendChild(linkIcon());
+  head.appendChild(favicon(meta.icon, href));
   head.appendChild(line("kx-link-card-site", meta.site || hostOf(href)));
   main.appendChild(head);
   if (meta.title) main.appendChild(line("kx-link-card-title", meta.title));
   if (meta.description) main.appendChild(line("kx-link-card-desc", meta.description));
 
+  // 复制按钮：悬浮在卡片右上角（绝对定位，不占正文的宽度），图标不带文字
   const copy = document.createElement("button");
   copy.type = "button";
   copy.className = "kx-link-card-copy";
-  copy.textContent = "复制链接";
+  copy.title = "复制链接";
+  copy.setAttribute("aria-label", "复制链接");
+  copy.appendChild(copyIcon());
   copy.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
     void copyText(href).then((ok) => {
-      copy.textContent = ok ? "已复制" : "复制失败";
-      window.setTimeout(() => (copy.textContent = "复制链接"), 1500);
+      if (!ok) return;
+      copy.replaceChildren(checkIcon());
+      copy.classList.add("done");
+      window.setTimeout(() => {
+        copy.replaceChildren(copyIcon());
+        copy.classList.remove("done");
+      }, 1500);
     });
   });
 
   card.append(main, copy);
   anchor.replaceWith(card);
+}
+
+/** 卡片图标：网页给了 favicon 就用它（加载不出来回退默认链接图标）。 */
+function favicon(icon: string | undefined, href: string): Element {
+  if (!icon) return linkIcon();
+  const img = document.createElement("img");
+  img.className = "kx-link-card-favicon";
+  img.src = icon;
+  img.alt = "";
+  img.loading = "lazy";
+  // 尺寸由 CSS 定死（1em 的方框），加载中不占位也不跳版；失败就换回默认图标
+  img.addEventListener("error", () => img.replaceWith(linkIcon()), { once: true });
+  return img;
 }
 
 /** 处理容器里的所有超链接（幂等：处理过的节点带 data-kx-link 标记；

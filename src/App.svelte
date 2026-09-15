@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { get } from "svelte/store";
   import { matchesShortcut } from "./lib/shortcuts";
   import { buildAppShellStyle, buildMobileShellStyle } from "./lib/styles";
   import {
@@ -10,6 +11,7 @@
   } from "./lib/stores";
   import { replaceTaskEmojis, selectNode as selectNodeAction, syncNow as syncNowAction } from "./lib/actions";
   import { isMobile, mobileView, startMobileRouter } from "./lib/platform";
+  import { imeViewport, startImeViewport } from "./lib/imeViewport";
   import { startAutoSync } from "./lib/syncRunner";
   import { revealMainWindow } from "./lib/backend";
   import { checkForUpdate } from "./lib/updater";
@@ -29,7 +31,7 @@
   let ledgerViewRef: LedgerView;
 
   $: appShellStyle = $isMobile
-    ? buildMobileShellStyle($appSettings.appearance)
+    ? buildMobileShellStyle($appSettings.appearance, $imeViewport)
     : buildAppShellStyle($appSettings.appearance);
 
   /** 日记占着主区域：桌面看 diaryOpen，移动端看历史栈驱动的 mobileView。 */
@@ -52,6 +54,8 @@
   onMount(() => {
     // 移动端历史栈路由：必须在模块全部初始化后挂载（platform 与 stores 循环依赖）
     startMobileRouter();
+    // 移动端输入法跟随：键盘弹起时把 shell 收到键盘之上，页面不再被浏览器顶上去
+    const stopImeViewport = get(isMobile) ? startImeViewport() : () => {};
     // 调度引擎在 Rust Background Host 中运行，前端不再持有调度循环。
     void hydrateStores();
     void revealMainWindow();
@@ -71,6 +75,7 @@
     return () => {
       window.removeEventListener("keydown", handleShortcut);
       window.clearTimeout(timer);
+      stopImeViewport();
     };
   });
 
