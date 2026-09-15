@@ -282,6 +282,9 @@ pub fn settings_payload(settings: &SettingsFile) -> Value {
         },
         "features": {
             "showCategoryBadges": settings.features.show_category_badges,
+            // 渲染偏好：一端开了，其它端跟着开（「自动标题」「卡片」这类只跟内容观感有关）
+            "autoLinkTitle": settings.features.auto_link_title,
+            "linkCards": settings.features.link_cards,
         },
         "updates": {
             "autoCheck": settings.updates.auto_check,

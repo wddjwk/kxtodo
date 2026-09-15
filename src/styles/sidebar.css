@@ -609,11 +609,11 @@
   margin-bottom: 6px;
 }
 
-/* 图标格子多（两百多个）：桌面在自己那块滚（鼠标滚轮没嵌套问题），
-   移动端由 mobile.css 放开、整面板单层滚动 */
+/* 图标格子多（两百多个）：固定五行高、自己滚（滚动条藏起来），
+   与下面的 emoji 区等高——图标再多也不把选择器撑长。桌面与移动端同一套。 */
 .icon-grid {
+  height: 238px;
   overflow-y: auto;
-  max-height: 264px;
   padding: 2px;
   scrollbar-width: none;
 }

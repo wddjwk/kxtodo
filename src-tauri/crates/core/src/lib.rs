@@ -17,6 +17,7 @@ pub mod ipc;
 pub mod jq;
 pub mod ledger_archive;
 pub mod ledger_icons;
+pub mod linkmeta;
 pub mod migrate;
 pub mod model;
 pub mod ops_config;

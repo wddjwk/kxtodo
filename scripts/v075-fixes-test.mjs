@@ -257,7 +257,18 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
     "卡片里的趋势图带横纵坐标（v0.7.6）",
     (await page.$$(".ledger-trend-card .ledger-chart-axis")).length >= 4
   );
-  await page.click(".ledger-trend-card");
+  // v0.7.7：卡片自己就能读数字（鼠标悬浮 / 点击），全屏按钮才开浮窗
+  const cardChartBox = await page.locator(".ledger-trend-card .ledger-chart-box").boundingBox();
+  await page.mouse.move(cardChartBox.x + cardChartBox.width / 2, cardChartBox.y + cardChartBox.height / 2);
+  await page.waitForSelector(".ledger-trend-card .ledger-chart-tip", { timeout: 3000 });
+  check(
+    "卡片悬浮直接显示数额（v0.7.7）",
+    ((await page.textContent(".ledger-trend-card .ledger-chart-tip")) ?? "").includes("总资产")
+  );
+  await page.mouse.click(cardChartBox.x + cardChartBox.width * 0.4, cardChartBox.y + cardChartBox.height / 2);
+  await page.waitForTimeout(250);
+  check("点卡片不拉浮窗（v0.7.7）", (await page.$$(".ledger-trend-dialog")).length === 0);
+  await page.click(".ledger-trend-card .ledger-trend-zoom");
   await page.waitForSelector(".ledger-trend-dialog", { timeout: 8000 });
   const dialogWidth = await page.$eval(".ledger-trend-dialog", (el) => el.offsetWidth);
   check("趋势浮窗放大", dialogWidth > 700, String(dialogWidth));
@@ -504,9 +515,14 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.waitForSelector(".ledger-manager .ledger-form-body", { timeout: 8000 });
   const gridOverflow = await page.$eval(".ledger-form-body .ledger-icon-grid", (el) => {
     const style = getComputedStyle(el);
-    return `${style.overflowY}/${style.maxHeight}`;
+    return { overflow: style.overflowY, scrollbar: style.scrollbarWidth, h: el.clientHeight, scrollH: el.scrollHeight };
   });
-  check("移动端表单里图标网格不再自滚", gridOverflow.startsWith("visible") || gridOverflow.endsWith("/none"), gridOverflow);
+  // v0.7.7：图标区自己滚（不显滚动条）——图标两三百个，全展开会把名称/颜色/预览挤远
+  check(
+    "移动端表单里图标网格自己滚且不画滚动条（v0.7.7）",
+    gridOverflow.overflow === "auto" && gridOverflow.scrollbar === "none" && gridOverflow.scrollH > gridOverflow.h,
+    JSON.stringify(gridOverflow)
+  );
   await page.evaluate(() => {
     const body = document.querySelector(".ledger-manager .ledger-sheet-body");
     if (body) body.scrollTop = body.scrollHeight;
@@ -546,24 +562,23 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
       mTrend.y > mNet.y + mNet.height - 8 && mAccounts.y > mTrend.y + mTrend.height - 8,
     `${mNet?.y} → ${mTrend?.y} → ${mAccounts?.y}`
   );
-  await page.locator(".ledger-trend-card").tap();
-  // v0.7.6 两段式：先给竖屏浮层（带坐标轴），点全屏按钮才转横屏
-  await page.waitForSelector(".ledger-trend-dialog", { timeout: 8000 });
-  check("全屏前没有横屏层", (await page.$$(".ledger-trend-full")).length === 0);
+  // v0.7.7：点图就是点曲线（直接读数），不拉半屏浮窗；全屏按钮才进横屏全屏
   check(
-    "移动浮层里的图带横纵坐标",
-    (await page.$$(".ledger-trend-dialog .ledger-chart-axis")).length >= 4
+    "移动卡片上的图带横纵坐标",
+    (await page.$$(".ledger-trend-card .ledger-chart-axis")).length >= 4
   );
-  const mChartBox = await page.locator(".ledger-trend-dialog .ledger-chart-box").boundingBox();
-  await page.locator(".ledger-trend-dialog .ledger-chart-box").tap({ position: { x: 60, y: 30 } });
-  await page.waitForSelector(".ledger-trend-dialog .ledger-chart-tip", { timeout: 3000 });
+  const mChartBox = await page.locator(".ledger-trend-card .ledger-chart-box").boundingBox();
+  await page.locator(".ledger-trend-card .ledger-chart-box").tap({ position: { x: 60, y: 30 } });
+  await page.waitForSelector(".ledger-trend-card .ledger-chart-tip", { timeout: 3000 });
   check(
-    "移动端点按显示读数",
-    ((await page.textContent(".ledger-trend-dialog .ledger-chart-tip")) ?? "").includes("总资产"),
+    "移动端点图直接显示读数（v0.7.7）",
+    ((await page.textContent(".ledger-trend-card .ledger-chart-tip")) ?? "").includes("总资产"),
     `box ${mChartBox?.width}x${mChartBox?.height}`
   );
-  await page.click(".ledger-trend-dialog .ledger-icon-button[title='全屏查看（横屏）']");
+  check("点图不拉半屏浮窗（v0.7.7）", (await page.$$(".ledger-trend-dialog")).length === 0);
+  await page.click(".ledger-trend-card .ledger-trend-zoom");
   await page.waitForSelector(".ledger-trend-full", { timeout: 8000 });
+  check("全屏按钮直接进横屏（v0.7.7）", (await page.$$(".ledger-trend-dialog")).length === 0);
   // 旋转 90° 的元素 bbox 是轴对齐外接框（铺满屏幕）：横屏与否看布局宽高
   const rot = await page.$eval(".ledger-trend-rot", (el) => [el.offsetWidth, el.offsetHeight]);
   check(
@@ -572,12 +587,9 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
     `${rot[0]}x${rot[1]}`
   );
   check("横屏层里有曲线", (await page.$$(".ledger-trend-full .ledger-trend-line")).length === 1);
-  // 退出全屏回浮层，再关浮层
-  await page.click(".ledger-trend-rot-head .ledger-image-tool[title='退出全屏']");
+  // 横屏层只有关闭（进来就是全屏，没有中间态可退）
+  await page.click(".ledger-trend-rot-head .ledger-image-tool[title='关闭']");
   await page.waitForSelector(".ledger-trend-full", { state: "detached", timeout: 8000 });
-  check("退出全屏回竖屏浮层", (await page.$$(".ledger-trend-dialog")).length === 1);
-  await page.click(".ledger-trend-dialog .ledger-icon-button[title='关闭']");
-  await page.waitForSelector(".ledger-trend-dialog", { state: "detached", timeout: 8000 });
 
   check("移动端没有页面错误", errors.length === 0, errors.join(" | ").slice(0, 300));
   await context.close();

@@ -192,19 +192,46 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await switchView(page, "列表视图");
   await page.waitForSelector(".ledger-card", { timeout: 8000 });
 
-  // 8 桌面记账编辑框正方形 + 开搁板不改高度
+  // 8 桌面记账编辑框：高度 = 宽度 − 一个一级分类图标（v0.7.7），
+  //   三排（备注+金额 / 日期账户图片 / 底栏）向下贴底，开搁板不上下乱跳
   await page.click(".ledger-entry:has-text('早餐')");
   await page.waitForSelector(".ledger-editor-sheet", { timeout: 8000 });
+  await page.waitForTimeout(400); // 等弹出动画（0.16s）走完：动画中 rect 会偏小、位置偏高
   const sheetSize = await page.$eval(".ledger-editor-sheet", (el) => [el.offsetWidth, el.offsetHeight]);
   check(
-    "桌面记账编辑框是正方形（8）",
-    Math.abs(sheetSize[0] - sheetSize[1]) < 3 && sheetSize[0] > 600,
+    "桌面记账编辑框高度 = 宽度 − 一个分类图标（8）",
+    sheetSize[0] > 600 && Math.abs(sheetSize[0] - sheetSize[1] - 44) < 3,
     `${sheetSize[0]}x${sheetSize[1]}`
+  );
+  const rowPositions = () =>
+    page.evaluate(() => {
+      const pick = (sel) => {
+        const el = document.querySelector(sel);
+        return el ? Math.round(el.getBoundingClientRect().top) : 0;
+      };
+      return {
+        note: pick(".ledger-editor-sheet .ledger-note-row"),
+        meta: pick(".ledger-editor-sheet .ledger-meta-row"),
+        foot: pick(".ledger-editor-sheet .ledger-sheet-foot"),
+        sheetBottom: Math.round(document.querySelector(".ledger-editor-sheet").getBoundingClientRect().bottom)
+      };
+    });
+  const rowsBefore = await rowPositions();
+  check(
+    "三排贴在下半部分（8）",
+    rowsBefore.note > rowsBefore.sheetBottom - 320 && rowsBefore.foot > rowsBefore.sheetBottom - 200,
+    JSON.stringify(rowsBefore)
   );
   const cells = page.locator(".ledger-cat-zone > .ledger-cat-grid > .ledger-cat-cell:not(.add)");
   await cells.nth(0).click();
   await page.waitForTimeout(200);
+  const rowsAfter = await rowPositions();
   const sheetAfter = await page.$eval(".ledger-editor-sheet", (el) => el.offsetHeight);
+  check(
+    "展开二级搁板三排原地不动（8）",
+    rowsAfter.note === rowsBefore.note && rowsAfter.meta === rowsBefore.meta && rowsAfter.foot === rowsBefore.foot,
+    `${JSON.stringify(rowsBefore)} → ${JSON.stringify(rowsAfter)}`
+  );
   check("展开二级搁板不改变对话框高度（8）", sheetAfter === sheetSize[1], `${sheetSize[1]} → ${sheetAfter}`);
   await page.keyboard.press("Escape");
   await page.waitForSelector(".ledger-editor-sheet", { state: "detached", timeout: 8000 });
@@ -394,21 +421,27 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
     "趋势预览带横纵坐标（6）",
     (await page.$$(".ledger-trend-card .ledger-chart-axis")).length >= 4
   );
-  await page.locator(".ledger-trend-card").tap();
-  await page.waitForSelector(".ledger-trend-dialog", { timeout: 8000 });
-  check("点预览先给内容浮层不是全屏（6）", (await page.$$(".ledger-trend-full")).length === 0);
-  await page.click(".ledger-trend-dialog .ledger-icon-button[title='全屏查看（横屏）']");
+  // v0.7.7：点图 = 点曲线（直接读数），不拉半屏浮窗；全屏按钮才进横屏全屏
+  const mTrendBox = await page.locator(".ledger-trend-card .ledger-chart-box").boundingBox();
+  await page.touchscreen.tap(mTrendBox.x + mTrendBox.width * 0.5, mTrendBox.y + mTrendBox.height * 0.5);
+  await page.waitForSelector(".ledger-trend-card .ledger-chart-tip", { timeout: 3000 });
+  check(
+    "点图直接给读数不是浮窗（6）",
+    (await page.$$(".ledger-trend-dialog")).length === 0 &&
+      (await page.$$(".ledger-trend-full")).length === 0 &&
+      (await page.$$(".ledger-trend-card .ledger-chart-tip")).length === 1
+  );
+  await page.tap(".ledger-trend-card .ledger-trend-zoom");
   await page.waitForSelector(".ledger-trend-full", { timeout: 8000 });
+  check("全屏按钮直接进横屏全屏（6）", (await page.$$(".ledger-trend-dialog")).length === 0);
   const rotHead = await page.locator(".ledger-trend-rot-head").boundingBox();
   check(
     "全屏层标题栏在屏幕内（避开系统栏）（6）",
     rotHead !== null && rotHead.y >= 0 && rotHead.y + rotHead.height <= 780,
     JSON.stringify(rotHead)
   );
-  await page.click(".ledger-trend-rot-head .ledger-image-tool[title='退出全屏']");
+  await page.click(".ledger-trend-rot-head .ledger-image-tool[title='关闭']");
   await page.waitForSelector(".ledger-trend-full", { state: "detached", timeout: 8000 });
-  await page.click(".ledger-trend-dialog .ledger-icon-button[title='关闭']");
-  await page.waitForSelector(".ledger-trend-dialog", { state: "detached", timeout: 8000 });
 
   // 7 分类管理「添加分类」：全部图标也能滚到底（颜色 + 预览可见）
   await page.click(".ledger-view .header-actions button[title='更多操作']");
@@ -417,33 +450,37 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.click(".ledger-sheet-foot button:has-text('添加大类')");
   await page.waitForSelector(".ledger-manager .ledger-form-body", { timeout: 8000 });
   await page.waitForTimeout(250);
-  const catScroll = await page.evaluate(() => {
+  // v0.7.7：图标区自己滚（不显滚动条），表单本身不用再滚——颜色与预览贴着图标区下方
+  const catForm = await page.evaluate(() => {
+    const grid = document.querySelector(".ledger-manager .ledger-icon-grid");
     const body = document.querySelector(".ledger-manager .ledger-sheet-body");
     const sheet = document.querySelector(".ledger-manager");
-    if (!body || !sheet) return null;
-    body.scrollTop = 99999;
+    if (!grid || !body || !sheet) return null;
     const preview = body.querySelector(".ledger-form-preview");
     const colors = body.querySelector(".ledger-color-row");
     const previewRect = preview?.getBoundingClientRect();
     const colorRect = colors?.getBoundingClientRect();
     return {
-      scrollTop: body.scrollTop,
-      max: body.scrollHeight - body.clientHeight,
+      gridHeight: grid.clientHeight,
+      gridScroll: grid.scrollHeight,
+      overflow: getComputedStyle(grid).overflowY,
+      scrollbar: getComputedStyle(grid).scrollbarWidth,
       sheetBottom: sheet.getBoundingClientRect().bottom,
       previewBottom: previewRect ? previewRect.bottom : null,
       colorBottom: colorRect ? colorRect.bottom : null
     };
   });
   check(
-    "分类表单能滚到底（7）",
-    catScroll !== null && catScroll.max > 100 && catScroll.scrollTop === catScroll.max,
-    JSON.stringify(catScroll)
+    "分类表单图标区自己滚且不画滚动条（7）",
+    catForm !== null && catForm.gridScroll > catForm.gridHeight + 50 &&
+      catForm.overflow === "auto" && catForm.scrollbar === "none",
+    JSON.stringify(catForm)
   );
   check(
-    "滚到底后颜色与预览都在面板内（7）",
-    catScroll !== null && catScroll.previewBottom !== null && catScroll.colorBottom !== null &&
-      catScroll.previewBottom <= catScroll.sheetBottom + 1 && catScroll.colorBottom <= catScroll.sheetBottom + 1,
-    JSON.stringify(catScroll)
+    "颜色与预览都在面板内可见（7）",
+    catForm !== null && catForm.previewBottom !== null && catForm.colorBottom !== null &&
+      catForm.previewBottom <= catForm.sheetBottom + 1 && catForm.colorBottom <= catForm.sheetBottom + 1,
+    JSON.stringify(catForm)
   );
   await page.keyboard.press("Escape");
   await page.waitForTimeout(200);

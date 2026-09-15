@@ -1,13 +1,13 @@
 <script lang="ts">
   /**
-   * 总资产趋势的放大查看：**两段式**——点卡片先给「看得清内容」的放大视图
-   * （桌面居中浮窗、移动端竖屏浮层，都带坐标轴与读数），浮窗里的全屏按钮才是
-   * 真·全屏（桌面铺满窗口、移动端整层旋转 90° 横屏——竖屏手机看长趋势图最舒服的姿势）。
-   * 早前移动端点一下就直接横屏全屏，用户还没看清就被转了屏，所以要分两段。
-   * 关闭走三路：X / Esc / 安卓返回键（addBackInterceptor），遮罩点空白也算；
-   * 全屏态下 Esc 与返回键先退全屏，再退浮窗（与两层浮层同一套两段式语义）。
+   * 总资产趋势的放大查看（入口只有一个：趋势卡片右上角的全屏按钮）。
+   * 桌面 = 居中浮窗，浮窗里的按钮再铺满窗口；移动端 = 直接旋转 90° 横屏全屏
+   * （竖屏手机看长趋势图最舒服的姿势）——卡片本身已经能悬浮/点按读数，
+   * 放大视图不再充当第二层「看内容」的中间态。
+   * 关闭走三路：X / Esc / 安卓返回键（addBackInterceptor），遮罩点空白也算。
    */
   import { onMount } from "svelte";
+  import { get } from "svelte/store";
   import { Maximize2, Minimize2, X } from "@lucide/svelte";
   import { addBackInterceptor, isMobile } from "../platform";
   import { suppressGhostClick } from "../ghostClick";
@@ -19,8 +19,10 @@
   export let points: AssetTrendPoint[] = [];
   export let onClose: () => void = () => {};
 
-  /** 移动端：false = 竖屏浮层（内容视图），true = 旋转 90° 的横屏全屏 */
-  let full = false;
+  /** 移动端：进来就是旋转 90° 的横屏全屏——卡片上的全屏按钮是唯一入口，
+   *  再拉一层半屏浮窗就是多此一举（卡片自己已经能读数了）。
+   *  桌面：居中浮窗，浮窗里的按钮再铺满窗口（真正的全屏）。 */
+  let full = get(isMobile);
   /** 桌面：false = 居中浮窗，true = 铺满窗口 */
   let expanded = false;
   let fullEl: HTMLDivElement;
@@ -48,12 +50,8 @@
     rotStyle = `width: ${width}px; height: ${height}px;`;
   }
 
-  /** Esc / 返回键：全屏态先退全屏，浮层还留着 */
+  /** Esc / 返回键：两种形态都直接收掉（移动端没有中间态可退） */
   function stepBack(): void {
-    if (full) {
-      full = false;
-      return;
-    }
     close();
   }
 
@@ -96,9 +94,6 @@
     >
       <div class="ledger-trend-rot-head">
         <strong>总资产趋势</strong>
-        <button type="button" class="ledger-image-tool" title="退出全屏" aria-label="退出全屏" on:click={() => (full = false)}>
-          <Minimize2 size={17} />
-        </button>
         <button type="button" class="ledger-image-tool" title="关闭" aria-label="关闭" on:click={() => close()}>
           <X size={17} />
         </button>
@@ -127,11 +122,11 @@
           <button
             type="button"
             class="ledger-icon-button"
-            title={$isMobile ? "全屏查看（横屏）" : expanded ? "退出全屏" : "全屏查看"}
-            aria-label={$isMobile ? "全屏查看" : expanded ? "退出全屏" : "全屏查看"}
-            on:click={() => ($isMobile ? (full = true) : (expanded = !expanded))}
+            title={expanded ? "退出全屏" : "全屏查看"}
+            aria-label={expanded ? "退出全屏" : "全屏查看"}
+            on:click={() => (expanded = !expanded)}
           >
-            {#if expanded && !$isMobile}<Minimize2 size={17} />{:else}<Maximize2 size={17} />{/if}
+            {#if expanded}<Minimize2 size={17} />{:else}<Maximize2 size={17} />{/if}
           </button>
           <button type="button" class="ledger-icon-button" title="关闭" aria-label="关闭" on:click={() => close()}>
             <X size={18} />
@@ -139,7 +134,7 @@
         </div>
       </header>
       <div class="ledger-trend-dialog-body">
-        <AssetsTrend {points} axes interactive axisFont={$isMobile ? 16 : 12} />
+        <AssetsTrend {points} axes interactive axisFont={12} />
       </div>
     </div>
   </div>

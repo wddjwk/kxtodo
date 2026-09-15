@@ -384,6 +384,18 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         is_map: false,
     },
     FieldMeta {
+        path: "features.autoLinkTitle",
+        kind: "boolean",
+        description: "超链接自动解析标题：裸链接抓网页标题按 [标题](链接) 渲染（默认开）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "features.linkCards",
+        kind: "boolean",
+        description: "超链接渲染为预览卡片（默认关；抓不到元数据就退回原样链接）",
+        is_map: false,
+    },
+    FieldMeta {
         path: "diary.view",
         kind: "enum(list|calendar|group)",
         description: "日记视图（本机偏好，不跨设备同步）",
@@ -544,6 +556,8 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "features.sync" => json!(settings.features.sync),
         "features.editorToolbar" => json!(settings.features.editor_toolbar),
         "features.mobileBack" => json!(settings.features.mobile_back),
+        "features.autoLinkTitle" => json!(settings.features.auto_link_title),
+        "features.linkCards" => json!(settings.features.link_cards),
         "diary.view" => json!(settings.diary.view.as_str()),
         "diary.accent" => json!(settings.diary.accent),
         "diary.backgroundColor" => json!(settings.diary.background_color),
@@ -1067,6 +1081,12 @@ pub fn set_value(
         "features.mobileBack" => {
             settings.features.mobile_back = expect_bool(path, &value)?;
         }
+        "features.autoLinkTitle" => {
+            settings.features.auto_link_title = expect_bool(path, &value)?;
+        }
+        "features.linkCards" => {
+            settings.features.link_cards = expect_bool(path, &value)?;
+        }
         "diary.view" => {
             let raw = expect_string(path, &value)?;
             settings.diary.view = DiaryView::parse(&raw)
@@ -1315,6 +1335,10 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "features.sync" => target.features.sync = defaults.features.sync,
         "features.editorToolbar" => target.features.editor_toolbar = defaults.features.editor_toolbar,
         "features.mobileBack" => target.features.mobile_back = defaults.features.mobile_back,
+        "features.autoLinkTitle" => {
+            target.features.auto_link_title = defaults.features.auto_link_title
+        }
+        "features.linkCards" => target.features.link_cards = defaults.features.link_cards,
         "diary.view" => target.diary.view = defaults.diary.view,
         "diary.accent" => target.diary.accent = defaults.diary.accent.clone(),
         "diary.backgroundColor" => {

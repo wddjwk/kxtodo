@@ -234,6 +234,16 @@
   height: 40px;
 }
 
+/* 触屏没有真 hover：点一下留下的「悬停」底色会一直挂着（齿轮点开又收起后
+   那圈阴影不消失）。改成按下态给底色、抬手即还原——与桌面鼠标悬停同一套观感。 */
+.app-shell.mobile .header-actions > button:hover {
+  background: transparent;
+}
+
+.app-shell.mobile .header-actions > button:active {
+  background: rgb(0 0 0 / 6%);
+}
+
 /* 齿轮下拉面板：锚在齿轮按钮下方右对齐（header-actions 是 absolute 包含块）。
    坐标在缩放 shell 内部，无需除以 uiScale。 */
 .app-shell.mobile .header-menu-panel {
@@ -585,7 +595,8 @@
   grid-template-columns: repeat(5, 34px);
 }
 
-/* 图标/表情选择器：移动端贴底抽屉式，内部只留一层滚动（格子放开、整面板滚） */
+/* 图标/表情选择器：移动端贴底抽屉式。简笔画区与桌面一样固定五行高、
+   自己滚（滚动条不画）；顶部「常用图标」与 emoji 区照桌面观感。 */
 .app-shell.mobile .icon-picker-backdrop {
   align-items: end;
   justify-items: stretch;
@@ -597,11 +608,6 @@
   max-height: 88vh;
   border-radius: 18px 18px 0 0;
   padding: 14px 14px calc(16px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
-}
-
-.app-shell.mobile .icon-grid {
-  overflow: visible;
-  max-height: none;
 }
 
 .app-shell.mobile .emoji-grid,
@@ -840,6 +846,7 @@
 
 .app-shell.mobile .ledger-net-split {
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 14px 24px;
 }
 
@@ -934,13 +941,8 @@
   padding: 11px 12px 20px;
 }
 
-/* 半屏抽屉里只许有一层滚动：表单里的图标网格在移动端完全展开（嵌套的
-   自滚区在触屏上把手势吃掉，外层表单永远滚不到最后一行——「添加账户看不到
-   底部的账户名称预览」就是它），滚动统一交给面板主体 */
-.app-shell.mobile .ledger-sheet-body .ledger-icon-grid {
-  overflow: visible;
-  max-height: none;
-}
+/* 表单里的图标网格：与桌面一样自己滚（滚动条不画）——图标两三百个，
+   全展开会把「名称/颜色/预览」挤到很远的地方。外层表单照旧能滚。 */
 
 .app-shell.mobile .ledger-keypad {
   gap: 5px;

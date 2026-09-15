@@ -22,6 +22,7 @@
   import { isMobile, touchOnly } from "../platform";
   import { imeInset } from "../imeInset";
   import { clampPopoverToViewport } from "../popover";
+  import { fieldKeydown } from "../shortcuts";
   import { uiScaleValue } from "../styles";
   import type { Tag, TagColor } from "../types";
 
@@ -298,12 +299,24 @@
     tags = tags.filter((tag) => tag.id !== tagId);
   }
 
+  /** 标签输入框的 keydown：吞全局快捷键但**放行 Escape**（fieldKeydown）——
+   *  无条件 stopPropagation 会把 Escape 一起吃掉，编辑器就「不支持 Esc」了。 */
   function handleTagKeydown(event: KeyboardEvent): void {
     if (event.isComposing || event.keyCode === 229) return;
-    event.stopPropagation();
+    fieldKeydown(event);
     if (event.key === "Enter") {
       event.preventDefault();
       addTag();
+    }
+  }
+
+  /** 已有标签的内联编辑输入框，同上。 */
+  function handleTagEditKeydown(event: KeyboardEvent): void {
+    if (event.isComposing || event.keyCode === 229) return;
+    fieldKeydown(event);
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commitTagEdit();
     }
   }
 
@@ -486,7 +499,7 @@
               maxlength="20"
               on:blur={commitTagEdit}
               on:click|stopPropagation
-              on:keydown|stopPropagation={(e) => { if (e.key === "Enter") commitTagEdit(); }}
+              on:keydown={handleTagEditKeydown}
             />
           {:else}
             <span

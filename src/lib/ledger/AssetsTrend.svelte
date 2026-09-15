@@ -3,10 +3,11 @@
    * 总资产趋势曲线（手写 SVG，与统计曲线同一族）：横纵坐标全自适应——
    * 纵轴按 1/2/5×10ⁿ 取整刻度（结余为负也放得下），横轴按跨度选标签格式、
    * 只画稀疏几档。少刻度、无注释，重点看曲线本身。
-   * axes = 画刻度（放大查看用）；interactive = 悬浮/点按读数（放大查看用）；
-   * 嵌在资产视图里的小块两个都关，就是一条安静的趋势线，点整卡去放大。
+   * axes = 画刻度；interactive = 悬浮/点按读数。卡片与放大视图都开着这两项——
+   * 卡片本身就能读数字，放大视图（全屏按钮唤起）只负责看得更大。
    */
   import { formatCents } from "../ledger";
+  import { touchOnly } from "../platform";
   import type { AssetTrendPoint } from "../ledger";
 
   export let points: AssetTrendPoint[] = [];
@@ -112,9 +113,20 @@
     hoverIndex = Math.min(count - 1, Math.max(0, index));
   }
 
+  /** 触屏没有真 hover：点一下读完数，浏览器随后的合成 mouseleave（触点抬起 =
+   *  hover 结束）会把读数立刻清掉——所以触屏上的读数是「点了就留着」，改由
+   *  下一次点到别处来收。桌面照旧：鼠标移开就收。 */
+  function handleOutsideDown(event: PointerEvent): void {
+    if (!interactive || !touchOnly || hoverIndex === null || !boxEl) return;
+    if (event.target instanceof Node && boxEl.contains(event.target)) return;
+    hoverIndex = null;
+  }
+
   $: hoverPoint = hoverIndex !== null ? points[hoverIndex] : null;
   $: tipLeft = hoverIndex !== null ? Math.min(86, Math.max(14, (pointX(hoverIndex) / W) * 100)) : 0;
 </script>
+
+<svelte:window on:pointerdown|capture={handleOutsideDown} />
 
 {#if count < 2}
   <div class="ledger-trend-empty">有了账户和流水，这里会画出总资产的走势。</div>
@@ -125,7 +137,7 @@
     class="ledger-chart-box"
     bind:this={boxEl}
     on:mousemove={(event) => readAt(event.clientX)}
-    on:mouseleave={() => { if (interactive) hoverIndex = null; }}
+    on:mouseleave={() => { if (interactive && !touchOnly) hoverIndex = null; }}
     on:click={(event) => readAt(event.clientX)}
   >
     <svg class="ledger-line-chart ledger-trend-chart" viewBox="0 0 {W} {H}" role="img" aria-label="总资产趋势">
@@ -149,12 +161,14 @@
         <circle class="ledger-chart-dot ledger-trend-dot" cx={pointX(hoverIndex ?? 0)} cy={pointY(hoverPoint.cents)} r="3.8" />
       {/if}
       {#each xTickIndexes as index (index)}
+        <!-- 首尾标签改用 start/end 锚：中间锚（middle）会让「8/31」这类标签向两侧
+             各溢出半个字宽，左下角正好撞上纵轴起点值——错开一点点，谁也不盖谁 -->
         <text
           class="ledger-chart-axis"
           style="font-size: {axisFont}px"
           x={pointX(index)}
           y={H - 8}
-          text-anchor="middle"
+          text-anchor={index === 0 ? "start" : index === count - 1 ? "end" : "middle"}
         >{xLabel(points[index].date)}</text>
       {/each}
     </svg>

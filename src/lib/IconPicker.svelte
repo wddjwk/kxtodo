@@ -4,6 +4,8 @@
    * v0.7.5：简笔画从 28 个零散预设换成与记账共用的分组目录（LEDGER_ICON_GROUPS，
    * 20 组两百多个）——分组 chips + 图标格子与记账管理器同一套视觉语言；
    * 选中的简笔画存 lucide 的 PascalCase 名字（IconGlyph 认它，旧的 kebab 名照旧渲染）。
+   * v0.7.7：顶部新增「常用图标」= 最近用过的（表情与简笔画混排，最多两行），
+   * 简笔画区固定五行高、自己滚（滚动条藏起来），整体与 emoji 区同一套观感。
    * emoji-picker-element 的滚动区在 shadow DOM 里，外部样式表够不着——挂载后注入
    * 一段样式把滚动条藏掉（「选 emoji 不要展示滚动条」）。
    */
@@ -12,6 +14,7 @@
   import { X } from "@lucide/svelte";
   import IconGlyph from "./IconGlyph.svelte";
   import { LEDGER_ICON_GROUPS } from "./ledgerIcons";
+  import { loadRecentIcons, rememberIcon } from "./recentIcons";
 
   export let selected = "";
   export let mode: "icon" | "emoji" = "icon";
@@ -19,8 +22,6 @@
   export let onClose: () => void;
 
   const ALL_GROUP = "全部";
-
-  const iconEmojiPresets = ["💡", "✅", "📝", "📌", "📚", "🎁", "🔐", "🎧", "🚗", "🛒", "❤️", "⭐"];
 
   const taskEmojiPresets = [
     "🚩", "🏁", "⚑", "🔴", "🟡", "🟢", "🔵", "⚪",
@@ -32,6 +33,8 @@
 
   let iconGroup = ALL_GROUP;
   let pickerEl: HTMLElement;
+  /** 最近用过的（表情 + 简笔画混排）；每选一次刷新，供顶部「常用图标」用 */
+  let recents = loadRecentIcons();
 
   $: iconChoices =
     iconGroup === ALL_GROUP
@@ -40,9 +43,16 @@
         )
       : LEDGER_ICON_GROUPS.find((group) => group.name === iconGroup)?.icons ?? [];
 
+  /** 所有选择都过这里：记一笔最近使用，再交给调用方 */
+  function pick(value: string): void {
+    rememberIcon(value);
+    recents = loadRecentIcons();
+    onPick(value);
+  }
+
   function handleEmojiClick(event: CustomEvent<{ unicode: string }>): void {
     if (event.detail?.unicode) {
-      onPick(event.detail.unicode);
+      pick(event.detail.unicode);
     }
   }
 
@@ -87,6 +97,17 @@
     </header>
 
     {#if mode === "icon"}
+      {#if recents.length > 0}
+        <div class="picker-section-label">常用图标</div>
+        <div class="emoji-grid" aria-label="常用图标">
+          {#each recents as item (item)}
+            <button type="button" class:selected={selected === item} title={item} on:click={() => pick(item)}>
+              <IconGlyph icon={item} size={20} />
+            </button>
+          {/each}
+        </div>
+      {/if}
+
       <div class="icon-group-chips" role="tablist" aria-label="图标分组">
         <button
           type="button"
@@ -107,23 +128,16 @@
       </div>
       <div class="icon-grid" aria-label="简笔画图标">
         {#each iconChoices as name (name)}
-          <button type="button" class:selected={selected === name} title={name} on:click={() => onPick(name)}>
+          <button type="button" class:selected={selected === name} title={name} on:click={() => pick(name)}>
             <IconGlyph icon={name} size={20} />
           </button>
-        {/each}
-      </div>
-
-      <div class="picker-section-label">常用表情</div>
-      <div class="emoji-grid" aria-label="常用表情">
-        {#each iconEmojiPresets as emoji (emoji)}
-          <button type="button" class:selected={selected === emoji} on:click={() => onPick(emoji)}>{emoji}</button>
         {/each}
       </div>
     {:else}
       <div class="picker-section-label">常用</div>
       <div class="emoji-grid emoji-grid-wide" aria-label="常用表情">
         {#each taskEmojiPresets as emoji (emoji)}
-          <button type="button" class:selected={selected === emoji} on:click={() => onPick(emoji)}>{emoji}</button>
+          <button type="button" class:selected={selected === emoji} on:click={() => pick(emoji)}>{emoji}</button>
         {/each}
       </div>
     {/if}

@@ -155,7 +155,9 @@ export const defaultSettings: Settings = {
     showCategoryBadges: true,
     sync: true,
     editorToolbar: true,
-    mobileBack: false
+    mobileBack: false,
+    autoLinkTitle: true,
+    linkCards: false
   },
   diary: {
     view: "list",
@@ -1136,7 +1138,15 @@ export function normalizeSettings(raw: unknown): Settings {
       mobileBack:
         typeof source?.features?.mobileBack === "boolean"
           ? source.features.mobileBack
-          : defaultSettings.features.mobileBack
+          : defaultSettings.features.mobileBack,
+      autoLinkTitle:
+        typeof source?.features?.autoLinkTitle === "boolean"
+          ? source.features.autoLinkTitle
+          : defaultSettings.features.autoLinkTitle,
+      linkCards:
+        typeof source?.features?.linkCards === "boolean"
+          ? source.features.linkCards
+          : defaultSettings.features.linkCards
     },
     diary: {
       view: normalizeDiaryView(source?.diary?.view),

@@ -149,9 +149,20 @@
     }
     openParent = openParent === id ? "" : id;
     if (openParent) {
-      // 大类在滚动区下缘时，展开的阴影区可能整个在可视区外——把它带进视野
+      // 大类贴着滚动区下缘时，展开的阴影区可能整个在可视区外——把它带进视野。
+      // **只滚分类区自己**：scrollIntoView 会连 overflow:hidden 的祖先一起滚，
+      // 整个对话框跟着上下跳几像素（用户报的「金额那一排乱跳」）。
       void tick().then(() => {
-        sheetEl?.querySelector(".ledger-cat-sub")?.scrollIntoView({ block: "nearest" });
+        const zone = sheetEl?.querySelector<HTMLElement>(".ledger-cat-zone");
+        const shelf = zone?.querySelector<HTMLElement>(".ledger-cat-sub");
+        if (!zone || !shelf) return;
+        const zoneRect = zone.getBoundingClientRect();
+        const shelfRect = shelf.getBoundingClientRect();
+        if (shelfRect.bottom > zoneRect.bottom) {
+          zone.scrollTop += shelfRect.bottom - zoneRect.bottom;
+        } else if (shelfRect.top < zoneRect.top) {
+          zone.scrollTop -= zoneRect.top - shelfRect.top;
+        }
       });
     }
   }

@@ -1113,6 +1113,22 @@
           on:change={(event) => updateFeature("mobileBack", event.currentTarget.checked)}
         />
       </label>
+      <label class="toggle-row" title="正文里的裸链接（如 https://x.com/a）自动抓取网页标题，按 [标题](链接) 渲染。用户手写的 [文字](链接) 一律不动。">
+        <span>自动解析超链接标题</span>
+        <input
+          type="checkbox"
+          checked={$appSettings.features.autoLinkTitle}
+          on:change={(event) => updateFeature("autoLinkTitle", event.currentTarget.checked)}
+        />
+      </label>
+      <label class="toggle-row" title="正文里的超链接渲染成一张预览卡片（站点 + 复制链接 / 标题 / 正文预览）。抓不到网页信息时退回普通链接。">
+        <span>渲染超链接为卡片</span>
+        <input
+          type="checkbox"
+          checked={$appSettings.features.linkCards}
+          on:change={(event) => updateFeature("linkCards", event.currentTarget.checked)}
+        />
+      </label>
     </div>
   </SettingsSection>
 

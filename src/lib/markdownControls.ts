@@ -5,8 +5,11 @@
 //! 不请求任何 CDN。
 
 import type { Mermaid } from "mermaid";
+import { copyText } from "./clipboard";
+import { enhanceLinks } from "./linkPreview";
 import { decodeDiagramSource, isMarkmapLang } from "./markdown";
 import { addBackInterceptor } from "./platform";
+import { appSettings } from "./stores";
 
 const diagramCache = new Map<string, string>();
 let diagramSeq = 0;
@@ -270,27 +273,6 @@ function handleClick(event: MouseEvent, root: HTMLElement): void {
   event.stopPropagation();
 }
 
-async function copyText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    try {
-      const area = document.createElement("textarea");
-      area.value = text;
-      area.style.position = "fixed";
-      area.style.opacity = "0";
-      document.body.appendChild(area);
-      area.select();
-      const ok = document.execCommand("copy");
-      area.remove();
-      return ok;
-    } catch {
-      return false;
-    }
-  }
-}
-
 function handleWheel(event: WheelEvent, root: HTMLElement): void {
   const canvas = canvasOf(event.target);
   if (!canvas || !root.contains(canvas)) return;
@@ -407,19 +389,30 @@ function wireInteractions(root: HTMLElement): void {
 export function markdownWire(node: HTMLElement): { update: () => void; destroy: () => void } {
   wireInteractions(node);
   renderDiagramsIn(node);
+  void enhanceLinks(node);
+  // 特性开关（自动标题 / 卡片）随时可能被拨动：订阅设置，拨完就地重跑一遍，
+  // 不必等下一次重渲（已处理过的节点自带标记，重跑很便宜）
+  const unsubscribe = appSettings.subscribe(() => {
+    void enhanceLinks(node);
+  });
   // {@html} 重渲会换掉 canvas 节点，而无参 action 的 update 不会被调用——
   // 用 MutationObserver 盯住子树，新占位框一出现就填（fillDiagram 有 rendered 守卫）。
   const observer =
     typeof MutationObserver !== "undefined"
-      ? new MutationObserver(() => renderDiagramsIn(node))
+      ? new MutationObserver(() => {
+          renderDiagramsIn(node);
+          void enhanceLinks(node);
+        })
       : null;
   observer?.observe(node, { childList: true, subtree: true });
   return {
     update() {
       renderDiagramsIn(node);
+      void enhanceLinks(node);
     },
     destroy() {
       observer?.disconnect();
+      unsubscribe();
     }
   };
 }

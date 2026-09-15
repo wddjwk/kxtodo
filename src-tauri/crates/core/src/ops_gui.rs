@@ -303,6 +303,14 @@ pub fn gui_dispatch(
             meta.revision = Some(outcome.revision);
             Ok(json!({ "imported": true, "revision": outcome.revision }))
         }
+        // 链接元数据（超链接自动标题 / 预览卡片）：只读、不碰任何领域文件，
+        // 结果缓存在 runtime/linkmeta.json（纯缓存，丢了重抓）。
+        "link-meta" => {
+            let url = required_str(&inv.params, "url")?;
+            let meta = crate::linkmeta::link_meta(&ctx.repo.layout.runtime_dir(), &url)?;
+            serde_json::to_value(meta)
+                .map_err(|error| CoreError::internal(format!("链接元数据序列化失败：{error}")))
+        }
         other => Err(CoreError::validation(
             "UNKNOWN_ACTION",
             format!("未知 gui 动作 `{other}`"),

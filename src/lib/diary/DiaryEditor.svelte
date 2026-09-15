@@ -24,6 +24,7 @@
   import type { DiaryEditorTarget, Tag, TagColor } from "../types";
   import { isMobile, touchOnly } from "../platform";
   import { imeInset } from "../imeInset";
+  import { fieldKeydown } from "../shortcuts";
 
   export let target: DiaryEditorTarget;
   export let onClose: () => void = () => {};
@@ -238,10 +239,22 @@
 
   function handleTagKeydown(event: KeyboardEvent): void {
     if (event.isComposing || event.keyCode === 229) return;
-    event.stopPropagation();
+    // fieldKeydown：吞全局快捷键但放行 Escape——无条件 stopPropagation 会把
+    // Escape 一起吃掉，「编辑器不支持 Esc」就是这么来的
+    fieldKeydown(event);
     if (event.key === "Enter") {
       event.preventDefault();
       addTag();
+    }
+  }
+
+  /** 已有标签的内联编辑输入框，同上。 */
+  function handleTagEditKeydown(event: KeyboardEvent): void {
+    if (event.isComposing || event.keyCode === 229) return;
+    fieldKeydown(event);
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commitTagEdit();
     }
   }
 
@@ -425,7 +438,7 @@
               maxlength="20"
               on:blur={commitTagEdit}
               on:click|stopPropagation
-              on:keydown|stopPropagation={(e) => { if (e.key === "Enter") commitTagEdit(); }}
+              on:keydown={handleTagEditKeydown}
             />
           {:else}
             <span

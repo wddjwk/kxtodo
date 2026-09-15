@@ -49,29 +49,25 @@
     </div>
   </section>
 
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <section
-    class="ledger-panel ledger-trend-card"
-    role="button"
-    tabindex="0"
-    title="点击放大查看总资产趋势"
-    on:click|stopPropagation={() => dispatch("openTrend")}
-    on:keydown|stopPropagation={(event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        dispatch("openTrend");
-      }
-    }}
-  >
+  <!-- 趋势块：点击/悬浮直接在图里读数字（不拉浮窗），只有右上角全屏按钮才放大查看 -->
+  <section class="ledger-panel ledger-trend-card">
     <header class="ledger-panel-head">
       <h2>总资产趋势</h2>
       <span class="ledger-panel-actions">
-        <Maximize2 class="ledger-trend-zoom" size={15} />
+        <button
+          type="button"
+          class="ledger-trend-zoom"
+          title="全屏查看总资产趋势"
+          aria-label="全屏查看总资产趋势"
+          on:click|stopPropagation={() => dispatch("openTrend")}
+        >
+          <Maximize2 size={15} />
+        </button>
       </span>
     </header>
-    <!-- 卡片里的图也要带横纵坐标（简单几档），字号按窄容器补，否则缩得看不清 -->
-    <AssetsTrend points={trend} axes axisFont={$isMobile ? 18 : 13} />
+    <!-- 卡片里的图带横纵坐标（简单几档）与读数：桌面悬浮、移动端点按都给数字；
+         字号按窄容器补，否则缩得看不清 -->
+    <AssetsTrend points={trend} axes interactive axisFont={$isMobile ? 18 : 13} />
   </section>
 </div>
 
