@@ -7,13 +7,13 @@ use serde_json::{json, Map, Value};
 
 use crate::core::{
     apply_write_outcome, idem_summary, notify_host, param_str, require_confirmation, required_str,
-    set_read_revision, ExecContext, Invocation,
+    set_read_revision, unbounded_page_from, ExecContext, Invocation,
 };
 use crate::envelope::Meta;
 use crate::error::{CoreError, CoreResult};
 use crate::ids::gen_id;
 use crate::model::{DiaryEntry, DiaryFile, Tag};
-use crate::ops_task::{build_tag, parse_tag_input};
+use crate::ops_task::{build_tag, paginate, parse_tag_input};
 use crate::repo::Domain;
 use crate::time::{now_iso, parse_date, today_local};
 
@@ -215,7 +215,7 @@ fn diary_list(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResul
     let date = param_str(params, "date").map(|raw| parse_date(&raw)).transpose()?;
     let from = param_str(params, "from").map(|raw| parse_date(&raw)).transpose()?;
     let to = param_str(params, "to").map(|raw| parse_date(&raw)).transpose()?;
-    let limit = params.get("limit").and_then(Value::as_u64).map(|v| v as usize);
+    let page = unbounded_page_from(params)?;
 
     let mut entries: Vec<DiaryEntry> = file
         .entries
@@ -229,11 +229,16 @@ fn diary_list(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResul
         .cloned()
         .collect();
     sort_entries(&mut entries);
-    if let Some(limit) = limit {
-        entries.truncate(limit);
-    }
+    // data.total = **过滤后**的篇数（与 ledger list 同口径）：早先这里给的是 file.entries.len()，
+    // 于是 `diary list --from 月初 --to 月末 --jq .data.total`（「这个月写了几篇」）报的是
+    // 全库篇数。total 与 returned 并排出现，读的人只会理解成「命中 N 篇、本页 M 篇」。
+    // meta.count 双写同一个值：render 的人类可读输出（table/pretty）只认 meta.count，
+    // 缺了它 diary list 在这两种格式下就退化成逐行裸 JSON、没有「共 N 条」。
+    let (entries, next_cursor, total) = paginate(entries, &page);
+    meta.count = Some(total);
+    meta.next_cursor = next_cursor;
     Ok(json!({
-        "total": file.entries.len(),
+        "total": total,
         "returned": entries.len(),
         "items": entries.iter().map(diary_view).collect::<Vec<_>>(),
     }))

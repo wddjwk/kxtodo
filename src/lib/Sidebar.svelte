@@ -19,7 +19,6 @@
   import { avatarCache, resolveAvatarSrc, isLocalImageRef, localImageFilename } from "./images";
   import { deleteBackgroundImage, deleteNodeImages, exportData } from "./backend";
   import IconGlyph from "./IconGlyph.svelte";
-  import IconPicker from "./IconPicker.svelte";
   import ListTree from "./ListTree.svelte";
   import SearchResults from "./SearchResults.svelte";
   import ContextMenu from "./menu/ContextMenu.svelte";
@@ -519,7 +518,18 @@
   {/if}
 
   {#if selectedIconPickerList}
-    <IconPicker mode="icon" selected={selectedIconPickerList.icon} onPick={pickIcon} onClose={() => (iconPickerListId = null)} />
+    <!-- 懒加载：IconPicker 会带进 emoji-picker-element（自带整份 emoji 数据库）。
+         Sidebar 在首屏链上，静态引入就等于让每个用户一启动就付这份体积。
+         App.svelte 与 MarkdownEditorModal 里那两处也是同一套写法。 -->
+    {#await import("./IconPicker.svelte") then module}
+      <svelte:component
+        this={module.default}
+        mode="icon"
+        selected={selectedIconPickerList.icon}
+        onPick={pickIcon}
+        onClose={() => (iconPickerListId = null)}
+      />
+    {/await}
   {/if}
 
   <div class="sidebar-footer" on:click|stopPropagation>

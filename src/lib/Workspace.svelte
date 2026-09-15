@@ -270,7 +270,7 @@
   // **必须在这条语句里直接读 measuredExpandable**：Svelte 不跟踪函数调用里的依赖，
   // 写成 `filter(isExpandable)` 的话注册表更新了这条语句也不会重算（按钮不跟着变）。
   $: expandableTasks = $visibleTasks.filter(
-    (task) => hasMultipleMarkdownLines(task.markdown) || measuredExpandable.get(task.id) === true
+    (task) => hasMultipleMarkdownLines(task.markdown) || measuredExpandable.has(task.id)
   );
   $: allExpanded = expandableTasks.length > 0 && expandableTasks.every((task) => task.expanded);
   $: allCollapsed = expandableTasks.every((task) => !task.expanded);
@@ -481,20 +481,25 @@
     }
   }
 
-  /** 卡片量出来的可展开性（单行超长的那批）——由 TaskCard 的 measure 事件维护。 */
-  let measuredExpandable = new Map<string, boolean>();
+  /** 卡片量出来的可展开性（单行超长的那批）——由 TaskCard 的 measure 事件维护。
+   *  只装「报了 true」的 id：缺席就是 false，于是绝大多数卡片的首次上报（false）
+   *  根本不必惊动响应式系统。陈旧 id（任务已删）留着无害——它永远匹配不上可见任务。 */
+  let measuredExpandable = new Set<string>();
 
   function handleCardMeasure(event: CustomEvent<{ id: string; canExpand: boolean }>): void {
     const { id, canExpand } = event.detail;
-    if (measuredExpandable.get(id) === canExpand) return;
-    const next = new Map(measuredExpandable);
-    next.set(id, canExpand);
-    measuredExpandable = next;
+    if (canExpand === measuredExpandable.has(id)) return;
+    if (canExpand) measuredExpandable.add(id);
+    else measuredExpandable.delete(id);
+    // 自赋值触发失效：Svelte 只看「这个变量被赋值过」，不比较内容。
+    // 早先这里是 `new Map(measuredExpandable)` 整表拷贝，而每张卡首次上报时 `get(id)`
+    // 是 undefined、必然与 canExpand 不等 → N 张卡挂载 = N 次递增规模的拷贝（O(N²)）。
+    measuredExpandable = measuredExpandable;
   }
 
   /** 这张卡片有没有可展开的内容：多行，或者卡片量出来「折叠态显示不全」。 */
   function isExpandable(task: Task): boolean {
-    return hasMultipleMarkdownLines(task.markdown) || measuredExpandable.get(task.id) === true;
+    return hasMultipleMarkdownLines(task.markdown) || measuredExpandable.has(task.id);
   }
 
   /** 展开/收起一张卡片。`expanded` 由卡片自己量出来（单行但显示不全也算可展开）；

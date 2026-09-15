@@ -23,6 +23,16 @@ impl Format {
             _ => None,
         }
     }
+
+    /// `--format` 的字面名（提示文案里回显给用户看）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Format::Json => "json",
+            Format::Pretty => "pretty",
+            Format::Table => "table",
+            Format::Ndjson => "ndjson",
+        }
+    }
 }
 
 /// Render the final CLI output: (exit code, stdout, stderr).
@@ -41,15 +51,23 @@ pub fn render(
     }
     let envelope = outcome.envelope.clone();
     if let Some(program) = jq {
+        // --jq 生效时 --format 就没有落点了（结果只有一份 JSON）。别静默把用户要的
+        // 表格丢掉：给一行提示，而且**只能进 stderr**——stdout 必须保持可被脚本解析的
+        // 纯 JSON，多一个字符就炸。
+        let note = match format {
+            Format::Json => String::new(),
+            other => format!("提示：--jq 生效时忽略 --format {}（输出为 JSON）\n", other.as_str()),
+        };
         match crate::jq::evaluate(program, &envelope) {
             Ok(filtered) => {
                 return (
                     0,
                     serde_json::to_string_pretty(&filtered).unwrap_or_default(),
-                    String::new(),
+                    note,
                 );
             }
             Err(error) => {
+                // 错误信封本身就是 stderr 的全部内容，不能再拼提示（调用方要解析它）
                 let failure = serde_json::json!({
                     "ok": false,
                     "command": envelope.get("command").cloned().unwrap_or(Value::Null),
@@ -300,7 +318,18 @@ fn render_pretty(envelope: &Value) -> String {
                     ));
                 }
             }
-            _ => return render_kv(data),
+            _ => {
+                // 没有专属渲染器的 items（ledger.list / diary.list）走键值兜底；
+                // 合计行照样补上，否则 --format pretty 下连「共 N 条」都看不到。
+                let mut rendered = render_kv(data);
+                if let Some(count) = envelope.get("meta").and_then(|m| m.get("count")) {
+                    if !rendered.is_empty() {
+                        rendered.push('\n');
+                    }
+                    rendered.push_str(&format!("-- 共 {count} 条"));
+                }
+                return rendered;
+            }
         }
         if let Some(count) = envelope.get("meta").and_then(|m| m.get("count")) {
             out.push(format!("-- 共 {} 条", count));

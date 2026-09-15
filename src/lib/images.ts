@@ -1,4 +1,4 @@
-import { writable, get } from "svelte/store";
+import { writable, get, type Writable } from "svelte/store";
 import { backgroundImageUrl, avatarImageUrl, mdImageUrl } from "./backend";
 
 const LOCAL_PREFIX = "img:";
@@ -18,6 +18,44 @@ export const mdImageCache = writable<Record<string, string>>({});
 
 const pending = new Set<string>();
 const attempts = new Map<string, number>();
+
+/**
+ * 缓存写入的字节预算（按字符数估，base64 一个字符就是一字节）。
+ *
+ * 三个缓存早先只增不减：`dataUrlImages` 平台（Linux 桌面 + Android）缓存的是 base64 正文，
+ * 一张几 MB 的图就是几 MB 的 JS 堆，一次长会话滚过几百张插图能吃到几百 MB 且永不释放。
+ * **Windows / macOS 不受影响**——那两边缓存的是 asset 协议的短 URL（百来字节），
+ * 预算永远碰不到，行为与从前逐字节一致。
+ *
+ * 预算刻意给得很宽：淘汰会让 `resolveMarkdownImages` 回退成裸文件名（一帧破图）并立刻
+ * 触发重新加载，预算小于「当前可见的工作集」就会来回抖动。
+ */
+const MD_CACHE_BUDGET = 64 * 1024 * 1024;
+const BACKGROUND_CACHE_BUDGET = 32 * 1024 * 1024;
+const AVATAR_CACHE_BUDGET = 8 * 1024 * 1024;
+
+/** 写一条缓存，超出预算就从最旧的键开始淘汰（对象的字符串键保持插入顺序）。
+ *  刚写入的那一条永远保留——哪怕它自己就超预算（一张图不可能被拆小）。 */
+function boundedPut(
+  cache: Writable<Record<string, string>>,
+  key: string,
+  url: string,
+  budget: number
+): void {
+  cache.update((map) => {
+    const next = { ...map, [key]: url };
+    let total = 0;
+    for (const value of Object.values(next)) total += value.length;
+    if (total > budget) {
+      for (const candidate of Object.keys(next)) {
+        if (total <= budget || candidate === key) continue;
+        total -= next[candidate].length;
+        delete next[candidate];
+      }
+    }
+    return next;
+  });
+}
 
 function load(key: string, loader: () => Promise<string>, apply: (url: string) => void): void {
   if (pending.has(key)) return;
@@ -64,7 +102,7 @@ export function localImageRef(filename: string): string {
 
 /** Seed the cache immediately after an upload so the image renders without a round-trip. */
 export function primeImageCache(filename: string, url: string): void {
-  imageCache.update((map) => ({ ...map, [filename]: url }));
+  boundedPut(imageCache, filename, url, BACKGROUND_CACHE_BUDGET);
 }
 
 function ensureLoaded(filename: string): void {
@@ -72,7 +110,7 @@ function ensureLoaded(filename: string): void {
   load(
     `bg:${filename}`,
     () => backgroundImageUrl(filename),
-    (url) => imageCache.update((map) => ({ ...map, [filename]: url }))
+    (url) => boundedPut(imageCache, filename, url, BACKGROUND_CACHE_BUDGET)
   );
 }
 
@@ -105,7 +143,7 @@ function ensureAvatarLoaded(filename: string): void {
   load(
     `av:${filename}`,
     () => avatarImageUrl(filename),
-    (url) => avatarCache.update((map) => ({ ...map, [filename]: url }))
+    (url) => boundedPut(avatarCache, filename, url, AVATAR_CACHE_BUDGET)
   );
 }
 
@@ -138,13 +176,13 @@ function ensureMdImageLoaded(nodeId: string, filename: string): void {
   load(
     `md:${key}`,
     () => mdImageUrl(nodeId, filename),
-    (url) => mdImageCache.update((map) => ({ ...map, [key]: url }))
+    (url) => boundedPut(mdImageCache, key, url, MD_CACHE_BUDGET)
   );
 }
 
 export function primeMdImageCache(nodeId: string, filename: string, url: string): void {
   const key = mdCacheKey(nodeId, filename);
-  mdImageCache.update((map) => ({ ...map, [key]: url }));
+  boundedPut(mdImageCache, key, url, MD_CACHE_BUDGET);
 }
 
 /**

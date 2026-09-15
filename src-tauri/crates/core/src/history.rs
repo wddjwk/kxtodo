@@ -27,6 +27,18 @@ pub fn append_bounded_jsonl(
     }
     let mut line = serde_json::to_vec(entry)?;
     line.push(b'\n');
+    // 追加后仍在字节上限内、且没有 per-task 条数上限要执行时，不必把整个文件读回来重写。
+    // 审计是每次业务写都会走的高频路径（上限 10MB），触顶之前它本该只是一次 O(1) 追加；
+    // 早先无条件调 trim_history，等于每条审计都要读全文 + 重建 + 原子重写 + fsync，
+    // 用起来越久越慢（触顶后就是每次写读写 10MB）。调度历史带 per-task 上限、
+    // 且只在定时任务真正跑起来时才写，保持原来的完整 trim。
+    let needs_trim = match per_task_cap {
+        Some(_) => true,
+        None => {
+            let existing = fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
+            existing + line.len() as u64 > max_bytes
+        }
+    };
     {
         let mut file = fs::OpenOptions::new()
             .create(true)
@@ -34,7 +46,10 @@ pub fn append_bounded_jsonl(
             .open(path)?;
         file.write_all(&line)?;
     }
-    trim_history(path, max_bytes, per_task_cap)
+    if needs_trim {
+        trim_history(path, max_bytes, per_task_cap)?;
+    }
+    Ok(())
 }
 
 pub fn trim_history(path: &Path, max_bytes: u64, per_task_cap: Option<usize>) -> CoreResult<()> {
@@ -72,10 +87,15 @@ pub fn trim_history(path: &Path, max_bytes: u64, per_task_cap: Option<usize>) ->
         }
     }
 
-    // Byte cap: drop oldest lines until under the limit.
+    // Byte cap: drop oldest lines until well under the limit.
+    //
+    // 目标刻意不是「刚好等于上限」而是上限的 80%：修剪是一次全文重写，若只裁到刚好达标，
+    // 文件满之后几乎每追加一行就要再重写一次（10MB 上限 = 每次点击读写 10MB）。留出 20%
+    // 余量，一次重写能摊到之后上千次追加。上限本身仍然是硬约束（文件永远不超过 max_bytes）。
+    let target = max_bytes * 4 / 5;
     let mut total: u64 = lines.iter().map(|line| line.len() as u64 + 1).sum();
     let mut start = 0;
-    while total > max_bytes && start < lines.len() {
+    while total > target && start < lines.len() {
         total -= lines[start].len() as u64 + 1;
         start += 1;
     }

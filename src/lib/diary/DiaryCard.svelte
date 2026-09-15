@@ -3,6 +3,7 @@
   import { Image as ImageIcon, PenLine } from "@lucide/svelte";
   import { markdownTitle, renderMarkdown } from "../markdown";
   import { markdownWire } from "../markdownControls";
+  import { observeResize } from "../measureBus";
   import { mdImageCache, resolveMarkdownImages } from "../images";
   import { isMobile as isMobileStore } from "../platform";
   import { longpress, isLongPressSuppressed } from "../longpress";
@@ -57,7 +58,11 @@
   // 展开态只认存储值：canExpand 是量出来的易失值（滚动条出现/消失、宽度变化都会翻转），
   // 拿它门控渲染会出现「动了别的卡片这张自己展开/收起」（v0.6.8 在 todo 卡片修过同一病）。
   $: isExpanded = entry.expanded === true;
-  $: fullHtml = renderMarkdown(resolveMarkdownImages(entry.markdown, DIARY_IMAGE_NODE, $mdImageCache));
+  // **只在展开时渲染完整 markdown**：Svelte 的 `$:` 是急切求值，早先折叠态的卡片也白跑一遍
+  // 完整渲染，而结果只有下面 `{#if isExpanded}` 那一支会消费。
+  $: fullHtml = isExpanded
+    ? renderMarkdown(resolveMarkdownImages(entry.markdown, DIARY_IMAGE_NODE, $mdImageCache))
+    : "";
   $: dayNumber = entry.date.slice(8, 10);
   $: monthLabel = `${Number.parseInt(entry.date.slice(5, 7), 10)}月`;
   $: dayLabel = relativeDayLabel(entry.date, today);
@@ -75,9 +80,7 @@
       titleOverflow = node.scrollWidth > node.clientWidth + 1;
     };
     check();
-    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => check()) : null;
-    observer?.observe(node);
-    window.addEventListener("resize", check);
+    const release = observeResize(node, check);
     let last = text;
     return {
       update(next: string): void {
@@ -86,8 +89,7 @@
         check();
       },
       destroy(): void {
-        observer?.disconnect();
-        window.removeEventListener("resize", check);
+        release();
       }
     };
   }
@@ -103,9 +105,7 @@
       excerptOverflow = lineHeight > 0 && natural > lineHeight * 2 + 1;
     };
     check();
-    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => check()) : null;
-    observer?.observe(node);
-    window.addEventListener("resize", check);
+    const release = observeResize(node, check);
     let last = text;
     return {
       update(next: string): void {
@@ -114,8 +114,7 @@
         check();
       },
       destroy(): void {
-        observer?.disconnect();
-        window.removeEventListener("resize", check);
+        release();
       }
     };
   }

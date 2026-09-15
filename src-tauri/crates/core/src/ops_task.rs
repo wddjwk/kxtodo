@@ -800,7 +800,9 @@ pub fn paginate<T>(items: Vec<T>, page: &Page) -> (Vec<T>, Option<String>, usize
         return (items, None, total);
     }
     let start = page.offset.min(total);
-    let end = (start + page.limit).min(total);
+    // saturating：limit = usize::MAX 表示「不分页」（ledger/diary 的 list 不传 --limit
+    // 就返回全部），裸加法在 debug 下会溢出 panic。
+    let end = start.saturating_add(page.limit).min(total);
     let next_cursor = if end < total {
         Some(end.to_string())
     } else {

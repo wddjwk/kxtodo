@@ -248,8 +248,36 @@ export const selectedNode = derived(
 
 export const listCounts = derived(appState, ($s) => buildListCounts($s));
 
+/** 搜索的防抖副本。
+ *  全局搜索每敲一个键都要扫任务 + 日记全文 + 全部流水，而 `visibleTasks` 与 `searchHits`
+ *  都依赖搜索词 —— 一个键跑两遍全量匹配（安卓上尤其明显）。
+ *  **清空立刻生效**：退出搜索态、移动端返回键清词、点条目清词都不能等一拍。
+ *  订阅时的当前值也立刻透传，否则「带着搜索词切换订阅者」会先拿到空值。 */
+const SEARCH_DEBOUNCE_MS = 180;
+
+export const debouncedSearchQuery = writable(get(searchQuery));
+
+let searchDebounceTimer: ReturnType<typeof setTimeout> | undefined;
+let searchDebouncePrimed = false;
+// 应用生命周期级别的订阅（与 stores 里其它模块级订阅同款），不需要退订。
+searchQuery.subscribe((value) => {
+  if (searchDebounceTimer !== undefined) {
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = undefined;
+  }
+  if (!searchDebouncePrimed || value.trim() === "") {
+    searchDebouncePrimed = true;
+    debouncedSearchQuery.set(value);
+    return;
+  }
+  searchDebounceTimer = setTimeout(() => {
+    searchDebounceTimer = undefined;
+    debouncedSearchQuery.set(value);
+  }, SEARCH_DEBOUNCE_MS);
+});
+
 export const visibleTasks = derived(
-  [appState, selectedNode, searchQuery],
+  [appState, selectedNode, debouncedSearchQuery],
   ([$s, $node, $q]) => buildVisibleTasks($s, $node, $q)
 );
 
@@ -263,14 +291,16 @@ export const accent = derived(
   ([$node, $settings]) => accentForNode($node, $settings.appearance.uiColors)
 );
 
-export const isSearching = derived(searchQuery, ($q) => $q.trim().length > 0);
+// isSearching 跟着防抖后的词走：否则界面会先切进搜索态、结果还在 180ms 之后才到，
+// 中间那一帧是「无搜索结果」的空态，每敲一个键闪一次。
+export const isSearching = derived(debouncedSearchQuery, ($q) => $q.trim().length > 0);
 
 /**
  * 全局搜索的混排结果（任务 + 日记 + 记账，按最近改动排序）。
  * 桌面在工作区渲染，移动端在侧栏搜索框下方的结果面板渲染——同一份数据，两处视图。
  */
 export const searchHits = derived(
-  [appState, diaryEntries, ledgerData, searchQuery],
+  [appState, diaryEntries, ledgerData, debouncedSearchQuery],
   ([$s, $d, $l, $q]) => buildSearchHits($s, $d, $l, $q)
 );
 
@@ -392,9 +422,24 @@ export function editBaseUpdatedAt(taskId: string): string | undefined {
 
 export let coreMode = false;
 
+/** 每个域已经落进 store 的 revision。
+ *  域事件带着 revision 来，而写操作之后前端往往已经显式 refresh 过一次 ——
+ *  没有这道判断，同一次写入就是两轮完整的快照往返（读盘 + 序列化 + IPC + 全量 normalize）。 */
+const appliedRevisions = new Map<string, number>();
+
+function noteRevisions(snapshot: Awaited<ReturnType<typeof coreSnapshot>>): void {
+  const revisions = snapshot.revisions;
+  if (!revisions) return;
+  for (const [domain, revision] of Object.entries(revisions)) {
+    if (typeof revision === "number") appliedRevisions.set(domain, revision);
+  }
+}
+
 function applySnapshot(snapshot: Awaited<ReturnType<typeof coreSnapshot>>, domains?: Set<string>): void {
   const wantAll = !domains;
-  if (wantAll || domains?.has("data")) {
+  noteRevisions(snapshot);
+  // 每个分支都要判 `snapshot.<域>` 存在：快照现在按域裁剪，没请求的域不在载荷里。
+  if ((wantAll || domains?.has("data")) && snapshot.data) {
     const current = get(appState);
     const normalized = normalizeState({
       ...snapshot.data,
@@ -402,21 +447,21 @@ function applySnapshot(snapshot: Awaited<ReturnType<typeof coreSnapshot>>, domai
     });
     appState.set({ ...normalized, scheduler: current.scheduler });
   }
-  if (wantAll || domains?.has("settings")) {
+  if ((wantAll || domains?.has("settings")) && snapshot.settings !== undefined) {
     appSettings.set(normalizeSettings(snapshot.settings));
   }
-  if (wantAll || domains?.has("diary")) {
+  if ((wantAll || domains?.has("diary")) && snapshot.diary !== undefined) {
     diaryEntries.set(normalizeDiaryEntries(snapshot.diary));
   }
-  if (wantAll || domains?.has("ledger")) {
+  if ((wantAll || domains?.has("ledger")) && snapshot.ledger !== undefined) {
     ledgerData.set(normalizeLedger(snapshot.ledger));
   }
-  if (wantAll || domains?.has("schedule")) {
+  if ((wantAll || domains?.has("schedule")) && snapshot.schedule) {
     const current = get(appState);
     const entries = snapshot.schedule.tasks as ScheduleEntryV9[];
     scheduleEntries.set(new Map(entries.map((entry) => [entry.id, entry])));
     const runtimes = schedulerRuntimeKeys.reduce((acc, key) => {
-      acc[key] = snapshot.schedule.runtimes?.[key] || "";
+      acc[key] = snapshot.schedule?.runtimes?.[key] || "";
       return acc;
     }, { ...defaultSchedulerRuntimes });
     appState.set({
@@ -456,14 +501,21 @@ export async function refreshFromCore(domains?: string[]): Promise<void> {
     while (snapshotPending) {
       const all = pendingAllDomains;
       const requested = all ? undefined : new Set(pendingDomains);
+      // 域列表要在清空之前取走：快照按域裁剪，请求的就是这几个域。
+      const wanted = all ? undefined : [...pendingDomains];
       snapshotPending = false;
       pendingAllDomains = false;
       pendingDomains.clear();
       try {
-        const snapshot = await coreSnapshot();
+        const snapshot = await coreSnapshot(wanted);
         applySnapshot(snapshot, requested);
       } catch {
-        // 保留一次 pending；后续领域事件会重新触发，不丢失并发事件。
+        // 快照现在是**按域裁剪**的，所以失败的那几个域必须重新排回去：不然下一次 refresh
+        // 只拉它自己的域，这次失败的域就永远停在旧数据上（要等下一次全量水合才修得好）。
+        // 直接升级成「下次拉全部」——出错时保守一点，比漏掉一个域便宜。
+        // 仍然 break：不在这里紧凑重试，后续任意领域事件都会重新触发。
+        pendingAllDomains = true;
+        pendingDomains.clear();
         snapshotPending = true;
         break;
       }
@@ -475,8 +527,15 @@ export async function refreshFromCore(domains?: string[]): Promise<void> {
 
 async function listenCoreEvents(): Promise<void> {
   const { listen } = await import("@tauri-apps/api/event");
-  await listen<{ domain?: string }>("kxtodo://domain-changed", (event) => {
+  await listen<{ domain?: string; revision?: number }>("kxtodo://domain-changed", (event) => {
     const domain = event.payload?.domain;
+    const revision = event.payload?.revision;
+    // 这一版已经在手里了就别再拉一次：写操作的路径通常是「前端乐观更新 → dispatch →
+    // 显式 refreshFromCore」，而 Host 的域事件在 dispatch 内部就已经发出来了，
+    // 两边撞在一起就是同一次写入两轮完整快照。
+    if (domain && typeof revision === "number" && (appliedRevisions.get(domain) ?? 0) >= revision) {
+      return;
+    }
     void refreshFromCore(domain ? [domain] : undefined);
   });
 }
@@ -486,13 +545,19 @@ async function listenCoreEvents(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function hydrate(): Promise<void> {
+  // 启动路径上本来串行的三段（版本号 IPC → core 探测 IPC → 事件模块动态 import）并行发出去：
+  // 它们互不依赖，串起来就是在首屏数据到达之前白等三个往返。
+  // **事件监听本身仍然必须在快照之前注册完成**（否则会漏掉这期间发生的域事件），
+  // 这里只预热它的 chunk —— 真正的 listen 还在下面的 coreMode 分支里。
+  const versionReady = getAppVersion()
+    .then((version) => appVersion.set(version))
+    .catch(() => {
+      // 版本号缺失不阻塞启动
+    });
+  const coreReady = hasCoreDispatch();
+  void import("@tauri-apps/api/event").catch(() => undefined);
   try {
-    appVersion.set(await getAppVersion());
-  } catch {
-    // 版本号缺失不阻塞启动
-  }
-  try {
-    coreMode = await hasCoreDispatch();
+    coreMode = await coreReady;
   } catch (error) {
     // Desktop capability failures fail closed: never enter legacy full-save mode.
     coreMode = true;
@@ -500,6 +565,7 @@ export async function hydrate(): Promise<void> {
     showToast(`Domain Core 初始化失败，已禁止写入以保护数据：${String(error)}`, 10_000);
     return;
   }
+  await versionReady;
   if (coreMode) {
     await listenCoreEvents();
     let snapshotLoaded = false;

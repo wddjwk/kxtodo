@@ -32,10 +32,11 @@
   font-size: var(--font-drawer-title);
 }
 
+/* 头里的关闭「×」是个文字字形，跟它并排的 h2 一起缩放（默认 24 + 2 = 26px）。 */
 .drawer-header button {
   border: 0;
   background: transparent;
-  font-size: 26px;
+  font-size: calc(var(--font-drawer-title) + 2px);
 }
 
 .settings-drawer section {
@@ -433,14 +434,14 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: #444;
-  font-size: 12.5px;
+  font-size: calc(var(--ui-font-size) - 5.5px);
 }
 
 .sync-status-meta {
   flex: none;
   margin-left: auto;
   color: #8a8a8a;
-  font-size: 12px;
+  font-size: calc(var(--ui-font-size) - 6px);
   white-space: nowrap;
 }
 
@@ -475,7 +476,7 @@
   background: #fffaeb;
   color: #8a6a17;
   padding: 6px 10px;
-  font-size: 12.5px;
+  font-size: calc(var(--ui-font-size) - 5.5px);
 }
 
 /* 同步内容：三个勾选一行排开，详细说明收进各自的 title */
@@ -488,7 +489,7 @@
 
 .sync-group-label {
   color: #666;
-  font-size: 12.5px;
+  font-size: calc(var(--ui-font-size) - 5.5px);
 }
 
 .sync-scope {
@@ -496,7 +497,7 @@
   align-items: center;
   gap: 5px;
   color: #444;
-  font-size: 12.5px;
+  font-size: calc(var(--ui-font-size) - 5.5px);
   white-space: nowrap;
 }
 
@@ -520,7 +521,7 @@
   align-items: center;
   gap: 6px;
   color: #666;
-  font-size: 12.5px;
+  font-size: calc(var(--ui-font-size) - 5.5px);
   white-space: nowrap;
 }
 
@@ -598,7 +599,7 @@
   gap: 4px;
   padding: 1px 4px 7px;
   color: #666;
-  font-size: 12px;
+  font-size: calc(var(--ui-font-size) - 6px);
 }
 
 .sync-popover-head .spacer {
@@ -622,7 +623,7 @@
 .sync-popover p.muted {
   margin: 0;
   padding: 4px;
-  font-size: 12px;
+  font-size: calc(var(--ui-font-size) - 6px);
 }
 
 .sync-popover .secret {
@@ -784,7 +785,7 @@
 .update-available p {
   margin: 0 0 8px;
   color: #1f2937;
-  font-size: 13px;
+  font-size: calc(var(--ui-font-size) - 5px);
 }
 
 .settings-row > span:first-child {
@@ -806,13 +807,13 @@
 .update-status {
   margin: 8px 0 0;
   color: #1f2937;
-  font-size: 13px;
+  font-size: calc(var(--ui-font-size) - 5px);
 }
 
 .update-error {
   margin: 8px 0 0;
   color: #b42318;
-  font-size: 13px;
+  font-size: calc(var(--ui-font-size) - 5px);
 }
 
 /* 统一按钮：次要操作白底细边框（与菜单按钮同一语言），主操作 accent 填充 */

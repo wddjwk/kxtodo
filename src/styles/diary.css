@@ -588,7 +588,7 @@
 .diary-emoji-menu .emoji-pick-cell {
   width: 32px;
   height: 32px;
-  font-size: 18px;
+  font-size: var(--font-diary);
 }
 
 /* ---------- 背景图层（日记现在也支持背景图，与列表同一套 --bg-image 机制） ---------- */
@@ -609,7 +609,7 @@
    与 `.context-menu`、`.diary-fab-row` 自己的定位规则相同（都是 0,1,0），而本文件
    比 menu.css 晚加载 → 后来者赢，浮层菜单和浮动按钮全被改成 `position: relative`
    掉回正文流：菜单被拉成整行宽、又被 `.diary-view` 的 overflow:hidden 裁掉一半，
-   + 按钮跑到左下角。（`.workspace > *` 没这个病，因为 workspace.css 在 menu.css 之前。）
+   + 按钮跑到左下角。（workspace.css 开头那条同形状的规则也已经改成显式列举。）
    `.list-header` 自己就带 `position: relative; z-index: 20`，不必再列进来。 */
 .diary-view > .list-subtitle,
 .diary-view > .diary-search,

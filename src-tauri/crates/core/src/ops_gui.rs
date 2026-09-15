@@ -1,4 +1,11 @@
 //! gui namespace: GUI-sourced business writes (§4.3; internal, not a CLI surface).
+//!
+//! **这些命令一律不发域事件**（没有 `notify_host`）：调用方只有 GUI 桥，而前端在
+//! `actions.ts` 里是「先乐观更新 store、再 dispatch」，事件只会换来一次多余的全量快照往返。
+//! 纯 UI 状态写（select-node / set-collapsed / set-*-ui）另外还不进审计流，见
+//! `Repository::audit` 的 UI_ONLY_COMMANDS。**若将来把 gui.* 开放给 CLI 或出现第二个
+//! 消费者，必须给 apply-tree-order 与 import-state 这两个实质业务写补 `notify_host`**，
+//! 否则另一个进程改了树、正在跑的 GUI 永远不会回刷。
 
 use serde_json::{json, Value};
 
@@ -94,7 +101,10 @@ pub fn gui_dispatch(
                 .unwrap_or_default();
             let expanded = inv.params.get("expanded").and_then(Value::as_bool);
             let (_file, outcome) = ctx.repo.write_data(None, None, &inv.command, |file| {
-                for item in file.tasks.iter_mut().filter(|item| ids.contains(&item.id)) {
+                // 「展开全部」一次能带上几百个 id：用 HashSet，否则这里是 O(任务数 × id 数)。
+                let ids: std::collections::HashSet<&str> =
+                    ids.iter().map(String::as_str).collect();
+                for item in file.tasks.iter_mut().filter(|item| ids.contains(item.id.as_str())) {
                     if let Some(expanded) = expanded {
                         item.expanded = Some(expanded);
                     }
@@ -220,6 +230,9 @@ pub fn gui_dispatch(
                         "节点集合与当前数据不一致，请刷新后重试",
                     ));
                 }
+                // 真正换了父节点的 id：下面写 order 时要用它一起判定「这个节点变了」。
+                let mut reparented: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
                 for (id, parent) in &parent_changes {
                     let parent_id = if parent.is_null() {
                         None
@@ -236,6 +249,9 @@ pub fn gui_dispatch(
                     let node = task_ops::find_node_mut(file, id).ok_or_else(|| {
                         CoreError::not_found("NODE_NOT_FOUND", format!("未找到节点 {id}"))
                     })?;
+                    if node.parent_id != parent_id {
+                        reparented.insert(id.clone());
+                    }
                     node.parent_id = parent_id;
                 }
                 let position: std::collections::HashMap<&str, usize> = ordered_ids
@@ -258,7 +274,11 @@ pub fn gui_dispatch(
                     let next = orders.entry(group_key).or_insert(0.0);
                     let new_order = *next;
                     *next += 1.0;
-                    let changed = node.order != new_order;
+                    // **换了父节点也算变了**，不能只看 order：从「分类 A 第 3 位」拖到「根级第 3 位」
+                    // 时组内序号恰好相同，漏刷 updatedAt 的节点会被同步的 pushed 水位判成「已对账」
+                    // 而跳过推送 —— 移动分组在多设备间静默丢失，而同组其它节点却推了出去，
+                    // 对端的树因此不自洽。
+                    let changed = node.order != new_order || reparented.contains(&node.id);
                     node.order = new_order;
                     if changed {
                         node.updated_at = Some(now.clone());

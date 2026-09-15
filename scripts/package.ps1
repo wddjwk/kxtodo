@@ -201,7 +201,10 @@ try {
         }
 
         # Ensure the Android Rust targets are installed (idempotent).
-        rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android | Out-Null
+        # 只装两个 arm target：x86 / x86_64 纯为模拟器服务，却占掉 APK 一半体积
+        # （实测 71.5MB 里 35.4MB 是这两个 ABI 的 .so）。真机只有 arm64-v8a 与 armeabi-v7a，
+        # 移动端的回归验证走 Playwright + 系统 Edge，不依赖 x86 APK。
+        rustup target add aarch64-linux-android armv7-linux-androideabi | Out-Null
 
         # Initialise the Gradle project on first run.
         if (-not (Test-Path -LiteralPath (Join-Path $root "src-tauri\gen\android"))) {
@@ -232,13 +235,23 @@ try {
         # 版本号唯一来源是 git：gradle 读取 KXTODO_VERSION 环境变量生成 versionName/versionCode。
         $env:KXTODO_VERSION = $effectiveVersion
 
-        npx tauri android build --apk $verboseFlag
+        npx tauri android build --apk --target aarch64 --target armv7 $verboseFlag
         if ($LASTEXITCODE -ne 0) { throw "Android build failed" }
 
         $apkSearchRoot = Join-Path $root "src-tauri\gen\android\app\build\outputs\apk"
-        $apk = Get-ChildItem -Path $apkSearchRoot -Recurse -Filter "*.apk" -ErrorAction SilentlyContinue |
-          Sort-Object LastWriteTime -Descending |
+        # 优先 universal（两个 arm ABI 都在一个包里），其次 arm64-v8a，最后才按时间兜底：
+        # 显式给了 --target 之后 gradle 可能出的是逐 ABI 的包，「最新的那个」会在两个 ABI 之间摇摆。
+        $apk = Get-ChildItem -Path (Join-Path $apkSearchRoot "universal") -Recurse -Filter "*.apk" -ErrorAction SilentlyContinue |
           Select-Object -First 1
+        if (-not $apk) {
+          $apk = Get-ChildItem -Path (Join-Path $apkSearchRoot "arm64-v8a") -Recurse -Filter "*.apk" -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        }
+        if (-not $apk) {
+          $apk = Get-ChildItem -Path $apkSearchRoot -Recurse -Filter "*.apk" -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+        }
         if (-not $apk) {
           throw "Android build completed but no APK was found under $apkSearchRoot"
         }

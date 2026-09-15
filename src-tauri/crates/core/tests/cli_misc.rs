@@ -175,11 +175,16 @@ fn skills_commands_work_embedded() {
     assert_eq!(list["skills"][0]["source"], "embedded");
 
     let read = env.ok(&["skills", "read", "kxtodo"]);
-    assert!(read["content"]
-        .as_str()
-        .unwrap()
-        .contains("KXToDo Agent SKILL"));
-    assert_eq!(read["version"], 1);
+    let content = read["content"].as_str().unwrap();
+    // 断言结构而不是某一行的原文：文档会重写（v0.8.0 就重排过一次），
+    // 但 frontmatter 与 H1 必须在，`skills validate` 也靠 frontmatter 判 name/version。
+    assert!(content.contains("name: kxtodo"), "SKILL 必须有 frontmatter name");
+    assert!(content.contains("# KXToDo"), "SKILL 必须有一个 H1 标题");
+    assert_eq!(
+        read["version"].as_u64(),
+        Some(kxtodo_core::skills::SKILL_VERSION as u64),
+        "frontmatter 的 version 必须与 SKILL_VERSION 同步抬"
+    );
     assert_eq!(read["source"], "embedded");
 
     env.err(&["skills", "read", "unknown"], 3);
@@ -395,4 +400,137 @@ fn duration_parser_is_shared() {
     assert_eq!(format_duration(3_600_000), "1h");
     assert_eq!(format_duration(90_000), "90s");
     assert_eq!(format_duration(5200), "5200ms");
+}
+
+#[test]
+fn schema_exposes_limit_defaults_only_where_they_exist() {
+    let env = TestEnv::fresh();
+    // task / schedule 家族的 --limit 真有默认值：clap 的 default_value 让 schema 能机读到
+    for path in ["task.list", "task.find", "schedule.list", "schedule.find"] {
+        let schema = env.ok(&["schema", path]);
+        assert_eq!(
+            schema["params"]["--limit"]["default"],
+            serde_json::json!(["50"]),
+            "{path} 的 --limit 应带机读默认值"
+        );
+        assert!(
+            schema["params"]["--limit"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("50"),
+            "{path} 的帮助文案也要写出默认值"
+        );
+    }
+    let logs = env.ok(&["schema", "schedule.logs"]);
+    assert_eq!(logs["params"]["--limit"]["default"], serde_json::json!(["20"]));
+
+    // ledger / diary 的 --limit **刻意没有**默认值：不传就返回全部（记账是金融数据，
+    // 静默截断会让月合计算出残值）；但它们同样支持 --cursor / --all。
+    for path in ["ledger.list", "diary.list"] {
+        let schema = env.ok(&["schema", path]);
+        assert!(
+            schema["params"]["--limit"].get("default").is_none(),
+            "{path} 不该有默认 limit，否则等于改了默认行为"
+        );
+        assert!(
+            schema["params"]["--limit"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("不传则返回全部"),
+            "{path} 的帮助文案要说清楚不传就是全部"
+        );
+        assert!(schema["params"]["--cursor"].is_object(), "{path} 要有 --cursor");
+        assert!(schema["params"]["--all"].is_object(), "{path} 要有 --all");
+    }
+}
+
+#[test]
+fn jq_object_construction_and_comma_output() {
+    let env = TestEnv::fresh();
+    let entry = env.ok(&["task", "add", "--type", "entry", "--name", "e"]);
+    let entry_id = entry["id"].as_str().unwrap().to_string();
+    env.ok(&["task", "add", "--type", "item", "--entry-id", &entry_id, "--markdown", "任务甲"]);
+    env.ok(&["task", "add", "--type", "item", "--entry-id", &entry_id, "--markdown", "任务乙"]);
+
+    // {a, b}：简写取同名字段，`键: 路径` 是显式键名——常配 map() 把列表削成需要的字段
+    let objects = env.run(&[
+        "task", "list", "--type", "item", "--entry-id", &entry_id,
+        "--jq", ".data.items | map({markdown, done: .completed})",
+    ]);
+    assert_eq!(objects.code, 0, "{}", objects.stderr);
+    assert_eq!(
+        serde_json::from_str::<Value>(&objects.stdout).unwrap(),
+        serde_json::json!([
+            { "markdown": "任务甲", "done": false },
+            { "markdown": "任务乙", "done": false }
+        ])
+    );
+
+    // 顶层逗号：多个值按既有约定序列化成数组
+    let pair = env.run(&["task", "list", "--type", "item", "--jq", ".command, .ok"]);
+    assert_eq!(pair.code, 0, "{}", pair.stderr);
+    assert_eq!(
+        serde_json::from_str::<Value>(&pair.stdout).unwrap(),
+        serde_json::json!(["task.list", true])
+    );
+
+    // `,` 的优先级高于 `|`：`.a | .b, .c` = `.a | (.b, .c)`（两个分支都吃 items[0]，
+    // 不是「(.a | .b), .c」——那样第二个分支会去信封根上找 .completed 得到 null）
+    let nested = env.run(&[
+        "task", "list", "--type", "item", "--entry-id", &entry_id,
+        "--jq", ".data.items[0] | .markdown, .completed",
+    ]);
+    assert_eq!(nested.code, 0, "{}", nested.stderr);
+    assert_eq!(
+        serde_json::from_str::<Value>(&nested.stdout).unwrap(),
+        serde_json::json!(["任务甲", false])
+    );
+
+    // 写错就是退出码 2，且 hint 里内联了支持清单（不必再跑一次 schema jq）
+    let bad = env.run(&["task", "tree", "--jq", "{,id}"]);
+    assert_eq!(bad.code, 2);
+    let hint = bad.stderr_envelope()["error"]["hint"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    for token in ["{a, b}", ".a, .b", "map(", "select(", "schema jq"] {
+        assert!(hint.contains(token), "hint 里应内联 `{token}`：{hint}");
+    }
+}
+
+#[test]
+fn jq_overrides_format_but_says_so_on_stderr_only() {
+    let env = TestEnv::fresh();
+    env.ok(&["task", "add", "--type", "category", "--name", "c"]);
+
+    let result = env.run(&[
+        "task", "list", "--type", "category", "--format", "table", "--jq", ".data.items | length",
+    ]);
+    assert_eq!(result.code, 0, "{}", result.stderr);
+    // stdout 必须仍是可被脚本解析的纯 JSON——提示一个字都不能进去
+    assert_eq!(result.stdout.trim(), "1");
+    assert!(
+        serde_json::from_str::<Value>(result.stdout.trim()).is_ok(),
+        "stdout 不是纯 JSON：{}",
+        result.stdout
+    );
+    assert!(
+        result.stderr.contains("--jq") && result.stderr.contains("table"),
+        "stderr 应说明 --format table 被忽略：{}",
+        result.stderr
+    );
+
+    // 不冲突时（缺省 = json）不给提示
+    let quiet = env.run(&["task", "list", "--type", "category", "--jq", ".data.items | length"]);
+    assert_eq!(quiet.code, 0, "{}", quiet.stderr);
+    assert_eq!(quiet.stderr, "", "默认 json 不该有提示：{}", quiet.stderr);
+
+    // --jq 自己失败时 stderr 仍然只是错误信封（调用方要解析它，不能拼提示）
+    let failed = env.run(&[
+        "task", "list", "--type", "category", "--format", "pretty", "--jq", ".data.items | keys",
+    ]);
+    assert_eq!(failed.code, 2);
+    let envelope = failed.stderr_envelope();
+    assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["error"]["code"], "JQ_TYPE");
 }

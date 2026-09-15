@@ -89,7 +89,7 @@
   display: flex;
   gap: 10px;
   align-items: baseline;
-  font-size: 12px;
+  font-size: calc(var(--font-control) - 6px);
   line-height: 1.5;
 }
 
@@ -138,7 +138,7 @@
   margin-right: auto;
   color: #5b6472;
   font-family: "Cascadia Mono", Consolas, monospace;
-  font-size: 11px;
+  font-size: calc(var(--font-control) - 7px);
   letter-spacing: 0.03em;
   text-transform: uppercase;
 }
@@ -149,7 +149,7 @@
   padding: 2px 8px;
   background: transparent;
   color: #5b6472;
-  font-size: 11px;
+  font-size: calc(var(--font-control) - 7px);
   cursor: pointer;
 }
 
@@ -197,7 +197,7 @@
   margin-right: auto;
   color: #5b6472;
   font-family: "Cascadia Mono", Consolas, monospace;
-  font-size: 11px;
+  font-size: calc(var(--font-control) - 7px);
   text-transform: uppercase;
 }
 
@@ -207,7 +207,7 @@
   padding: 2px 8px;
   background: transparent;
   color: #5b6472;
-  font-size: 11px;
+  font-size: calc(var(--font-control) - 7px);
   cursor: pointer;
 }
 
@@ -245,7 +245,7 @@
 .diagram-loading,
 .diagram-error {
   color: #8a94a2;
-  font-size: 12px;
+  font-size: calc(var(--font-control) - 6px);
 }
 
 .diagram-error {
@@ -284,7 +284,7 @@ pre.diagram-source {
   padding: 8px 14px;
   border-bottom: 1px solid #e3e6ea;
   color: #5b6472;
-  font-size: 12px;
+  font-size: calc(var(--font-control) - 6px);
 }
 
 .md-fullscreen-close {
@@ -294,7 +294,7 @@ pre.diagram-source {
   padding: 5px 12px;
   background: #ffffff;
   color: #1f2937;
-  font-size: 12px;
+  font-size: calc(var(--font-control) - 6px);
   cursor: pointer;
 }
 

@@ -20,6 +20,18 @@ export default defineConfig({
   build: {
     target: process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari13",
     minify: process.env.TAURI_ENV_DEBUG ? false : "esbuild",
-    sourcemap: Boolean(process.env.TAURI_ENV_DEBUG)
+    sourcemap: Boolean(process.env.TAURI_ENV_DEBUG),
+    rollupOptions: {
+      output: {
+        // KaTeX 有两个引用方（markdown.ts 的公式渲染、mermaid 内部的数学标签），
+        // rollup 的默认启发式会把它**打两份**：一份进首屏 entry，一份 261KB 的独立 chunk。
+        // 强制收成一个共享 chunk，两边都 import 它。其余模块一律交回默认拆分
+        // （返回 undefined），别去干扰 mermaid 那套已经调好的懒加载 chunk。
+        manualChunks(id: string): string | undefined {
+          if (id.includes("node_modules/katex/")) return "katex";
+          return undefined;
+        }
+      }
+    }
   }
 });

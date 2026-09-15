@@ -150,7 +150,7 @@ pub enum Commands {
     },
     /// 读写日记（按日期归档的 Markdown 记录）
     #[command(
-        long_about = "日记与 task 平行：以「归属日期」为核心属性，一天可以有多篇，正文/标题/心情/天气/标签均可选。\n日记住在自己的 diary.json 里（独立的第四个领域文件，独立的 revision 与域事件）。\n\n动作：\n  add      新增一篇（--date 缺省为今天）\n  get      按稳定 ID 读取\n  list     列出（--date 某天 / --from --to 区间 / --limit）\n  modify   修改（改日期、标题、正文、心情、天气、标签）\n  remove   删除（high-risk-write）\n  export   导出成压缩包：年/月/YYYYMMDD[_序号][_标题].md，元数据在 YAML front-matter 里\n  import   从导出的压缩包导入（同一天已有日记不算冲突，直接当成另一篇）\n\n示例：\n  kxtodo-cli diary add --markdown \"今天把同步分层重构完了\" --mood 🙂 --weather ☀️\n  kxtodo-cli diary add --date 2026-09-01 --title \"开学\" --markdown-file note.md\n  kxtodo-cli diary list --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli diary modify --id diary-xxxx --date 2026-09-02\n  kxtodo-cli diary remove --id diary-xxxx --yes\n  kxtodo-cli diary export --out diary.zip\n  kxtodo-cli diary export --out 2026-09.zip --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli diary import --zip diary.zip --yes"
+        long_about = "日记与 task 平行：以「归属日期」为核心属性，一天可以有多篇，正文/标题/心情/天气/标签均可选。\n日记住在自己的 diary.json 里（独立的第四个领域文件，独立的 revision 与域事件）。\n\n动作：\n  add      新增一篇（--date 缺省为今天）\n  get      按稳定 ID 读取\n  list     列出（--date 某天 / --from --to 区间 / --limit / --cursor / --all，不传 --limit 返回全部）\n  modify   修改（改日期、标题、正文、心情、天气、标签）\n  remove   删除（high-risk-write）\n  export   导出成压缩包：年/月/YYYYMMDD[_序号][_标题].md，元数据在 YAML front-matter 里\n  import   从导出的压缩包导入（同一天已有日记不算冲突，直接当成另一篇）\n\n示例：\n  kxtodo-cli diary add --markdown \"今天把同步分层重构完了\" --mood 🙂 --weather ☀️\n  kxtodo-cli diary add --date 2026-09-01 --title \"开学\" --markdown-file note.md\n  kxtodo-cli diary list --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli diary modify --id diary-xxxx --date 2026-09-02\n  kxtodo-cli diary remove --id diary-xxxx --yes\n  kxtodo-cli diary export --out diary.zip\n  kxtodo-cli diary export --out 2026-09.zip --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli diary import --zip diary.zip --yes"
     )]
     Diary {
         #[command(subcommand)]
@@ -158,7 +158,7 @@ pub enum Commands {
     },
     /// 记账：收支流水、资金账户、两级分类、统计与 Excel 导入导出
     #[command(
-        long_about = "记账与 diary 平行但自成一域：账本住在自己的 ledger.json 里（第五个领域文件）。\n金额一律按「元」输入（CLI 与 Excel 都是两位小数的元），core 内部存整数分。\n转账（transfer）不计入收支统计，只改两个账户的余额。\n\n**金融数据敏感**：所有写动作（add/transfer/modify/remove/account-add/account-modify/account-remove/\ncategory-add/category-modify/category-remove/import）一律 high-risk-write——必须先向用户说明这次改动\n并得到明确同意，再带 --yes 执行；未带 --yes 返回退出码 10。\n读动作（get/list/accounts/categories/stats/balance/export）永远不需要确认。\n\n动作：\n  add            记一笔（--kind expense|income，--amount 元，--account 账户名或 ID）\n  transfer       账户间转账（--from --to --amount）\n  get / list     读取 / 列出（--date 某天、--from --to 区间、--kind、--account、--category）\n  modify         修改一笔\n  remove         删除一笔\n  accounts       列出账户与各自余额、净资产\n  account-add / account-modify / account-remove   账户管理（名下有账的账户不让删）\n  categories     列出两级分类（--side expense|income）\n  category-add / category-modify / category-remove 分类管理（删大类连带子分类）\n  stats          统计：--month 2026-09 或 --year 2026 或 --from --to；输出合计、逐日/逐月序列、大类占比\n  balance        资产：各账户余额 + 净资产/总资产/总负债\n  export         导出 zip（内含 kxtodo-ledger.xlsx：说明/账户/分类/账目 四张表）\n  import         从导出的 zip 或裸 xlsx 导入（账户/分类按名字合并，缺的自动建）\n\n示例：\n  kxtodo-cli ledger add --amount 30 --account 微信 --category 午餐 --note 小面 --yes\n  kxtodo-cli ledger add --kind income --amount 18155 --account 储蓄卡 --category 工资薪金 --yes\n  kxtodo-cli ledger transfer --from 储蓄卡 --to 微信 --amount 2000 --yes\n  kxtodo-cli ledger list --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli ledger stats --month 2026-09\n  kxtodo-cli ledger balance\n  kxtodo-cli ledger export --out kxtodo-ledger.zip\n  kxtodo-cli ledger export --out 2026-09.zip --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli ledger import --file kxtodo-ledger.zip --yes"
+        long_about = "记账与 diary 平行但自成一域：账本住在自己的 ledger.json 里（第五个领域文件）。\n金额一律按「元」输入（CLI 与 Excel 都是两位小数的元），core 内部存整数分。\n转账（transfer）不计入收支统计，只改两个账户的余额。\n\n**金融数据敏感**：所有写动作（add/transfer/modify/remove/account-add/account-modify/account-remove/\ncategory-add/category-modify/category-remove/import）一律 high-risk-write——必须先向用户说明这次改动\n并得到明确同意，再带 --yes 执行；未带 --yes 返回退出码 10。\n读动作（get/list/accounts/categories/stats/balance/export）永远不需要确认。\n\n动作：\n  add            记一笔（--kind expense|income，--amount 元，--account 账户名或 ID）\n  transfer       账户间转账（--from --to --amount）\n  get / list     读取 / 列出（--date 某天、--from --to 区间、--kind、--account、--category；list 另有 --limit/--cursor/--all，不传 --limit 返回全部）\n  modify         修改一笔\n  remove         删除一笔\n  accounts       列出账户与各自余额、净资产\n  account-add / account-modify / account-remove   账户管理（名下有账的账户不让删）\n  categories     列出两级分类（--side expense|income）\n  category-add / category-modify / category-remove 分类管理（删大类连带子分类）\n  stats          统计：--month 2026-09 或 --year 2026 或 --from --to；输出合计、逐日/逐月序列（区间 ≤62 天按天且 series 严格跟着 --from/--to，更长按月）、大类占比\n  balance        资产：各账户余额 + 净资产/总资产/总负债\n  export         导出 zip（内含 kxtodo-ledger.xlsx：说明/账户/分类/账目 四张表）\n  import         从导出的 zip 或裸 xlsx 导入（账户/分类按名字合并，缺的自动建）\n\n示例：\n  kxtodo-cli ledger add --amount 30 --account 微信 --category 午餐 --note 小面 --yes\n  kxtodo-cli ledger add --kind income --amount 18155 --account 储蓄卡 --category 工资薪金 --yes\n  kxtodo-cli ledger transfer --from 储蓄卡 --to 微信 --amount 2000 --yes\n  kxtodo-cli ledger list --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli ledger stats --month 2026-09\n  kxtodo-cli ledger balance\n  kxtodo-cli ledger export --out kxtodo-ledger.zip\n  kxtodo-cli ledger export --out 2026-09.zip --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli ledger import --file kxtodo-ledger.zip --yes"
     )]
     Ledger {
         #[command(subcommand)]
@@ -421,9 +421,9 @@ pub struct TaskListArgs {
     #[arg(long, value_name = "asc|desc")]
     pub order: Option<String>,
     /// 每页数量（默认 50）
-    #[arg(long, value_name = "n")]
+    #[arg(long, value_name = "n", default_value = "50")]
     pub limit: Option<u64>,
-    /// 分页游标
+    /// 分页游标（取上一页 meta.nextCursor）
     #[arg(long, value_name = "cursor")]
     pub cursor: Option<String>,
     /// 输出全部（忽略分页）
@@ -494,13 +494,13 @@ pub struct TaskFindArgs {
     /// 排序方向
     #[arg(long, value_name = "asc|desc")]
     pub order: Option<String>,
-    /// 每页数量
-    #[arg(long, value_name = "n")]
+    /// 每页数量（默认 50）
+    #[arg(long, value_name = "n", default_value = "50")]
     pub limit: Option<u64>,
-    /// 分页游标
+    /// 分页游标（取上一页 meta.nextCursor）
     #[arg(long, value_name = "cursor")]
     pub cursor: Option<String>,
-    /// 输出全部
+    /// 输出全部（忽略分页）
     #[arg(long)]
     pub all: bool,
 }
@@ -620,7 +620,7 @@ pub enum DiaryAction {
     Get(DiaryIdArgs),
     /// 列出日记（Risk: read）
     #[command(
-        long_about = "Risk: read\n\n按日期由近及远输出（同一天内按写作先后）。\n--date 只看某天；--from/--to 限定日期区间；--limit 截断条数。\n\n示例：\n  kxtodo-cli diary list --date 2026-09-08\n  kxtodo-cli diary list --from 2026-09-01 --to 2026-09-30 --limit 20"
+        long_about = "Risk: read\n\n按日期由近及远输出（同一天内按写作先后）。\n--date 只看某天；--from/--to 限定日期区间。\n分页：--limit 截断条数（不传则返回全部，这一点与 task list 的默认 50 刻意不同）、--cursor 翻页、--all 强制全部。\ndata.total 是**过滤后**命中的篇数（同一个值也写进 meta.count，--format table/pretty 的合计行读它）、\ndata.returned 是本页篇数，还有下一页时游标在 meta.nextCursor。\n\n示例：\n  kxtodo-cli diary list --date 2026-09-08\n  kxtodo-cli diary list --from 2026-09-01 --to 2026-09-30 --limit 20\n  kxtodo-cli diary list --from 2026-09-01 --to 2026-09-30 --jq \".data.total\"   # 这个月写了几篇\n  kxtodo-cli diary list --limit 20 --cursor 20"
     )]
     List(DiaryListArgs),
     /// 修改一篇日记（Risk: write）
@@ -696,9 +696,15 @@ pub struct DiaryListArgs {
     /// 结束日期（含）
     #[arg(long, value_name = "date")]
     pub to: Option<String>,
-    /// 最多返回条数
+    /// 最多返回条数（不传则返回全部；刻意没有 task list 那样的默认 50）
     #[arg(long, value_name = "n")]
     pub limit: Option<u64>,
+    /// 分页游标（取上一页 meta.nextCursor）
+    #[arg(long, value_name = "cursor")]
+    pub cursor: Option<String>,
+    /// 输出全部（忽略分页）
+    #[arg(long)]
+    pub all: bool,
 }
 
 #[derive(Debug, Args, Serialize)]
@@ -773,7 +779,7 @@ pub enum LedgerAction {
     Get(LedgerIdArgs),
     /// 列出账目（Risk: read）
     #[command(
-        long_about = "Risk: read\n\n按日期由近及远输出。\n--date 只看某天；--from/--to 限定区间；--kind 只看一类；--account/--category 按名字或 ID 过滤；--limit 截断。\n\n示例：\n  kxtodo-cli ledger list --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli ledger list --kind income --limit 10"
+        long_about = "Risk: read\n\n按日期由近及远输出。\n--date 只看某天；--from/--to 限定区间；--kind 只看一类；--account/--category 按名字或 ID 过滤。\n分页：--limit 截断条数（不传则返回全部——记账是金融数据，静默截断会让月合计算出残值，\n所以这里刻意没有 task list 那样的默认 50）、--cursor 翻页、--all 强制全部。\ndata.total 是过滤后的总笔数（同一个值也写进 meta.count，--format table/pretty 的合计行读它）、\ndata.returned 是本页笔数，还有下一页时游标在 meta.nextCursor。\n\n示例：\n  kxtodo-cli ledger list --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli ledger list --kind income --limit 10\n  kxtodo-cli ledger list --limit 10 --cursor 10"
     )]
     List(LedgerListArgs),
     /// 修改一笔（Risk: high-risk-write）
@@ -866,7 +872,7 @@ pub enum LedgerAction {
     IconList,
     /// 收支统计（Risk: read）
     #[command(
-        long_about = "Risk: read\n\n--month 2026-09 / --year 2026 / --from --to 三选一（都不给 = 全量）。\n输出：合计（收入/支出/结余/转账）、逐日或逐月序列、大类占比（含笔数与百分比）。\n--side 只统计一侧的占比。\n\n示例：\n  kxtodo-cli ledger stats --month 2026-09\n  kxtodo-cli ledger stats --year 2026 --side expense"
+        long_about = "Risk: read\n\n--month 2026-09 / --year 2026 / --from --to 三选一（都不给 = 全量）。\n输出：range（from/to/grain/label）、合计（收入/支出/结余/转账）、逐日或逐月序列、大类占比（含笔数与百分比）。\ngrain 与 series 的横轴：区间不超过 62 天（约两个月）按 day，series 严格逐日枚举 --from..--to（含两端、空档补零）；\n更长的区间按 month 逐月枚举。门槛与 GUI 的统计视图同一个数（core 有测试钉住），两边不会给出不同粒度。\n不给 --from/--to 的开区间按账目里出现过的日期/月份收表，不枚举空档。\n--side 只统计一侧的占比。\n\n示例：\n  kxtodo-cli ledger stats --month 2026-09\n  kxtodo-cli ledger stats --year 2026 --side expense\n  kxtodo-cli ledger stats --from 2026-09-14 --to 2026-09-21   # series 就是这 8 天，不是整月\n  kxtodo-cli ledger stats --from 2026-09-01 --to 2026-10-31 --jq \".data.series\"   # 跨月也逐日（61 天）"
     )]
     Stats(LedgerStatsArgs),
     /// 资产总览（Risk: read）
@@ -972,9 +978,15 @@ pub struct LedgerListArgs {
     /// 按分类过滤（名或 ID）
     #[arg(long, value_name = "name|id")]
     pub category: Option<String>,
-    /// 最多返回条数
+    /// 最多返回条数（不传则返回全部；刻意没有 task list 那样的默认 50）
     #[arg(long, value_name = "n")]
     pub limit: Option<u64>,
+    /// 分页游标（取上一页 meta.nextCursor）
+    #[arg(long, value_name = "cursor")]
+    pub cursor: Option<String>,
+    /// 输出全部（忽略分页）
+    #[arg(long)]
+    pub all: bool,
 }
 
 #[derive(Debug, Args, Serialize)]
@@ -1332,13 +1344,13 @@ pub struct ScheduleListArgs {
     /// 排序方向
     #[arg(long, value_name = "asc|desc")]
     pub order: Option<String>,
-    /// 每页数量
-    #[arg(long, value_name = "n")]
+    /// 每页数量（默认 50）
+    #[arg(long, value_name = "n", default_value = "50")]
     pub limit: Option<u64>,
-    /// 分页游标
+    /// 分页游标（取上一页 meta.nextCursor）
     #[arg(long, value_name = "cursor")]
     pub cursor: Option<String>,
-    /// 输出全部
+    /// 输出全部（忽略分页）
     #[arg(long)]
     pub all: bool,
 }
@@ -1380,13 +1392,13 @@ pub struct ScheduleFindArgs {
     /// 排序方向
     #[arg(long, value_name = "asc|desc")]
     pub order: Option<String>,
-    /// 每页数量
-    #[arg(long, value_name = "n")]
+    /// 每页数量（默认 50）
+    #[arg(long, value_name = "n", default_value = "50")]
     pub limit: Option<u64>,
-    /// 分页游标
+    /// 分页游标（取上一页 meta.nextCursor）
     #[arg(long, value_name = "cursor")]
     pub cursor: Option<String>,
-    /// 输出全部
+    /// 输出全部（忽略分页）
     #[arg(long)]
     pub all: bool,
 }
@@ -1420,7 +1432,7 @@ pub struct ScheduleLogsArgs {
     #[arg(long, value_name = "id")]
     pub id: String,
     /// 最近 N 次记录（默认 20）
-    #[arg(long, value_name = "n")]
+    #[arg(long, value_name = "n", default_value = "20")]
     pub limit: Option<u64>,
 }
 

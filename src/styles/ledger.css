@@ -954,7 +954,7 @@
 
 .ledger-chart-axis {
   fill: #9aa1ac;
-  font-size: 11px;
+  font-size: calc(var(--font-ledger) - 7px);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1166,24 +1166,24 @@
 
 .ledger-donut-tag {
   fill: #6b7280;
-  font-size: 13px;
+  font-size: calc(var(--font-ledger) - 5px);
 }
 
 .ledger-donut-label {
   fill: #8b929e;
-  font-size: 14px;
+  font-size: calc(var(--font-ledger) - 4px);
 }
 
 .ledger-donut-value {
   fill: #2b3038;
-  font-size: 24px;
+  font-size: calc(var(--font-ledger) + 6px);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
 }
 
 .ledger-donut-note {
   fill: #9aa1ac;
-  font-size: 12px;
+  font-size: calc(var(--font-ledger) - 6px);
   font-variant-numeric: tabular-nums;
 }
 
@@ -2398,7 +2398,7 @@
   border-radius: 8px;
   background: var(--side, var(--accent));
   color: #ffffff;
-  font-size: 9.5px;
+  font-size: calc(var(--font-ledger) - 8.5px);
   font-style: normal;
   font-variant-numeric: tabular-nums;
   line-height: 14px;
@@ -3059,7 +3059,7 @@
   border-radius: 999px;
   background: rgb(255 255 255 / 12%);
   color: rgb(255 255 255 / 88%);
-  font-size: 12px;
+  font-size: calc(var(--font-ledger) - 6px);
   font-variant-numeric: tabular-nums;
   transform: translateX(-50%);
   user-select: none;

@@ -190,11 +190,11 @@
 }
 
 .app-shell.mobile .sync-status-text {
-  font-size: 12px;
+  font-size: calc(var(--font-control) - 6px);
 }
 
 .app-shell.mobile .sync-status-meta {
-  font-size: 11.5px;
+  font-size: calc(var(--font-control) - 6.5px);
 }
 
 .app-shell.mobile .sync-card .settings-row.sync-actions {
@@ -203,7 +203,7 @@
 
 .app-shell.mobile .sync-actions > .settings-button {
   padding: 9px 4px;
-  font-size: 12.5px;
+  font-size: calc(var(--font-control) - 5.5px);
 }
 
 .app-shell.mobile .sync-popover .discovery-item {
@@ -213,14 +213,14 @@
 
 /* 「最近同步」是一整串时间戳 + 计数，窄屏缩一号字，长了允许折行而不是挤掉标签 */
 .app-shell.mobile .sync-stamp {
-  font-size: 11.5px;
+  font-size: calc(var(--font-control) - 6.5px);
   line-height: 1.45;
   white-space: normal;
 }
 
 /* Smaller title font on mobile */
 .app-shell.mobile h1 {
-  font-size: 24px;
+  font-size: calc(var(--font-control) + 6px);
 }
 
 .app-shell.mobile .header-actions {
@@ -281,7 +281,7 @@
 
 .app-shell.mobile .header-menu-panel .menu-item-button {
   padding: 10px 12px;
-  font-size: 15px;
+  font-size: calc(var(--font-control) - 3px);
   min-height: 44px;
 }
 
@@ -297,7 +297,7 @@
 
 .app-shell.mobile .context-menu .menu-item-button {
   padding: 10px 12px;
-  font-size: 15px;
+  font-size: calc(var(--font-control) - 3px);
   min-height: 44px;
 }
 
@@ -436,7 +436,7 @@
 
 .app-shell.mobile .md-fullscreen-close {
   padding: 8px 14px;
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
 }
 
 /* Insert image button on mobile */
@@ -476,12 +476,12 @@
 
 .app-shell.mobile .planned-group-chip {
   min-height: 36px;
-  font-size: 14px;
+  font-size: calc(var(--font-control) - 4px);
 }
 
 .app-shell.mobile .planned-group-panel .menu-item-button {
   padding: 10px 12px;
-  font-size: 15px;
+  font-size: calc(var(--font-control) - 3px);
   min-height: 44px;
 }
 
@@ -662,7 +662,7 @@
   gap: 9px;
   padding: 54px 12px;
   color: #8b929e;
-  font-size: 15px;
+  font-size: calc(var(--font-control) - 3px);
 }
 
 /* 移动端编辑器元数据行只留图标：占位文字（心情/天气/标签）隐藏，已选的值（表情/天气

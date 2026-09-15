@@ -679,20 +679,6 @@ fn execute_standalone(
             }
         }
     };
-    // Run pending migrations before any operation. doctor is exempt: it must
-    // be able to report corrupted/unmigrated data instead of failing up front.
-    if inv.command != "doctor" {
-        if let Err(error) = repo.load_all() {
-            return ExecOutcome {
-                code: error.exit_code(),
-                envelope: crate::envelope::failure(
-                    &inv.command,
-                    &error,
-                    crate::envelope::Meta::default(),
-                ),
-            };
-        }
-    }
     let ctx = ExecContext {
         repo: &repo,
         cwd: crate::ipc::normalize_absolute_path(

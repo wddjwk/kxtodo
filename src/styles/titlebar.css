@@ -15,7 +15,7 @@
   align-items: center;
   gap: 12px;
   color: #202020;
-  font-size: 16px;
+  font-size: calc(var(--font-control) - 2px);
   font-weight: 500;
 }
 
@@ -40,7 +40,7 @@
   border: 0;
   background: transparent;
   color: #444;
-  font-size: 16px;
+  font-size: calc(var(--font-control) - 2px);
   line-height: 1;
 }
 

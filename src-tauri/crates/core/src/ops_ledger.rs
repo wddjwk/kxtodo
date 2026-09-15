@@ -6,13 +6,14 @@
 //! 金额一律**整数分**（i64）：浮点累加在统计里会 drift，而分是记账的最小单位。
 //! 对外（CLI/Excel/JSON 输出）同时给 `amountCents` 与两位小数的 `amount` 字符串。
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+use chrono::NaiveDate;
 use serde_json::{json, Map, Value};
 
 use crate::core::{
     apply_write_outcome, idem_summary, notify_host, param_str, require_confirmation, required_str,
-    set_read_revision, ExecContext, Invocation,
+    set_read_revision, unbounded_page_from, ExecContext, Invocation,
 };
 use crate::diary_archive::is_safe_image_name;
 use crate::envelope::Meta;
@@ -22,6 +23,7 @@ use crate::model::{
     default_account_kind, LedgerAccount, LedgerAccountType, LedgerCategory, LedgerEntry,
     LedgerFile, LedgerKind, LedgerSide, ACCOUNT_KIND_CREDIT, LEDGER_IMAGE_NODE,
 };
+use crate::ops_task::paginate;
 use crate::repo::Domain;
 use crate::time::{now_iso, parse_date, today_local};
 
@@ -170,18 +172,24 @@ pub(crate) fn parse_cents(raw: &str) -> Option<i64> {
     if !whole.chars().all(|c| c.is_ascii_digit()) || !frac.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }
-    let whole_cents: i128 = whole
-        .trim_start_matches('0')
-        .parse::<i128>()
-        .unwrap_or(0)
-        .checked_mul(100)?;
+    // 全是 0（`"0"` / `"000"`）→ 0；否则解析失败就是真的溢出（i128 装不下 39 位以上），
+    // **必须拒**：早先这里是 `.unwrap_or(0)`，于是「四十位数字的 --initial」被静默当成 0
+    // ——`ledger add` 有 `amount_cents <= 0` 的写入门兜住（只是报错误导），而
+    // `account-modify --initial/--balance` 里 0 是合法值，会真的把期初写成 0。
+    let trimmed = whole.trim_start_matches('0');
+    let whole_units: i128 = if trimmed.is_empty() {
+        0
+    } else {
+        trimmed.parse::<i128>().ok()?
+    };
+    let whole_cents: i128 = whole_units.checked_mul(100)?;
     // 两位小数截到分，第三位四舍五入
     let frac_digits: String = format!("{frac:0<3}");
     let tenths_hundredths: i128 = frac_digits[0..2].parse().ok()?;
     let third: i128 = frac_digits[2..3].parse().ok()?;
-    let mut cents = whole_cents + tenths_hundredths;
+    let mut cents = whole_cents.checked_add(tenths_hundredths)?;
     if third >= 5 {
-        cents += 1;
+        cents = cents.checked_add(1)?;
     }
     if negative {
         cents = -cents;
@@ -695,7 +703,7 @@ fn ledger_list(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResu
         }
         None => None,
     };
-    let limit = params.get("limit").and_then(Value::as_u64);
+    let page = unbounded_page_from(params)?;
 
     let mut entries: Vec<LedgerEntry> = file
         .entries
@@ -731,10 +739,13 @@ fn ledger_list(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResu
         .cloned()
         .collect();
     sort_entries(&mut entries);
+    // data.total 是「过滤后的全部」，与分页无关（不给 --limit 时它就等于 returned）
     let total = entries.len() as u64;
-    if let Some(limit) = limit {
-        entries.truncate(limit as usize);
-    }
+    let (entries, next_cursor, _) = paginate(entries, &page);
+    // meta 与 data 双写同一份分页元信息：render 的人类可读输出（table/pretty）只认
+    // meta.count，缺了它 ledger list 在这两种格式下就退化成逐行裸 JSON、没有「共 N 条」。
+    meta.count = Some(total as usize);
+    meta.next_cursor = next_cursor;
     let items: Vec<Value> = entries.iter().map(|entry| entry_view(&file, entry)).collect();
     Ok(json!({ "total": total, "returned": items.len(), "items": items }))
 }
@@ -1565,13 +1576,16 @@ fn stats_range(params: &Value) -> CoreResult<StatsRange> {
         let to = param_str(params, "to");
         let from = match from {
             Some(raw) => parse_date(&raw)?,
-            None => "0000-01-01".to_string(),
+            None => OPEN_FROM.to_string(),
         };
         let to = match to {
             Some(raw) => parse_date(&raw)?,
-            None => "9999-12-31".to_string(),
+            None => OPEN_TO.to_string(),
         };
-        let grain = if from.len() >= 7 && to.len() >= 7 && from[0..7] == to[0..7] {
+        // 跨度不超过两个月（含两端 ≤62 天）就按天，否则按月。
+        // 早先的判据是「from 与 to 落在同一个自然月」，于是 09-28 ~ 10-03 这种
+        // 跨月的周报区间会被摊成两个月桶，调用方拿不到自己指定范围内的日粒度。
+        let grain = if span_days(&from, &to).is_some_and(|days| days <= DAY_GRAIN_MAX_DAYS) {
             "day"
         } else {
             "month"
@@ -1595,6 +1609,92 @@ fn last_day_of_month(year: i32, month: u32) -> u32 {
     }
 }
 
+/// 不给 --from / --to 时的哨兵边界（「全量范围」）。
+const OPEN_FROM: &str = "0000-01-01";
+const OPEN_TO: &str = "9999-12-31";
+/// 日粒度的跨度上限（含两端）。**必须与前端 `src/lib/ledger.ts::bucketOf` 同一个数**：
+/// 两边各自判一次，门槛不同的话同一段区间 GUI 画日桶、CLI 给月桶（v0.8.0 之前
+/// 前端是 62、这里是「同一个自然月」，32~62 天的自定义区间两边结论相反）。
+const DAY_GRAIN_MAX_DAYS: i64 = 62;
+/// 序列横轴的硬顶：day 粒度只在 ≤62 天的区间上生效、month 粒度也轮不到一千个月，
+/// 这个上限纯属防御，别让一个畸形区间生成上百万个空档。
+const MAX_SERIES_KEYS: usize = 1200;
+
+/// 闭区间 `[from, to]` 的天数（含两端）；任一端不是合法日期就 None。
+fn span_days(from: &str, to: &str) -> Option<i64> {
+    let start = NaiveDate::parse_from_str(from, "%Y-%m-%d").ok()?;
+    let end = NaiveDate::parse_from_str(to, "%Y-%m-%d").ok()?;
+    (end - start).num_days().checked_add(1)
+}
+
+/// 逐日枚举 `[from, to]`（含两端）。跨月、跨年、闰月都由 chrono 兜住；
+/// `to` 早于 `from` 时返回空表（倒挂的区间里没有任何一天）。
+fn enumerate_days(from: &str, to: &str) -> Vec<String> {
+    let (Ok(start), Ok(end)) = (
+        NaiveDate::parse_from_str(from, "%Y-%m-%d"),
+        NaiveDate::parse_from_str(to, "%Y-%m-%d"),
+    ) else {
+        return Vec::new();
+    };
+    let mut keys = Vec::new();
+    let mut cursor = start;
+    while cursor <= end && keys.len() < MAX_SERIES_KEYS {
+        keys.push(cursor.format("%Y-%m-%d").to_string());
+        let Some(next) = cursor.succ_opt() else { break };
+        cursor = next;
+    }
+    keys
+}
+
+/// 逐月枚举 `[from, to]` 覆盖到的 `YYYY-MM`（含两端）。
+fn enumerate_months(from: &str, to: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    let mut year: i32 = from[0..4].parse().unwrap_or(1970);
+    let mut month: u32 = from[5..7].parse().unwrap_or(1);
+    let end_year: i32 = to[0..4].parse().unwrap_or(9999);
+    let end_month: u32 = to[5..7].parse().unwrap_or(12);
+    while (year, month) <= (end_year, end_month) && keys.len() < MAX_SERIES_KEYS {
+        keys.push(format!("{year:04}-{month:02}"));
+        month += 1;
+        if month > 12 {
+            month = 1;
+            year += 1;
+        }
+    }
+    keys
+}
+
+/// 序列的横轴。
+///
+/// day 粒度**严格跟着 --from/--to 走**（逐日枚举，含两端）：早先是「from 所在月的
+/// 1 号到月末」，于是 `stats --from 2026-09-14 --to 2026-09-21` 的 `range` 是对的、
+/// `series` 却给出整月 30 天，做周报的调用方必须自己裁，很容易把整月当成一周用。
+/// 开区间（没给 --from 或 --to）逐日/逐月枚举会是几百万个空档，按出现过的日期收表。
+fn series_keys(range: &StatsRange, entries: &[&LedgerEntry]) -> Vec<String> {
+    let open_ended = range.from == OPEN_FROM || range.to == OPEN_TO;
+    match (range.grain, open_ended) {
+        ("day", false) => enumerate_days(&range.from, &range.to),
+        ("day", true) => distinct_sorted(entries.iter().map(|entry| entry.date.clone())),
+        (_, false) => enumerate_months(&range.from, &range.to),
+        (_, true) => distinct_sorted(entries.iter().map(|entry| entry.date[0..7].to_string())),
+    }
+}
+
+fn distinct_sorted(values: impl Iterator<Item = String>) -> Vec<String> {
+    values.collect::<BTreeSet<String>>().into_iter().collect()
+}
+
+/// `ledger stats` 的分类聚合中间态：聚合走结构体 + 槽位表，最后才组装成 JSON
+/// （形状与字段顺序和早先在 `serde_json::Value` 上原地累加的实现逐字节一致）。
+struct CategoryGroup {
+    category_id: String,
+    name: String,
+    side: LedgerSide,
+    count: u64,
+    cents: i64,
+    percent: f64,
+}
+
 fn ledger_stats(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
     let params = &inv.params;
     let file = ctx.repo.load_ledger()?;
@@ -1611,91 +1711,53 @@ fn ledger_stats(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRes
     let mut income: i64 = 0;
     let mut expense: i64 = 0;
     let mut transfer: i64 = 0;
+    // 一次遍历同时算出总额与每个时间桶（day = 完整日期，month = YYYY-MM）的收/支：
+    // 早先是「每个 key 都把全部 entries 重扫一遍」的 O(keys × entries)。
+    let mut buckets: BTreeMap<&str, (i64, i64)> = BTreeMap::new();
     for entry in &entries {
+        let bucket = if range.grain == "day" {
+            entry.date.as_str()
+        } else {
+            &entry.date[0..7]
+        };
+        let slot = buckets.entry(bucket).or_insert((0, 0));
         match entry.kind {
-            LedgerKind::Income => income += entry.amount_cents,
-            LedgerKind::Expense => expense += entry.amount_cents,
+            LedgerKind::Income => {
+                income += entry.amount_cents;
+                slot.0 += entry.amount_cents;
+            }
+            LedgerKind::Expense => {
+                expense += entry.amount_cents;
+                slot.1 += entry.amount_cents;
+            }
             LedgerKind::Transfer => transfer += entry.amount_cents,
         }
     }
 
-    // 序列：按天或按月的收/支两条线
-    let mut series: Vec<Value> = Vec::new();
-    {
-        let keys: Vec<String> = if range.grain == "day" {
-            let (year, month) = {
-                let year: i32 = range.from[0..4].parse().unwrap_or(1970);
-                let month: u32 = range.from[5..7].parse().unwrap_or(1);
-                (year, month)
-            };
-            if range.from == "0000-01-01" || range.to == "9999-12-31" {
-                // 全量范围按出现的日期排序
-                let mut keys: Vec<String> = entries
-                    .iter()
-                    .map(|entry| entry.date.clone())
-                    .collect::<std::collections::BTreeSet<String>>()
-                    .into_iter()
-                    .collect();
-                keys.sort();
-                keys
-            } else {
-                let last = last_day_of_month(year, month);
-                (1..=last).map(|day| format!("{year:04}-{month:02}-{day:02}")).collect()
-            }
-        } else if range.from != "0000-01-01" && range.to != "9999-12-31" {
-            // 自定义跨月范围：逐月枚举
-            let mut keys = Vec::new();
-            let mut year: i32 = range.from[0..4].parse().unwrap_or(1970);
-            let mut month: u32 = range.from[5..7].parse().unwrap_or(1);
-            let end_year: i32 = range.to[0..4].parse().unwrap_or(9999);
-            let end_month: u32 = range.to[5..7].parse().unwrap_or(12);
-            while (year, month) <= (end_year, end_month) && keys.len() < 1200 {
-                keys.push(format!("{year:04}-{month:02}"));
-                month += 1;
-                if month > 12 {
-                    month = 1;
-                    year += 1;
-                }
-            }
-            keys
-        } else {
-            let mut keys: Vec<String> = entries
-                .iter()
-                .map(|entry| entry.date[0..7].to_string())
-                .collect::<std::collections::BTreeSet<String>>()
-                .into_iter()
-                .collect();
-            keys.sort();
-            keys
-        };
-        for key in keys {
-            let mut day_income = 0i64;
-            let mut day_expense = 0i64;
-            for entry in &entries {
-                let entry_key = if range.grain == "day" {
-                    entry.date.as_str()
-                } else {
-                    &entry.date[0..7]
-                };
-                if entry_key != key {
-                    continue;
-                }
-                match entry.kind {
-                    LedgerKind::Income => day_income += entry.amount_cents,
-                    LedgerKind::Expense => day_expense += entry.amount_cents,
-                    LedgerKind::Transfer => {}
-                }
-            }
-            series.push(json!({
+    // 序列：按天或按月的收/支两条线（横轴见 series_keys，空档补零）
+    let series: Vec<Value> = series_keys(&range, &entries)
+        .iter()
+        .map(|key| {
+            let (bucket_income, bucket_expense) =
+                buckets.get(key.as_str()).copied().unwrap_or((0, 0));
+            json!({
                 "key": key,
-                "incomeCents": day_income,
-                "expenseCents": day_expense,
-            }));
-        }
-    }
+                "incomeCents": bucket_income,
+                "expenseCents": bucket_expense,
+            })
+        })
+        .collect();
 
-    // 分类占比：归到大类一级（子分类的金额并进父类），未分类单独一组
-    let mut groups: Vec<Value> = Vec::new();
+    // 分类占比：归到大类一级（子分类的金额并进父类），未分类单独一组。
+    // 早先每笔都做两次线性 find_category，还在 Value 数组里逐笔比字符串找槽位；
+    // 现在先建 id → 分类 的索引，聚合走结构体 + 槽位表，最后再组装成 JSON。
+    let category_index: HashMap<&str, &LedgerCategory> = file
+        .categories
+        .iter()
+        .map(|category| (category.id.as_str(), category))
+        .collect();
+    let mut groups: Vec<CategoryGroup> = Vec::new();
+    let mut slots: HashMap<(String, bool), usize> = HashMap::new();
     for entry in &entries {
         if entry.kind == LedgerKind::Transfer {
             continue;
@@ -1707,56 +1769,71 @@ fn ledger_stats(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRes
         if side_filter.map(|want| want != side).unwrap_or(false) {
             continue;
         }
-        let (group_id, group_name) = match entry.category_id.as_deref().and_then(|cid| find_category(&file, cid)) {
-            Some(category) => match category.parent_id.as_deref().and_then(|pid| find_category(&file, pid)) {
-                Some(parent) => (parent.id.clone(), parent.name.clone()),
-                None => (category.id.clone(), category.name.clone()),
-            },
-            None => (String::new(), "未分类".to_string()),
-        };
-        let slot = groups.iter_mut().find(|item| {
-            item["categoryId"].as_str() == Some(group_id.as_str()) && item["side"].as_str() == Some(side.as_str())
-        });
-        match slot {
-            Some(item) => {
-                item["count"] = json!(item["count"].as_u64().unwrap_or(0) + 1);
-                let cents = item["cents"].as_i64().unwrap_or(0) + entry.amount_cents;
-                item["cents"] = json!(cents);
+        let category = entry
+            .category_id
+            .as_deref()
+            .and_then(|id| category_index.get(id).copied());
+        let (group_id, group_name) = match category {
+            Some(category) => {
+                let parent = category
+                    .parent_id
+                    .as_deref()
+                    .and_then(|id| category_index.get(id).copied());
+                match parent {
+                    Some(parent) => (parent.id.as_str(), parent.name.as_str()),
+                    None => (category.id.as_str(), category.name.as_str()),
+                }
             }
-            None => groups.push(json!({
-                "categoryId": group_id,
-                "name": group_name,
-                "side": side.as_str(),
-                "count": 1,
-                "cents": entry.amount_cents,
-            })),
+            None => ("", "未分类"),
+        };
+        let slot_key = (group_id.to_string(), side == LedgerSide::Expense);
+        match slots.get(&slot_key) {
+            Some(&index) => {
+                groups[index].count += 1;
+                groups[index].cents += entry.amount_cents;
+            }
+            None => {
+                slots.insert(slot_key, groups.len());
+                groups.push(CategoryGroup {
+                    category_id: group_id.to_string(),
+                    name: group_name.to_string(),
+                    side,
+                    count: 1,
+                    cents: entry.amount_cents,
+                    percent: 0.0,
+                });
+            }
         }
     }
     for side in [LedgerSide::Expense, LedgerSide::Income] {
         let total: i64 = groups
             .iter()
-            .filter(|item| item["side"].as_str() == Some(side.as_str()))
-            .map(|item| item["cents"].as_i64().unwrap_or(0))
+            .filter(|group| group.side == side)
+            .map(|group| group.cents)
             .sum();
-        for item in groups.iter_mut() {
-            if item["side"].as_str() != Some(side.as_str()) {
-                continue;
-            }
-            let cents = item["cents"].as_i64().unwrap_or(0);
-            let percent = if total > 0 {
-                (cents as f64 * 100.0 / total as f64 * 100.0).round() / 100.0
+        for group in groups.iter_mut().filter(|group| group.side == side) {
+            group.percent = if total > 0 {
+                (group.cents as f64 * 100.0 / total as f64 * 100.0).round() / 100.0
             } else {
                 0.0
             };
-            item["percent"] = json!(percent);
         }
     }
-    groups.sort_by(|a, b| {
-        b["cents"]
-            .as_i64()
-            .unwrap_or(0)
-            .cmp(&a["cents"].as_i64().unwrap_or(0))
-    });
+    // sort_by 是稳定排序：金额相同保持首次出现的顺序（与旧实现一致）
+    groups.sort_by(|a, b| b.cents.cmp(&a.cents));
+    let categories: Vec<Value> = groups
+        .iter()
+        .map(|group| {
+            json!({
+                "categoryId": group.category_id,
+                "name": group.name,
+                "side": group.side.as_str(),
+                "count": group.count,
+                "cents": group.cents,
+                "percent": group.percent,
+            })
+        })
+        .collect();
 
     Ok(json!({
         "range": { "from": range.from, "to": range.to, "grain": range.grain, "label": range.label },
@@ -1772,7 +1849,7 @@ fn ledger_stats(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRes
             "transfer": cents_to_yuan(transfer),
         },
         "series": series,
-        "categories": groups,
+        "categories": categories,
     }))
 }
 
@@ -2098,6 +2175,28 @@ mod tests {
     }
 
     #[test]
+    fn cents_parsing_rejects_overflow_instead_of_quietly_zeroing() {
+        // 前导零与纯零仍然合法
+        assert_eq!(parse_cents("0"), Some(0));
+        assert_eq!(parse_cents("000"), Some(0));
+        assert_eq!(parse_cents("0.5"), Some(50));
+        assert_eq!(parse_cents("007"), Some(700));
+        // i64 分装得下的最大一档
+        assert_eq!(parse_cents("92233720368547758.07"), Some(i64::MAX));
+        assert_eq!(parse_cents("-92233720368547758.08"), Some(i64::MIN));
+        // 再大一档就拒（早先 i64::try_from 已经挡住这一类）
+        assert_eq!(parse_cents("92233720368547758.08"), None);
+        // **≥39 位整数部分**：i128 也装不下。早先 `.unwrap_or(0)` 会把它静默变成 0
+        // （甚至只剩小数部分），`account-modify --initial` 里 0 是合法值 → 期初被写成 0。
+        let huge = "9".repeat(45);
+        assert_eq!(parse_cents(&huge), None);
+        assert_eq!(parse_cents(&format!("{huge}.50")), None);
+        assert_eq!(parse_cents(&format!("-{huge}")), None);
+        // 37 位：i128 装得下但 ×100 溢出，checked_mul 挡住
+        assert_eq!(parse_cents(&"9".repeat(37)), None);
+    }
+
+    #[test]
     fn yuan_formatting_keeps_two_decimals() {
         assert_eq!(cents_to_yuan(1250), "12.50");
         assert_eq!(cents_to_yuan(5), "0.05");
@@ -2110,5 +2209,92 @@ mod tests {
         assert_eq!(last_day_of_month(2024, 2), 29);
         assert_eq!(last_day_of_month(2026, 2), 28);
         assert_eq!(last_day_of_month(2026, 12), 31);
+    }
+
+    #[test]
+    fn span_days_counts_both_ends() {
+        assert_eq!(span_days("2026-09-09", "2026-09-09"), Some(1));
+        assert_eq!(span_days("2026-09-14", "2026-09-21"), Some(8));
+        // 跨月的短区间：周报要的就是这几天的日粒度，不能被摊成两个月桶
+        assert_eq!(span_days("2026-09-28", "2026-10-03"), Some(6));
+        assert_eq!(span_days("2026-09-01", "2026-10-01"), Some(31));
+        assert_eq!(span_days("2026-09-01", "2026-10-02"), Some(32));
+        // 倒挂的区间是负数（grain 判定与 enumerate_days 都按「没有任何一天」处理）
+        assert_eq!(span_days("2026-09-20", "2026-09-10"), Some(-9));
+        assert_eq!(span_days("nope", "2026-09-10"), None);
+    }
+
+    #[test]
+    fn grain_is_day_up_to_the_threshold_then_month() {
+        let grain = |from: &str, to: &str| {
+            stats_range(&json!({ "from": from, "to": to }))
+                .expect("合法区间")
+                .grain
+        };
+        // --month（30/31 天）与周报（跨月 6 天）都按天
+        assert_eq!(grain("2026-09-01", "2026-09-30"), "day");
+        assert_eq!(grain("2026-09-28", "2026-10-03"), "day");
+        // 门槛含两端：62 天按天、63 天按月
+        assert_eq!(grain("2026-01-01", "2026-03-03"), "day");
+        assert_eq!(span_days("2026-01-01", "2026-03-03"), Some(DAY_GRAIN_MAX_DAYS));
+        assert_eq!(grain("2026-01-01", "2026-03-04"), "month");
+        // --year 按月
+        assert_eq!(grain("2026-01-01", "2026-12-31"), "month");
+    }
+
+    /// 日粒度门槛**必须与前端 `src/lib/ledger.ts::bucketOf` 同一个数**：两边各判一次，
+    /// 漂移了就是同一段区间 GUI 画日桶、CLI 给月桶。与 `tests/ledger_icons.rs` 同一路数
+    /// （include_str! 前端源码直接比对），改一边就会被这条挡住。
+    #[test]
+    fn day_grain_threshold_matches_frontend() {
+        const TS: &str = include_str!("../../../../src/lib/ledger.ts");
+        let needle = "days <= ";
+        let at = TS.find(needle).expect("前端 bucketOf 的门槛判定不见了");
+        let digits: String = TS[at + needle.len()..]
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect();
+        assert_eq!(
+            digits.parse::<i64>().expect("前端门槛不是数字"),
+            DAY_GRAIN_MAX_DAYS,
+            "core 与前端的日粒度门槛不一致：改一边必须改另一边"
+        );
+    }
+
+    #[test]
+    fn enumerate_days_crosses_month_and_year_boundaries() {
+        assert_eq!(
+            enumerate_days("2026-09-28", "2026-10-03"),
+            vec![
+                "2026-09-28", "2026-09-29", "2026-09-30",
+                "2026-10-01", "2026-10-02", "2026-10-03",
+            ]
+        );
+        assert_eq!(
+            enumerate_days("2026-12-30", "2027-01-02"),
+            vec!["2026-12-30", "2026-12-31", "2027-01-01", "2027-01-02"]
+        );
+        // 闰月：2028-02 有 29 天
+        assert_eq!(enumerate_days("2028-02-01", "2028-02-29").len(), 29);
+        assert_eq!(enumerate_days("2026-02-01", "2026-02-28").len(), 28);
+        // 单天与倒挂
+        assert_eq!(enumerate_days("2026-09-09", "2026-09-09"), vec!["2026-09-09"]);
+        assert!(enumerate_days("2026-09-20", "2026-09-10").is_empty());
+        assert!(enumerate_days("nope", "2026-09-10").is_empty());
+        // 硬顶：畸形区间不会生成上百万个空档
+        assert_eq!(enumerate_days("0000-01-01", "9999-12-31").len(), MAX_SERIES_KEYS);
+    }
+
+    #[test]
+    fn enumerate_months_covers_the_range() {
+        assert_eq!(
+            enumerate_months("2026-08-01", "2026-10-31"),
+            vec!["2026-08", "2026-09", "2026-10"]
+        );
+        assert_eq!(enumerate_months("2026-01-01", "2026-12-31").len(), 12);
+        assert_eq!(
+            enumerate_months("2025-11-15", "2026-02-03"),
+            vec!["2025-11", "2025-12", "2026-01", "2026-02"]
+        );
     }
 }

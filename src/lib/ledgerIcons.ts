@@ -233,7 +233,7 @@ import {
   Zap,
   type LucideIcon
 } from "@lucide/svelte";
-import type { LedgerAccountKind, LedgerSide } from "./types";
+import type { LedgerAccountKind } from "./types";
 
 export const LEDGER_ICONS: Record<string, LucideIcon> = {
   Activity,
@@ -583,16 +583,5 @@ export function softColor(color: string, ratio = 0.15): string {
       .padStart(2, "0");
   return `#${mix(r)}${mix(g)}${mix(b)}`;
 }
-
-/** 收支两侧的默认强调色：支出红、收入绿（热力图与统计图同口径）。 */
-export const SIDE_COLOR: Record<LedgerSide, string> = {
-  expense: "#d9534f",
-  income: "#2f9e6e"
-};
-
-export const SIDE_LABEL: Record<LedgerSide, string> = {
-  expense: "支出",
-  income: "收入"
-};
 
 export const TRANSFER_ICON = "ArrowLeftRight";

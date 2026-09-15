@@ -692,15 +692,16 @@ fn export_data(payload: Value, path: String) -> Result<(), String> {
 
 static IMAGE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// 图片文件名护栏：**转调 core 的那一份**（`diary_archive::is_safe_image_name`）。
+/// 这里曾经是一套独立的弱实现（只查空 / `/` / `\` / `..`），少了长度上限、前导点、
+/// 控制字符与 Windows 保留字符——而它守的是插图与背景/头像的落盘与删除路径。
+/// 护栏只能有一份，否则两侧迟早漂移。
 fn safe_image_name(filename: &str) -> Result<(), String> {
-    if filename.is_empty()
-        || filename.contains('/')
-        || filename.contains('\\')
-        || filename.contains("..")
-    {
-        return Err("Invalid image filename".to_string());
+    if domain::diary_archive::is_safe_image_name(filename) {
+        Ok(())
+    } else {
+        Err("Invalid image filename".to_string())
     }
-    Ok(())
 }
 
 fn extension_for_mime(meta: &str) -> &'static str {
@@ -731,23 +732,125 @@ fn mime_for_extension(ext: &str) -> &'static str {
 }
 
 #[tauri::command]
-fn save_background_image(app: AppHandle, data_url: String) -> Result<String, String> {
-    let (meta, payload) = data_url
-        .split_once(',')
-        .ok_or_else(|| "Invalid image data".to_string())?;
-    let ext = extension_for_mime(meta);
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(payload.trim().as_bytes())
-        .map_err(|error| error.to_string())?;
+async fn save_background_image(app: AppHandle, data_url: String) -> Result<String, String> {
     let dir = images_dir(&app)?;
+    let filename = next_image_filename("bg", &extension_for_mime(&data_url_meta(&data_url)?));
+    let dest = dir.join(&filename);
+    // 同步命令跑在主线程上：一张 19MB 的手机原图解码 + 缩放要一两秒，够把整个窗口卡住
+    // （v0.5.0 修同步命令时踩过同一个坑）。所有图片入库一律走阻塞线程池。
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = decode_data_url_payload(&data_url)?;
+        store_image_bytes(&dest, bytes)?;
+        Ok(filename)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// dataURL 的 mime 头（`data:image/png;base64,` 那一段），用来定扩展名。
+fn data_url_meta(data_url: &str) -> Result<String, String> {
+    data_url
+        .split_once(',')
+        .map(|(meta, _)| meta.to_string())
+        .ok_or_else(|| "Invalid image data".to_string())
+}
+
+fn decode_data_url_payload(data_url: &str) -> Result<Vec<u8>, String> {
+    let payload = data_url
+        .split_once(',')
+        .map(|(_, payload)| payload)
+        .ok_or_else(|| "Invalid image data".to_string())?;
+    base64::engine::general_purpose::STANDARD
+        .decode(payload.trim().as_bytes())
+        .map_err(|error| error.to_string())
+}
+
+/// 图片入库文件名：`<前缀>-<纳秒>-<进程内计数器>.<ext>`。命名冲突由纳秒 + 计数器挡住
+/// （图片是内容寻址的不可变 blob，重导必须幂等，见 diary_archive / cards_archive）。
+fn next_image_filename(prefix: &str, ext: &str) -> String {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|value| value.as_nanos())
         .unwrap_or(0);
     let counter = IMAGE_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let filename = format!("bg-{stamp}-{counter}.{ext}");
-    fs::write(dir.join(&filename), bytes).map_err(|error| error.to_string())?;
-    Ok(filename)
+    format!("{prefix}-{stamp}-{counter}.{ext}")
+}
+
+/// 读一张用户挑的图片并落盘（顺带过体积闸）。
+fn store_image_from_path(src: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
+    if !src.is_file() {
+        return Err("File not found".to_string());
+    }
+    let bytes = fs::read(src).map_err(|error| error.to_string())?;
+    store_image_bytes(dest, bytes)
+}
+
+fn store_image_bytes(dest: &std::path::Path, bytes: Vec<u8>) -> Result<(), String> {
+    fs::write(dest, shrink_oversized_image(bytes)).map_err(|error| error.to_string())
+}
+
+/// 图片入库前的体积闸：**只在超过 5MB 时动手**（小图重新编码只有看不见的损失、没有收益）。
+///
+/// 做法是「按最长边等比缩 + 高质量重编码」，且**只处理 JPEG 与 PNG**：
+/// - JPEG（多半是手机原图，实测有 19MB 的列表背景）：长边收到 2560、质量 90，
+///   在背景/插图的显示尺寸下肉眼无差，体积通常掉到 1MB 上下；
+/// - PNG（多半是票据与长截图，以文字为主）：长边上限放宽到 4096、仍然无损编码，
+///   宁可省得少也不糊字；
+/// - 其它格式一律原样保留：GIF / WebP 可能是动图，解码只拿得到第一帧，重编码等于把动画弄丢。
+///
+/// 三条兜底，任何一条不满足都原样返回：**压缩永远不许弄丢或弄坏用户的图**——
+/// 解码失败、重编码失败、重编码后反而没变小（那就白搭一次画质损失）。
+fn shrink_oversized_image(bytes: Vec<u8>) -> Vec<u8> {
+    use image::ImageEncoder;
+
+    const THRESHOLD: usize = 5 * 1024 * 1024;
+    const MAX_EDGE_JPEG: u32 = 2560;
+    const MAX_EDGE_LOSSLESS: u32 = 4096;
+    const JPEG_QUALITY: u8 = 90;
+
+    if bytes.len() <= THRESHOLD {
+        return bytes;
+    }
+    let Ok(format) = image::guess_format(&bytes) else {
+        return bytes;
+    };
+    if !matches!(format, image::ImageFormat::Jpeg | image::ImageFormat::Png) {
+        return bytes;
+    }
+    let Ok(decoded) = image::load_from_memory(&bytes) else {
+        return bytes;
+    };
+    let jpeg = format == image::ImageFormat::Jpeg;
+    let max_edge = if jpeg { MAX_EDGE_JPEG } else { MAX_EDGE_LOSSLESS };
+    let (width, height) = (decoded.width(), decoded.height());
+    let resized = if width.max(height) > max_edge {
+        // 等比缩：长边落到上限，短边按比例算，至少 1px
+        let (target_w, target_h) = if width >= height {
+            (max_edge, ((height as u64 * max_edge as u64) / width as u64).max(1) as u32)
+        } else {
+            (((width as u64 * max_edge as u64) / height as u64).max(1) as u32, max_edge)
+        };
+        decoded.resize_exact(target_w, target_h, image::imageops::FilterType::Lanczos3)
+    } else {
+        decoded
+    };
+    let mut out: Vec<u8> = Vec::new();
+    // `write_image` 是 `ImageEncoder`  trait 的方法（消费 self）；JpegEncoder 另有一个同名的
+    // 固有 `encode`，PngEncoder 没有——两边统一走 trait 方法，别混用。
+    let (width, height, color) = (resized.width(), resized.height(), resized.color().into());
+    let pixels = resized.as_bytes();
+    let encoded = if jpeg {
+        // JPEG 没有 alpha：走到这一支说明源图本来就是 JPEG，不会有透明通道
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY).write_image(
+            pixels, width, height, color,
+        )
+    } else {
+        image::codecs::png::PngEncoder::new(&mut out).write_image(pixels, width, height, color)
+    };
+    if encoded.is_err() || out.is_empty() || out.len() >= bytes.len() {
+        return bytes;
+    }
+    out
 }
 
 #[tauri::command]
@@ -783,23 +886,19 @@ fn extension_for_path(path: &str) -> String {
 }
 
 /// Copy a picked image file into the images dir without any base64 round-trip.
-/// Returns the stored filename. Works for arbitrarily large images.
+/// Returns the stored filename. Works for arbitrarily large images（超过 5MB 的会先过
+/// `shrink_oversized_image` 那道体积闸）。
 #[tauri::command]
-fn import_background_image(app: AppHandle, src_path: String) -> Result<String, String> {
-    let src = std::path::Path::new(&src_path);
-    if !src.is_file() {
-        return Err("File not found".to_string());
-    }
-    let ext = extension_for_path(&src_path);
+async fn import_background_image(app: AppHandle, src_path: String) -> Result<String, String> {
     let dir = images_dir(&app)?;
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|value| value.as_nanos())
-        .unwrap_or(0);
-    let counter = IMAGE_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let filename = format!("bg-{stamp}-{counter}.{ext}");
-    fs::copy(src, dir.join(&filename)).map_err(|error| error.to_string())?;
-    Ok(filename)
+    let filename = next_image_filename("bg", &extension_for_path(&src_path));
+    let dest = dir.join(&filename);
+    tauri::async_runtime::spawn_blocking(move || {
+        store_image_from_path(std::path::Path::new(&src_path), &dest)?;
+        Ok(filename)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// 存储图像转 base64 dataURL（kind: avatar/background/md）。Linux 部分环境的
@@ -900,25 +999,22 @@ fn background_image_path(app: AppHandle, filename: String) -> Result<String, Str
 
 /// Copy a picked image into the avatar directory. Returns stored filename.
 #[tauri::command]
-fn save_avatar_image(app: AppHandle, src_path: String) -> Result<String, String> {
-    let src = std::path::Path::new(&src_path);
-    if !src.is_file() {
-        return Err("File not found".to_string());
-    }
-    let ext = extension_for_path(&src_path);
+async fn save_avatar_image(app: AppHandle, src_path: String) -> Result<String, String> {
     let dir = avatar_dir(&app)?;
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|value| value.as_nanos())
-        .unwrap_or(0);
-    let filename = format!("avatar-{stamp}.{ext}");
-    for entry in fs::read_dir(&dir).into_iter().flatten() {
-        if let Ok(entry) = entry {
-            let _ = fs::remove_file(entry.path());
+    let filename = next_image_filename("avatar", &extension_for_path(&src_path));
+    let dest = dir.join(&filename);
+    tauri::async_runtime::spawn_blocking(move || {
+        // 头像只留一张：先清掉目录里的旧文件（沿用原来的行为）
+        for entry in fs::read_dir(&dir).into_iter().flatten() {
+            if let Ok(entry) = entry {
+                let _ = fs::remove_file(entry.path());
+            }
         }
-    }
-    fs::copy(src, dir.join(&filename)).map_err(|error| error.to_string())?;
-    Ok(filename)
+        store_image_from_path(std::path::Path::new(&src_path), &dest)?;
+        Ok(filename)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// Delete the avatar image file.
@@ -943,21 +1039,16 @@ fn avatar_image_path(app: AppHandle, filename: String) -> Result<String, String>
 
 /// Copy a picked image into img/<node_id>/ for markdown embedding. Returns stored filename.
 #[tauri::command]
-fn save_md_image(app: AppHandle, src_path: String, node_id: String) -> Result<String, String> {
-    let src = std::path::Path::new(&src_path);
-    if !src.is_file() {
-        return Err("File not found".to_string());
-    }
-    let ext = extension_for_path(&src_path);
+async fn save_md_image(app: AppHandle, src_path: String, node_id: String) -> Result<String, String> {
     let dir = md_images_dir(&app, &node_id)?;
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|value| value.as_nanos())
-        .unwrap_or(0);
-    let counter = IMAGE_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let filename = format!("md-{stamp}-{counter}.{ext}");
-    fs::copy(src, dir.join(&filename)).map_err(|error| error.to_string())?;
-    Ok(filename)
+    let filename = next_image_filename("md", &extension_for_path(&src_path));
+    let dest = dir.join(&filename);
+    tauri::async_runtime::spawn_blocking(move || {
+        store_image_from_path(std::path::Path::new(&src_path), &dest)?;
+        Ok(filename)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// Delete a single markdown image file.
@@ -1002,23 +1093,21 @@ fn md_image_path(app: AppHandle, node_id: String, filename: String) -> Result<St
 
 /// Save a base64 data URL as a markdown image in img/<node_id>/. Returns stored filename.
 #[tauri::command]
-fn save_md_image_data(app: AppHandle, data_url: String, node_id: String) -> Result<String, String> {
-    let (meta, payload) = data_url
-        .split_once(',')
-        .ok_or_else(|| "Invalid image data".to_string())?;
-    let ext = extension_for_mime(meta);
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(payload.trim().as_bytes())
-        .map_err(|error| error.to_string())?;
+async fn save_md_image_data(
+    app: AppHandle,
+    data_url: String,
+    node_id: String,
+) -> Result<String, String> {
     let dir = md_images_dir(&app, &node_id)?;
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|value| value.as_nanos())
-        .unwrap_or(0);
-    let counter = IMAGE_COUNTER.fetch_add(1, Ordering::SeqCst);
-    let filename = format!("md-{stamp}-{counter}.{ext}");
-    fs::write(dir.join(&filename), bytes).map_err(|error| error.to_string())?;
-    Ok(filename)
+    let filename = next_image_filename("md", &extension_for_mime(&data_url_meta(&data_url)?));
+    let dest = dir.join(&filename);
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = decode_data_url_payload(&data_url)?;
+        store_image_bytes(&dest, bytes)?;
+        Ok(filename)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[cfg(desktop)]
@@ -1027,26 +1116,128 @@ fn shortcut_from_string(raw: &str) -> Result<Shortcut, String> {
     let mut code: Option<Code> = None;
 
     for part in raw.split('+') {
-        match part.trim().to_lowercase().as_str() {
+        let token = part.trim().to_lowercase();
+        match token.as_str() {
             "ctrl" | "control" => modifiers |= Modifiers::CONTROL,
             "shift" => modifiers |= Modifiers::SHIFT,
             "alt" | "option" => modifiers |= Modifiers::ALT,
             "super" | "meta" | "win" | "cmd" => modifiers |= Modifiers::SUPER,
-            "space" => code = Some(Code::Space),
-            "enter" => code = Some(Code::Enter),
-            "n" => code = Some(Code::KeyN),
-            "l" => code = Some(Code::KeyL),
-            "f" => code = Some(Code::KeyF),
-            "t" => code = Some(Code::KeyT),
-            "m" => code = Some(Code::KeyM),
-            "d" => code = Some(Code::KeyD),
-            "e" => code = Some(Code::KeyE),
-            key => return Err(format!("Unsupported shortcut key: {key}")),
+            key => {
+                code = Some(
+                    key_code(key)
+                        .ok_or_else(|| format!("Unsupported shortcut key: {key}"))?,
+                )
+            }
         }
     }
 
     code.map(|key| Shortcut::new(Some(modifiers), key))
         .ok_or_else(|| "Shortcut must include a key".to_string())
+}
+
+/// 键名 → 物理键码。
+///
+/// 覆盖面必须与前端 `shortcuts.ts::matchesShortcut` 一致：它认的是 `event.key` 的小写形式
+/// （多字符的还会把 `arrow` 前缀去掉），设置面板把用户输入的字符串原样写进配置。
+/// 早先这里只白名单了 space/enter 加 n l f t m d e 七个字母，于是用户把「显示/隐藏窗口」
+/// 设成 `Ctrl+Shift+K` 时**前端认、这里报 `Unsupported shortcut key: k`**——
+/// 全局快捷键静默失效，界面还显示着这个组合键。
+///
+/// **必须与 `shortcut_from_string` 一样 `#[cfg(desktop)]`**：返回类型 `Code` 来自
+/// `tauri-plugin-global-shortcut`，那是 `cfg(not(any(android, ios)))` 才有的依赖，
+/// 移动端根本没有全局快捷键（`caps.globalShortcuts` 为假）。漏了这个 gate，APK 编译
+/// 会以 87 条 `cannot find type Code` 直接失败。
+#[cfg(desktop)]
+fn key_code(token: &str) -> Option<Code> {
+    Some(match token {
+        " " | "space" => Code::Space,
+        "enter" | "return" => Code::Enter,
+        "esc" | "escape" => Code::Escape,
+        "tab" => Code::Tab,
+        "backspace" => Code::Backspace,
+        "del" | "delete" => Code::Delete,
+        "ins" | "insert" => Code::Insert,
+        "home" => Code::Home,
+        "end" => Code::End,
+        "pageup" | "prior" => Code::PageUp,
+        "pagedown" | "next" => Code::PageDown,
+        "up" | "arrowup" => Code::ArrowUp,
+        "down" | "arrowdown" => Code::ArrowDown,
+        "left" | "arrowleft" => Code::ArrowLeft,
+        "right" | "arrowright" => Code::ArrowRight,
+        "-" | "minus" => Code::Minus,
+        "=" | "equal" => Code::Equal,
+        "[" | "bracketleft" => Code::BracketLeft,
+        "]" | "bracketright" => Code::BracketRight,
+        ";" | "semicolon" => Code::Semicolon,
+        "'" | "quote" => Code::Quote,
+        "`" | "backquote" => Code::Backquote,
+        "," | "comma" => Code::Comma,
+        "." | "period" => Code::Period,
+        "/" | "slash" => Code::Slash,
+        "\\" | "backslash" => Code::Backslash,
+        "a" => Code::KeyA,
+        "b" => Code::KeyB,
+        "c" => Code::KeyC,
+        "d" => Code::KeyD,
+        "e" => Code::KeyE,
+        "f" => Code::KeyF,
+        "g" => Code::KeyG,
+        "h" => Code::KeyH,
+        "i" => Code::KeyI,
+        "j" => Code::KeyJ,
+        "k" => Code::KeyK,
+        "l" => Code::KeyL,
+        "m" => Code::KeyM,
+        "n" => Code::KeyN,
+        "o" => Code::KeyO,
+        "p" => Code::KeyP,
+        "q" => Code::KeyQ,
+        "r" => Code::KeyR,
+        "s" => Code::KeyS,
+        "t" => Code::KeyT,
+        "u" => Code::KeyU,
+        "v" => Code::KeyV,
+        "w" => Code::KeyW,
+        "x" => Code::KeyX,
+        "y" => Code::KeyY,
+        "z" => Code::KeyZ,
+        "0" => Code::Digit0,
+        "1" => Code::Digit1,
+        "2" => Code::Digit2,
+        "3" => Code::Digit3,
+        "4" => Code::Digit4,
+        "5" => Code::Digit5,
+        "6" => Code::Digit6,
+        "7" => Code::Digit7,
+        "8" => Code::Digit8,
+        "9" => Code::Digit9,
+        "f1" => Code::F1,
+        "f2" => Code::F2,
+        "f3" => Code::F3,
+        "f4" => Code::F4,
+        "f5" => Code::F5,
+        "f6" => Code::F6,
+        "f7" => Code::F7,
+        "f8" => Code::F8,
+        "f9" => Code::F9,
+        "f10" => Code::F10,
+        "f11" => Code::F11,
+        "f12" => Code::F12,
+        "f13" => Code::F13,
+        "f14" => Code::F14,
+        "f15" => Code::F15,
+        "f16" => Code::F16,
+        "f17" => Code::F17,
+        "f18" => Code::F18,
+        "f19" => Code::F19,
+        "f20" => Code::F20,
+        "f21" => Code::F21,
+        "f22" => Code::F22,
+        "f23" => Code::F23,
+        "f24" => Code::F24,
+        _ => return None,
+    })
 }
 
 #[cfg(desktop)]
@@ -2350,40 +2541,78 @@ fn core_ping() -> Value {
     json!({ "available": true, "protocolVersion": domain::ipc::PROTOCOL_VERSION })
 }
 
-/// Snapshot read for GUI hydration (replaces full-file load_* paths).
-/// 异步 + 阻塞线程池：每次领域变化都会调一次，读三个 JSON 也是磁盘 IO，别占主线程。
+/// Snapshot read for GUI hydration and per-domain refreshes.
+///
+/// `domains` 收窄这次要读哪几个域：**每次领域变化都会调一次这里**，而一次勾选任务只需要
+/// data 域——把几千笔账与全部日记一起解析、序列化、过 IPC 是纯浪费（前端 `applySnapshot`
+/// 本来就只覆盖请求过的那些 store）。省略 = 全部五个域，首次水合走这条。
+/// 异步 + 阻塞线程池：读 JSON 是磁盘 IO，别占主线程。
 #[tauri::command]
-async fn core_snapshot(core: State<'_, Arc<domain::host::HostCore>>) -> Result<Value, String> {
+async fn core_snapshot(
+    core: State<'_, Arc<domain::host::HostCore>>,
+    domains: Option<Vec<String>>,
+) -> Result<Value, String> {
     let host = core.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let data = host.repo.load_data().map_err(|error| error.to_string())?;
-        let settings = host
-            .repo
-            .load_settings()
-            .map_err(|error| error.to_string())?;
-        let schedule = host
-            .repo
-            .load_schedule()
-            .map_err(|error| error.to_string())?;
-        let diary = host.repo.load_diary().map_err(|error| error.to_string())?;
-        let ledger = host.repo.load_ledger().map_err(|error| error.to_string())?;
-        Ok(serde_json::json!({
-            "data": data,
-            "settings": settings,
-            "schedule": schedule,
-            "diary": diary,
-            "ledger": ledger,
-            "revisions": {
-                "data": data.meta.revision,
-                "settings": settings.meta.revision,
-                "schedule": schedule.meta.revision,
-                "diary": diary.meta.revision,
-                "ledger": ledger.meta.revision,
-            }
-        }))
+        let wanted = |name: &str| -> bool {
+            domains
+                .as_ref()
+                .map_or(true, |list| list.iter().any(|item| item == name))
+        };
+        let mut payload = serde_json::Map::new();
+        let mut revisions = serde_json::Map::new();
+        if wanted("data") {
+            put_snapshot_domain(&mut payload, &mut revisions, "data", host.repo.load_data())?;
+        }
+        if wanted("settings") {
+            put_snapshot_domain(
+                &mut payload,
+                &mut revisions,
+                "settings",
+                host.repo.load_settings(),
+            )?;
+        }
+        if wanted("schedule") {
+            put_snapshot_domain(
+                &mut payload,
+                &mut revisions,
+                "schedule",
+                host.repo.load_schedule(),
+            )?;
+        }
+        if wanted("diary") {
+            put_snapshot_domain(&mut payload, &mut revisions, "diary", host.repo.load_diary())?;
+        }
+        if wanted("ledger") {
+            put_snapshot_domain(&mut payload, &mut revisions, "ledger", host.repo.load_ledger())?;
+        }
+        payload.insert(
+            "revisions".to_string(),
+            Value::Object(revisions),
+        );
+        Ok(Value::Object(payload))
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// Serialize one domain into the snapshot payload and record its revision.
+fn put_snapshot_domain<T: serde::Serialize>(
+    payload: &mut serde_json::Map<String, Value>,
+    revisions: &mut serde_json::Map<String, Value>,
+    name: &str,
+    loaded: domain::error::CoreResult<T>,
+) -> Result<(), String> {
+    let file = loaded.map_err(|error| error.to_string())?;
+    let value = serde_json::to_value(&file).map_err(|error| error.to_string())?;
+    let revision = value
+        .get("_meta")
+        .and_then(|meta| meta.get("revision"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    revisions.insert(name.to_string(), Value::from(revision));
+    payload.insert(name.to_string(), value);
+    Ok(())
 }
 
 /// 日记导出成压缩包。给了 `path` 就写到那儿（桌面「另存为」对话框的结果）；

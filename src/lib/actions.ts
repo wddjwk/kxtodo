@@ -539,9 +539,11 @@ export async function setItemUi(id: string, ui: { expanded?: boolean }): Promise
 }
 
 export async function setItemsUi(ids: string[], expanded: boolean): Promise<void> {
+  // 「展开全部」一次能带上几百个 id：用 Set，否则这里是 O(任务数 × id 数)。
+  const wanted = new Set(ids);
   appState.update((s) => ({
     ...s,
-    tasks: s.tasks.map((task) => (ids.includes(task.id) ? { ...task, expanded } : task))
+    tasks: s.tasks.map((task) => (wanted.has(task.id) ? { ...task, expanded } : task))
   }));
   if (coreMode) {
     try {
@@ -574,6 +576,9 @@ export async function saveTaskMarkdown(id: string, markdown: string, expanded: b
       return false;
     }
     clearEditBase(id);
+    // 展开态没变就别再发第二条写命令：保存正文已经是一次完整的 data.json 重写 + fsync，
+    // 为了一个没变的布尔值再来一遍纯属浪费（编辑器保存是高频操作）。
+    const expandChanged = (findTask(id)?.expanded === true) !== expanded;
     appState.update((s) => ({
       ...s,
       tasks: s.tasks.map((task) =>
@@ -582,10 +587,12 @@ export async function saveTaskMarkdown(id: string, markdown: string, expanded: b
           : task
       )
     }));
-    try {
-      await coreDispatch("gui.set-item-ui", { id, expanded });
-    } catch {
-      // 忽略
+    if (expandChanged) {
+      try {
+        await coreDispatch("gui.set-item-ui", { id, expanded });
+      } catch {
+        // 忽略
+      }
     }
     return true;
   }

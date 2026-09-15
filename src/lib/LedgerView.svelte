@@ -16,7 +16,7 @@
   import { imageCache, resolveImageSrc } from "./images";
   import { monthOf, shiftMonth, todayDate, type MonthCursor } from "./diary";
   import {
-    compactCents, entriesTotals, filterLedgerEntries, monthDayGroups, monthTotals,
+    compactCents, entriesTotals, filterLedgerEntries, monthDayGroups,
     assetsTrend, LEDGER_IMAGE_NODE
   } from "./ledger";
   import type { AssetTrendPoint } from "./ledger";
@@ -97,7 +97,6 @@
   $: view = $appSettings.ledger.view;
   $: book = $ledgerData;
   $: thisMonth = monthOf(today);
-  $: monthTotal = monthTotals(book.entries, cursor);
   $: monthLabel = `${cursor.year}年${cursor.month + 1}月`;
   $: ledgerBg = ledgerBackground($appSettings.ledger);
   $: resolvedBgImage = resolveImageSrc(ledgerBg.image, $imageCache);
@@ -105,7 +104,14 @@
   $: menuEntry = entryMenu ? book.entries.find((entry) => entry.id === entryMenu?.id) ?? null : null;
 
   /** 列表视图只展示 cursor 一个月：滚到底整屏换成上一个月，滚到顶下拉换回下一个月 */
-  $: sections = [{ key: `${cursor.year}-${cursor.month}`, groups: monthDayGroups(book.entries, cursor) }];
+  $: monthGroups = monthDayGroups(book.entries, cursor);
+  $: sections = [{ key: `${cursor.year}-${cursor.month}`, groups: monthGroups }];
+  // 月份条的收/支从按天分组里累加：分组已经把当月每一笔过了一遍，再调一次 monthTotals
+  // 等于把全部流水（含其它月份的）又扫一遍。
+  $: monthTotal = monthGroups.reduce(
+    (acc, group) => ({ income: acc.income + group.income, expense: acc.expense + group.expense }),
+    { income: 0, expense: 0 }
+  );
 
   /** 搜索态：有查询词时整页换成「单条卡片 + 收支结余汇总」 */
   $: searching = searchOpen && query.trim().length > 0;

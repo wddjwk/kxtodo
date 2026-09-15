@@ -55,7 +55,7 @@ fn add_defaults_to_local_today_and_lists_newest_first() {
     assert_eq!(range["returned"], 1);
     let limited = env.ok(&["diary", "list", "--limit", "2"]);
     assert_eq!(limited["returned"], 2);
-    assert_eq!(limited["total"], 3, "total 说的是全部，不是这一页");
+    assert_eq!(limited["total"], 3, "total 说的是命中的全部，不是这一页");
 }
 
 #[test]
@@ -346,4 +346,52 @@ fn time_param_lands_in_created_at_and_date_moves_preserve_the_clock() {
     // 不给 --time 的新日记：createdAt 仍是「现在」，与 updatedAt 同值
     let plain = add(&env, &["--markdown", "没给时刻的一篇"]);
     assert_eq!(plain["createdAt"], plain["updatedAt"]);
+}
+
+#[test]
+fn list_returns_everything_by_default_and_double_writes_paging_meta() {
+    let env = TestEnv::fresh();
+    for day in 1..=4 {
+        let date = format!("2026-09-0{day}");
+        add(&env, &["--date", &date, "--markdown", "一篇"]);
+    }
+
+    // 不传 --limit 就返回全部（月度回顾要的是整月，不是「前 50 篇」）
+    let all = env.run(&["diary", "list"]);
+    assert_eq!(all.code, 0, "{}", all.stderr);
+    let envelope = all.envelope();
+    assert_eq!(envelope["data"]["total"], 4);
+    assert_eq!(envelope["data"]["returned"], 4);
+    // meta 双写同一份分页信息：render 的人类可读输出（table/pretty）只认 meta.count
+    assert_eq!(envelope["meta"]["count"], 4);
+    assert_eq!(envelope["meta"]["nextCursor"], Value::Null);
+
+    // --limit + --cursor 与 task list 同一套语义
+    let page = env.run(&["diary", "list", "--limit", "3"]);
+    let envelope = page.envelope();
+    assert_eq!(envelope["data"]["returned"], 3);
+    assert_eq!(envelope["data"]["total"], 4, "data.total 的语义没动");
+    assert_eq!(envelope["meta"]["count"], 4);
+    assert_eq!(envelope["meta"]["nextCursor"], "3");
+    let rest = env.ok(&["diary", "list", "--limit", "3", "--cursor", "3"]);
+    assert_eq!(rest["returned"], 1, "游标接着翻，只剩一篇");
+
+    // --all 忽略分页
+    assert_eq!(env.ok(&["diary", "list", "--limit", "1", "--all"])["returned"], 4);
+
+    // data.total 是**过滤后**的篇数（与 ledger list 同口径）：「这个月写了几篇」要能直接读它
+    let one_day = env.ok(&["diary", "list", "--date", "2026-09-01"]);
+    assert_eq!(one_day["returned"], 1);
+    assert_eq!(one_day["total"], 1);
+    let range = env.ok(&["diary", "list", "--from", "2026-09-02", "--to", "2026-09-03"]);
+    assert_eq!(range["total"], 2, "区间过滤同样收窄 total");
+    assert_eq!(range["returned"], 2);
+
+    // 游标非法 → 退出码 2
+    assert_eq!(env.err(&["diary", "list", "--cursor", "abc"], 2)["code"], "INVALID_CURSOR");
+
+    // --format pretty 的合计行回来了（此前 meta 里没有 count，只有键值兜底）
+    let pretty = env.run(&["diary", "list", "--format", "pretty"]);
+    assert_eq!(pretty.code, 0, "{}", pretty.stderr);
+    assert!(pretty.stdout.contains("-- 共 4 条"), "{}", pretty.stdout);
 }

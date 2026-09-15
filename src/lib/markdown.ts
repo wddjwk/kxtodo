@@ -245,14 +245,15 @@ function renderMathToken(src: string, displayMode: boolean): string {
 }
 
 function restoreMath(html: string, blocks: string[], inlines: string[]): string {
-  let out = html;
-  blocks.forEach((src, index) => {
-    out = out.split(MATH_TOKEN("b", index)).join(renderMathToken(src, true));
+  if (blocks.length === 0 && inlines.length === 0) return html;
+  // 单遍替换：早先按 token 逐个 `split().join()`，是 O(token 数 × 文本长)——
+  // 一篇有 30 个公式的长文要把整份 HTML 复制 30 遍。
+  return html.replace(/@@KXMath([bi])(\d+)@@/g, (match, kind: string, index: string) => {
+    const at = Number(index);
+    const source = kind === "b" ? blocks[at] : inlines[at];
+    // 下标对不上（用户在正文里手写了这个记号）就原样留着，与逐个替换时的行为一致
+    return source === undefined ? match : renderMathToken(source, kind === "b");
   });
-  inlines.forEach((src, index) => {
-    out = out.split(MATH_TOKEN("i", index)).join(renderMathToken(src, false));
-  });
-  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -273,11 +274,13 @@ function protectCode(markdown: string): { text: string; pieces: string[] } {
 }
 
 function restoreCode(text: string, pieces: string[]): string {
-  let out = text;
-  pieces.forEach((piece, index) => {
-    out = out.split(`\u0000KXCode${index}\u0000`).join(piece);
+  if (pieces.length === 0) return text;
+  // 单遍替换，理由同 restoreMath：逐 token split/join 是 O(token 数 × 文本长)。
+  // 用函数形式的 replace 而不是字符串替换串，代码里的 `$&`/`$1` 才不会被当成反向引用。
+  return text.replace(/\u0000KXCode(\d+)\u0000/g, (match, index: string) => {
+    const piece = pieces[Number(index)];
+    return piece === undefined ? match : piece;
   });
-  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -286,6 +289,9 @@ function restoreCode(text: string, pieces: string[]): string {
 
 function highlightCodeBlocks(html: string): string {
   if (typeof document === "undefined") return html;
+  // 没有代码块就别走这一趟：下面是一次完整的 innerHTML 解析 + querySelectorAll + 再序列化，
+  // 而绝大多数卡片是纯文本。这一个早退把「渲染一张普通卡片」的 DOM 解析从两次降到一次。
+  if (!html.includes("<pre")) return html;
   const template = document.createElement("template");
   template.innerHTML = html;
   template.content.querySelectorAll("pre code").forEach((block) => {
@@ -305,6 +311,12 @@ function highlightCodeBlocks(html: string): string {
 
 const DIAGRAM_LANGS = ["mermaid", "markmap", "mindmap"];
 const CODE_COLLAPSE_LINES = 18;
+/** 提到模块级：早先每次调用都 `new RegExp(...)` 重新编译一遍。
+ *  带 `g` 的正则用于 `String.replace` 时会自己重置 lastIndex，共享是安全的。 */
+const DIAGRAM_PATTERN = new RegExp(
+  `<pre><code class="language-(${DIAGRAM_LANGS.join("|")})[^"]*">([\\s\\S]*?)</code></pre>`,
+  "g"
+);
 
 /** markmap / mindmap 两种围栏都渲染成 markmap 脑图（mermaid 自带的 mindmap 类型让位）。 */
 export function isMarkmapLang(lang: string): boolean {
@@ -329,11 +341,8 @@ export function decodeDiagramSource(encoded: string): string {
 
 /** ```mermaid / ```markmap / ```mindmap 代码块 → 图框（源码进 data-source，异步渲染见 markdownControls）。 */
 function transformDiagrams(html: string): string {
-  const pattern = new RegExp(
-    `<pre><code class="language-(${DIAGRAM_LANGS.join("|")})[^"]*">([\\s\\S]*?)</code></pre>`,
-    "g"
-  );
-  return html.replace(pattern, (_m, lang: string, escaped: string) => {
+  if (!html.includes('<pre><code class="language-')) return html;
+  return html.replace(DIAGRAM_PATTERN, (_m, lang: string, escaped: string) => {
       const source = unescapeHtml(escaped).replace(/\n$/, "");
       const encoded = encodeDiagramSource(source);
       return (
@@ -358,6 +367,7 @@ function transformDiagrams(html: string): string {
 
 /** 其余代码块加语言条 + 复制 + 折叠（超过阈值默认折起）。 */
 function transformCodeBlocks(html: string): string {
+  if (!html.includes("<pre><code")) return html;
   return html.replace(/<pre><code class="([^"]*)">([\s\S]*?)<\/code><\/pre>/g, (m, classes: string, body: string) => {
     if (DIAGRAM_LANGS.some((lang) => classes.includes("language-" + lang))) return m;
     const language = classes
@@ -397,8 +407,79 @@ function replaceEmojiShortcodes(text: string): string {
   });
 }
 
+// ---------------------------------------------------------------------------
+// 渲染记忆化
+// ---------------------------------------------------------------------------
+
+/** 渲染计数：给性能基准（scripts/perf-bench.mjs）与现场诊断用，本身没有任何副作用。 */
+export const renderStats = { block: 0, blockHit: 0, inline: 0, inlineHit: 0 };
+
+/**
+ * `renderMarkdown` / `renderInlineMarkdown` 都是**纯函数**——marked / DOMPurify / KaTeX /
+ * highlight.js 的配置全是模块级常量，输出只取决于输入字符串，所以按输入缓存是安全的。
+ *
+ * 不缓存的代价：① 每次快照刷新都给每个 task 换新对象身份，所有卡片的 `$:` 全失效重跑；
+ * ② `mdImageCache` 每解析出一张图就 update 一次，订阅它的**每张**卡片都跟着重跑一遍
+ * （M 张图 × N 张卡）。有了缓存，这两种情况都退化成一次 Map 查找。
+ *
+ * 条数与字符数双上限，超了淘汰最久未用的（Map 的迭代顺序就是插入顺序）。
+ */
+class RenderCache {
+  private readonly entries = new Map<string, string>();
+  private chars = 0;
+
+  constructor(private readonly maxEntries: number, private readonly maxChars: number) {}
+
+  get(key: string): string | undefined {
+    const hit = this.entries.get(key);
+    if (hit === undefined) return undefined;
+    // LRU：命中就挪到末尾
+    this.entries.delete(key);
+    this.entries.set(key, hit);
+    return hit;
+  }
+
+  set(key: string, value: string): void {
+    const previous = this.entries.get(key);
+    if (previous !== undefined) this.chars -= previous.length;
+    else this.chars += key.length;
+    this.entries.set(key, value);
+    this.chars += value.length;
+    // `size > 1`：绝不能把刚放进去的这一条自己淘汰掉
+    while (
+      this.entries.size > 1 &&
+      (this.entries.size > this.maxEntries || this.chars > this.maxChars)
+    ) {
+      const oldest = this.entries.keys().next();
+      if (oldest.done) break;
+      const evicted = this.entries.get(oldest.value);
+      this.chars -= oldest.value.length + (evicted?.length ?? 0);
+      this.entries.delete(oldest.value);
+    }
+  }
+}
+
+const blockCache = new RenderCache(300, 4_000_000);
+const inlineCache = new RenderCache(800, 400_000);
+
+if (typeof window !== "undefined") {
+  (window as unknown as Record<string, unknown>).__kxtodoRenderStats = renderStats;
+}
+
 /** 完整渲染：front-matter / callout / 公式 / 代码折叠 / 图框占位。 */
 export function renderMarkdown(markdown: string): string {
+  renderStats.block += 1;
+  const cached = blockCache.get(markdown);
+  if (cached !== undefined) {
+    renderStats.blockHit += 1;
+    return cached;
+  }
+  const html = renderMarkdownNow(markdown);
+  blockCache.set(markdown, html);
+  return html;
+}
+
+function renderMarkdownNow(markdown: string): string {
   const normalized = markdown.trim().length > 0 ? markdown : "添加任务";
   const { fields, rest } = splitFrontMatter(normalized);
   const protectedCode = protectCode(rest);
@@ -414,6 +495,18 @@ export function renderMarkdown(markdown: string): string {
 }
 
 export function renderInlineMarkdown(markdown: string): string {
+  renderStats.inline += 1;
+  const cached = inlineCache.get(markdown);
+  if (cached !== undefined) {
+    renderStats.inlineHit += 1;
+    return cached;
+  }
+  const html = renderInlineMarkdownNow(markdown);
+  inlineCache.set(markdown, html);
+  return html;
+}
+
+function renderInlineMarkdownNow(markdown: string): string {
   const protectedCode = protectCode(markdown || "未命名任务");
   const math = extractMath(protectedCode.text);
   const withEmoji = replaceEmojiShortcodes(math.text);

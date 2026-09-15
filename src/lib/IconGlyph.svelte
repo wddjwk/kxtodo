@@ -1,3 +1,42 @@
+<script context="module" lang="ts">
+  /** 旧的 kebab-case 图标白名单。**必须放在 module 作用域**：侧栏每一行树节点都有一个
+   *  IconGlyph 实例，写在实例作用域就是每个实例新建一个 33 元素的 Set。 */
+  const KNOWN_ICONS = new Set([
+    "archive",
+    "bell",
+    "book",
+    "bookmark",
+    "brain",
+    "briefcase",
+    "calendar",
+    "camera",
+    "car",
+    "check-square",
+    "clock",
+    "code",
+    "cpu",
+    "file",
+    "folder",
+    "gift",
+    "heart",
+    "home",
+    "inbox",
+    "list",
+    "lightbulb",
+    "lock",
+    "music",
+    "notebook",
+    "palette",
+    "plane",
+    "rocket",
+    "shopping-cart",
+    "star",
+    "sun",
+    "tag",
+    "wrench"
+  ]);
+</script>
+
 <script lang="ts">
   import {
     Archive,
@@ -41,42 +80,7 @@
 
   /** 记账图标库（PascalCase，两百多个）：图标选择器复用那份目录后，节点也会存这类名字 */
   $: ledgerComponent = LEDGER_ICONS[icon] ?? null;
-  $: isEmoji = !knownIcons.has(icon) && !ledgerComponent;
-
-  const knownIcons = new Set([
-    "archive",
-    "bell",
-    "book",
-    "bookmark",
-    "brain",
-    "briefcase",
-    "calendar",
-    "camera",
-    "car",
-    "check-square",
-    "clock",
-    "code",
-    "cpu",
-    "file",
-    "folder",
-    "gift",
-    "heart",
-    "home",
-    "inbox",
-    "list",
-    "lightbulb",
-    "lock",
-    "music",
-    "notebook",
-    "palette",
-    "plane",
-    "rocket",
-    "shopping-cart",
-    "star",
-    "sun",
-    "tag",
-    "wrench"
-  ]);
+  $: isEmoji = !KNOWN_ICONS.has(icon) && !ledgerComponent;
 </script>
 
 {#if isEmoji}

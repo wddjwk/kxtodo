@@ -378,3 +378,193 @@ fn account_type_crud_round_trip() {
     let missing = env.err(&["ledger", "account-type-remove", "--id", "latype-nope", "--yes"], 2);
     assert_eq!(missing["code"], "LEDGER_ACCOUNT_TYPE_NOT_FOUND");
 }
+
+/// `series[*].key` 的横轴（用来断言 day/month 粒度到底枚举了哪些桶）。
+fn series_keys(value: &Value) -> Vec<&str> {
+    value["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["key"].as_str().unwrap())
+        .collect()
+}
+
+#[test]
+fn stats_series_follows_from_to_instead_of_the_whole_month() {
+    let env = TestEnv::fresh();
+    add(&env, &["--amount", "10", "--account", "微信", "--category", "午餐", "--date", "2026-09-15"]);
+    add(&env, &["--amount", "20", "--account", "微信", "--category", "晚餐", "--date", "2026-09-29"]);
+    add(&env, &["--amount", "30", "--account", "微信", "--category", "午餐", "--date", "2026-10-01"]);
+
+    // day 粒度的横轴就是 --from..--to（含两端），不再是 from 所在的整个自然月：
+    // 做周报的调用方不必自己裁，也不会把整月数据当成一周用。
+    let week = env.ok(&["ledger", "stats", "--from", "2026-09-14", "--to", "2026-09-21"]);
+    assert_eq!(week["range"]["grain"], "day");
+    assert_eq!(
+        series_keys(&week),
+        vec![
+            "2026-09-14", "2026-09-15", "2026-09-16", "2026-09-17",
+            "2026-09-18", "2026-09-19", "2026-09-20", "2026-09-21",
+        ]
+    );
+    assert_eq!(week["series"][1]["expenseCents"], 1000, "09-15 那一笔在区间里");
+    assert_eq!(week["totals"]["expenseCents"], 1000, "合计只算区间内的");
+
+    // 跨月的短区间同样逐日枚举（周报常常横跨月底）
+    let crossing = env.ok(&["ledger", "stats", "--from", "2026-09-28", "--to", "2026-10-03"]);
+    assert_eq!(crossing["range"]["grain"], "day", "门槛内就按天，哪怕跨月");
+    assert_eq!(
+        series_keys(&crossing),
+        vec![
+            "2026-09-28", "2026-09-29", "2026-09-30",
+            "2026-10-01", "2026-10-02", "2026-10-03",
+        ]
+    );
+    assert_eq!(crossing["series"][1]["expenseCents"], 2000);
+    assert_eq!(crossing["series"][3]["expenseCents"], 3000);
+
+    // --month 的行为一点没变：整月逐日补齐空档
+    let month = env.ok(&["ledger", "stats", "--month", "2026-09"]);
+    assert_eq!(month["range"]["grain"], "day");
+    assert_eq!(series_keys(&month).len(), 30);
+    assert_eq!(series_keys(&month)[0], "2026-09-01");
+    assert_eq!(series_keys(&month)[29], "2026-09-30");
+    assert_eq!(month["series"][14]["expenseCents"], 1000, "09-15");
+    assert_eq!(month["series"][28]["expenseCents"], 2000, "09-29");
+
+    // 更长的区间仍按月逐月枚举
+    let year = env.ok(&["ledger", "stats", "--year", "2026"]);
+    assert_eq!(year["range"]["grain"], "month");
+    assert_eq!(series_keys(&year).len(), 12);
+    let long = env.ok(&["ledger", "stats", "--from", "2026-08-01", "--to", "2026-10-31"]);
+    assert_eq!(series_keys(&long), vec!["2026-08", "2026-09", "2026-10"]);
+
+    // 日粒度门槛含两端 62 天（与 GUI 的 bucketOf 同一个数，core 侧另有测试钉住）：
+    // 62 天逐日、63 天转月。32~62 天这一段在 v0.8.0 之前两边结论相反。
+    let two_months = env.ok(&["ledger", "stats", "--from", "2026-09-01", "--to", "2026-11-01"]);
+    assert_eq!(two_months["range"]["grain"], "day");
+    assert_eq!(series_keys(&two_months).len(), 62);
+    let over = env.ok(&["ledger", "stats", "--from", "2026-09-01", "--to", "2026-11-02"]);
+    assert_eq!(over["range"]["grain"], "month");
+    assert_eq!(series_keys(&over), vec!["2026-09", "2026-10", "2026-11"]);
+
+    // 开区间（不给 --from/--to）按账目里出现过的桶收表，不枚举几百万个空档
+    assert_eq!(series_keys(&env.ok(&["ledger", "stats"])), vec!["2026-09", "2026-10"]);
+
+    // 闰月与倒挂区间
+    assert_eq!(series_keys(&env.ok(&["ledger", "stats", "--month", "2028-02"])).len(), 29);
+    assert_eq!(
+        series_keys(&env.ok(&["ledger", "stats", "--from", "2026-09-20", "--to", "2026-09-10"])),
+        Vec::<&str>::new(),
+        "倒挂的区间里没有任何一天"
+    );
+}
+
+#[test]
+fn stats_series_and_category_shape_is_locked() {
+    // stats 的聚合从「每个 key 重扫全部 entries + 在 Value 数组里线性找槽位」改成
+    // 一次遍历 + id 索引，输出必须逐字节等价：这里把 series 与 categories 的**序列化
+    // 文本**钉住（字段顺序也算——serde_json 开了 preserve_order）。
+    let env = TestEnv::fresh();
+    add(&env, &["--amount", "30", "--account", "微信", "--category", "午餐", "--date", "2026-09-08"]);
+    add(&env, &["--amount", "20", "--account", "微信", "--category", "晚餐", "--date", "2026-09-08"]);
+    add(&env, &["--amount", "40", "--account", "微信", "--category", "公交地铁", "--date", "2026-09-09"]);
+    add(&env, &["--kind", "income", "--amount", "100", "--account", "储蓄卡", "--category", "工资薪金", "--date", "2026-09-10"]);
+
+    let stats = env.ok(&["ledger", "stats", "--from", "2026-09-08", "--to", "2026-09-10"]);
+    assert_eq!(
+        stats["series"].to_string(),
+        concat!(
+            r#"[{"key":"2026-09-08","incomeCents":0,"expenseCents":5000},"#,
+            r#"{"key":"2026-09-09","incomeCents":0,"expenseCents":4000},"#,
+            r#"{"key":"2026-09-10","incomeCents":10000,"expenseCents":0}]"#
+        )
+    );
+    assert_eq!(
+        stats["categories"].to_string(),
+        concat!(
+            r#"[{"categoryId":"lcat-inc-01","name":"工资","side":"income","count":1,"cents":10000,"percent":100.0},"#,
+            r#"{"categoryId":"lcat-exp-01","name":"餐饮","side":"expense","count":2,"cents":5000,"percent":55.56},"#,
+            r#"{"categoryId":"lcat-exp-02","name":"交通","side":"expense","count":1,"cents":4000,"percent":44.44}]"#
+        ),
+        "子分类并进大类、按金额降序、percent 两位小数"
+    );
+}
+
+#[test]
+fn list_returns_everything_by_default_and_double_writes_paging_meta() {
+    let env = TestEnv::fresh();
+    for day in 1..=5 {
+        let date = format!("2026-09-0{day}");
+        add(&env, &["--amount", "10", "--account", "微信", "--date", &date]);
+    }
+    let ids = |envelope: &Value| -> Vec<String> {
+        envelope["data"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // 不传 --limit 就返回全部：记账是金融数据，静默截断会让「这个月花了多少」算出残值
+    let all = env.run(&["ledger", "list"]);
+    assert_eq!(all.code, 0, "{}", all.stderr);
+    let envelope = all.envelope();
+    assert_eq!(envelope["data"]["total"], 5);
+    assert_eq!(envelope["data"]["returned"], 5);
+    assert_eq!(envelope["data"]["items"].as_array().unwrap().len(), 5);
+    // meta 双写同一份分页信息：render 的合计行（--format table/pretty）只认 meta.count
+    assert_eq!(envelope["meta"]["count"], 5);
+    assert_eq!(envelope["meta"]["nextCursor"], Value::Null);
+
+    // --limit 分页：data.total 仍是过滤后的全部，returned 是这一页，游标进 meta.nextCursor
+    let first = env.run(&["ledger", "list", "--limit", "2"]);
+    let envelope = first.envelope();
+    assert_eq!(envelope["data"]["total"], 5);
+    assert_eq!(envelope["data"]["returned"], 2);
+    assert_eq!(envelope["meta"]["count"], 5);
+    assert_eq!(envelope["meta"]["nextCursor"], "2");
+
+    // --cursor 接着翻，与 task list 同一套语义（偏移量，两页不重叠）
+    let first_ids = ids(&first.envelope());
+    let second = env.run(&["ledger", "list", "--limit", "2", "--cursor", "2"]);
+    let envelope = second.envelope();
+    assert_eq!(envelope["meta"]["nextCursor"], "4");
+    let second_ids = ids(&envelope);
+    assert_eq!(second_ids.len(), 2);
+    assert!(
+        first_ids.iter().all(|id| !second_ids.contains(id)),
+        "第二页不该重复第一页：{first_ids:?} / {second_ids:?}"
+    );
+    let third = env.run(&["ledger", "list", "--limit", "2", "--cursor", "4"]);
+    let envelope = third.envelope();
+    assert_eq!(envelope["data"]["returned"], 1, "最后一页只剩一笔");
+    assert_eq!(envelope["meta"]["nextCursor"], Value::Null, "没有下一页就不给游标");
+
+    // --all 忽略分页（哪怕同时给了 --limit）
+    let forced = env.run(&["ledger", "list", "--limit", "2", "--all"]);
+    let envelope = forced.envelope();
+    assert_eq!(envelope["data"]["returned"], 5);
+    assert_eq!(envelope["meta"]["nextCursor"], Value::Null);
+
+    // 天文数字的 --limit 不许溢出（paginate 用 saturating_add；debug 构建下裸加法会 panic）
+    let huge = env.run(&["ledger", "list", "--limit", "18446744073709551615"]);
+    assert_eq!(huge.code, 0, "{}", huge.stderr);
+    assert_eq!(huge.envelope()["data"]["returned"], 5);
+
+    // 过滤后的 total 只算命中的笔数
+    let filtered = env.ok(&["ledger", "list", "--from", "2026-09-01", "--to", "2026-09-03"]);
+    assert_eq!(filtered["total"], 3);
+    assert_eq!(filtered["returned"], 3);
+
+    // 游标非法 → 退出码 2
+    let bad = env.err(&["ledger", "list", "--cursor", "abc"], 2);
+    assert_eq!(bad["code"], "INVALID_CURSOR");
+
+    // --format table 的合计行回来了（此前 meta 里没有 count，退化成逐行裸 JSON）
+    let table = env.run(&["ledger", "list", "--limit", "2", "--format", "table"]);
+    assert_eq!(table.code, 0, "{}", table.stderr);
+    assert!(table.stdout.contains("-- 共 5 条"), "{}", table.stdout);
+    assert_eq!(table.stdout.lines().count(), 3, "两行条目 + 一行合计");
+}

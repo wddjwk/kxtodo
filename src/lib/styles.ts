@@ -86,15 +86,6 @@ export function fontSizeValue(value: number, fallback: number, min: number, max:
   return Math.min(max, Math.max(min, Math.round(value || fallback)));
 }
 
-export function clampNumber(value: number, fallback: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) return fallback;
-  return Math.min(max, Math.max(min, Math.round(value)));
-}
-
-export function isNumberInRange(value: number, min: number, max: number): boolean {
-  return Number.isFinite(value) && value >= min && value <= max;
-}
-
 /**
  * 语义字号变量：--font-* 是各区域实际吃的值。记账与日记各有一个自己的字号
  * （两页信息密度不同，跟着 UI 字号一起动并不合适），其余区域仍走 --font-control。

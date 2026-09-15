@@ -129,7 +129,9 @@ jobs:
           done
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+          # 只装两个 arm target：x86 / x86_64 纯为模拟器服务，却占掉 APK 一半体积
+          # （实测 71.5MB 里 35.4MB 是这两个 ABI 的 .so）。与 package.ps1 保持同一份清单。
+          targets: aarch64-linux-android,armv7-linux-androideabi
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: "src-tauri -> target"
@@ -162,12 +164,17 @@ jobs:
         env:
           NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: npx tauri android build --apk
-      - name: 收集固定名产物（优先 universal APK，与 package.ps1 的产物一致；staging/ 独立于 vite 的 dist/）
+        run: npx tauri android build --apk --target aarch64 --target armv7
+      - name: 收集固定名产物（优先 universal，其次 arm64-v8a；staging/ 独立于 vite 的 dist/）
         run: |
           mkdir -p staging
           apk_dir=src-tauri/gen/android/app/build/outputs/apk
           apk="$(find "$apk_dir/universal" -name '*.apk' 2>/dev/null | head -n1)"
+          if [ -z "$apk" ]; then
+            # 显式给了 --target 之后 gradle 可能出的是逐 ABI 的包：按固定优先级挑 arm64，
+            # 别用「最新的那个」——那会在两个 ABI 之间摇摆，发出去的包是哪个全看构建顺序。
+            apk="$(find "$apk_dir/arm64-v8a" -name '*.apk' 2>/dev/null | head -n1)"
+          fi
           if [ -z "$apk" ]; then
             apk="$(find "$apk_dir" -name '*.apk' -printf '%T@ %p\n' | sort -rn | head -n1 | cut -d' ' -f2-)"
           fi

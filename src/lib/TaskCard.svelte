@@ -8,6 +8,7 @@
   import { uiScaleValue } from "./styles";
   import { longpress, isLongPressSuppressed } from "./longpress";
   import { markdownWire } from "./markdownControls";
+  import { observeResize } from "./measureBus";
   import DatePicker from "./DatePicker.svelte";
   import type { Task } from "./types";
 
@@ -53,10 +54,19 @@
   let revealedEmojiIndex = -1;
   // isMobile 是 store：当布尔直接用会永远为真，桌面端就会误走移动端手势
   $: mobile = $isMobileStore;
+  // 展开态只认存储值：canExpand 是量出来的易失值（列表增减导致滚动条出现/消失、
+  // 宽度一变标题溢出判定就翻转），拿它门控渲染会出现「动了别的任务这张卡自己展开」。
+  // canExpand 只留给手势/按钮当「有没有内容可展开」的判据。
+  $: isExpanded = task.expanded === true;
 
   $: resolvedMd = resolveMarkdownImages(task.markdown, nodeId, $mdImageCache);
   $: collapsedHtml = renderInlineMarkdown(collapsedMarkdownLine(task.markdown));
-  $: fullHtml = renderMarkdown(resolvedMd);
+  // **只在展开时渲染完整 markdown**：Svelte 的 `$:` 是急切求值，与模板消不消费无关，
+  // 早先折叠态的卡片也白跑一遍完整渲染（12 步，含 DOMPurify 的完整 DOM 解析），
+  // 而结果只有下面 `{#if isExpanded}` 那一支会用到。一屏 300 张折叠卡就是 300 次白渲染，
+  // 而且每次列表变化都要重来。`resolvedMd` 仍然照旧 eagerly 算——它负责触发插图预加载，
+  // 改成惰性会让「展开才看到图」变成一次可感知的等待。
+  $: fullHtml = isExpanded ? renderMarkdown(resolvedMd) : "";
   $: formattedDate = task.dueDate
     ? `${formatDate(task.dueDate)}${task.dueTime ? ` ${task.dueTime}` : ""}`
     : "";
@@ -69,10 +79,6 @@
     const value = canExpand;
     void Promise.resolve().then(() => dispatch("measure", { id: task.id, canExpand: value }));
   }
-  // 展开态只认存储值：canExpand 是量出来的易失值（列表增减导致滚动条出现/消失、
-  // 宽度一变标题溢出判定就翻转），拿它门控渲染会出现「动了别的任务这张卡自己展开」。
-  // canExpand 只留给手势/按钮当「有没有内容可展开」的判据。
-  $: isExpanded = task.expanded === true;
   $: plain = cardStyle === "card";
 
   onDestroy(() => {
@@ -105,10 +111,10 @@
     };
     check();
     // 元素自身尺寸变化也要重量：移动端首屏卡片在 view-list 下是 display:none，
-    // 挂载时量到的全是 0；点进内容页变可见时没有任何 window 事件，只有 RO 能接到。
-    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => check()) : null;
-    observer?.observe(node);
-    window.addEventListener("resize", check);
+    // 挂载时量到的全是 0；点进内容页变可见时没有任何 window 事件，只有 ResizeObserver 能接到。
+    // observer 与 window 监听都由 measureBus 单例托管（一张卡一份的话，300 张卡就是
+    // 300 个 observer + 300 个 window 监听，一次窗口缩放触发 600 次强制同步布局）。
+    const release = observeResize(node, check);
     let last = html;
     return {
       update(next: string): void {
@@ -118,8 +124,7 @@
         check();
       },
       destroy(): void {
-        observer?.disconnect();
-        window.removeEventListener("resize", check);
+        release();
       }
     };
   }

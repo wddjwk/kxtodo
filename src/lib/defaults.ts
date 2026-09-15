@@ -745,12 +745,18 @@ function normalizeLedgerEntry(raw: unknown): LedgerEntry | null {
     typeof item.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(item.date)
       ? item.date
       : localDateOf(typeof item.createdAt === "string" ? item.createdAt : "");
-  // v0.7.4 的旧数据是单数 image 字段：折叠进 images（用户真实账本里的图不能丢）
-  const images = Array.isArray(item.images)
-    ? item.images.filter((name): name is string => typeof name === "string" && name !== "")
-    : typeof item.image === "string" && item.image !== ""
-      ? [item.image]
-      : [];
+  // v0.7.4 的旧数据是单数 image 字段：折叠进 images（用户真实账本里的图不能丢）。
+  // 分支判据与 core 的 `LedgerEntry::fold_legacy_image` 对齐——**原始 images 数组为空**
+  // （缺字段或 `[]`）才折 legacy。别拿过滤后的结果当判据，也别拿 `Array.isArray` 当判据：
+  // `"images": []` 配上旧 `image` 时前端会丢图、core 会保留，同一份 JSON 两侧结论相反。
+  const listed = Array.isArray(item.images) ? item.images : [];
+  const legacy = typeof item.image === "string" ? item.image.trim() : "";
+  const images =
+    listed.length > 0
+      ? listed.filter((name): name is string => typeof name === "string" && name !== "")
+      : legacy !== ""
+        ? [legacy]
+        : [];
   return {
     id: item.id,
     kind,
@@ -972,8 +978,12 @@ export function normalizeSettings(raw: unknown): Settings {
   };
   const normalizeUiScale = (value: unknown): number | null =>
     typeof value === "number" && Number.isFinite(value) ? Math.min(1.5, Math.max(0.5, value)) : null;
+  // isFinite 不能省：NaN 也是 "number"，Math.min/max/round 一路把 NaN 传下去，
+  // 于是 CSS 变量变成 `--font-ledger: NaNpx`——整页字号失效（同文件的 normalizeUiScale
+  // 与两个整数归一都判了，只有这里漏）。JSON 里存不下 NaN，但设置对象也会由
+  // localStorage 的外观缓存与 NumberField 的输入拼出来，这条洞是可达的。
   const normalizeFontSize = (value: unknown, fallback: number, min = 14, max = 24): number =>
-    typeof value === "number" ? Math.min(max, Math.max(min, Math.round(value))) : fallback;
+    typeof value === "number" && Number.isFinite(value) ? Math.min(max, Math.max(min, Math.round(value))) : fallback;
   const normalizeHexColor = (value: unknown, fallback: string): string =>
     typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value.trim()) ? value.trim() : fallback;
   const normalizeThemePresets = (value: unknown): ThemePreset[] => {

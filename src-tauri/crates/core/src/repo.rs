@@ -392,7 +392,7 @@ pub fn read_json_value(path: &Path) -> CoreResult<Value> {
             "DATA_CORRUPTED",
             format!("数据文件损坏 {}：{error}", path.display()),
         )
-        .with_hint("运行 kxtodo-cli doctor 检查；可从 backups/ 恢复最近备份")
+        .with_hint("运行 kxtodo-cli doctor 检查定位；backups/ 里有最近 5 份全量备份，手工拷回覆盖即可（没有自动恢复命令）")
     })
 }
 
@@ -425,10 +425,12 @@ impl Repository {
         }
     }
 
-    /// Load + migrate (if needed) under exclusive lock. Safe to call on every process start.
+    /// Load the three core domains under the exclusive lock; used at process start
+    /// to fail early on a corrupted data dir. Not called per command: each command
+    /// loads the domains it actually needs, and parsing files only to discard them
+    /// was the single largest fixed cost on the CLI path.
     pub fn load_all(&self) -> CoreResult<(DataFile, SettingsFile, ScheduleFile)> {
         let _lock = RepoLock::acquire(&self.layout)?;
-        crate::migrate::migrate_if_needed(&self.layout)?;
         Ok((
             self.load_data()?,
             self.load_settings()?,
@@ -590,7 +592,6 @@ impl Repository {
             return Ok(None);
         };
         let _lock = RepoLock::acquire(&self.layout)?;
-        crate::migrate::migrate_if_needed(&self.layout)?;
         let file = self.load_schedule()?;
         Ok(file
             .meta
@@ -609,7 +610,6 @@ impl Repository {
             return Ok(None);
         };
         let _lock = RepoLock::acquire(&self.layout)?;
-        crate::migrate::migrate_if_needed(&self.layout)?;
         let file = self.load_settings()?;
         Ok(file
             .meta
@@ -628,7 +628,6 @@ impl Repository {
             return Ok(None);
         };
         let _lock = RepoLock::acquire(&self.layout)?;
-        crate::migrate::migrate_if_needed(&self.layout)?;
         let file = self.load_data()?;
         Ok(file
             .meta
@@ -647,7 +646,6 @@ impl Repository {
             return Ok(None);
         };
         let _lock = RepoLock::acquire(&self.layout)?;
-        crate::migrate::migrate_if_needed(&self.layout)?;
         let file = self.load_diary()?;
         Ok(file
             .meta
@@ -666,7 +664,6 @@ impl Repository {
             return Ok(None);
         };
         let _lock = RepoLock::acquire(&self.layout)?;
-        crate::migrate::migrate_if_needed(&self.layout)?;
         let file = self.load_ledger()?;
         Ok(file
             .meta
@@ -692,7 +689,6 @@ impl Repository {
         F: FnOnce(&mut DataFile) -> CoreResult<Value>,
     {
         let _lock = RepoLock::acquire(&self.layout)?;
-        crate::migrate::migrate_if_needed(&self.layout)?;
         let mut file = self.load_data()?;
         let outcome = self.prepare_write(
             Domain::Data,
@@ -734,7 +730,6 @@ impl Repository {
         F: FnOnce(&mut DataFile) -> CoreResult<Value>,
     {
         let _lock = RepoLock::acquire(&self.layout)?;
-        crate::migrate::migrate_if_needed(&self.layout)?;
         let mut file = self.load_data()?;
         let outcome = self.prepare_write(
             Domain::Data,
@@ -891,7 +886,6 @@ impl Repository {
         F: FnOnce(&mut SettingsFile) -> CoreResult<Value>,
     {
         let _lock = RepoLock::acquire(&self.layout)?;
-        crate::migrate::migrate_if_needed(&self.layout)?;
         let mut file = self.load_settings()?;
         let outcome = self.prepare_write(
             Domain::Settings,
@@ -928,7 +922,6 @@ impl Repository {
         F: FnOnce(&mut DiaryFile) -> CoreResult<Value>,
     {
         let _lock = RepoLock::acquire(&self.layout)?;
-        crate::migrate::migrate_if_needed(&self.layout)?;
         let mut file = self.load_diary()?;
         let outcome = self.prepare_write(
             Domain::Diary,
@@ -966,7 +959,6 @@ impl Repository {
         F: FnOnce(&mut LedgerFile) -> CoreResult<Value>,
     {
         let _lock = RepoLock::acquire(&self.layout)?;
-        crate::migrate::migrate_if_needed(&self.layout)?;
         let existed = self.layout.ledger_file().exists();
         let mut file = self.load_ledger()?;
         let outcome = self.prepare_write(
@@ -1036,7 +1028,6 @@ impl Repository {
         F: FnOnce(&mut ScheduleFile) -> CoreResult<Value>,
     {
         let _lock = RepoLock::acquire(&self.layout)?;
-        crate::migrate::migrate_if_needed(&self.layout)?;
         let mut file = self.load_schedule()?;
         let outcome = self.prepare_write(
             Domain::Schedule,
@@ -1117,6 +1108,21 @@ impl Repository {
         revision: u64,
         summary: &Value,
     ) -> CoreResult<()> {
+        // 纯本机 UI 状态写不进审计流。判据是命令名白名单而不是 `gui.` 前缀：
+        // 同一个 ops_gui 里的 apply-tree-order / import-state 是实质业务写，必须留痕。
+        // 这些字段既不参与同步（merge 明确剥离 collapsed/expanded）、又是点击频率最高的写，
+        // 记进 10MB 上限的审计流只会把真正的操作记录挤出去，还要为每次点击付一次追加。
+        const UI_ONLY_COMMANDS: [&str; 6] = [
+            "gui.select-node",
+            "gui.set-collapsed",
+            "gui.set-item-ui",
+            "gui.set-items-ui",
+            "gui.set-diary-ui",
+            "gui.set-schedule-ui",
+        ];
+        if UI_ONLY_COMMANDS.contains(&command) {
+            return Ok(());
+        }
         let entry = serde_json::json!({
             "at": now_iso(),
             "command": command,
@@ -1132,7 +1138,8 @@ impl Repository {
         )
     }
 
-    /// Full JSON backup set of the three domain files (§4.2.3).
+    /// Full JSON backup set of **all five** domain files (§4.2.3).
+    /// 日记与账本必须在内：账本是金融数据，早先只备三个域，`ledger.json` 写坏了根本没有回退。
     pub fn backup(&self, reason: &str) -> CoreResult<PathBuf> {
         let _lock = RepoLock::acquire(&self.layout)?;
         self.backup_locked(reason)
@@ -1142,7 +1149,13 @@ impl Repository {
         let stamp = now_iso().replace([':', '.'], "-");
         let dir = self.layout.backup_dir().join(format!("{stamp}-{reason}"));
         fs::create_dir_all(&dir)?;
-        for file in [DATA_FILE, SETTINGS_FILE, SCHEDULE_FILE] {
+        for file in [
+            DATA_FILE,
+            SETTINGS_FILE,
+            SCHEDULE_FILE,
+            DIARY_FILE,
+            LEDGER_FILE,
+        ] {
             let src = self.layout.root.join(file);
             if src.exists() {
                 fs::copy(&src, dir.join(file))?;

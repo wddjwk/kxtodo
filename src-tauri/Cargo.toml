@@ -17,6 +17,18 @@ members = ["crates/core", "crates/cli", "crates/server"]
 # tauri build / cargo build 默认只构建 GUI 与 core；kxtodo-cli / kxtodo-server 用 -p 显式构建。
 default-members = [".", "crates/core"]
 
+# 发布制品体积优先。cargo 默认是 opt-level=3 + 无 LTO + codegen-units=16 + 不 strip
+# （两个 exe 里都能搜到 .pdb 路径），实测 KXToDo.exe 19.1MB、AppImage 83.5MB、
+# APK 里每个 ABI 的 .so 约 18MB。thin LTO + 单 codegen unit + strip 预计全线 -25~35%，
+# 代价是编译时间明显变长（CI 三个 job 都会变慢）。
+# **不要加 `panic = "abort"`**：GUI 是常驻 Host，调度器用 process_group/killpg 管整组子进程，
+# 让一次 panic 直接带走整个常驻进程比 unwind 到边界更糟；Android 的 cdylib 上 abort 也不友好。
+# `opt-level` 保持默认 3：这一版的目标是「不卡」，体积靠 LTO 与 strip 拿，不靠降优化档。
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -35,6 +47,11 @@ kxtodo-server = { path = "crates/server" }
 # 只用 time：重启内置主机时给「等旧服务循环退出」一个有界等待（core 已把 tokio 拉进依赖图）
 tokio = { version = "1", features = ["time"] }
 ureq = { version = "2", default-features = false, features = ["tls"] }
+# 图片入库前的体积闸（>5MB 才等比缩 + 重编码）。只开 jpeg 与 png 两个编解码器：
+# 实测数据目录里 92MB 图片本体全是这两种（单张背景 JPEG 19MB、单张记账 PNG 17MB），
+# 而它们又会原样加密推到同步服务器（本机 server/data.db 因此 123MB，真实数据只有 185KB）。
+# gif/webp 刻意不支持——它们可能是动图，解码只拿得到第一帧，重编码等于把动画弄丢。
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri = { version = "2", features = ["tray-icon"] }

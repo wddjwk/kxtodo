@@ -3,6 +3,7 @@
 
 import type {
   LedgerAccount,
+  LedgerAccountType,
   LedgerBook,
   LedgerCategory,
   LedgerEntry,
@@ -35,30 +36,35 @@ export function formatCents(cents: number): string {
   return `${sign}${grouped}.${frac}`;
 }
 
-/** 元（用户输入）→ 分；非法返回 null。第三位小数四舍五入。
- *  允许负数（账户的期初/当前金额可以是负的，信用卡尤其如此）；
- *  记账金额是否必须为正在调用方另拦（与 core parse_cents 同口径）。 */
+/** 元（用户输入）→ 分；非法返回 null。
+ *
+ * 与 core 的 `parse_cents`（`crates/core/src/ops_ledger.rs`）**逐条同口径**：逗号先去掉；
+ * `.5` 与 `5.` 都收；小数第三位四舍五入、第四位起直接丢；只允许一个小数点；
+ * 允许负数（账户的期初/当前金额可以是负的，信用卡尤其如此）。
+ *
+ * 两套解析器曾经三处不一致（`.5`、`5.`、四位以上小数：core 收而前端拒），于是同一串输入
+ * CLI 记进去了、GUI 弹「无效金额」——钱的事不该有两种口径。改这里之前先看 core 那一侧，
+ * 两边必须一起动（`src/lib/__tests__/ledger.spec.ts` 有黄金用例守着）。
+ */
 export function parseYuanToCents(raw: string): number | null {
   const text = raw.trim().replace(/,/g, "");
-  if (text === "" || !/^[+-]?\d+(\.\d{1,4})?$/.test(text)) return null;
+  if (text === "") return null;
   const negative = text.startsWith("-");
   const unsigned = negative || text.startsWith("+") ? text.slice(1) : text;
-  const [whole, frac = ""] = unsigned.split(".");
-  const padded = `${frac}000`.slice(0, 3);
-  const cents = Number.parseInt(whole, 10) * 100 + Number.parseInt(padded.slice(0, 2), 10);
-  const third = Number.parseInt(padded.slice(2, 3), 10);
-  const value = cents + (third >= 5 ? 1 : 0);
-  return negative ? -value : value;
-}
-
-/** 一笔账的带符号展示：支出 -、收入 +、转账按转出方向记 -。 */
-export function signedCents(entry: LedgerEntry): number {
-  return entry.kind === "income" ? entry.amountCents : -entry.amountCents;
-}
-
-export function signedLabel(entry: LedgerEntry): string {
-  const value = signedCents(entry);
-  return `${value > 0 ? "+" : ""}${formatCents(value)}`;
+  const parts = unsigned.split(".");
+  if (parts.length > 2) return null;
+  const whole = parts[0];
+  const frac = parts.length === 2 ? parts[1] : "0";
+  if (whole === "" && frac === "") return null;
+  if (!/^\d*$/.test(whole) || !/^\d*$/.test(frac)) return null;
+  // 前导零去掉再转数（core 是 trim_start_matches('0') 后 parse，空串按 0）；
+  // 超出安全整数就拒——core 那边是 i128 checked_mul，同样会拒。
+  const wholeCents = Number(whole.replace(/^0+/, "") || "0") * 100;
+  if (!Number.isSafeInteger(wholeCents)) return null;
+  const fracDigits = `${frac}000`.slice(0, 3);
+  const cents = wholeCents + Number(fracDigits.slice(0, 2)) + (Number(fracDigits[2]) >= 5 ? 1 : 0);
+  if (!Number.isSafeInteger(cents)) return null;
+  return negative && cents !== 0 ? -cents : cents;
 }
 
 /** 列表顺序：日期新→旧，同一天时间晚→早（与 core 的规范序一致）。 */
@@ -71,22 +77,55 @@ export function sortEntries(entries: LedgerEntry[]): LedgerEntry[] {
   });
 }
 
+// ---------------------------------------------------------------------------
+// 按 id 查表的索引
+// ---------------------------------------------------------------------------
+
+export type LedgerLookup = {
+  categoryById: Map<string, LedgerCategory>;
+  accountById: Map<string, LedgerAccount>;
+  /** 自定义账户类型按名字查（kind 字符串 = 类型名） */
+  accountTypeByName: Map<string, LedgerAccountType>;
+};
+
+/**
+ * 索引按 **book 对象身份**缓存（WeakMap）：一屏几百行条目每行都要查分类与账户，
+ * 早先是每行 6 次 `Array.find`（其中 3 次查的还是同一个分类），300 行 × 60 个分类
+ * ≈ 十万次比较，而每次记账写入都会重来一遍。
+ *
+ * 用 WeakMap 而不是让调用方传 prop：`book` 每次快照刷新都是新对象，旧索引随之被回收，
+ * 同一份 book 下的所有行共用一份索引——四处调用点（列表/日历/钻取/搜索）一行都不用改。
+ */
+const lookupCache = new WeakMap<LedgerBook, LedgerLookup>();
+
+export function ledgerLookup(book: LedgerBook): LedgerLookup {
+  const cached = lookupCache.get(book);
+  if (cached !== undefined) return cached;
+  const built: LedgerLookup = {
+    categoryById: new Map(book.categories.map((item) => [item.id, item])),
+    accountById: new Map(book.accounts.map((item) => [item.id, item])),
+    accountTypeByName: new Map((book.accountTypes ?? []).map((item) => [item.name, item]))
+  };
+  lookupCache.set(book, built);
+  return built;
+}
+
 /**
  * 记账搜索：分类名（二级命中时把大类名也算上）、备注、金额（含大类的名字对不上时也认）。
  * 匹配规则与日记/任务各自那条同构（各自模块里一份），结果按时间倒序（最新在前）。
- * 金额按「元」比对：查询里的逗号、空格先去掉，再与 12.34 / 1,234.56 / 1234 各种形态比。
+ * 金额按「元」比对：查询里的逗号、空格先去掉，再与 12.34 / 1,234.56 / 1234 各种形态比；
+ * **带符号也认**（支出 `-12.34`、收入 `+8888`，与屏幕上画的一致，转账不带符号）。
  */
 export function filterLedgerEntries(book: LedgerBook, query: string): LedgerEntry[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return sortEntries(book.entries);
+  const lookup = ledgerLookup(book);
   const amountNeedle = needle.replaceAll(",", "").replace(/\s+/g, "");
-  return sortEntries(book.entries).filter((entry) => {
-    const category = entry.categoryId
-      ? book.categories.find((item) => item.id === entry.categoryId)
-      : undefined;
-    const parent = category?.parentId
-      ? book.categories.find((item) => item.id === category.parentId)
-      : undefined;
+  // **先筛后排**：早先对全部流水做一次 sortEntries 再 filter，命中 5 条也要把 3000 笔
+  // 拷贝 + 排序一遍（O(n log n)），而这一步每敲一个键就跑一次。
+  const hits = book.entries.filter((entry) => {
+    const category = entry.categoryId ? lookup.categoryById.get(entry.categoryId) : undefined;
+    const parent = category?.parentId ? lookup.categoryById.get(category.parentId) : undefined;
     const haystack = [
       entry.kind === "transfer" ? "转账" : "",
       category?.name ?? "",
@@ -96,15 +135,23 @@ export function filterLedgerEntries(book: LedgerBook, query: string): LedgerEntr
       .toLowerCase();
     if (haystack.includes(needle)) return true;
     if (entry.note.toLowerCase().includes(needle)) return true;
+    // 查询只由逗号/空格组成时 amountNeedle 是空串，而 `x.includes("")` 恒真——
+    // 不加这道门的话搜一个「,」会把整本账都列出来。
+    if (!amountNeedle) return false;
     const amount = entry.amountCents / 100;
     const forms = [
       amount.toFixed(2),
-      formatCents(entry.amountCents).toLowerCase(),
+      formatCents(entry.amountCents),
       String(amount),
       Math.round(amount).toString()
     ];
+    // 界面上支出画的是 `-12.34`、收入 `+12.34`（转账不带符号）：用户照着屏幕敲
+    // 带符号的查询也得能命中，而 amountCents 恒为正，光靠上面四种形态永远匹配不上。
+    const sign = entry.kind === "income" ? "+" : entry.kind === "expense" ? "-" : "";
+    if (sign) forms.push(...forms.map((form) => `${sign}${form}`));
     return forms.some((form) => form.includes(amountNeedle));
   });
+  return sortEntries(hits);
 }
 
 /** 一组流水（搜索结果）的收/支/结余合计——转账不计入，与统计口径一致。 */
@@ -305,6 +352,9 @@ export function statsEntries(entries: LedgerEntry[], bounds: StatsBounds): Ledge
 
 export type LedgerSeriesPoint = { key: string; income: number; expense: number };
 
+/** 分桶门槛：**必须与 core `ops_ledger.rs::DAY_GRAIN_MAX_DAYS` 同一个数**（那边有一条
+ *  include_str! 本文件的测试守着，改一边就会被挡住）。门槛不同 = 同一段区间 GUI 画日桶、
+ *  CLI 给月桶。 */
 function bucketOf(bounds: StatsBounds): "day" | "month" {
   const days =
     (new Date(`${bounds.to}T00:00:00`).getTime() - new Date(`${bounds.from}T00:00:00`).getTime()) / 86_400_000 + 1;
@@ -370,11 +420,18 @@ export type LedgerCategoryStat = {
 
 /** 分类占比：归到大类一级（子分类金额并进父类），未分类单独一组。 */
 export function categoryStats(book: LedgerBook, entries: LedgerEntry[], side: LedgerSide): LedgerCategoryStat[] {
+  const lookup = ledgerLookup(book);
   const stats: LedgerCategoryStat[] = [];
+  // 累积一律走 Map：早先在 per-entry 循环里对累积数组做 `stats.find(...)`、
+  // 对 children 又做一次 `find`，是 O(账目 × 分类) —— 3000 笔 × 60 分类 = 十几万次比较，
+  // 而切一次周期/收支侧就重跑一遍。
+  const groupBy = new Map<string, LedgerCategoryStat>();
+  const childBy = new Map<string, LedgerCategoryStat["children"][number]>();
   const pick = (key: string, name: string): LedgerCategoryStat => {
-    let slot = stats.find((item) => item.categoryId === key);
+    let slot = groupBy.get(key);
     if (!slot) {
       slot = { categoryId: key, name, side, count: 0, cents: 0, percent: 0, children: [] };
+      groupBy.set(key, slot);
       stats.push(slot);
     }
     return slot;
@@ -383,17 +440,19 @@ export function categoryStats(book: LedgerBook, entries: LedgerEntry[], side: Le
     const entrySide: LedgerSide | null =
       entry.kind === "expense" ? "expense" : entry.kind === "income" ? "income" : null;
     if (entrySide !== side) continue;
-    const category = entry.categoryId ? book.categories.find((item) => item.id === entry.categoryId) : undefined;
-    const parent = category?.parentId ? book.categories.find((item) => item.id === category.parentId) : undefined;
+    const category = entry.categoryId ? lookup.categoryById.get(entry.categoryId) : undefined;
+    const parent = category?.parentId ? lookup.categoryById.get(category.parentId) : undefined;
     const groupKey = parent ? parent.id : category ? category.id : "";
     const groupName = parent ? parent.name : category ? category.name : "未分类";
     const slot = pick(groupKey, groupName);
     slot.count += 1;
     slot.cents += entry.amountCents;
     if (category && parent) {
-      let child = slot.children.find((item) => item.categoryId === category.id);
+      const childKey = `${slot.categoryId}\u0000${category.id}`;
+      let child = childBy.get(childKey);
       if (!child) {
         child = { categoryId: category.id, name: category.name, count: 0, cents: 0 };
+        childBy.set(childKey, child);
         slot.children.push(child);
       }
       child.count += 1;
@@ -409,21 +468,35 @@ export function categoryStats(book: LedgerBook, entries: LedgerEntry[], side: Le
   return stats;
 }
 
-/** 账户余额 = 期初 + 流水推导（与 core 的 account_balance_cents 同口径）。 */
-export function accountBalance(book: LedgerBook, accountId: string): number {
-  const account = book.accounts.find((item) => item.id === accountId);
-  let cents = account?.initialCents ?? 0;
+/**
+ * 一次遍历算出**所有**账户的余额（期初 + 流水推导）。
+ * 早先是每个账户各扫一遍全部流水（`accountBalance` × 账户数）：20 个账户 × 3000 笔
+ * = 6 万次判断，而资产视图与账户管理器各算一次、每次记账写入都重跑。
+ * 口径与 core 的 `account_balance_cents` 一致：收入 +、支出 −、转账转出 − / 转入 +。
+ */
+export function accountBalances(book: LedgerBook): Map<string, number> {
+  const balances = new Map<string, number>();
+  for (const account of book.accounts) balances.set(account.id, account.initialCents);
   for (const entry of book.entries) {
+    const from = balances.get(entry.accountId) ?? 0;
     if (entry.kind === "income") {
-      if (entry.accountId === accountId) cents += entry.amountCents;
+      balances.set(entry.accountId, from + entry.amountCents);
     } else if (entry.kind === "expense") {
-      if (entry.accountId === accountId) cents -= entry.amountCents;
+      balances.set(entry.accountId, from - entry.amountCents);
     } else {
-      if (entry.accountId === accountId) cents -= entry.amountCents;
-      if (entry.toAccountId === accountId) cents += entry.amountCents;
+      balances.set(entry.accountId, from - entry.amountCents);
+      if (entry.toAccountId) {
+        balances.set(entry.toAccountId, (balances.get(entry.toAccountId) ?? 0) + entry.amountCents);
+      }
     }
   }
-  return cents;
+  return balances;
+}
+
+/** 账户余额 = 期初 + 流水推导（与 core 的 account_balance_cents 同口径）。 */
+export function accountBalance(book: LedgerBook, accountId: string): number {
+  // 走同一份实现：两套算法迟早会漂移，而这是钱。
+  return accountBalances(book).get(accountId) ?? 0;
 }
 
 export type LedgerAssets = {
@@ -435,9 +508,10 @@ export type LedgerAssets = {
 
 /** 资产总览：净资产 / 总资产 / 总负债（信用卡负余额计入负债）。 */
 export function assetsOverview(book: LedgerBook): LedgerAssets {
+  const balances = accountBalances(book);
   const perAccount = [...book.accounts]
     .sort((a, b) => a.order - b.order)
-    .map((account) => ({ account, balance: accountBalance(book, account.id) }));
+    .map((account) => ({ account, balance: balances.get(account.id) ?? 0 }));
   let net = 0;
   let liabilities = 0;
   for (const item of perAccount) {
@@ -450,17 +524,22 @@ export function assetsOverview(book: LedgerBook): LedgerAssets {
 export type AssetTrendPoint = { date: string; cents: number };
 
 /**
- * 总资产随时间的变化：从最早的一天（首笔流水或首个账户创建日）扫到今天。
+ * 总资产随时间的变化：从最早的一天（首笔流水或首个账户创建日）扫到**最晚的一天**
+ * （今天，或账里日期最晚的那一笔——见下）。
  * 横坐标自适应——按跨度取采样步长，点数封顶 maxPoints（标签不会太密，首尾都落点）。
  * 每个点是**当天结束时**的总资产，口径与 assetsOverview 完全一致
  * （净资产 + 信用类账户负余额的负债），不另立第二套算法。
  */
 export function assetsTrend(book: LedgerBook, maxPoints = 90): AssetTrendPoint[] {
   if (book.accounts.length === 0) return [];
-  const to = todayDate();
+  // 终点取 max(今天, 最晚一笔)：账里可以有**未来日期**的一笔（预付下月房租、已定的还款日），
+  // 只扫到今天的话曲线右端会漏掉它，与旁边 assetsOverview 的数额对不上——用户看到的就是
+  // 「曲线末尾和卡片里的数字不一样」。
+  let to = todayDate();
   let from = to;
   for (const entry of book.entries) {
     if (entry.date < from) from = entry.date;
+    if (entry.date > to) to = entry.date;
   }
   for (const account of book.accounts) {
     const created = (account.createdAt ?? "").slice(0, 10);
@@ -535,15 +614,6 @@ export function categoryTree(book: LedgerBook, side: LedgerSide): { parent: Ledg
 export function categoryColor(book: LedgerBook, category: LedgerCategory | undefined): string {
   if (!category) return "#95a5a6";
   if (category.color) return category.color;
-  const parent = category.parentId ? book.categories.find((item) => item.id === category.parentId) : undefined;
+  const parent = category.parentId ? ledgerLookup(book).categoryById.get(category.parentId) : undefined;
   return parent?.color || (category.side === "income" ? "#27ae60" : "#f0862c");
-}
-
-export function accountName(book: LedgerBook, accountId: string): string {
-  return book.accounts.find((item) => item.id === accountId)?.name ?? "已删除账户";
-}
-
-export function categoryName(book: LedgerBook, categoryId?: string): string {
-  if (!categoryId) return "";
-  return book.categories.find((item) => item.id === categoryId)?.name ?? "";
 }

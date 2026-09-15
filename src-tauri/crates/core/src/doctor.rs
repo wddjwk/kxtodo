@@ -158,6 +158,7 @@ pub fn run_doctor(inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> Core
     ));
 
     // 2. Domain files: presence, parse, schema versions, revisions.
+    //    五个域一个都不能少：日记与账本早先不在体检范围内，账本写坏了 doctor 还说一切正常。
     for (name, path, expected) in [
         (
             "data",
@@ -173,6 +174,16 @@ pub fn run_doctor(inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> Core
             "schedule",
             layout.schedule_file(),
             crate::model::SCHEDULE_SCHEMA_VERSION,
+        ),
+        (
+            "diary",
+            layout.diary_file(),
+            crate::model::DIARY_SCHEMA_VERSION,
+        ),
+        (
+            "ledger",
+            layout.ledger_file(),
+            crate::model::LEDGER_SCHEMA_VERSION,
         ),
     ] {
         if !path.exists() {
@@ -212,7 +223,9 @@ pub fn run_doctor(inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> Core
                     if ok {
                         None
                     } else {
-                        Some("版本或 revision 缺失，运行任意 kxtodo-cli 命令触发迁移")
+                        // 已经没有迁移这回事了（项目不做版本兼容）：缺失的字段加载时按默认值补齐，
+                        // 下一次写入会把文件写回当前版本。别再叫用户「触发迁移」。
+                        Some("schemaVersion 或 revision 与当前版本不符（文件来自旧版本或被外部改写）；读取时按默认值补齐，下一次写入会写回当前版本")
                     },
                 ));
             }
@@ -223,7 +236,8 @@ pub fn run_doctor(inv: &Invocation, ctx: &ExecContext, _meta: &mut Meta) -> Core
                     format!("{} 无法解析", path.display()),
                     Some(match error.hint.as_deref() {
                         Some(hint) => hint,
-                        None => "从 backups/ 恢复最近备份",
+                        // 应用没有自动恢复命令，说清楚是手工拷回，别给空承诺。
+                        None => "backups/ 里有最近 5 份全量备份，手工把对应文件拷回数据目录覆盖即可（没有自动恢复命令）",
                     }),
                 ));
             }

@@ -689,6 +689,22 @@ fn page_from(params: &Value) -> CoreResult<task_ops::Page> {
     Ok(task_ops::Page { offset, limit, all })
 }
 
+/// `ledger list` / `diary list` 的分页：**不传 --limit 就返回全部**，其余（--cursor /
+/// --all）与 `page_from` 同语义。
+///
+/// 刻意不给这两个命令补 DEFAULT_PAGE_LIMIT：记账是金融数据，静默截断会让调用方把
+/// 一页当成全月合计（「这个月花了多少」算出个残值），日记的月度回顾同理。要分页就
+/// 显式给 --limit，游标从 meta.nextCursor 拿。
+pub(crate) fn unbounded_page_from(params: &Value) -> CoreResult<task_ops::Page> {
+    let limit = match params.get("limit").and_then(Value::as_u64) {
+        Some(value) => value as usize,
+        None => usize::MAX,
+    };
+    let offset = task_ops::parse_cursor(param_str(params, "cursor").as_deref())?;
+    let all = param_bool(params, "all").unwrap_or(false);
+    Ok(task_ops::Page { offset, limit, all })
+}
+
 fn task_list(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
     let params = &inv.params;
     let kind_raw = required_str(params, "type")?;

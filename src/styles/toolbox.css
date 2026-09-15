@@ -54,7 +54,7 @@
 }
 
 .toolbox-header-title {
-  font-size: 22px;
+  font-size: calc(var(--font-control) + 4px);
   font-weight: 800;
   color: #1f1f1f;
 }
@@ -104,12 +104,12 @@
 }
 
 .toolbox-card-text strong {
-  font-size: 16px;
+  font-size: calc(var(--font-control) - 2px);
   color: #1f2937;
 }
 
 .toolbox-card-text span {
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
   color: #6b7280;
 }
 
@@ -130,7 +130,7 @@
   border-radius: 8px;
   background: transparent;
   color: #2564cf;
-  font-size: 15px;
+  font-size: calc(var(--font-control) - 3px);
   cursor: pointer;
 }
 
@@ -151,7 +151,7 @@
   align-items: center;
   gap: 8px;
   color: #1f2937;
-  font-size: 17px;
+  font-size: calc(var(--font-control) - 1px);
   font-weight: 700;
 }
 
@@ -166,7 +166,7 @@
   border-radius: 12px;
   background: #ffffff;
   color: #374151;
-  font-size: 15px;
+  font-size: calc(var(--font-control) - 3px);
 }
 
 .toolbox-results {
@@ -183,7 +183,7 @@
   background: #ffffff;
   color: #1f2937;
   font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
-  font-size: 20px;
+  font-size: calc(var(--font-control) + 2px);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -191,5 +191,5 @@
 .toolbox-empty {
   margin: 8px 0;
   color: #8b929e;
-  font-size: 14px;
+  font-size: calc(var(--font-control) - 4px);
 }

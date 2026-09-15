@@ -37,8 +37,13 @@ export const ACCOUNT_TYPE_PRESETS: AccountTypePreset[] = [
   { kind: "other", label: "其他", icon: "Ellipsis", color: "#7f8c8d" }
 ];
 
+/** 按 kind 查预置：一次建好的表，别每行条目都对 19 条预置做一次线性 find。 */
+const PRESET_BY_KIND = new Map<string, AccountTypePreset>(
+  ACCOUNT_TYPE_PRESETS.map((item) => [item.kind as string, item])
+);
+
 function preset(kind: string): AccountTypePreset | undefined {
-  return ACCOUNT_TYPE_PRESETS.find((item) => item.kind === kind);
+  return PRESET_BY_KIND.get(kind);
 }
 
 /** 自定义类型的账户 kind = 类型名（自由字符串），按名字回查它的图标与颜色 */

@@ -393,14 +393,22 @@ pub(crate) fn is_image_name(name: &str) -> bool {
         || lower.ends_with(".bmp")
 }
 
-/// 落盘前的文件名护栏：不带路径分隔符与 `..`、没有控制字符、长度有界。
-/// 包内名字来自外部输入，拼进本地目录前必须过这一道。
+/// 落盘前的文件名护栏：不带路径分隔符与 `..`、没有控制字符、长度有界、不以点开头、
+/// 不含 Windows 保留字符。
+///
+/// **这是全项目唯一的一份实现。** 壳层（`src-tauri/src/lib.rs` 的 `safe_image_name`）
+/// 早先另有一套更弱的判据（只查空 / `/` / `\` / `..`），而它守的恰恰是插图与背景/头像的
+/// **落盘和删除**路径——两套护栏迟早漂移，所以壳层已改为转调这里。
+/// Windows 保留字符一并拒掉的理由是跨平台：同一批图片会在三端之间流动（同步、导入导出），
+/// 名字必须在最严的那个平台上也合法；本应用自己生成的名字（`md-<纳秒>-<计数>.<ext>`、
+/// `bg-…`、`avator-…`）一个都不含这些字符，所以对现有数据零影响。
 pub fn is_safe_image_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 200
         && !name.contains(['/', '\\'])
         && !name.contains("..")
         && !name.starts_with('.')
+        && !name.contains(['<', '>', ':', '"', '|', '?', '*'])
         && !name.chars().any(|ch| ch.is_control())
 }
 

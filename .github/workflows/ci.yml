@@ -26,7 +26,7 @@ env:
 
 jobs:
   frontend:
-    name: 前端（svelte-check + vite build）
+    name: 前端（svelte-check + vitest 单测 + vite build）
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -37,6 +37,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+      # 纯逻辑单测（src/lib/__tests__/*.spec.ts：记账金额/统计/余额、时刻、归一化）。
+      # 跑在 node 环境，不需要浏览器；配置在 vitest.config.ts（独立于 vite.config.ts）。
+      # 资金路径以前只有 core 侧的 tests/ledger_money.rs 守着，前端这一套是第二份实现。
+      - run: npm run test:unit
       - run: npm run build
 
   rust-windows:

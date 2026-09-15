@@ -1,0 +1,226 @@
+---
+name: develop-kxtodo
+version: 1
+description: 开发 / 修改 / 调试 / 重构 KXToDo（Todo Note）项目本身时**必须先加载本 skill**。KXToDo 是一款本地优先的「待办 + 日记 + 记账」三端应用：Rust + Tauri 2（桌面壳与后端）、Svelte 4 + TypeScript + Vite（前端）、CodeMirror 6（编辑器）、marked + DOMPurify + highlight.js（渲染），同一份 kxtodo-core 跑在 Windows（exe）/ Linux（AppImage）/ Android（APK）三端。只要在本仓库动任何代码就用它：改前端 Svelte 组件或全局 CSS、改 Rust core（model / repo / ops_*）或 src-tauri 壳、改数据同步（core/src/sync 与 crates/server）、加或改 CLI 命令、改任务 / 日记 / 记账域、加设置项、排查移动端浮层与手势问题、跑测试、构建打包发版（release.ps1 / release.sh / GitHub Actions）、打 tag、推送远程、以及遇到 Windows / Linux / Android 的环境坑位（Git Bash 里 cargo 报 link: extra operand、pwsh 5.1 编码、裸 cargo 出白屏制品、gradle/NDK、单实例标识撞车）。采用渐进披露：本文件常驻（架构精简版 + 全部铁律 + 路由表 + references 索引），细节按需读 references/ 下的 11 份专题文件 + history/ 下 7 份版本档案（共 18 份 md）。注意：本 skill 是**开发本项目**用的；要用 KXToDo 的 CLI 记录待办 / 日记 / 账目，那是另一个 skill（`kxtodo`）。
+---
+
+# 开发 KXToDo
+
+## 0. 怎么用这份 skill（渐进披露）
+
+- **本文件常驻**：项目概览、架构精简版、**全部铁律**、路由表（要做什么 → 动哪里）、references 索引、自我迭代条款、最短构建路径。
+- **细节按需读**：`references/` 下 11 份专题文件 + `references/history/` 下 7 份版本档案（见第 5 节的索引表）。动手前按路由表最后一列的指引去读对应文件；拿不准某条约束为什么存在，读 `references/invariants.md`。
+- **版本流水账在 `references/history/`**：本文件**不**堆「vX.Y 改了什么」，那是 history 的职责。
+
+## 1. 项目是什么
+
+KXToDo（Todo Note）是一款本地优先的待办 + 快捷笔记桌面应用：左侧分类/条目树、右侧 Markdown 卡片画布（交互参考 Microsoft To Do，品牌与实现完全原创），外加 CLI、定时任务与系统通知。技术栈：Rust + Tauri 2（桌面壳与后端）、Svelte 4 + TypeScript + Vite（前端）、CodeMirror 6（编辑器）、marked + DOMPurify + highlight.js（渲染）。
+
+后来长成的样子：**待办 + 日记 + 记账**三类内容（各住自己的领域文件），**Windows / Linux / Android 三端**同一份 core，外加**多端数据同步**（自建 server / 局域网内置主机 / iroh P2P 三种通信方式，端到端加密）。
+
+- **Windows**：`KXToDo.exe`（GUI）+ `kxtodo-cli.exe` + `kxtodo-server.exe`
+- **Linux**：`KXToDo.AppImage` + `kxtodo-cli` + `kxtodo-server`（与 Windows 同拓扑：GUI 常驻 Host，CLI 经 IPC 找 Host）
+- **Android**：`KXToDo.apk`（内嵌同一个 kxtodo-core，HostCore 进程内直跑，不启 IPC server / 调度引擎 / 看门狗 / 托盘）
+
+## 2. 系统架构（精简版）
+
+### 进程拓扑（v10，最重要的认知）
+
+```
+kxtodo.exe (GUI)                    kxtodo-cli (CLI)
+  │ windows 子系统，无控制台          │ 控制台程序，跑完即退
+  │ 内嵌 Host（IPC 服务端 + 调度引擎） │ 薄入口 → kxtodo_core::cli::main_entry
+  └──────────┬───────────────────────┘
+             │  共享同一个 Domain Core（crates/core，kxtodo-core）
+             ▼
+   Repository（fs2 文件锁 + 原子写 + revision + 幂等台账）
+             ▼
+   <数据目录>/data.json + settings.json + tasks.json + diary.json + ledger.json
+```
+
+- **GUI 是唯一常驻进程**：窗口关闭（默认隐藏到托盘）后 Host 继续跑调度与 IPC；无窗口、无启用任务时看门狗自动退出。
+- **CLI 不持有状态**：需要常驻能力时经 IPC 找 Host；Host 不在就拉起 GUI 同目录 exe 的隐藏 Host 模式（`--kxtodo-host`），找不到 GUI 报 `GUI_NOT_FOUND`。
+- **Android 同栈**：APK 内嵌同一个 kxtodo-core（`init_mobile_core`），写操作与桌面走完全相同的 core_dispatch 命令层。浏览器 dev 预览（非 Tauri）才走 localStorage legacy 路径。
+
+**路径约定**：文档里写的 `crates/core/src/...`、`crates/server/src/...` 一律**相对 `src-tauri/`**（磁盘上是 `src-tauri/crates/...`）；`src/...`（前端）与 `scripts/...` 相对仓库根；Tauri 壳在 `src-tauri/src/lib.rs`。详见 `references/architecture.md`。
+
+### 五个领域文件
+
+`data.json`（节点与任务）+ `settings.json`（设置）+ `tasks.json`（定时任务）+ `diary.json`（日记）+ `ledger.json`（记账）。每个都有独立的 revision / 幂等台账 / 墓碑 / 域事件；`Domain` 变体、layout 路径、`load_*` / `write_*` 都在 `crates/core/src/repo.rs`。**数据地基（schema v6）**：ID 是 128-bit 随机 hex（32-bit 会跨设备碰撞）；Node/Item 有显式 `order: f64`（同级排序唯一来源，数组顺序仅是渲染缓存）；`collapsed`/`expanded` 是本机 UI 状态不参与同步。
+
+### 同步分层一句话
+
+每台设备持**全量副本**，主机（任一台设备上的 kxtodo-server，或内嵌在 GUI/APK 里）只是**密文中转缓存，不是数据归属者**；逐实体 LWW + 墓碑传播删除，合并**永远在客户端**。代码分层：`crypto`（密钥派生+加解密）/ `merge`（LWW 纯函数）/ `transport`（HTTP 客户端，三方式共用）/ `endpoint`（「这一轮连哪儿」）/ `engine`（编排）——**换通信方式只动 endpoint，不动内核**。细节全在 `references/sync.md`。
+
+## 3. 不变式与铁律（改任何代码前都要过一遍）
+
+完整的「为什么」与其余 100+ 条分散硬约束在 **`references/invariants.md`**。下面是必须常驻的部分。
+
+### 3.1 写路径
+
+- **写路径永远过 Domain Core 命令层；前端永不直接改 JSON；GUI 桥接默认 `controls.yes = true`**（GUI 操作即用户确认，CLI 的确认门不适用于 GUI）。
+- 「**GUI/CLI/Agent 三方写操作走同一条业务命令层**（Domain Core 的 Invocation → 域分发 → envelope 输出），不存在"读全量 JSON 改完写回"的路径。」
+- 前端 `actions.ts`：「**新写操作一律加在这里，不要在组件里直接改 store 或 invoke。**」
+- **纯 UI 写命令不进 audit 台账**（`repo.rs::UI_ONLY_COMMANDS` 六个：`gui.select-node`/`set-collapsed`/`set-item-ui`/`set-items-ui`/`set-diary-ui`/`set-schedule-ui`）——点一下树节点就写一行审计，台账会被 UI 噪音灌满；**新加纯 UI 命令要进这个白名单**。
+- **备份是五个领域文件全量**（`repo.rs::backup_locked`）；恢复靠手工从 `backups/` 拷回覆盖，**没有自动恢复命令**（`restore` 与 LWW 语义冲突，明确不做）。
+- **`core_snapshot` 可按域过滤**（前端 `refreshFromCore` 只拉脏域）：新加领域文件必须把它加进 `lib.rs::core_snapshot` 的 `wanted()` 名单与 `put_snapshot_domain` 调用，否则前端永远拉不到它；前端 `applySnapshot` 各分支带 `!== undefined` 守卫，缺的域不能被当成空。
+- **图片入库有 5MB 体积闸**（`lib.rs::shrink_oversized_image`）：超限才动手（JPEG 长边 2560/质量 90、PNG 长边 4096 保无损）；**GIF/WebP 一律不动**（可能是动图）；解码/编码失败或没变小一律原样保留——**压缩永远不许弄丢或弄坏用户的图**。
+
+### 3.2 跨平台铁律（三条）
+
+KXToDo 是 Windows / Linux / Android 三端应用，**任何更改、新增功能、bugfix 都必须按跨平台审视**：
+
+1. **底线**——不能让任何一端变得不可用（编译不过、启动白屏、核心路径坏掉都算）；平台专有代码必须 `#[cfg]` / capabilities 隔离，改共享层时逐端过一遍影响面。
+2. **进阶**——考虑该功能是否需要适配其它平台：能力差异收敛到 `capabilities.ts` + Rust `#[cfg(desktop)]`/`#[cfg(not(desktop))]`，UI 差异收敛到 CSS `.app-shell.mobile` 命名空间与平台覆盖 conf（如 `tauri.linux.conf.json`），不要在业务组件里散落平台判断。
+3. **验证**——本地验证不了的平台（如无 WSL 时的 Linux、无真机时的 Android）交给 CI（ci.yml 双平台编译检查 / release.yml 三平台构建），但**必须明说"该端未验证"，不许默认没问题**。
+
+### 3.3 不做兼容
+
+项目没有正式 release，不存在需要兼容的旧版用户。**数据格式、数据位置等变更一律直接切换，不写迁移/兼容代码**；旧数据由用户自行迁移或丢弃。（唯一例外：记账 v0.7.4 的单数 `image` 字段在加载 normalize 时一次性折叠进 `images`——用户真实账本里的图不能丢，重写后旧键不再落盘。）**v0.8.0 已把最后一份迁移代码 `migrate.rs`（v8→v9）整个删掉**（连带 `repo.rs` 的 `migrate_if_needed`、`time.rs::migrate_legacy_local_time`、`exec.rs::split_legacy_arguments`）——这条铁律现在连迁移代码都不留，别把它加回来。
+
+### 3.4 版本号只有 git 一个来源
+
+**仓库任何文件里都不写版本号**（Cargo.toml 是 0.0.0 占位、tauri.conf.json 无 version 字段、前端无常量）——发版只打 tag/写 commit，**永远不要往文件里同步版本号**。解析优先级：HEAD 上的精确 `v*` tag → 最近 30 条 commit 里第一条 `vX.Y.Z` 主题 → 最近的祖先 `v*` tag，都没有回落 `0.0.0-dev`。改这套解析前必须知道的两个真实 bug（都已修，**别改回去**）：① **精确 tag 必须排在祖先 tag 之前**；② **subject 校验只能取第一个空白前的 token**。
+
+### 3.5 commit-msg hook 强制 subject 以 vX.Y.Z 开头
+
+判据与解析器完全一致：**小写 `v` + 恰好三段纯数字**，所以 `v1.2`（两段）、`v0.4.2.1`（四段）、`V0.4.2`（大写）都拒。源文件版本化在 `scripts/git-hooks/commit-msg`，`npm install` / `npm ci` 的 `prepare` 把它拷进本克隆的 hooks 目录（不用 `core.hooksPath`）。`.gitattributes` 钉了 `scripts/git-hooks/** eol=lf`——CRLF 检出会把 shebang 变成 `#!/bin/sh\r`，hook 静默失效等于整条强制形同虚设。`package.ps1` 侧必须用 `-cmatch`（`-match` 默认大小写不敏感会放行 `V1.3.0`）。merge / revert 等自动生成的消息用 `git commit --no-verify` 显式绕过。
+
+### 3.6 发布工作流铁律（四条，Agent 与维护者都要遵守）
+
+1. 本地构建只用 `release.ps1`（Windows/Android/unix）与 `release.sh`（Linux 原生）；`publish.ps1` 基本不再使用，仅作离线/CI 不可用时的备用路径。
+2. **每次推送远程前必须询问用户：这一版是否需要打 tag（即是否发 release）**。要打则 commit → 在 HEAD 打 `vX.Y.Z` tag → 一并推送分支与 tag；不打则只推分支。
+3. **同一版本的修复只能 amend，不许新开 commit**：在用户没有明确指定"这次修复要升版本号"之前，所有修改（bugfix、文档补充、CI 修复、遗漏的改动）一律 `git commit --amend` 并进那笔 `vX.Y.Z` commit，保持"一个版本 = 一笔 commit"。已经打了 tag 的按顺序来：`git tag -d vX.Y.Z` → amend → 在 HEAD 重打（tag 已推远程则 force-push tag，并按需处理对应的 GitHub release）。另起一笔 `vX.Y.Z 修复…`、或不带版本号前缀的散 commit，都算违规。
+4. **不论是否打 tag，推送后必须监听远程 CI 直到结束**（ci.yml 编译检查；打了 tag 还有 release.yml 三平台构建 + 发布）：确认检查通过、构建/发布成功；任何失败都必须后续处理（修复重推或 re-run failed jobs），不许放着红着不管。
+
+体积相关的两条硬约束（v0.8.0 起，理由在 `references/build-and-release.md`）：**APK 只构建 aarch64 + armv7 两个 ABI**——x86/x86_64 纯为模拟器服务却占掉 APK 一半体积，别为了「万一有人用模拟器」加回来；**`[profile.release]` 不许加 `panic = "abort"`**——GUI 是常驻 Host，一次 panic 直接带走整个常驻进程比 unwind 到边界更糟（Android 的 cdylib 上 abort 也不友好）。
+
+### 3.7 CSS 铁律
+
+- **绝不写 `.xxx > *`**（「把直接子元素统一压到 `position:relative; z-index:1`」这类兜底规则）。要抬层就**显式列举正文流子元素**。两种死法都是特异性相同（`*` 不计特异性）谁在后面谁赢，曾让整个日记界面的浮层与浮动按钮位置全错乱。最后一处违例 `.workspace > *` 已在 v0.8.0 删除（显式列举 `.list-subtitle`/`.task-list`/`.add-task-bar`/`.scheduler-panel`，自带定位的浮层与头部刻意不列）。
+- **字号一律 `calc(var(--font-*) ± N)`，不许写死像素**（v0.7.0 就是字号各写各的被用户点名）。记账与日记吃自己独立的 `--font-ledger` / `--font-diary`。**v0.8.0 起已全面收编：除 `base.css` 的 5 个 `--*-font-size` 变量定义外，CSS 里不许再出现 `font-size: Npx`**；基变量按区域选（ledger 页 `--font-ledger`、日记页 `--font-diary`、其余 chrome `--font-control`）。唯一例外是 `ledger/AssetsTrend.svelte` 的内联 `axisFont`（SVG 按 viewBox 整体缩放，它是按容器宽度补字号的，用 CSS 变量会被二次缩放）。
+- **按钮只许 `settings-button` / `menu-action-button` 两类**（危险动作加 `.danger` 变体）；菜单项一律走 `MenuItem` 组件（menu-item-button），不写裸 `<button>`；「新写任何按钮前先想这两个类能不能用；**风格不一致的裸按钮视为 bug**」。
+- **级联顺序固定**：`main.ts` 按 base → titlebar → sidebar → workspace → settings → menu → shared → editor → diary → mobile 导入（**mobile 必须最后**，它覆盖前面所有区域）。同名类用父选择器区分。「移动端样式全部收在 `.app-shell.mobile` 下，桌面零副作用」。
+- 全局 CSS 非 Svelte scoped（`{@html}` 渲染的 Markdown 没有 scoped 属性，触及不到）。
+- **别拿全局类名当状态类名**（`.collapsed` 曾被代码块折叠态复用，整块代码被转 90°）。**夹行只写 `-webkit-` 三件套**，别「两个都写以求兼容」。
+
+### 3.8 浮层与安全区
+
+**任何「JS 命令式建的全屏/浮层」都要先问一句：移动端顶部避让了吗？**（`env(safe-area-inset-*) × var(--safe-inv)`；浮层要挂进 `.app-shell` 而不是 body，否则拿不到 `--safe-inv`。）这条安全区坑**已经踩过三次**（v0.6.8 编辑器全屏、v0.6.8 链接预览标题栏、v0.6.9 图全屏工具栏）。配套：不占历史栈的覆盖层要注册 `addBackInterceptor`，否则安卓返回键会把底下的页面弹掉而浮层留在原地。
+
+### 3.9 测试与一致性地基（v0.8.0 起）
+
+- **前端单测 `npm run test:unit`**（vitest 5，node 环境，独立 `vitest.config.ts`——刻意不复用 vite.config.ts）；**断言必须时区无关**（CI 的 ubuntu 是 UTC、开发机是 UTC+8，一律用 `todayDate()`/`shiftDays()` 相对构造）。地基在 `references/frontend.md`。
+- **跨语言的同口径数字要有测试钉住**：日粒度门槛 62（core `DAY_GRAIN_MAX_DAYS` ↔ `ledger.ts::bucketOf`）、图标目录（`tests/ledger_icons.rs`）、金额解析（`parse_cents` ↔ `parseYuanToCents`）。手法是 `include_str!` 前端 TS 源码直接比对——**只写注释说「两边要一致」一定会漂**。
+- **改 `skills/kxtodo/SKILL.md` 必须重跑 `kxtodo-cli skills validate`**：`cmd_validate` 的正则会把任何 `task|diary|schedule|config|skills` 后跟的小写英文词当命令名、任何 `--xxx` 当参数名去比对目录，文档里写一个不存在的子命令或参数会直接挂测试。
+
+### 3.10 还有一大批（去 invariants.md 查）
+
+数据与写路径 / 同步 / 前端 Svelte 与渲染 / 记账 / 图片与导入导出与清理 / 构建发布 CI / 平台与窗口——七组共 100+ 条硬约束速查（每条原文照引 + 出处），全在 **`references/invariants.md` 第九节**。
+
+## 4. 路由表：要做什么 → 动哪里
+
+（**全篇最有价值的一张表。**前两列是原 AGENTS.md 的原文，一字未改；第三列「详见」是本 skill 新加的指路。）
+
+| 要做什么 | 动哪里 | 详见 |
+|---|---|---|
+| 加/改 CLI 命令 | `crates/core/src/cli.rs`（clap 树）+ 对应 `ops_*.rs`；`schema.rs`/`skills.rs` 自动跟随 | `references/cli.md` |
+| 扩 CLI 的 `--jq` 子集 | `crates/core/src/jq.rs`（`SUPPORT_SUMMARY` 错误 hint 与 `JQ_SUBSET_DOC` 要同步改，有测试钉住两边） | `references/cli.md` |
+| 改列表命令的分页 / 合计 | `ops_task.rs` 的 `Page`/`paginate` + `core.rs` 的 `page_from`/`unbounded_page_from` + `render.rs` 的合计行；`ledger list`/`diary list` 默认返回全部，**金融数据不许静默截断** | `references/cli.md` |
+| 加 GUI 写操作 | `crates/core/src/ops_gui.rs` 加命令 → `actions.ts` 加 coreDispatch 包装 → 组件调用 actions；**纯 UI 命令要进 `repo.rs::UI_ONLY_COMMANDS` 白名单**（不进审计台账） | `references/frontend.md`（actions.ts）+ `references/invariants.md` |
+| 改渲染性能 / 测量 / 记忆化 | `src/lib/markdown.ts`（block/inline LRU + `window.__kxtodoRenderStats`）+ `src/lib/measureBus.ts`（全应用共享 RO/resize/rAF 的 `observeResize`）；卡片 `fullHtml` **只在展开时渲染**（`$:` 是急切求值） | `references/frontend.md` + `references/history/v0.8.md` 批次 2 |
+| 写前端纯逻辑单测 | `src/lib/__tests__/*.spec.ts` + 独立 `vitest.config.ts`（node 环境）；跑 `npm run test:unit`；**断言必须时区无关** | 本文件 3.9 + `references/frontend.md` |
+| 加设置项 | `model.rs` SettingsFile + `defaults.ts` 默认值/normalize + `SettingsDrawer.svelte` UI | `references/frontend.md` + `references/ui-patterns.md`（设置抽屉）+ `references/sync.md`（若该项要同步） |
+| 加调度触发/动作类型 | `model.rs`（discriminator 分支）+ `ops_schedule.rs` 白名单校验 + `plan.rs`/`scheduler.rs` 执行 + `scheduleAdapter.ts` 适配 + `ScheduledTasksView.svelte` 编辑表单 | `references/ui-patterns.md`（定时任务）+ `references/frontend.md`（scheduleAdapter.ts） |
+| 改记账 | 数据与命令：`model.rs`（LedgerFile/LedgerEntry/LedgerAccount/LedgerCategory/LedgerSettings + `seed_defaults` 确定性种子）+ `repo.rs`（Domain::Ledger / load_ledger（缺文件内存种子）/ write_ledger（首写落种子）/ ensure_initialized）+ `ops_ledger.rs`（ledger.add/get/list/modify/remove/transfer/accounts/accountAdd…/categories/categoryAdd…/stats/balance/export/import）+ `ledger_archive.rs`（xlsx 四表 zip 打包与解析）+ `ops_config.rs` 的 `ledger.*` 五个路径 + `cli.rs` 的 Ledger 子命令树（kebab 名）+ `schema.rs` risk_for + `src-tauri/src/lib.rs` 的 `ledger_export_zip`/`ledger_import_zip`（**两个 invoke_handler 都要注册**）；同步：`merge.rs`（Scopes 五 bool / ledger 三种 kind 的 stamp·payload·apply·normalize / settings 共享子集 ledger 块）+ `engine.rs` 五处 + `ops_sync.rs` 与 `cli.rs` 的 `--sync-diary/--sync-ledger`；前端：`ledger.ts`（按天/热力/统计/余额纯逻辑）+ `ledgerIcons.ts`（lucide 白名单与账户类型默认图标）→ `stores.ledgerData` → `LedgerView.svelte`（四视图 + 齿轮 + 段控 + FAB）→ `ledger/LedgerRow|LedgerList|LedgerCalendar|LedgerStats|LedgerAssets|LedgerEditor|LedgerEntryMenu|CategoryManager|AccountManager.svelte` → `actions.ts` 的 ledger 包装 → `ledger.css` + mobile.css 的 `.view-ledger` | `references/ledger.md` + `references/history/v0.7.0-v0.7.4.md` + `references/history/v0.7.5-v0.7.8.md` |
+| 加一类**要同步的**实体 | 日记（kind `diary`）是现成样板：`model.rs` 新领域文件结构 + 自己的 SCHEMA_VERSION → `repo.rs`（Domain 变体 + layout 路径 + load_/write_ + `ensure_initialized` 里补一条）→ `merge.rs`（payload 剥本机 UI 态 / extract / `*_entity_stamp` / `apply_*_record` **连删除分支一起** / `normalize_*_orders`）→ `engine.rs` **五处**（拉取分桶、合并事务、对账水位 match、全新设备推送抑制、`resolve_conflict`）→ `host.rs` 的 `emit_domain_event` match（新 Domain 变体不补会直接编不过）→ `core.rs` 与 `cli.rs` 的 schemaVersions → `lib.rs` 的 `core_snapshot`（**`wanted()` 名单与 `put_snapshot_domain` 调用都要加**，它按域过滤）→ 前端 `CoreSnapshot`/`applySnapshot`/`normalize*`/`commit*`。**server 一行都不用改**（entities 表没有 kind 列，kind 只在密文里）。搭现有 scope 的车（日记跟「同步数据」）就不用动 `Scopes`/scopeSignature/三勾选框/CLI 范围参数 | `references/sync.md` + `references/architecture.md` |
+| 改外观 | 全局 CSS 文件按区域找；配色变量在 base.css；菜单样式统一在 menu.css | `references/frontend.md`（CSS 全部）+ `references/invariants.md`（CSS 铁律） |
+| 改超链接增强（标题 / 预览卡片） | 抓取与解析在 `crates/core/src/linkmeta.rs`（命令 `gui.link-meta`，缓存 `runtime/linkmeta.json`——**改了元数据字段就把 `CACHE_VERSION` 抬一格**，否则老缓存命中不到新字段）；渲染在 `src/lib/linkPreview.ts`（由 `markdownControls.ts::markdownWire` 驱动）+ `markdown-ext.css` 的 `.kx-link-card`；设置项 `features.autoLinkTitle/linkCards`（设置页合成一行「超链接渲染样式」的 标题/卡片 两档）走 model.rs/ops_config/defaults.ts/types.ts/SettingsDrawer | `references/ui-patterns.md`（markdown 扩展渲染）+ `references/history/v0.7.5-v0.7.8.md`（v0.7.7 ⑧ / v0.7.8 ⑦） |
+| 加原生能力 | Tauri 命令/插件，桌面专有逻辑必须 `#[cfg(desktop)]` 隔离并在移动端给空实现（前端 invoke 不能炸） | `references/invariants.md`（跨平台铁律）+ `references/pitfalls-android.md` + `references/frontend.md`（capabilities.ts） |
+| 改图片入库（压缩 / 体积闸 / 文件名安全） | `src-tauri/src/lib.rs` 的 `shrink_oversized_image`（5MB 闸，GIF/WebP 不动，`spawn_blocking`）与 `safe_image_name`（委托 core `diary_archive.rs::is_safe_image_name`——全项目唯一一份实现） | 本文件 3.1 + `references/history/v0.8.md` 批次 6 |
+| 改同步协议/加密 | `crates/core/src/sync/`（crypto=密钥派生+加解密、merge=LWW 纯函数、**transport=HTTP 客户端（三方式共用）**、**endpoint=「连哪儿」（加新通信方式只改这里 + model 的 SyncMode）**、engine=编排、images=图片 blob 通道、discovery=局域网发现客户端、state=runtime/sync.json + sync-host.json、**credentials=明文凭据留档（runtime/sync-credentials.json，配对成功时写，解除配对不清）**）+ `crates/server/src/`（api/db 两侧同步改，discovery=UDP 应答、daemon=后台运行、**host=可嵌入的 serve()/ServerHandle**）；改信封结构要同步动 `merge.rs` 的 SyncEnvelope 与测试，改图片元数据要同步动 `images.rs` 与 `db.rs`/`api.rs`，**改「连哪儿」不许动 merge/crypto**（分层的全部意义） | `references/sync.md` |
+| 部署/运维 kxtodo-server | 单二进制 `kxtodo-server --name 家里的服务器 [--listen 0.0.0.0:52177 --db 路径 --data-dir 目录]`；`--daemon` 后台静默运行 + `--stop` 结束；`--update` 自升级（下载失败自动回退 ghfast.top 代理）；升级密钥/盐算法前想清楚——改了派生参数所有设备全部失配 | `references/sync.md`（server 运维 / 管理控制台）+ `references/build-and-release.md` |
+| Agent 技能文档 | 只编辑 `skills/kxtodo/SKILL.md`（编译期 include_str! 嵌入，发布 exe 自包含）；**改完必须重跑 `kxtodo-cli skills validate`**（本文件 3.9）。`skills persist` 不指定位置时默认写 `~/.agents/skills/kxtodo/SKILL.md`（v0.6.11）；已存在的 SKILL.md 直接覆盖，路径被同名文件/目录挡住时未加 `--yes` 报 confirmation（退出码 10）询问 y/N；结果里的 `data.path` 就是最终落地路径 | `references/cli.md`（Agent 技能文档） |
+
+## 5. references 索引：何时读哪个文件
+
+| 文件 | 里面是什么 | 什么时候读 |
+|---|---|---|
+| `references/architecture.md` | 进程拓扑（GUI 常驻 Host / CLI 经 IPC / Android 同栈 / Linux 同拓扑与 core 内 unix 差异）、五个领域文件与数据地基、数据目录解析、同步分层图、**路径约定** | 第一次接触本项目；要理解「谁在跑、数据落在哪」；改 repo / IPC / 移动端宿主；加一类领域文件 |
+| `references/invariants.md` | **全部硬约束与铁律 + 每条的「为什么」**（写路径、跨平台三条、不做兼容、版本号、commit-msg hook、发布四条、CSS、浮层与安全区）+ 分散在各处的 100+ 条速查 | **改任何东西之前都该扫一眼**；拿不准某条约束为什么存在；评审自己的改动 |
+| `references/frontend.md` | 前端 `src/` 分层（stores / actions / backend / capabilities / platform / longpress / scheduleAdapter / syncRunner / 纯逻辑 / measureBus / 组件 / editor / diary / menu）+ **前端单测（vitest，v0.8.0）** + 全局 CSS 的级联顺序、**层叠坑**、按钮样式规范 | 加/改前端写操作、加设置项、加平台能力、写或改任何 CSS、浮层被盖住/位置错乱/被 overflow 裁掉、要新建按钮、写前端纯逻辑单测、改渲染性能与测量 |
+| `references/ui-patterns.md` | 「UI 布局与特性」全章：布局、任务卡片、列表分区与排序、树与图标选择器、⋯ 列表菜单、定时任务、工具箱、我的一天、日记（含 Markdown 压缩包导入导出）、全局搜索混排、markdown 扩展渲染、输入框加号与编辑器元数据行、设置抽屉、Linux 桌面、移动端（Android）、编辑器工具栏、一般卡片压缩包、首帧缩放、返回键拦截器、幽灵点击与浮层层级、安卓退出生命周期 | 改任何 Svelte 组件、改界面行为或手势、加/改右键与三点菜单、改设置抽屉、改移动端交互、改 markdown 渲染扩展 |
+| `references/ledger.md` | 记账域专项：数据模型与不变式（整数分 / 余额推导 / 确定性种子 id / 两级分类）、四个视图、以「天」为组织单位、浮层与编辑器语义、齿轮面板、图标目录、**Excel 归档**、**CLI 确认门**、kebab/camel 映射、ledger.css 约定 | 改记账（core 的 `ops_ledger.rs` / `model.rs` LedgerFile 家族 / `ledger_archive.rs` / `ledger_icons.rs`，前端 `ledger.ts` / `LedgerView.svelte` / `ledger/` / `ledger.css`）；排查金额、余额、统计口径 |
+| `references/sync.md` | 同步专项：安全模型（Etebase 式）、同步语义（LWW + 墓碑 + OCC）、实体与范围（五个勾选框）、数据地基、配对流程、**踩坑记录 ①–⑦**、server 运维、自动同步（含 v0.4.1 死代码的教训）、局域网发现、图片 blob 通道、掉线不阻塞 UI、账户模型、暂停/恢复、配对历史、设置面板同步卡片、管理控制台、传输分层、内置主机、主机身份是名字、instance epoch、端口生命周期、**P2P**、同步功能总开关 | 改 `core/src/sync/` 或 `crates/server/`；改设置页「数据同步」；排查「同步成功但数据没动」/ 409 一路重试 / 换主机拉不到东西；加一类要同步的实体；部署 kxtodo-server |
+| `references/cli.md` | CLI 约定与命令面：加/改命令要动哪里、core camel ↔ CLI kebab、确认门与退出码（3/4/10）、有常驻 Host 时全部经 IPC、`command_needs_data` 白名单、`--jq` 与 `schema`、**列表分页与合计（--cursor/--all/meta.count，v0.8.0）**、Windows 编码坑、**Agent 技能文档 `skills/kxtodo/SKILL.md` 的维护规则** | 加/改任何 CLI 命令或参数；给动作加确认门；排查 CLI 退出码；CLI 中文参数乱码；扩 `--jq` 子集；要更新产品自带的 Agent 技能文档 |
+| `references/build-and-release.md` | 构建 / 测试 / 全部回归脚本命令、版本号解析（含两个真实 bug）、commit-msg hook、**七个固定名产物**、kxtodo-server 双平台发布、**应用内更新的多通道测速选路**、GitHub Actions（ci.yml / release.yml / Android 签名）、**发布工作流铁律四条** | 要跑测试、要出包、要打 tag、要推送远程、要改版本号解析或 CI、构建失败、部署或自升级 kxtodo-server |
+| `references/pitfalls-windows.md` | Windows 环境坑位 8 条（Git Bash 里 cargo 报 `link: extra operand`、`taskkill` 被转 UNC、**单实例标识撞车**、window-state 插件与窗口几何竞态、**pwsh 5.1 编码两个方向**、Android 交叉检查的 NDK clang 环境、Node 24 libuv flake 与 `\| tail` 掩退出码）+ **computer-use 调试 WebView2 应用的 8 条经验** | 在 Windows 上跑 cargo / npm / release 脚本报错；「改了代码没生效」；窗口尺寸位置异常；脚本中文乱码；要用截图+坐标验证桌面 UI |
+| `references/pitfalls-linux.md` | Linux 坑位 6 条（apt 依赖清单与 release.sh 门控含 libxdo 例外、**裸 cargo 构建出 dev 模式制品导致整窗白屏**、托盘依赖 appindicator 宿主、AppImage 需要 FUSE、cargo 直接可用、WSLg XWayland 丢光标与 AppImage 强制 x11） | 在 Linux/WSL 上构建或运行；Linux 制品白屏；托盘不出现；AppImage 跑不起来；光标消失；改 `release.sh` 的依赖门控 |
+| `references/pitfalls-android.md` | Android 20 条（gen/android 的所有权、返回键、Kotlin 桥、dialog 的 content:// URI、触摸长按语义、**坐标与 uiScale**、**模块循环 TDZ 白屏**、用 Playwright 模拟移动端、签名与升级、APK 产物策略、图标同步、通知、能力门控优先于 isMobile、**`isMobile` 是 writable store**、夹行三件套、ContextMenu 限高、**transform 缩放影响一切 rect**、首屏量尺寸全是 0、软键盘两连击、菜单限高不能顶到视口顶部） | 构建 APK；改 `src-tauri/gen/android/`；写 Kotlin 桥；改移动端手势/浮层/菜单/测量逻辑；没有真机要验证移动端 UX；签名或升级链出问题 |
+| `references/history/README.md` | history 目录的定位与用法 | 想知道「这个目录是什么、该往哪写」 |
+| `references/history/v0.4.md`<br>`v0.5.md`<br>`v0.6.md`<br>`v0.7.0-v0.7.4.md`<br>`v0.7.5-v0.7.8.md`<br>`v0.8.md` | 按版本归档的**改动索引**（原文粗体小标题 → 现在住在哪），v0.7 那两份还带**逐版流水账全文**（v0.7.3 打磨 ①–⑦、v0.7.4 界面改写 ①–⑩、v0.7.5 ①–⑪、v0.7.6 ①–⑬、v0.7.7 ①–⑧、v0.7.8 ①–⑪，合计 43 条）；`v0.8.md` 是 v0.8.0（**正确性 + 性能 + 卫生版，无新功能**）的七个批次全档 + vitest 挖出的 6 个正确性问题 + **明确决定不做的事清单** + perf-bench 实测数字 | 追溯「这一版为什么这么改」「某个方案试过又被推翻的经过」「某个方案为什么明确不做」；**改记账界面之前必读 v0.7 那两份**（很多当前界面细节只在那里）；改渲染/性能/CLI 分页/图片入库前读 v0.8.md 对应批次 |
+
+**几条最常用的组合**：
+
+- 改记账界面 → `ledger.md` + `history/v0.7.0-v0.7.4.md` + `history/v0.7.5-v0.7.8.md`（+ `ui-patterns.md` 若涉及共用组件）
+- 改渲染 / 排查卡顿 / 动测量逻辑 → `frontend.md` + `history/v0.8.md`（批次 2/3 + 实测数字；性能基线跑 `node scripts/perf-bench.mjs`）
+- 改任务卡片 / 列表 / 树 / 菜单 → `ui-patterns.md` + `frontend.md`（CSS）+ `invariants.md`
+- 改同步 / 排查同步 → `sync.md`（+ `architecture.md` 的分层图）
+- 发版 / 打 tag / 推送 → `build-and-release.md` + 本文件 3.4–3.6
+- Windows 上 cargo 报 `link: extra operand` → `pitfalls-windows.md` 第 1 条（一切 cargo 调用走 `scripts/cargo-msvc.sh`）
+- Linux 制品白屏 → `pitfalls-linux.md` 第 2 条（裸 cargo 出的是 dev 模式制品）
+- 移动端浮层跑到屏幕外 / 滚不到底 → `invariants.md` 第七、八节 + `history/v0.7.5-v0.7.8.md` 的 v0.7.5 ⑥⑦ 与 v0.7.6 ②
+
+## 6. 自我迭代条款（每轮开发结束时**必须**执行）
+
+**这份 skill 是活文档。每轮开发结束时，必须把本轮新经验写回本 skill**——AGENTS.md 之所以膨胀成 166KB 的流水账，就是因为经验只往里堆、从不重组。写回时按下面的判据分流，**别一律往 SKILL.md 里塞**。
+
+| 本轮产生了什么 | 写到哪里 |
+|---|---|
+| **新的不变式 / 铁律**（「绝不 / 必须 / 一律 / 别 / 勿」类，或「这样做会坏，因为……」） | ① 若是**跨领域、每次改动都该知道**的 → 写进本文件**第 3 节**（挑对子节：3.1 写路径 / 3.2 跨平台 / 3.3 不做兼容 / 3.4 版本号 / 3.5 hook / 3.6 发布 / 3.7 CSS / 3.8 浮层与安全区 / 3.9 测试与一致性；确实不属于任何子节才新开一条）；② **同时**把「原文照引 + 为什么 + 出处」写进 `references/invariants.md`（跨领域的进第 1–8 节，领域内的进第九节对应分组） |
+| **新的平台坑位**（Windows / Linux / Android 上「这么干会炸」的环境级经验） | 对应的 `references/pitfalls-windows.md` / `pitfalls-linux.md` / `pitfalls-android.md`，**按现有编号列表续一条**（写清现象 + 根因 + 正确做法） |
+| **新的界面细节与本版改动**（这一版改了什么 UI / 交互 / 视觉，含被推翻的方案） | `references/history/vX.Y.md`（当前正在进行的那个大版本；没有就新建一个，照 `v0.7.5-v0.7.8.md` 的结构：这一版的主题 → 改动索引 → 逐版流水账全文）。**同时**把「当前生效的规则」写进对应主题文件（`ui-patterns.md` / `ledger.md` / `frontend.md`），因为主题文件才是「现在长什么样」的权威 |
+| **架构变化**（进程拓扑、领域文件、数据目录、同步分层、路径约定） | `references/architecture.md`；若同步分层动了，`references/sync.md` 一起改 |
+| **新的「要做什么 → 动哪里」**（发现某类改动总是漏掉某个文件） | 本文件**第 4 节路由表**（改对应行，或加一行）；同时更新第 5 节索引表里那份文件的「里面是什么」 |
+| **构建 / 发布 / CI 的变化**（新脚本、新回归测试、版本号规则、workflow） | `references/build-and-release.md`；若是**每轮都要跑**的命令，也更新本文件第 7 节 |
+| **CLI 命令面或确认门的变化** | `references/cli.md`；产品自带的 `skills/kxtodo/SKILL.md` 是**另一件事**（那是给外部 Agent 用的使用手册，按 `cli.md` 的规则单独维护） |
+
+**硬性要求**：
+
+1. **不要往 SKILL.md 里堆版本流水账**——那是 `references/history/` 的职责。SKILL.md 只放「**当前不变式**」与「**指路**」。
+2. **SKILL.md 长度控制在 500 行以内**。超了就把细节下沉到 references，本文件只留结论 + 指路。
+3. **写「为什么」，不只写「是什么」**。这份 skill 里每一条血泪经验都带着根因（「否则……」「曾导致……」「实测……」），新写的条目照这个格式来——只写规则不写根因，下一个人就会把它改回去。
+4. **引用代码位置用「文件路径 + 函数名 / 结构体名 / CSS 选择器名」，不要用行号**（行号会随代码演进失效，函数名不会）。例：`crates/core/src/repo.rs` 的 `Repository::write_data`、`src-tauri/src/lib.rs` 的 `core_snapshot` 命令、`workspace.css` 的 `.task-tag .tag-delete`。
+5. **改完顺手校对指路**：新加了 reference 文件或改了小节标题，就更新第 5 节的索引表与各文件顶部的「什么时候读它」。
+
+## 7. 构建 / 测试 / 验证的最短路径
+
+```bash
+npm install                                     # 依赖（新克隆跑一次即自动装上 commit-msg hook）
+npm run desktop:dev                             # 桌面开发（vite + tauri dev）
+scripts/cargo-msvc.sh test -p kxtodo-core       # Rust 测试（Git Bash 下必须用这个包装！）
+npm run test:unit                               # 前端纯逻辑单测（vitest：资金路径 / 时刻 / normalize；断言时区无关）
+node scripts/perf-bench.mjs                     # 性能基线（300 任务 / 300 日记 / 3000 账目：冷启动 + 页内 rAF 计时的交互
+                                                #   + 断言首屏 block 渲染为 0；需先 npm run dev）
+npm run build                                   # 前端构建（svelte-check + vite build 同 CI 口径）
+```
+
+**Git Bash 下 `cargo` 会报 `link: extra operand`**（uutils-coreutils 的 `link` 遮蔽了 MSVC `link.exe`）——**一切 cargo 调用走 `scripts/cargo-msvc.sh`**。`npm run desktop:dev` 同样中招（`tauri dev` 内部调裸 cargo）：先 `eval "$(grep -E '^(MSVC_|SDK_VER|export )' scripts/cargo-msvc.sh)"` 再跑，或直接在 VS 开发者 shell 里跑。详见 `references/pitfalls-windows.md` 第 1 条。
+
+**出包**：
+
+```bash
+.\release.ps1              # 默认 Windows + Android（KXToDo.exe + kxtodo-cli.exe + KXToDo.apk）
+.\release.ps1 win / android / unix     # 单平台（unix = 经 WSL 原生克隆构建 AppImage + CLI + server）
+.\release.ps1 win,unix     # 逗号组合；all = 三平台（环境未就绪告警跳过，不终止其它）
+./release.sh               # Linux 构建入口（须在 Linux/WSL 上跑）
+git tag vX.Y.Z; git push origin main vX.Y.Z   # 云端发布：触发 release.yml 构建三平台并发 release
+```
+
+**推送前必须先问用户这一版要不要打 tag；推送后必须盯 CI 到结束**（第 3.6 节）。**跑 release/publish 脚本不要接 `| tail` 管道**（会把退出码掩成 0 造成「构建成功」误报），重定向到日志文件再 tail。
+
+**调试前先把所有 kxtodo/KXToDo 进程杀光（含托盘）**：单实例标识 `com.wddjwk.kxtodo` 全局唯一，debug/release/旧版本 exe 互相转发，用户反馈「修复没生效」优先怀疑旧进程残留。杀进程用 `powershell -NoProfile -Command "Stop-Process -Id <pid> -Force"`（Git Bash 里 `taskkill /PID` 会被转成 UNC 路径）。
+
+**界面存疑时先读磁盘**：默认数据目录（Windows `%LOCALAPPDATA%\kxtodo\todo-note-data`）下的 `*.json` 直接可读，先分清是「写错了」还是「画错了」，能省一半时间。
+
+**回归脚本**（都是 playwright-core + 系统 Edge 连 vite dev，需先 `npm run dev`）：`mobile-ux-test` / `diary-ux-test` / `menu-sweep-test`（浮层越界类 bug 的守门员）/ `markdown-ext-test` / `ledger-ux-test` / `v068…v078-fixes-test`（逐版回归）。改了哪一版的东西就跑哪一份，清单与各自覆盖范围在 `references/build-and-release.md`。

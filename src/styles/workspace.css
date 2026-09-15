@@ -25,7 +25,24 @@
   pointer-events: none;
 }
 
-.workspace > * {
+/* 只抬正文流里的直接子元素。**绝不要写成 `.workspace > *`**：那条兜底规则的特异性
+   与浮层自己的定位规则相同（都是 0,1,0），谁在后面加载谁赢——diary.css 与 ledger.css
+   各栽过一次（`.context-menu` 的 fixed 与浮动按钮的 absolute 全被压成 relative 掉回
+   正文流：菜单被拉成整行宽、再被容器的 overflow:hidden 裁掉一半，+ 按钮跑到左下角）。
+   workspace.css 目前排在 menu.css 之前才侥幸没炸，而 `.link-preview-overlay` 这类
+   本文件里的浮层纯靠「写在后面」保命，插一条规则就可能翻车。
+
+   所以这里显式列举正文流的子元素，浮层与自带定位的一律不列：
+   `.list-header`（自己带 relative / z-index 20）、`.planned-group-bar`（relative / 30）、
+   `.link-preview-overlay`（fixed / 9000）、`.context-menu`（menu.css，fixed / 3600，
+   ListMenu / DiaryEntryMenu / 任务右键菜单三个入口都是它）。
+
+   列进来的这四个必须抬：`.workspace::before` 是 absolute / z-index 0 的背景层，
+   正文流子元素若退回 static 就画在它下面（背景图会盖住卡片与输入栏）。 */
+.workspace > .list-subtitle,
+.workspace > .task-list,
+.workspace > .add-task-bar,
+.workspace > .scheduler-panel {
   position: relative;
   z-index: 1;
 }
@@ -137,7 +154,7 @@ h1 {
 .ui-color-value {
   overflow: hidden;
   color: #666;
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
   text-overflow: ellipsis;
 }
 
@@ -190,7 +207,7 @@ h1 {
 
 .preset-editor-title {
   color: #5f5a52;
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
   font-weight: 700;
 }
 
@@ -223,7 +240,7 @@ h1 {
   display: grid;
   gap: 5px;
   color: #666;
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
 }
 
 .background-link input {
@@ -246,7 +263,7 @@ h1 {
   display: grid;
   gap: 5px;
   color: #666;
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
 }
 
 .opacity-row input {
@@ -392,12 +409,12 @@ h1 {
 
 .runtime-settings-title strong {
   color: var(--accent);
-  font-size: 15px;
+  font-size: calc(var(--font-control) - 3px);
 }
 
 .runtime-settings-title span {
   color: rgb(0 0 0 / 50%);
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
 }
 
 .runtime-path-row {
@@ -419,7 +436,7 @@ h1 {
 .scheduler-editor label span,
 .action-editor label span {
   color: rgb(0 0 0 / 58%);
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
   font-weight: 700;
 }
 
@@ -437,7 +454,7 @@ h1 {
   background: #fbfdff;
   color: #24292f;
   padding: 9px 10px;
-  font-size: 14px;
+  font-size: calc(var(--font-control) - 4px);
 }
 
 .scheduler-editor select,
@@ -472,7 +489,7 @@ h1 {
   background: #fbfdff;
   padding: 9px 10px;
   color: #24292f;
-  font-size: 14px;
+  font-size: calc(var(--font-control) - 4px);
 }
 
 .scheduler-editor .dropdown-trigger:hover,
@@ -502,7 +519,7 @@ h1 {
   border-radius: 8px;
   padding: 8px 10px;
   color: #242424;
-  font-size: 14px;
+  font-size: calc(var(--font-control) - 4px);
 }
 
 .scheduler-editor .dropdown-menu button:hover,
@@ -624,7 +641,7 @@ h1 {
 .scheduled-title-row span,
 .scheduled-meta-grid {
   color: rgb(0 0 0 / 54%);
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
 }
 
 .scheduled-card-panel {
@@ -658,7 +675,7 @@ h1 {
   gap: 12px;
   margin-top: 3px;
   color: rgb(0 0 0 / 54%);
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
   font-weight: 700;
 }
 
@@ -681,7 +698,7 @@ h1 {
   background: rgb(255 255 255 / 48%);
   color: rgb(0 0 0 / 42%);
   padding: 16px;
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
 }
 
 .scheduler-output {
@@ -700,7 +717,7 @@ h1 {
   padding: 10px;
   color: #24292f;
   font-family: "Cascadia Code", Consolas, monospace;
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
   white-space: pre-wrap;
 }
 
@@ -717,7 +734,7 @@ h1 {
   background: #f1f4f8;
   color: #64748b;
   padding: 5px 9px;
-  font-size: 12px;
+  font-size: calc(var(--font-control) - 6px);
   font-weight: 800;
   white-space: nowrap;
 }
@@ -803,13 +820,13 @@ h1 {
 
 .scheduler-editor small {
   color: rgb(0 0 0 / 50%);
-  font-size: 12px;
+  font-size: calc(var(--font-control) - 6px);
   line-height: 1.45;
 }
 
 .action-editor small {
   color: rgb(0 0 0 / 48%);
-  font-size: 12px;
+  font-size: calc(var(--font-control) - 6px);
   line-height: 1.45;
 }
 
@@ -828,7 +845,7 @@ h1 {
   gap: 8px !important;
   min-height: 42px;
   color: rgb(0 0 0 / 62%);
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
   font-weight: 700;
 }
 
@@ -864,7 +881,7 @@ h1 {
 
 .action-editor-title {
   color: var(--accent);
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
   font-weight: 800;
 }
 
@@ -1016,7 +1033,7 @@ h1 {
   border-radius: 6px;
   color: #6f4d2f;
   background: rgb(255 255 255 / 65%);
-  font-size: 14px;
+  font-size: calc(var(--font-control) - 4px);
   line-height: 1.2;
   white-space: nowrap;
   cursor: pointer;
@@ -1129,7 +1146,7 @@ h1 {
   background: rgb(255 255 255 / 62%);
   color: #606060;
   padding: 8px 12px;
-  font-size: 14px;
+  font-size: calc(var(--font-control) - 4px);
 }
 
 /* Completed section */
@@ -1151,7 +1168,7 @@ h1 {
 }
 
 .chevron-placeholder {
-  font-size: 22px;
+  font-size: calc(var(--font-control) + 4px);
   line-height: 0;
 }
 
@@ -1235,8 +1252,8 @@ h1 {
 
 /* 计划内视图：日期分组筛选 chip + 下拉面板。
    视觉语言与「已完成」标签一致：左对齐、圆角 7、白底 70%、accent 色。
-   注意：.workspace > * 统一 z-index:1，bar 与 task-list 是同级层叠上下文，
-   DOM 靠后的 task-list 会盖住面板——bar 必须显式抬高。 */
+   注意：正文流子元素被文件开头那条显式列举的规则统一抬到 z-index:1，bar 与 task-list
+   是同级层叠上下文，DOM 靠后的 task-list 会盖住面板——bar 必须显式抬高。 */
 .planned-group-bar {
   position: relative;
   z-index: 30;
@@ -1324,7 +1341,7 @@ h1 {
 .suggestion-panel-title {
   padding: 8px 10px 4px;
   color: #666;
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
   font-weight: 600;
 }
 
@@ -1338,7 +1355,7 @@ h1 {
   background: transparent;
   padding: 8px 10px;
   text-align: left;
-  font-size: 14px;
+  font-size: calc(var(--font-control) - 4px);
   color: #333;
 }
 
@@ -1374,7 +1391,7 @@ h1 {
   padding: 20px 10px;
   color: #999;
   text-align: center;
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
 }
 
 /* Calendar panel */
@@ -1413,7 +1430,7 @@ h1 {
 }
 
 .calendar-header span {
-  font-size: 15px;
+  font-size: calc(var(--font-control) - 3px);
   font-weight: 600;
   color: #333;
 }
@@ -1445,7 +1462,7 @@ h1 {
   border-radius: 6px;
   background: #f2f4f7;
   padding: 5px 0;
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
   color: #666;
 }
 
@@ -1463,7 +1480,7 @@ h1 {
 
 .calendar-grid .day-header {
   text-align: center;
-  font-size: 12px;
+  font-size: calc(var(--font-control) - 6px);
   color: #999;
   padding: 4px 0;
 }
@@ -1476,7 +1493,7 @@ h1 {
   border: 0;
   border-radius: 6px;
   background: transparent;
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
   color: #333;
   position: relative;
 }
@@ -1517,7 +1534,7 @@ h1 {
 .calendar-tasks-title {
   padding: 6px 4px;
   color: #666;
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
   font-weight: 600;
 }
 
@@ -1527,7 +1544,7 @@ h1 {
   gap: 8px;
   padding: 6px 8px;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
   color: #6f6f6f;
   text-decoration: line-through;
 }
@@ -1540,7 +1557,7 @@ h1 {
   padding: 16px 4px;
   color: #bbb;
   text-align: center;
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
 }
 
 /* Week summary */
@@ -1566,7 +1583,7 @@ h1 {
   border-radius: 6px;
   background: #f3f3f5;
   color: #555;
-  font-size: 12.5px;
+  font-size: calc(var(--font-control) - 5.5px);
   font-weight: 600;
   cursor: pointer;
 }
@@ -1590,7 +1607,7 @@ h1 {
   border-radius: 9px;
   background: rgba(0, 0, 0, 0.08);
   text-align: center;
-  font-size: 11px;
+  font-size: calc(var(--font-control) - 7px);
 }
 
 .my-day-back {
@@ -1600,7 +1617,7 @@ h1 {
   border-radius: 10px;
   background: color-mix(in srgb, var(--accent) 16%, #ffffff);
   color: var(--accent);
-  font-size: 12px;
+  font-size: calc(var(--font-control) - 6px);
   cursor: pointer;
 }
 
@@ -1623,7 +1640,7 @@ h1 {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 8px;
-  font-size: 13.5px;
+  font-size: calc(var(--font-control) - 4.5px);
   font-weight: 600;
   color: #444;
 }
@@ -1652,7 +1669,7 @@ h1 {
 
 .date-picker-grid .dp-head {
   text-align: center;
-  font-size: 11.5px;
+  font-size: calc(var(--font-control) - 6.5px);
   color: #999;
   padding: 3px 0;
 }
@@ -1664,7 +1681,7 @@ h1 {
   border: 0;
   border-radius: 6px;
   background: transparent;
-  font-size: 12.5px;
+  font-size: calc(var(--font-control) - 5.5px);
   color: #333;
   cursor: pointer;
 }
@@ -1699,7 +1716,7 @@ h1 {
   padding: 6px 0;
   border: 0;
   border-radius: 7px;
-  font-size: 12.5px;
+  font-size: calc(var(--font-control) - 5.5px);
   cursor: pointer;
 }
 
@@ -2041,7 +2058,7 @@ h1 {
   padding: 0 6px;
   border: 1px solid var(--accent);
   border-radius: 5px;
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
   line-height: 1;
   outline: none;
   background: white;
@@ -2092,7 +2109,7 @@ h1 {
   height: 28px;
   padding: 0 8px;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
@@ -2147,7 +2164,7 @@ h1 {
   padding: 0 8px;
   border: 1px solid #dedede;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
   outline: none;
   background: white;
 }
@@ -2214,17 +2231,17 @@ h1 {
 
 .tag-clear-all {
   padding: 6px 10px;
-  font-size: 13px;
+  font-size: calc(var(--font-control) - 5px);
 }
 
-/* ---------- Task emoji badge ---------- */
-
+/* ---------- Task emoji badge ----------
+   表情徽标与卡片正文同号（默认都是 20px）：跟着「正文字号」一起缩放。 */
 .task-emoji-badge {
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 20px;
+  font-size: var(--markdown-font-size);
   line-height: 1;
   cursor: pointer;
   transition: transform 0.12s;
@@ -2297,7 +2314,7 @@ h1 {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: #1f2937;
-  font-size: 13.5px;
+  font-size: calc(var(--font-control) - 4.5px);
 }
 
 .link-preview-close {

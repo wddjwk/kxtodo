@@ -62,24 +62,51 @@ export function buildListCounts(state: AppState): Record<string, number> {
   const plainEntryIds = new Set(
     state.nodes.filter((node) => node.kind === "entry" && node.cardStyle === "card").map((node) => node.id)
   );
+  // **一次遍历任务**把各口径的计数都攒出来。早先是「每个节点各扫一遍全部任务」
+  // （O(节点 × 任务)），category 分支里的 descendantEntryIds 还要递归 filter 节点表；
+  // 这条 derived 每次 appState 变化都重算，任务上千时是实打实的浪费。
+  let myDay = 0;
+  let planned = 0;
+  let important = 0;
+  const byNode = new Map<string, number>();
+  for (const task of state.tasks) {
+    if (task.completed) continue;
+    if (task.myDay) myDay += 1;
+    if (task.dueDate || task.plannedDate) planned += 1;
+    if (task.important) important += 1;
+    if (plainEntryIds.has(task.nodeId)) continue;
+    byNode.set(task.nodeId, (byNode.get(task.nodeId) ?? 0) + 1);
+  }
+  const childrenOf = new Map<string, AppNode[]>();
+  for (const node of state.nodes) {
+    const key = node.parentId ?? "";
+    const bucket = childrenOf.get(key);
+    if (bucket) bucket.push(node);
+    else childrenOf.set(key, [node]);
+  }
+  // 分组的角标 = 子树里所有条目的未完成数（一般卡片已经在 byNode 那一步排除掉了）
+  const subtree = new Map<string, number>();
+  const countSubtree = (node: AppNode): number => {
+    const cached = subtree.get(node.id);
+    if (cached !== undefined) return cached;
+    let total = node.kind === "entry" && !plainEntryIds.has(node.id) ? byNode.get(node.id) ?? 0 : 0;
+    for (const child of childrenOf.get(node.id) ?? []) total += countSubtree(child);
+    subtree.set(node.id, total);
+    return total;
+  };
   for (const node of state.nodes) {
     if (node.id === "my-day") {
-      counts[node.id] = state.tasks.filter((task) => !task.completed && task.myDay).length;
+      counts[node.id] = myDay;
     } else if (node.id === "planned") {
-      counts[node.id] = state.tasks.filter((task) => !task.completed && (task.dueDate || task.plannedDate)).length;
+      counts[node.id] = planned;
     } else if (node.id === "important") {
-      counts[node.id] = state.tasks.filter((task) => !task.completed && task.important).length;
+      counts[node.id] = important;
     } else if (node.id === "scheduled") {
       counts[node.id] = state.scheduler.tasks.length;
     } else if (node.kind === "entry") {
-      counts[node.id] = plainEntryIds.has(node.id)
-        ? 0
-        : state.tasks.filter((task) => !task.completed && task.nodeId === node.id).length;
+      counts[node.id] = plainEntryIds.has(node.id) ? 0 : byNode.get(node.id) ?? 0;
     } else if (node.kind === "category") {
-      const ids = descendantEntryIds(node.id, state.nodes);
-      counts[node.id] = state.tasks.filter(
-        (task) => !task.completed && ids.has(task.nodeId) && !plainEntryIds.has(task.nodeId)
-      ).length;
+      counts[node.id] = countSubtree(node);
     }
   }
   return counts;
@@ -88,8 +115,10 @@ export function buildListCounts(state: AppState): Record<string, number> {
 export function buildVisibleTasks(state: AppState, node: AppNode | undefined, queryValue: string): Task[] {
   const query = queryValue.trim().toLowerCase();
   if (query) {
+    // 搜索时每个任务都要回查它所属条目的名字：先建一次索引，别在 filter 里线性 find
+    const nodeById = new Map(state.nodes.map((item) => [item.id, item]));
     return state.tasks.filter((task) => {
-      const taskNode = state.nodes.find((item) => item.id === task.nodeId);
+      const taskNode = nodeById.get(task.nodeId);
       return task.markdown.toLowerCase().includes(query) || taskNode?.name.toLowerCase().includes(query);
     });
   }

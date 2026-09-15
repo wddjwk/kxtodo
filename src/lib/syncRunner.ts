@@ -30,6 +30,9 @@ const DEFAULT_INTERVAL_SECONDS = 30;
 const DEFAULT_RECONNECT_SECONDS = 300;
 /** 上一轮还没跑完时的重试间隔（绝不并发两次同步） */
 const BUSY_RETRY_MS = 1500;
+/** 水合完成后首轮同步的让路延迟：首屏还在渲染，同步会和它抢 IO 与主线程，
+ *  收尾的域事件还会再触发一轮快照与重渲。1.2 秒对用户无感，对首屏是实打实的让路。 */
+const FIRST_ROUND_DELAY_MS = 1200;
 
 type SyncConfig = {
   /**
@@ -165,7 +168,8 @@ function boot(): void {
     syncConnection.set({ online: null });
     return;
   }
-  void tick();
+  // 初次连接仍然「立刻」同步，只是让首屏先渲染完（见 FIRST_ROUND_DELAY_MS）。
+  arm(FIRST_ROUND_DELAY_MS);
 }
 
 function handleSettingsChange(): void {

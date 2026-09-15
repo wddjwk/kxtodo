@@ -23,7 +23,6 @@
   import LedgerView from "./lib/LedgerView.svelte";
   import ToolboxView from "./lib/ToolboxView.svelte";
   import SettingsDrawer from "./lib/SettingsDrawer.svelte";
-  import IconPicker from "./lib/IconPicker.svelte";
 
   let sidebarRef: Sidebar;
   let workspaceRef: Workspace;
@@ -215,11 +214,17 @@
   {/if}
 
   {#if emojiPickerTask && $taskEmojiPicker}
-    <IconPicker
-      mode="emoji"
-      selected={$taskEmojiPicker.index >= 0 ? (emojiPickerTask.emojis[$taskEmojiPicker.index] ?? "") : ""}
-      onPick={handleEmojiPick}
-      onClose={() => taskEmojiPicker.set(null)}
-    />
+    <!-- 懒加载：IconPicker 静态引入了 emoji-picker-element（自带整份 emoji 数据库），
+         而它是个低频对话框。挂在首屏链上就是白付一两百 KB 的 entry 体积。
+         与上面三个编辑器同一套写法；Sidebar 里那处也必须一起改，否则又被拉回首屏。 -->
+    {#await import("./lib/IconPicker.svelte") then module}
+      <svelte:component
+        this={module.default}
+        mode="emoji"
+        selected={$taskEmojiPicker.index >= 0 ? (emojiPickerTask.emojis[$taskEmojiPicker.index] ?? "") : ""}
+        onPick={handleEmojiPick}
+        onClose={() => taskEmojiPicker.set(null)}
+      />
+    {/await}
   {/if}
 </div>

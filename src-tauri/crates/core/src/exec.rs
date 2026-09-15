@@ -14,44 +14,6 @@ use std::time::{Duration, Instant};
 use crate::error::{CoreError, CoreResult};
 use crate::model::{Action, Probe, Runtimes, ScriptLanguage, Source};
 
-/// The single implementation of legacy v8 argument splitting (also used by migration).
-pub fn split_legacy_arguments(raw: &str) -> Result<Vec<String>, String> {
-    let mut args = Vec::new();
-    let mut current = String::new();
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut escaped = false;
-    for ch in raw.chars() {
-        if escaped {
-            current.push(ch);
-            escaped = false;
-            continue;
-        }
-        match ch {
-            '\\' if !in_single => escaped = true,
-            '\'' if !in_double => in_single = !in_single,
-            '"' if !in_single => in_double = !in_double,
-            ch if ch.is_whitespace() && !in_single && !in_double => {
-                if !current.is_empty() {
-                    args.push(current.clone());
-                    current.clear();
-                }
-            }
-            _ => current.push(ch),
-        }
-    }
-    if escaped {
-        current.push('\\');
-    }
-    if in_single || in_double {
-        return Err("参数包含未闭合的引号".to_string());
-    }
-    if !current.is_empty() {
-        args.push(current);
-    }
-    Ok(args)
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct ExecOutput {
     pub exit_code: Option<i32>,

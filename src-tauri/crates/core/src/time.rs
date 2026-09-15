@@ -1,8 +1,6 @@
 //! Single source of truth for durations, dates and instants (requirements §3.2, §3.5.2).
 
-use chrono::{
-    DateTime, Duration, FixedOffset, Local, NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc,
-};
+use chrono::{DateTime, Duration, FixedOffset, Local, NaiveDate, SecondsFormat, Utc};
 use chrono_tz::Tz;
 
 use crate::error::{CoreError, CoreResult};
@@ -166,95 +164,6 @@ pub fn local_timezone() -> Option<Tz> {
     iana_time_zone::get_timezone()
         .ok()
         .and_then(|name| name.parse::<Tz>().ok())
-}
-
-/// Migration helper: interpret a legacy `runAt` string.
-/// - Has offset/Z: normalize as instant.
-/// - Missing offset: treat as local wall clock in `tz`, applying DST rules:
-///   ambiguous → earlier instant (warning), gap → first valid instant after (warning).
-pub fn migrate_legacy_local_time(raw: &str, tz: Tz) -> (Option<String>, Vec<String>) {
-    let mut warnings = Vec::new();
-    let value = raw.trim();
-    if value.is_empty() {
-        return (None, warnings);
-    }
-    if let Ok(parsed) = DateTime::parse_from_rfc3339(value) {
-        return (
-            Some(
-                parsed
-                    .with_timezone(&Utc)
-                    .to_rfc3339_opts(SecondsFormat::Millis, true),
-            ),
-            warnings,
-        );
-    }
-    let formats = [
-        "%Y-%m-%dT%H:%M:%S%.f",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%dT%H:%M",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%d %H:%M",
-    ];
-    let naive = formats
-        .iter()
-        .find_map(|fmt| NaiveDateTime::parse_from_str(value, fmt).ok());
-    let Some(naive) = naive else {
-        warnings.push(format!("无法解析的旧时间 `{value}`"));
-        return (None, warnings);
-    };
-    use chrono::offset::LocalResult;
-    match tz.from_local_datetime(&naive) {
-        LocalResult::Single(at) => (
-            Some(
-                at.with_timezone(&Utc)
-                    .to_rfc3339_opts(SecondsFormat::Millis, true),
-            ),
-            warnings,
-        ),
-        LocalResult::Ambiguous(early, _) => {
-            warnings.push(format!(
-                "旧时间 `{value}` 在 {tz} 处于 DST 重叠，已选择较早时刻"
-            ));
-            (
-                Some(
-                    early
-                        .with_timezone(&Utc)
-                        .to_rfc3339_opts(SecondsFormat::Millis, true),
-                ),
-                warnings,
-            )
-        }
-        LocalResult::None => {
-            // DST gap: advance minute by minute until valid (up to 3h).
-            let mut candidate = naive;
-            let mut resolved = None;
-            for _ in 0..180 {
-                candidate += Duration::minutes(1);
-                if let LocalResult::Single(at) = tz.from_local_datetime(&candidate) {
-                    resolved = Some(at);
-                    break;
-                }
-            }
-            match resolved {
-                Some(at) => {
-                    warnings.push(format!(
-                        "旧时间 `{value}` 在 {tz} 处于 DST 空洞，已顺延到第一个有效时刻"
-                    ));
-                    (
-                        Some(
-                            at.with_timezone(&Utc)
-                                .to_rfc3339_opts(SecondsFormat::Millis, true),
-                        ),
-                        warnings,
-                    )
-                }
-                None => {
-                    warnings.push(format!("旧时间 `{value}` 无法映射到 {tz} 的有效时刻"));
-                    (None, warnings)
-                }
-            }
-        }
-    }
 }
 
 /// Compute local-zone now in a named timezone (for cron evaluation).

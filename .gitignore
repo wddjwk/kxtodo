@@ -11,6 +11,8 @@ PixPin*.png
 npm-debug.log*
 *.log
 .pi-subagents/
-.qoder/
+.qoder/*
+!.qoder/AGENTS.md
+!.qoder/skills
 src-tauri/gen/schemas/
 ref/

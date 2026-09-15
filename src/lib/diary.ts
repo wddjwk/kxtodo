@@ -125,17 +125,6 @@ export function monthOf(date: string): MonthCursor {
 // 排序与分组
 // ---------------------------------------------------------------------------
 
-/** 日记的规范顺序：日期由近及远，同一天内按写作先后（早的在上）。 */
-export function compareDiaries(a: DiaryEntry, b: DiaryEntry): number {
-  if (a.date !== b.date) return a.date < b.date ? 1 : -1;
-  if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-}
-
-export function sortDiaries(entries: DiaryEntry[]): DiaryEntry[] {
-  return [...entries].sort(compareDiaries);
-}
-
 /** date → 当天的日记（天内按写作先后）。 */
 export function diaryByDate(entries: DiaryEntry[]): Map<string, DiaryEntry[]> {
   const map = new Map<string, DiaryEntry[]>();

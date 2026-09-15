@@ -1,4 +1,4 @@
-//! Trigger planning: next-run computation shared by migration and the scheduler engine.
+//! Trigger planning: next-run computation shared by the scheduler engine and `schedule plan`.
 
 use std::str::FromStr;
 

@@ -12,11 +12,11 @@
   import { createEventDispatcher } from "svelte";
   import { ArrowLeftRight, Image as ImageIcon } from "@lucide/svelte";
   import { longpress, isLongPressSuppressed } from "../longpress";
-  import { formatCents } from "../ledger";
+  import { formatCents, ledgerLookup } from "../ledger";
   import { ledgerIcon, softColor, TRANSFER_ICON } from "../ledgerIcons";
   import { accountTypeIcon } from "../ledgerAccountTypes";
   import { displayClock } from "../clock";
-  import type { LedgerBook, LedgerEntry } from "../types";
+  import type { LedgerBook, LedgerCategory, LedgerEntry } from "../types";
 
   export let book: LedgerBook;
   export let entry: LedgerEntry;
@@ -30,47 +30,52 @@
     context: { id: string; x: number; y: number };
   }>();
 
+  // 一律走索引查表：早先这一行要做 6 次 `Array.find`（分类查了 3 次同一个 id：名字、图标、
+  // 颜色各一次，颜色还要再查父类；账户 2 次）。列表 / 日历选中日 / 钻取明细 / 搜索结果
+  // 四处共用这一行，一屏几百行 × 每行 6 次 × 分类表长度，每次记账写入还要重来一遍。
+  // 索引按 book 对象身份缓存（ledger.ts::ledgerLookup），所以四处调用点都不用传 prop。
+  $: lookup = ledgerLookup(book);
+  $: category =
+    entry.kind === "transfer" || !entry.categoryId
+      ? undefined
+      : lookup.categoryById.get(entry.categoryId);
+  $: parent = category?.parentId ? lookup.categoryById.get(category.parentId) : undefined;
+
   $: images = entry.images ?? [];
   $: hasNote = Boolean(entry.note);
   /** 分类名那一格里显示的文字（可带日期前缀） */
-  $: title = `${datePrefix}${entryName(entry)}`;
-  $: color = entryColor(entry);
-  $: icon = ledgerIcon(entryIcon(entry), "Ellipsis");
+  $: title = `${datePrefix}${entryName(entry, category)}`;
+  $: color = entryColor(entry, category, parent);
+  $: icon = ledgerIcon(entryIcon(entry, category), "Ellipsis");
   $: clock = displayClock(entry.time);
   $: amount = amountText(entry);
   $: showSub = hasNote || images.length > 0;
-  $: fromAccount = book.accounts.find((candidate) => candidate.id === entry.accountId);
-  $: toAccount = book.accounts.find((candidate) => candidate.id === entry.toAccountId);
+  $: fromAccount = lookup.accountById.get(entry.accountId);
+  $: toAccount = entry.toAccountId ? lookup.accountById.get(entry.toAccountId) : undefined;
   $: fromName = fromAccount?.name ?? "";
   $: toName = toAccount?.name ?? "";
   $: accountText = entry.kind === "transfer" ? `${fromName} → ${toName}` : fromName;
 
-  function entryName(item: LedgerEntry): string {
+  // 分类/父类都从参数进来，不在函数体里读响应式变量：**Svelte 不跟踪函数调用里的依赖**，
+  // 少传一个参数就等于这条 `$:` 永远不会因为它变化而重算。
+  function entryName(item: LedgerEntry, cat: LedgerCategory | undefined): string {
     if (item.kind === "transfer") return "转账";
-    const category = item.categoryId
-      ? book.categories.find((candidate) => candidate.id === item.categoryId)
-      : undefined;
-    return category?.name ?? "未分类";
+    return cat?.name ?? "未分类";
   }
 
-  function entryIcon(item: LedgerEntry): string {
+  function entryIcon(item: LedgerEntry, cat: LedgerCategory | undefined): string {
     if (item.kind === "transfer") return TRANSFER_ICON;
-    const category = item.categoryId
-      ? book.categories.find((candidate) => candidate.id === item.categoryId)
-      : undefined;
-    return category?.icon || (category ? "Package" : "Ellipsis");
+    return cat?.icon || (cat ? "Package" : "Ellipsis");
   }
 
-  function entryColor(item: LedgerEntry): string {
+  function entryColor(
+    item: LedgerEntry,
+    cat: LedgerCategory | undefined,
+    dad: LedgerCategory | undefined
+  ): string {
     if (item.kind === "transfer") return "#7f8c8d";
-    const category = item.categoryId
-      ? book.categories.find((candidate) => candidate.id === item.categoryId)
-      : undefined;
-    if (category?.color) return category.color;
-    const parent = category?.parentId
-      ? book.categories.find((candidate) => candidate.id === category?.parentId)
-      : undefined;
-    if (parent?.color) return parent.color;
+    if (cat?.color) return cat.color;
+    if (dad?.color) return dad.color;
     return item.kind === "income" ? "#2f9e6e" : "#f0862c";
   }
 

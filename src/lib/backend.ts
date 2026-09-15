@@ -555,24 +555,32 @@ export async function coreDispatch<T = unknown>(command: string, params: unknown
 }
 
 export type CoreSnapshot = {
-  data: {
+  /** 各域都是可选的：`coreSnapshot(domains)` 只请求需要的域时，其余的不会出现在载荷里。 */
+  data?: {
     nodes: AppState["nodes"];
     tasks: AppState["tasks"];
     backgrounds: AppState["backgrounds"];
     selectedNodeId: string;
   };
-  settings: unknown;
-  schedule: {
+  settings?: unknown;
+  schedule?: {
     runtimes: SchedulerRuntimePaths;
     tasks: unknown[];
   };
-  diary: unknown;
-  ledger: unknown;
-  revisions: { data: number; settings: number; schedule: number; diary: number; ledger: number };
+  diary?: unknown;
+  ledger?: unknown;
+  revisions?: Partial<
+    Record<"data" | "settings" | "schedule" | "diary" | "ledger", number>
+  >;
 };
 
-export async function coreSnapshot(): Promise<CoreSnapshot> {
-  return invoke<CoreSnapshot>("core_snapshot");
+/**
+ * 拉取核心快照。给了 `domains` 就只读那几个域——一次勾选任务不需要把整本账与全部日记
+ * 序列化过 IPC。省略 = 全部五个域（首次水合）。
+ */
+export async function coreSnapshot(domains?: readonly string[]): Promise<CoreSnapshot> {
+  const args = domains && domains.length > 0 ? { domains: [...domains] } : {};
+  return invoke<CoreSnapshot>("core_snapshot", args);
 }
 
 export async function registerGlobalShortcut(shortcut: string): Promise<void> {
