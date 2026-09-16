@@ -268,6 +268,23 @@ function restoreMath(html: string, blocks: string[], inlines: string[]): string 
   });
 }
 
+/**
+ * 快速通道里的公式回填：不调 KaTeX，把源码原样（转义后）摆回它的位置。
+ * 完整版渲染随后会把这些位置换成排版好的公式——占位期间用户看到的是可读的
+ * `$x^2$` 源码，而不是空块或记号。
+ */
+function restoreMathSource(html: string, blocks: string[], inlines: string[]): string {
+  if (blocks.length === 0 && inlines.length === 0) return html;
+  return html.replace(/@@KXMath([bi])(\d+)@@/g, (match, kind: string, index: string) => {
+    const at = Number(index);
+    const source = kind === "b" ? blocks[at] : inlines[at];
+    if (source === undefined) return match;
+    return kind === "b"
+      ? `<span class="kx-math-block">${escapeHtml(`$$${source}$$`)}</span>`
+      : escapeHtml(`$${source}$`);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // 代码保护 / 还原
 // ---------------------------------------------------------------------------
@@ -401,6 +418,75 @@ function transformCodeBlocks(html: string): string {
   });
 }
 
+/**
+ * 本地插图 `![](filename)` → `<img src="" data-md-img="nodeId/filename">` 占位。
+ *
+ * 与 mermaid 完全同一个模式：渲染阶段只留占位，真正的字节由 markdownControls 的
+ * action 在挂载后从 `mdImageCache` 异步填进 `src`。这样渲染结果**与图片解析进度无关**——
+ * 早先把「解析后的文本」当渲染输入，每解析出一张图整份 markdown 的缓存键就变一次，
+ * 同一张卡积累一串缓存键、每次解析都触发整卡重渲（M 张图 × N 张卡的白渲染就是这么来的）。
+ *
+ * 给了 `nodeId` 才转换（调用方明确「这份文本里的相对路径归属这个节点」）；
+ * http(s)/data/blob 等绝对来源原样保留，浏览器自己会加载。
+ */
+function transformLocalImages(html: string, nodeId: string): string {
+  if (!html.includes("<img") || !nodeId) return html;
+  return html.replace(/<img([^>]*)\ssrc="([^"]*)"([^>]*)>/g, (match, pre: string, src: string, post: string) => {
+    if (!src || /^(https?:|data:|blob:|asset:|file:|\/\/)/i.test(src)) return match;
+    // marked 会对 URL 做百分号编码，缓存键必须用回原始文件名（与 resolveMarkdownImages 同口径）
+    let filename = src;
+    try {
+      filename = decodeURIComponent(src);
+    } catch {
+      // 编码不合法就用原样
+    }
+    return `<img${pre} src="" data-md-img="${escapeHtml(`${nodeId}/${filename}`)}"${post}>`;
+  });
+}
+
+/**
+ * 勾选过的任务项打标：`li.md-task-done` + 把「这一行自己的内容」圈进 `span.md-task-label`
+ * （松散列表里勾选框在第一个 `<p>` 里，直接给那个 p 打标）。
+ *
+ * 为什么不在 CSS 里拿 `li:has(input:checked)` 画删除线——两个都试过、都不行：
+ * ① `:has` 的**后代**匹配会把祖先 li 一起命中（勾一个子项，整棵树全划线）；
+ * ② `text-decoration` 会从 li **传播**进嵌套子列表，且子级无法取消继承——
+ * 只有把被装饰的元素收窄成「这一行的行内内容」（原子行内盒除外，勾选框自己
+ * 不会被划穿），删除线才只属于当前行。
+ */
+function markCheckedTaskItems(html: string): string {
+  if (typeof document === "undefined" || !html.includes("md-task-box")) return html;
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  template.content.querySelectorAll("li").forEach((li) => {
+    const tight = li.querySelector<HTMLInputElement>(":scope > input.md-task-box");
+    const looseP = tight ? null : li.querySelector(":scope > p:first-child");
+    const loose = looseP?.querySelector<HTMLInputElement>(":scope > input.md-task-box") ?? null;
+    const box = tight ?? loose;
+    if (!box || !box.checked) return;
+    li.classList.add("md-task-done");
+    if (looseP && loose) {
+      looseP.classList.add("md-task-label");
+      return;
+    }
+    if (!tight) return;
+    const label = document.createElement("span");
+    label.className = "md-task-label";
+    // 勾选框之后、嵌套列表之前的行内内容全进 span（勾选框本身留在外面）
+    const moving: ChildNode[] = [];
+    let node: ChildNode | null = tight.nextSibling;
+    while (node) {
+      if (node instanceof HTMLElement && (node.tagName === "UL" || node.tagName === "OL")) break;
+      moving.push(node);
+      node = node.nextSibling;
+    }
+    if (moving.length === 0) return;
+    tight.after(label);
+    for (const child of moving) label.appendChild(child);
+  });
+  return template.innerHTML;
+}
+
 const SANITIZE_OPTIONS = {
   ADD_TAGS: ["mark", "input"],
   ADD_ATTR: ["target", "rel", "src", "type", "checked", "disabled", "hidden", "viewBox"],
@@ -423,16 +509,18 @@ function replaceEmojiShortcodes(text: string): string {
 // 渲染记忆化
 // ---------------------------------------------------------------------------
 
-/** 渲染计数：给性能基准（scripts/perf-bench.mjs）与现场诊断用，本身没有任何副作用。 */
-export const renderStats = { block: 0, blockHit: 0, inline: 0, inlineHit: 0 };
+/** 渲染计数：给性能基准（scripts/perf-bench.mjs）与现场诊断用，本身没有任何副作用。
+ *  fast/fastHit 数的是「快速通道」（无高亮无公式排版的那一份）。 */
+export const renderStats = { block: 0, blockHit: 0, inline: 0, inlineHit: 0, fast: 0, fastHit: 0 };
 
 /**
  * `renderMarkdown` / `renderInlineMarkdown` 都是**纯函数**——marked / DOMPurify / KaTeX /
  * highlight.js 的配置全是模块级常量，输出只取决于输入字符串，所以按输入缓存是安全的。
  *
- * 不缓存的代价：① 每次快照刷新都给每个 task 换新对象身份，所有卡片的 `$:` 全失效重跑；
- * ② `mdImageCache` 每解析出一张图就 update 一次，订阅它的**每张**卡片都跟着重跑一遍
- * （M 张图 × N 张卡）。有了缓存，这两种情况都退化成一次 Map 查找。
+ * 不缓存的代价：每次快照刷新都给每个 task 换新对象身份，所有卡片的 `$:` 全失效重跑——
+ * 有了缓存，重跑退化成一次 Map 查找。（插图解析曾经也会引发同款风暴：缓存键是
+ * 「图片替换后的文本」，每解析一张图键就变一次；现在渲染吃**原始 markdown**、
+ * 图片走占位异步填充，键与解析进度彻底解耦。）
  *
  * 条数与字符数双上限，超了淘汰最久未用的（Map 的迭代顺序就是插入顺序）。
  */
@@ -472,40 +560,66 @@ class RenderCache {
 }
 
 const blockCache = new RenderCache(300, 4_000_000);
+const fastCache = new RenderCache(120, 2_000_000);
 const inlineCache = new RenderCache(800, 400_000);
 
 if (typeof window !== "undefined") {
   (window as unknown as Record<string, unknown>).__kxtodoRenderStats = renderStats;
 }
 
+/** 缓存键 = 原文 + 归属节点。同一份 markdown 挂在不同节点下，插图占位的键不同，产物就不同。 */
+function cacheKey(markdown: string, nodeId: string): string {
+  return nodeId ? `${nodeId}\u0000${markdown}` : markdown;
+}
+
 /**
  * 记忆化命中就同步给出 HTML，没命中回 null（**不触发渲染**）。
  *
  * 展开一张卡片时用它决定走哪条路：命中的（刚收起又展开、列表刷新后重挂）立刻画出来，
- * 没命中的才需要让一帧（见 TaskCard/DiaryCard 的 `syncFullRender`）。
+ * 没命中的才走「快速版先上、完整版随后」（见 deferredMarkdown）。
  */
-export function peekMarkdown(markdown: string): string | null {
-  const hit = blockCache.get(markdown);
+export function peekMarkdown(markdown: string, nodeId = ""): string | null {
+  const hit = blockCache.get(cacheKey(markdown, nodeId));
   // 命中也要记数：走记忆化就不经过 `renderMarkdown` 了（展开卡片那条路径正是这样），
   // 不记的话性能基准里的 blockHit 永远是 0，「记忆化到底有没有生效」就测不出来
   if (hit !== undefined) renderStats.blockHit += 1;
   return hit ?? null;
 }
 
-/** 完整渲染：front-matter / callout / 公式 / 代码折叠 / 图框占位。 */
-export function renderMarkdown(markdown: string): string {
+/** 完整渲染：front-matter / callout / 公式 / 代码高亮 / 代码折叠 / 图框与插图占位。 */
+export function renderMarkdown(markdown: string, nodeId = ""): string {
   renderStats.block += 1;
-  const cached = blockCache.get(markdown);
+  const key = cacheKey(markdown, nodeId);
+  const cached = blockCache.get(key);
   if (cached !== undefined) {
     renderStats.blockHit += 1;
     return cached;
   }
-  const html = renderMarkdownNow(markdown);
-  blockCache.set(markdown, html);
+  const html = renderMarkdownNow(markdown, nodeId, true);
+  blockCache.set(key, html);
   return html;
 }
 
-function renderMarkdownNow(markdown: string): string {
+/**
+ * 快速渲染：与完整版同一条流水线，但**跳过两个纯装饰的重活**——
+ * highlight.js 代码高亮与 KaTeX 公式排版（代码块保持素色、公式摆回源码占位）。
+ * 结构与文字和完整版完全一致，用于「长卡片展开那一刻先给可读内容」，
+ * 装饰由完整版在随后一两帧内补上（见 deferredMarkdown）。
+ */
+export function renderMarkdownFast(markdown: string, nodeId = ""): string {
+  renderStats.fast += 1;
+  const key = cacheKey(markdown, nodeId);
+  const cached = fastCache.get(key);
+  if (cached !== undefined) {
+    renderStats.fastHit += 1;
+    return cached;
+  }
+  const html = renderMarkdownNow(markdown, nodeId, false);
+  fastCache.set(key, html);
+  return html;
+}
+
+function renderMarkdownNow(markdown: string, nodeId: string, decorate: boolean): string {
   const normalized = markdown.trim().length > 0 ? markdown : "添加任务";
   const { fields, rest } = splitFrontMatter(normalized);
   const protectedCode = protectCode(rest);
@@ -514,10 +628,15 @@ function renderMarkdownNow(markdown: string): string {
   const withCodeBack = restoreCode(withEmoji, protectedCode.pieces);
   const raw = marked.parse(applyHighlights(withCodeBack), { async: false }) as string;
   const diagrammed = transformDiagrams(raw);
-  const highlighted = highlightCodeBlocks(diagrammed);
+  const imaged = transformLocalImages(diagrammed, nodeId);
+  const highlighted = decorate ? highlightCodeBlocks(imaged) : imaged;
   const wrapped = transformCodeBlocks(highlighted);
-  const clean = DOMPurify.sanitize(wrapped, SANITIZE_OPTIONS);
-  return frontMatterHtml(fields) + restoreMath(clean, math.blocks, math.inlines);
+  const taskmarked = markCheckedTaskItems(wrapped);
+  const clean = DOMPurify.sanitize(taskmarked, SANITIZE_OPTIONS);
+  const mathed = decorate
+    ? restoreMath(clean, math.blocks, math.inlines)
+    : restoreMathSource(clean, math.blocks, math.inlines);
+  return frontMatterHtml(fields) + mathed;
 }
 
 export function renderInlineMarkdown(markdown: string): string {

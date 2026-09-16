@@ -122,17 +122,20 @@ async function seedTasks(page, tasks) {
 async function seedBook(page) {
   await page.evaluate(() => {
     const now = new Date().toISOString();
+    // 本地日期：toISOString 是 UTC，凌晨跑会差一天（账按本地日归月）
+    const iso = (value) =>
+      `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
     const monthDay = (monthOffset, dayOfMonth) => {
       const d = new Date();
       d.setDate(1);
       d.setMonth(d.getMonth() + monthOffset);
       d.setDate(dayOfMonth);
-      return d.toISOString().slice(0, 10);
+      return iso(d);
     };
     const day = (offset) => {
       const d = new Date();
       d.setDate(d.getDate() - offset);
-      return d.toISOString().slice(0, 10);
+      return iso(d);
     };
     const entries = [];
     for (let i = 0; i < 13; i += 1) {
@@ -158,7 +161,7 @@ async function seedBook(page) {
       createdAt: now
     });
     localStorage.setItem(
-      "kxtodo-ledger-book",
+      "todo-note-ledger-v1",
       JSON.stringify({
         accounts: [
           { id: "lacc-01", name: "现金", kind: "cash", icon: "Wallet", color: "#f0862c", initialCents: 100000, createdAt: now },
@@ -475,7 +478,6 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
 
   // 4 换月：触摸上滑/下滑
   const monthLabel = () => page.textContent(".ledger-month-bar strong");
-  const startMonth = await monthLabel();
   const box = await page.locator(".ledger-scroll").boundingBox();
   const cx = Math.round(box.x + box.width / 2);
   const swipe = async (dy) => {
@@ -499,12 +501,15 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
       { x: cx, y: Math.round(box.y + 150), delta: dy }
     );
   };
-  // 先滚到底（有得滚就真滚，没得滚本身就在底部）——手指再往上拖就该换更早的月
+  // 先滚到底（有得滚就真滚，没得滚本身就在底部）——手指再往上拖就该换更早的月。
+  // **滚到底这一下自己就会换月**（「到底换上月」是设计行为），基准月必须等它落定后再读，
+  // 否则程序化滚动换的一跳会算到手指那一滑头上（看着像一次滑了两月）。
   await page.evaluate(() => {
     const el = document.querySelector(".ledger-scroll");
     el.scrollTop = el.scrollHeight;
   });
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(1000);
+  const startMonth = await monthLabel();
   const overflows = await page.$eval(".ledger-scroll", (el) => el.scrollHeight - el.clientHeight);
   await swipe(-95);
   await page.waitForTimeout(900);

@@ -7,7 +7,7 @@
   import { dueHighlightOf, dueHighlightStyle } from "./dueHighlight";
   import { fullDayLabel } from "./diary";
   import { createDeferredMarkdown } from "./deferredMarkdown";
-  import { mdImageCache, resolveMarkdownImages } from "./images";
+  import { preloadMarkdownImages } from "./images";
   import { appSettings } from "./stores";
   import { saveTaskMarkdown } from "./actions";
   import { isMobile as isMobileStore, touchOnly } from "./platform";
@@ -65,43 +65,49 @@
   // canExpand 只留给手势/按钮当「有没有内容可展开」的判据。
   $: isExpanded = task.expanded === true;
 
-  $: resolvedMd = resolveMarkdownImages(task.markdown, nodeId, $mdImageCache);
+  // 插图预热：渲染吃**原始 markdown**（图片是占位符，由 markdownWire 从缓存异步填 src），
+  // 这里只负责在卡片挂载时把字节提前要过来——展开时图已经在缓存里，占位一挂上就填掉。
+  $: preloadMarkdownImages(task.markdown, nodeId);
   $: collapsedHtml = renderInlineMarkdown(collapsedMarkdownLine(task.markdown));
   // **只在展开时渲染完整 markdown**：Svelte 的 `$:` 是急切求值，与模板消不消费无关，
   // 早先折叠态的卡片也白跑一遍完整渲染（12 步，含 DOMPurify 的完整 DOM 解析），
   // 而结果只有下面 `{#if isExpanded}` 那一支会用到。一屏 300 张折叠卡就是 300 次白渲染，
-  // 而且每次列表变化都要重来。`resolvedMd` 仍然照旧 eagerly 算——它负责触发插图预加载，
-  // 改成惰性会让「展开才看到图」变成一次可感知的等待。
+  // 而且每次列表变化都要重来。
   //
-  // 但「算的时机」不能落在展开那一次同步 flush 里：长卡片一整套跑完要几百毫秒，
-  // 用户点下去到浏览器画面之间全被占住，表现成「点了没反应」（安卓尤其明显）。
-  // 改由 createDeferredMarkdown 调度：命中记忆化或短文本同步出，其余让一帧再算。
-  // 让帧期间画的是折叠态内容，卡片该展开就展开，内容随后换上来。
+  // 展开那一刻的时机由 createDeferredMarkdown 调度：命中记忆化或短文本一步渲染到位；
+  // 长文本先同步给「快速版」（结构文字齐全，只缺代码高亮与公式排版），完整装饰在
+  // 浏览器画过一两帧后补上——点击立刻看到完整可读的内容，没有空白块阶段。
   let fullHtml = "";
   const fullRender = createDeferredMarkdown((html) => {
     fullHtml = html;
   });
-  $: syncFullRender(isExpanded, resolvedMd);
+  $: syncFullRender(isExpanded, task.markdown, nodeId);
 
-  function syncFullRender(expanded: boolean, markdown: string): void {
+  function syncFullRender(expanded: boolean, markdown: string, node: string): void {
     if (!expanded) {
       fullRender.cancel();
       if (fullHtml !== "") fullHtml = "";
       return;
     }
-    fullRender.schedule(markdown);
+    fullRender.schedule(markdown, node);
   }
   // 日期展示：`9月8日 周二` / `9月8日 周二 18:30`（有时刻才带时刻）
   $: formattedDate = task.dueDate
     ? `${fullDayLabel(task.dueDate.slice(0, 10))}${task.dueTime ? ` ${task.dueTime}` : ""}`
     : "";
-  // 临期高亮：配色按**本页**（这个节点）自己的三色走，没配过就用默认红 → 橙黄 → 浅黄。
+  // 临期高亮：配色按**本页**（这个节点）自己的三色走，没配过就用默认红 / 黄 / 蓝。
   // 已完成的卡片不画——它有自己的一整套完成态样式。
   $: dueHighlight =
     task.completed || !task.dueDate
       ? null
       : dueHighlightOf(task, $appSettings.features.dueHighlight, $appSettings.appearance.dueColors[nodeId]);
-  $: canExpand = hasMultipleMarkdownLines(task.markdown) || titleOverflow;
+  // 可展开 = 多行 ∪ 折叠态量出来显示不全 ∪ **当前就是展开的**。
+  // 第三项治的是「折行卡片以展开态挂载」（编辑器保存后、展开全部后重挂载）：
+  // 那时 measureTitle 根本不在树上（它只挂在折叠分支），titleOverflow 永远是 false，
+  // 单行超长的卡片就被判成不可折叠——勾选框不画加号、双击也收不起来（toggleExpand
+  // 被 canExpand 门控）。展开着的卡片天然「可以收起」，直接并进判据即可；收起瞬间
+  // measureTitle 重新挂载、同步重量，判据随即回到量出来的真值。
+  $: canExpand = hasMultipleMarkdownLines(task.markdown) || titleOverflow || isExpanded;
   // 把可展开性同步给列表：**延后一个微任务**再派发——首次检查发生在组件挂载期间，
   // 同步派发会让父组件在渲染途中改状态。
   let reportedExpand: boolean | null = null;

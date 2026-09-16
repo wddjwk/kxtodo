@@ -53,7 +53,7 @@ debug、release、旧版本 exe 互相同标识，启动新实例会转发到已
 
 ### 7. 裸 cargo 交叉检查 Android 目标需要 NDK clang 环境
 
-ureq/ring 是共享依赖后，`cargo check --target aarch64-linux-android` 会在 ring 的 cc-rs 构建脚本里找 clang 失败。gradle 的 rust 插件（`tauri android build`）会自己配好；手工 check 需导出：`PATH += $NDK_HOME/toolchains/llvm/prebuilt/windows-x86_64/bin`、`CC/CXX/AR_aarch64_linux_android=clang.exe/clang++.exe/llvm-ar.exe`、`CFLAGS/CXXFLAGS_aarch64_linux_android=--target=aarch64-linux-android24`。
+ureq/ring 是共享依赖后，`cargo check --target aarch64-linux-android` 会在 ring 的 cc-rs 构建脚本里找 clang 失败。gradle 的 rust 插件（`tauri android build`）会自己配好；手工 check 需导出：`PATH += $NDK_HOME/toolchains/llvm/prebuilt/windows-x86_64/bin`、`CC/CXX/AR_aarch64_linux_android=clang.exe/clang++.exe/llvm-ar.exe`、`CFLAGS/CXXFLAGS_aarch64_linux_android=--target=aarch64-linux-android24`。**v0.8.2 实测的省事版**：`PATH` 前置 `$NDK/toolchains/llvm/prebuilt/windows-x86_64/bin` + `CC_aarch64_linux_android` 指到 `aarch64-linux-android24-clang.cmd` + `AR_aarch64_linux_android=llvm-ar.exe`，`cargo check --target aarch64-linux-android -p kxtodo-core -p kxtodo-server` 就能过（本机的 `NDK` 环境变量已指向 NDK 根；仍然要经 `scripts/cargo-msvc.sh` 跑，宿主侧的 build script 需要 MSVC 工具链）。
 
 ### 8. Node 24 + vite 在 Windows 的退出期 libuv 断言 flake
 

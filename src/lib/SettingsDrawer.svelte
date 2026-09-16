@@ -37,7 +37,7 @@
     isTauriRuntime, pickImageFile, saveAvatarImage, avatarImageUrl, openExternalUrl, trayAvailable,
     importBackgroundImage, backgroundImageUrl, saveBackgroundImageFromDataUrl
   } from "./backend";
-  import { avatarCache, resolveAvatarSrc, primeImageCache, localImageRef, isLocalImageRef, compressAvatarImage, compressBackgroundImage } from "./images";
+  import { avatarCache, resolveAvatarSrc, primeImageCache, primeAvatarCache, localImageRef, isLocalImageRef, compressAvatarImage, compressBackgroundImage } from "./images";
   import { themePresets } from "./defaults";
   import { NAV_ITEM_IDS, NAV_ITEM_LABELS, NAV_LAYOUTS, type NavItemId } from "./nav";
   import { cleanStorage, fetchStorageUsage, formatBytes, type StorageUsage } from "./actions";
@@ -314,6 +314,15 @@
     { value: "p2p", label: "P2P" }
   ];
 
+  /**
+   * 抽屉分两段挂载：外壳 + 前两节（个人资料/外观效果）立刻画，其余分区等浏览器
+   * 画过两帧再补。整份抽屉一千九百行、几百个控件，一次性挂完在安卓上要一两百毫秒，
+   * 全压在「点头像」那一帧里——表现就是点下去顿一下抽屉才出来。首屏只看得到前两节，
+   * 剩下的在折叠线下面悄悄补齐，用户全程无感。
+   */
+  let deepReady = false;
+  let deepFrame = 0;
+
   onMount(() => {
     clockTimer = window.setInterval(() => {
       clock = Date.now();
@@ -323,9 +332,16 @@
         traySupported = available;
       });
     }
+    deepFrame = requestAnimationFrame(() => {
+      deepFrame = requestAnimationFrame(() => {
+        deepFrame = 0;
+        deepReady = true;
+      });
+    });
   });
   onDestroy(() => {
     if (clockTimer !== undefined) window.clearInterval(clockTimer);
+    if (deepFrame) cancelAnimationFrame(deepFrame);
   });
 
   $: syncMode = $appSettings.sync?.mode ?? "lan";
@@ -836,7 +852,7 @@
       if (!srcPath) return;
       const filename = await saveAvatarImage(srcPath);
       const url = await avatarImageUrl(filename);
-      avatarCache.update((map) => ({ ...map, [filename]: url }));
+      primeAvatarCache(filename, url);
       void setConfigAction("profile.avatar", filename);
     } catch (error) {
       showToast(`头像上传失败：${String(error)}`);
@@ -1162,6 +1178,7 @@
     </div>
   </SettingsSection>
 
+  {#if deepReady}
   <SettingsSection title="特性开关" storageKey="features">
     <div class="settings-card">
       <label class="toggle-row" title="在左侧栏分类行显示该分类下未完成条目数。">
@@ -1229,26 +1246,37 @@
           </label>
         </span>
       </div>
-      <!-- 临期高亮：两个档位互斥（都勾没有额外含义），都不勾 = 关 -->
+      <!-- 临期高亮：**圆形单选三档**（不高亮 / 配色 / 渐变色）——「都勾」与「勾一个再点
+           另一个」在两个勾选框的形态下语义混乱，单选组一目了然（与一周开始同款形态） -->
       <div
         class="toggle-row link-style-row"
-        title="快到期的事项在卡片上加一层高亮。「高亮色」按今天 / 明天 / 后天各取一种颜色；「渐变」按实际剩余时间在这三种颜色之间过渡（今天到期的接近红色，明天到期的接近黄色，中间的时刻按远近插值）。设了具体时刻且不足 5 小时的会更重。两个都不勾 = 不高亮。配色在列表右上角菜单的「临期高亮色」里改，每个页面各配一套。"
+        title="快到期的事项在卡片上加一层高亮。「配色」按今天 / 明天 / 后天各取一种颜色；「渐变色」按实际剩余时间在这三种颜色之间过渡（今天到期的接近红色，明天到期的接近黄色，中间的时刻按远近插值）。设了具体时刻且不足 5 小时的会更重。配色在列表右上角菜单的「临期高亮色」里改，每个页面各配一套。"
       >
         <span>快到期事项添加高亮</span>
         <span class="link-style-choices">
+          <label title="不加高亮">
+            <input
+              type="radio"
+              name="due-highlight"
+              checked={$appSettings.features.dueHighlight === "off"}
+              on:change={() => updateFeature("dueHighlight", "off")}
+            />不高亮
+          </label>
           <label title="今天/明天/后天各用一种颜色">
             <input
-              type="checkbox"
+              type="radio"
+              name="due-highlight"
               checked={$appSettings.features.dueHighlight === "solid"}
-              on:change={(event) => updateFeature("dueHighlight", event.currentTarget.checked ? "solid" : "off")}
-            />高亮色
+              on:change={() => updateFeature("dueHighlight", "solid")}
+            />配色
           </label>
           <label title="按剩余时间在三种颜色之间过渡">
             <input
-              type="checkbox"
+              type="radio"
+              name="due-highlight"
               checked={$appSettings.features.dueHighlight === "gradient"}
-              on:change={(event) => updateFeature("dueHighlight", event.currentTarget.checked ? "gradient" : "off")}
-            />渐变
+              on:change={() => updateFeature("dueHighlight", "gradient")}
+            />渐变色
           </label>
         </span>
       </div>
@@ -1921,4 +1949,5 @@
       <p class="update-error">{updateCheckError}</p>
     {/if}
   </SettingsSection>
+  {/if}
 </aside>

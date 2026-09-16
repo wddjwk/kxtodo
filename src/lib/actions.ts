@@ -10,7 +10,7 @@ import { accountBalance } from "./ledger";
 import {
   appState, appSettings, commit, commitDiary, commitLedger, commitScheduler, commitSettings,
   coreMode, createDiaryId, createTaskId, diaryEntries, editBaseUpdatedAt, ledgerData, markEditStart, clearEditBase, rebaseEditBase,
-  manualSyncAt, refreshFromCore, scheduleEntries, syncConnection, showToast, todayIso
+  manualSyncAt, noteEnvelopeRevision, refreshFromCore, scheduleEntries, syncConnection, showToast, todayIso
 } from "./stores";
 import {
   coreDispatch, CoreCommandError, exportDiaryZip, importDiaryZipFromDialog, importDiaryZipFromFile,
@@ -337,7 +337,7 @@ export async function addTask(entryId: string, draft: TaskDraft): Promise<Task |
         plannedDate: draft.plannedDate,
         dueDate: draft.dueDate,
         dueTime: draft.dueTime,
-        tags: (draft.tags ?? []).map((tag) => `${tag.color}:${tag.text ?? ""}`),
+        tags: (draft.tags ?? []).map(tagParam),
         emojis: draft.emojis ?? []
       });
       const task: Task = {
@@ -490,7 +490,7 @@ export async function replaceTaskTags(id: string, tags: Tag[]): Promise<void> {
       await coreDispatch("task.modify", {
         type: "item",
         id,
-        replaceTags: tags.map((tag) => `${tag.color}:${tag.text ?? ""}`)
+        replaceTags: tags.map(tagParam)
       });
     } catch (error) {
       await report(error, "标签保存失败");
@@ -645,7 +645,8 @@ export async function setConfig(path: string, value: unknown): Promise<boolean> 
     //（fs2 锁 + fsync + revision + 域事件），安卓上是几十到上百毫秒。等它回来才翻 UI，
     // 表现就是「点一下视图切换，按钮先顿一下」——视图切换、开关这类操作必须立刻有反馈，
     // 这个优先级高于任何资源节省。设置是本机权威、没有冲突语义，本地先生效没有数据风险；
-    // 失败按原值回滚并提示（域事件回来时还会用快照兜一次一致性）。
+    // 失败按原值回滚并提示。一致性不靠域事件那一轮快照兜（它被 revision 水位挡掉了，
+    // 见下面 noteEnvelopeRevision），靠**信封带回的落盘后权威值**兜——见 sameValue 那段。
     const previous = clone(get(appSettings));
     appSettings.update((current) => {
       const next = clone(current);
@@ -653,7 +654,22 @@ export async function setConfig(path: string, value: unknown): Promise<boolean> 
       return next;
     });
     try {
-      await coreDispatch("config.set", { path, value });
+      const envelope = await coreDispatch("config.set", { path, value });
+      // 本地已经生效、core 也落盘成功：记下这一版的 revision，把紧随其后的域事件挡在
+      // 快照往返之外——store 里已经是同一个值，再 set 一次只是让全树白重跑一遍。
+      noteEnvelopeRevision(envelope.meta);
+      // 但 core 有可能**没照原样存**：自动同步秒数 clamp(5,86400)、背景透明度 clamp(0,1)。
+      // 信封里带回了落盘后的权威值，与乐观值不同就以它为准——域事件那一轮已经被水位挡掉，
+      // 不会再有快照来兜一致性，不补这一下界面上就会一直显示一个盘里没有的数。
+      // （动态 map 也走这条：信封带回整份 map，`applySettingsPath` 原样铺回去即正确。）
+      const stored = (envelope.data as { value?: unknown } | null)?.value;
+      if (stored !== undefined && !sameValue(stored, value)) {
+        appSettings.update((current) => {
+          const next = clone(current);
+          applySettingsPath(next, path, stored);
+          return next;
+        });
+      }
       return true;
     } catch (error) {
       appSettings.update((current) => {
@@ -702,6 +718,22 @@ export async function unsetUiColor(nodeId: string): Promise<boolean> {
   delete next.appearance.uiColors[nodeId];
   commitSettings(next);
   return true;
+}
+
+/** 与 core 落盘后的权威值比对（键序无关，Rust 的 serde 顺序与 JS 对象顺序不保证一致）。
+ *  settings 的值都是标量或小数组/小对象，递归比一遍远比多换一次 store 身份便宜。 */
+function sameValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((item, index) => sameValue(item, right[index]));
+  }
+  if (typeof left !== "object" || typeof right !== "object" || left === null || right === null) return false;
+  const a = left as Record<string, unknown>;
+  const b = right as Record<string, unknown>;
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((key) => key in b && sameValue(a[key], b[key]));
 }
 
 function applySettingsPath(target: Settings, path: string, value: unknown): void {
@@ -764,7 +796,17 @@ export type DiaryDraft = {
 export type DiaryChanges = DiaryDraft;
 
 function diaryTagParams(tags: Tag[]): string[] {
-  return tags.map((tag) => `${tag.color}:${tag.text ?? ""}`);
+  return tags.map(tagParam);
+}
+
+/**
+ * 标签 → core 的字符串参数（`颜色:文字`）。**自定义色必须拿 hex 当颜色 token**：
+ * core 的 parse_tag_input 认 `#rrggbb` 并记成 custom+hex，而传 `custom:文字` 会
+ * 因为「custom 没带 hex」被退成灰色——v0.8.1 的自定义标签颜色写进去就丢，根子在这。
+ */
+function tagParam(tag: Tag): string {
+  const colorToken = tag.color === "custom" && tag.hex ? tag.hex : tag.color;
+  return `${colorToken}:${tag.text ?? ""}`;
 }
 
 function findDiary(id: string): DiaryEntry | undefined {

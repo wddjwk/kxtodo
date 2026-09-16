@@ -1,7 +1,7 @@
 ---
 name: develop-kxtodo
 version: 1
-description: 开发 / 修改 / 调试 / 重构 KXToDo（Todo Note）项目本身时**必须先加载本 skill**。KXToDo 是一款本地优先的「待办 + 日记 + 记账」三端应用：Rust + Tauri 2（桌面壳与后端）、Svelte 4 + TypeScript + Vite（前端）、CodeMirror 6（编辑器）、marked + DOMPurify + highlight.js（渲染），同一份 kxtodo-core 跑在 Windows（exe）/ Linux（AppImage）/ Android（APK）三端。只要在本仓库动任何代码就用它：改前端 Svelte 组件或全局 CSS、改 Rust core（model / repo / ops_*）或 src-tauri 壳、改数据同步（core/src/sync 与 crates/server）、加或改 CLI 命令、改任务 / 日记 / 记账域、加设置项、排查移动端浮层与手势问题、跑测试、构建打包发版（release.ps1 / release.sh / GitHub Actions）、打 tag、推送远程、以及遇到 Windows / Linux / Android 的环境坑位（Git Bash 里 cargo 报 link: extra operand、pwsh 5.1 编码、裸 cargo 出白屏制品、gradle/NDK、单实例标识撞车）。采用渐进披露：本文件常驻（架构精简版 + 全部铁律 + 路由表 + references 索引），细节按需读 references/ 下的 11 份专题文件 + history/ 下 7 份版本档案（共 18 份 md）。注意：本 skill 是**开发本项目**用的；要用 KXToDo 的 CLI 记录待办 / 日记 / 账目，那是另一个 skill（`kxtodo`）。
+description: 开发 / 修改 / 调试 / 重构 KXToDo（Todo Note）项目本身时**必须先加载本 skill**。KXToDo 是一款本地优先的「待办 + 日记 + 记账」三端应用：Rust + Tauri 2（桌面壳与后端）、Svelte 4 + TypeScript + Vite（前端）、CodeMirror 6（编辑器）、marked + DOMPurify + highlight.js（渲染），同一份 kxtodo-core 跑在 Windows（exe）/ Linux（AppImage）/ Android（APK）三端。只要在本仓库动任何代码就用它：改前端 Svelte 组件或全局 CSS、改 Rust core（model / repo / ops_*）或 src-tauri 壳、改数据同步（core/src/sync 与 crates/server）、加或改 CLI 命令、改任务 / 日记 / 记账域、加设置项、排查移动端浮层与手势问题、跑测试、构建打包发版（release.ps1 / release.sh / GitHub Actions）、打 tag、推送远程、以及遇到 Windows / Linux / Android 的环境坑位（Git Bash 里 cargo 报 link: extra operand、pwsh 5.1 编码、裸 cargo 出白屏制品、gradle/NDK、单实例标识撞车）。采用渐进披露：本文件常驻（架构精简版 + 全部铁律 + 路由表 + references 索引），细节按需读 references/ 下的 11 份专题文件 + history/ 下 8 份版本档案（共 19 份 md）。注意：本 skill 是**开发本项目**用的；要用 KXToDo 的 CLI 记录待办 / 日记 / 账目，那是另一个 skill（`kxtodo`）。
 ---
 
 # 开发 KXToDo
@@ -9,7 +9,7 @@ description: 开发 / 修改 / 调试 / 重构 KXToDo（Todo Note）项目本身
 ## 0. 怎么用这份 skill（渐进披露）
 
 - **本文件常驻**：项目概览、架构精简版、**全部铁律**、路由表（要做什么 → 动哪里）、references 索引、自我迭代条款、最短构建路径。
-- **细节按需读**：`references/` 下 11 份专题文件 + `references/history/` 下 7 份版本档案（见第 5 节的索引表）。动手前按路由表最后一列的指引去读对应文件；拿不准某条约束为什么存在，读 `references/invariants.md`。
+- **细节按需读**：`references/` 下 11 份专题文件 + `references/history/` 下 8 份版本档案（见第 5 节的索引表）。动手前按路由表最后一列的指引去读对应文件；拿不准某条约束为什么存在，读 `references/invariants.md`。
 - **版本流水账在 `references/history/`**：本文件**不**堆「vX.Y 改了什么」，那是 history 的职责。
 
 ## 1. 项目是什么
@@ -64,6 +64,7 @@ kxtodo.exe (GUI)                    kxtodo-cli (CLI)
 - **纯 UI 写命令不进 audit 台账**（`repo.rs::UI_ONLY_COMMANDS` 六个：`gui.select-node`/`set-collapsed`/`set-item-ui`/`set-items-ui`/`set-diary-ui`/`set-schedule-ui`）——点一下树节点就写一行审计，台账会被 UI 噪音灌满；**新加纯 UI 命令要进这个白名单**。
 - **备份是五个领域文件全量**（`repo.rs::backup_locked`）；恢复靠手工从 `backups/` 拷回覆盖，**没有自动恢复命令**（`restore` 与 LWW 语义冲突，明确不做）。
 - **`core_snapshot` 可按域过滤**（前端 `refreshFromCore` 只拉脏域）：新加领域文件必须把它加进 `lib.rs::core_snapshot` 的 `wanted()` 名单与 `put_snapshot_domain` 调用，否则前端永远拉不到它；前端 `applySnapshot` 各分支带 `!== undefined` 守卫，缺的域不能被当成空。
+- **写命令回来后必须记信封 revision**（`actions.ts`：`noteEnvelopeRevision(envelope.meta)`）：写命令的信封带 `meta.revisionDomain`/`revision`，记下水位后 `applySnapshot` 才能按域判断「这份快照我已经有过了」并跳过 `set`。漏记的症状是**一次写入让 store 换两次身份**（乐观更新一遍、随后的域事件又应用一遍快照）→ 所有 `$:` 重算、图表出场动画重启（v0.8.2 的饼图掉帧与「日历→统计闪一下」就是这个）。`gui.*` 命令一律不发域事件，不用记；带 `expectedUpdatedAt` 冲突检测的写命令（`task.modify` 这类）**刻意不记**，否则自己的下一次写入会被误判成冲突。
 - **图片入库有 5MB 体积闸**（`lib.rs::shrink_oversized_image`）：超限才动手（JPEG 长边 2560/质量 90、PNG 长边 4096 保无损）；**GIF/WebP 一律不动**（可能是动图）；解码/编码失败或没变小一律原样保留——**压缩永远不许弄丢或弄坏用户的图**。
 
 ### 3.2 跨平台铁律（三条）
@@ -123,18 +124,26 @@ $: backGuard(open, onClose);
 
 配套：`{#await import(...)}` 一律配 `{:catch}`（懒加载失败不能让用户「点开什么都没有也退不出去」）；不占历史栈的覆盖层还要注册 `addBackInterceptor`（`createBackGuard` 就是它的封装），否则安卓返回键会把底下的页面弹掉而浮层留在原地。
 
+**多层浮层要逐级退，一层一记返回**（v0.8.2）：`AccountManager` 是三层（账户类型小表单 → 账户表单/转账 → 列表 → 关），拦截器里就按这个顺序判；还要区分「从列表点进去的」与**直达表单**的（`startedOutsideList`）——从资产页点「添加」直接落在表单上时，返回该把整层关掉，而不是退到一个用户从没见过的列表面板。
+
+**懒加载的浮层要加 store 级兜底 guard**（`platform.ts::startMobileRouter` 里对 `taskEmojiPicker` 就是这么做的）：组件挂载后自己的 `createBackGuard` 才注册，chunk 在途的那段窗口（首开、冷缓存）按返回键会直接把底下的整页弹掉。两层不冲突——组件的 guard 注册得更晚，按「后注册的先问」它先被问到。
+
+**测返回键一律走 `window.kxtodoBackHandler()`**：安卓硬件返回键的真实链路是 MainActivity 的 `OnBackPressedCallback` → evaluateJavascript 调这个函数 → 返回 true 就吃掉、false 才让 WebView 退历史/finish。测试里直接 `page.goBack()` 量的是**历史栈**，压根问不到浮层拦截器（`scripts/v082-fixes-test.mjs` 的 `pressBack()` 是现成写法）。同理，左上角返回箭头 `goBackLevel()` 也必须先 `consumeBackInterceptors()` 再 `history.back()`。
+
 ### 3.9 测试与一致性地基（v0.8.0 起）
 
 - **前端单测 `npm run test:unit`**（vitest 5，node 环境，独立 `vitest.config.ts`——刻意不复用 vite.config.ts）；**断言必须时区无关**（CI 的 ubuntu 是 UTC、开发机是 UTC+8，一律用 `todayDate()`/`shiftDays()` 相对构造）。地基在 `references/frontend.md`。
 - **跨语言的同口径数字要有测试钉住**：日粒度门槛 62（core `DAY_GRAIN_MAX_DAYS` ↔ `ledger.ts::bucketOf`）、图标目录（`tests/ledger_icons.rs`）、金额解析（`parse_cents` ↔ `parseYuanToCents`）。手法是 `include_str!` 前端 TS 源码直接比对——**只写注释说「两边要一致」一定会漂**。
+- **core 加字段，前端 `normalize*` 必须同步加**（`defaults.ts` 的 `normalizeTask`/`normalizeNode`/`normalizeSettings` 是逐字段白名单）：漏一个就等于「每次快照刷新都把用户的值抹掉」。`dueTime` 漏了两个大版本才被发现——它只在「设过时刻 + 触发过一次快照刷新」时才现形（症状是日期浮层的「精确到分钟」勾选框勾不上、勾上又弹回来）。
 - **改 `skills/kxtodo/SKILL.md` 必须重跑 `kxtodo-cli skills validate`**：`cmd_validate` 的正则会把任何 `task|diary|schedule|config|skills` 后跟的小写英文词当命令名、任何 `--xxx` 当参数名去比对目录，文档里写一个不存在的子命令或参数会直接挂测试。
 
-### 3.10 首帧与响应（v0.8.1）
+### 3.10 首帧与响应（v0.8.1–v0.8.2）
 
-两条硬优先级，排在「省资源」前面：
+三条硬优先级，排在「省资源」前面：
 
-- **首帧不许闪**：一切首帧可见的东西都要进 `localStorage` 的外观/资料缓存（**外观缓存收整个 `appearance`**，别只白名单数字字段——冷启动「先单列再跳双列」就是这么来的）；缓存写入失败要**退一步保住能保的**（头像撑爆配额时仍然写名字与邮箱）。水合是异步的，首帧只能用缓存。
-- **点击不许顿**：`setConfig` **先本地生效、再落盘**；展开一张长卡片的完整渲染**双 rAF 之后再算**（`deferredMarkdown.ts`，单 rAF 仍在当帧绘制前触发）；懒加载组件要预取 + 有失败路径。任何「为了省资源而让点击变慢」的改动都不成立。
+- **首帧不许闪**：一切首帧可见的东西都要进 `localStorage` 缓存——**四件套**：`appearance`（整个对象，别只白名单数字字段——冷启动「先单列再跳双列」就是这么来的）/ `profile`（写失败要**退一步保住能保的**：头像撑爆配额时仍然写名字与邮箱）/ **`features`**（v0.8.2 补：状态缓存让卡片第一帧就画出来，开关若还是默认值，临期底色与链接样式都会「先按默认画一遍再改回来」）/ **`state`**（节点树 + 任务 + 选中节点 + 背景；防抖 800ms、剥 scheduler、超配额三档降级、`visibilitychange`/`pagehide` flush、`isHydrated` 门控 + 水合完成补写一次）。另有头像缩略图缓存（160px，同步种子）。**所有缓存写入一律先 stringify 比对，值不变一个字节都不写**——同步 `setItem` 是同步磁盘 I/O，落在动画帧里就是掉帧。水合是异步的，首帧只能用缓存。
+- **点击不许顿**：`setConfig` **先本地生效、再落盘**；展开长卡片走**两阶段渲染**（`renderMarkdownFast` 同步上屏：跳过 hljs、公式摆回转义源码；双 rAF 后完整版升级，两版逐字节相同就跳过第二次 `apply`）——**短文档（< 1000 字）一条老路走到底，不为长文档付代价**；懒加载组件要预取 + 有失败路径。任何「为了省资源而让点击变慢」的改动都不成立。
+- **命令式 DOM 增强必须可逆**（v0.8.2）：渲染之后对 DOM 做的破坏性增强（换节点、覆写文字）要留退路（`linkPreview.ts` 用两张 WeakMap 存原节点与原文），并且**落地前重读当前设置**（抓取在途时用户可能已经拨了档）。理由是 markdown 有记忆化：设置变了也不会重渲，靠「等下次重渲纠正」等于永远不纠正。同理，**首帧不许拿默认设置做不可逆的 DOM 决定**——这也是开关必须进首帧缓存的原因。
 
 ### 3.11 还有一大批（去 invariants.md 查）
 
@@ -157,7 +166,7 @@ $: backGuard(open, onClose);
 | 改记账 | 数据与命令：`model.rs`（LedgerFile/LedgerEntry/LedgerAccount/LedgerCategory/LedgerSettings + `seed_defaults` 确定性种子）+ `repo.rs`（Domain::Ledger / load_ledger（缺文件内存种子）/ write_ledger（首写落种子）/ ensure_initialized）+ `ops_ledger.rs`（ledger.add/get/list/modify/remove/transfer/accounts/accountAdd…/categories/categoryAdd…/stats/balance/export/import）+ `ledger_archive.rs`（xlsx 四表 zip 打包与解析）+ `ops_config.rs` 的 `ledger.*` 五个路径 + `cli.rs` 的 Ledger 子命令树（kebab 名）+ `schema.rs` risk_for + `src-tauri/src/lib.rs` 的 `ledger_export_zip`/`ledger_import_zip`（**两个 invoke_handler 都要注册**）；同步：`merge.rs`（Scopes 五 bool / ledger 三种 kind 的 stamp·payload·apply·normalize / settings 共享子集 ledger 块）+ `engine.rs` 五处 + `ops_sync.rs` 与 `cli.rs` 的 `--sync-diary/--sync-ledger`；前端：`ledger.ts`（按天/热力/统计/余额纯逻辑）+ `ledgerIcons.ts`（lucide 白名单与账户类型默认图标）→ `stores.ledgerData` → `LedgerView.svelte`（四视图 + 齿轮 + 段控 + FAB）→ `ledger/LedgerRow|LedgerList|LedgerCalendar|LedgerStats|LedgerAssets|LedgerEditor|LedgerEntryMenu|CategoryManager|AccountManager.svelte` → `actions.ts` 的 ledger 包装 → `ledger.css` + mobile.css 的 `.view-ledger` | `references/ledger.md` + `references/history/v0.7.0-v0.7.4.md` + `references/history/v0.7.5-v0.7.8.md` |
 | 加一类**要同步的**实体 | 日记（kind `diary`）是现成样板：`model.rs` 新领域文件结构 + 自己的 SCHEMA_VERSION → `repo.rs`（Domain 变体 + layout 路径 + load_/write_ + `ensure_initialized` 里补一条）→ `merge.rs`（payload 剥本机 UI 态 / extract / `*_entity_stamp` / `apply_*_record` **连删除分支一起** / `normalize_*_orders`）→ `engine.rs` **五处**（拉取分桶、合并事务、对账水位 match、全新设备推送抑制、`resolve_conflict`）→ `host.rs` 的 `emit_domain_event` match（新 Domain 变体不补会直接编不过）→ `core.rs` 与 `cli.rs` 的 schemaVersions → `lib.rs` 的 `core_snapshot`（**`wanted()` 名单与 `put_snapshot_domain` 调用都要加**，它按域过滤）→ 前端 `CoreSnapshot`/`applySnapshot`/`normalize*`/`commit*`。**server 一行都不用改**（entities 表没有 kind 列，kind 只在密文里）。搭现有 scope 的车（日记跟「同步数据」）就不用动 `Scopes`/scopeSignature/三勾选框/CLI 范围参数 | `references/sync.md` + `references/architecture.md` |
 | 改外观 | 全局 CSS 文件按区域找；配色变量在 base.css；菜单样式统一在 menu.css | `references/frontend.md`（CSS 全部）+ `references/invariants.md`（CSS 铁律） |
-| 改超链接增强（标题 / 预览卡片） | 抓取与解析在 `crates/core/src/linkmeta.rs`（命令 `gui.link-meta`，缓存 `runtime/linkmeta.json`——**改了元数据字段就把 `CACHE_VERSION` 抬一格**，否则老缓存命中不到新字段）；渲染在 `src/lib/linkPreview.ts`（由 `markdownControls.ts::markdownWire` 驱动）+ `markdown-ext.css` 的 `.kx-link-card`；设置项 `features.linkRender`（**三档单选** `off|title|card`，默认 card；设置页三个 radio）走 model.rs/ops_config/defaults.ts/types.ts/SettingsDrawer | `references/ui-patterns.md`（markdown 扩展渲染）+ `references/history/v0.7.5-v0.7.8.md`（v0.7.7 ⑧ / v0.7.8 ⑦） |
+| 改超链接增强（标题 / 预览卡片） | 抓取与解析在 `crates/core/src/linkmeta.rs`（命令 `gui.link-meta`，缓存 `runtime/linkmeta.json`——**改了元数据字段就把 `CACHE_VERSION` 抬一格**，否则老缓存命中不到新字段）；渲染在 `src/lib/linkPreview.ts`（由 `markdownControls.ts::markdownWire` 驱动；**增强是可逆的**——`revertUnwanted` + `cardOriginalAnchor`/`titleOriginalText` 两张 WeakMap，改这块别把退路弄断，否则「设置拨了档、画面不动」，因为 markdown 有记忆化根本不会重渲）+ `markdown-ext.css` 的 `.kx-link-card`；设置项 `features.linkRender`（**三档单选** `off|title|card`，默认 card；设置页三个 radio）走 model.rs/ops_config/defaults.ts/types.ts/SettingsDrawer | `references/ui-patterns.md`（markdown 扩展渲染）+ `references/history/v0.7.5-v0.7.8.md`（v0.7.7 ⑧ / v0.7.8 ⑦） |
 | 加浮层 / 弹层 / 全屏查看 | `platform.ts::createBackGuard`（**挂载式必须 `onDestroy(dispose)`**，见 3.8）+ 安全区避让 | 本文件 3.8 + `references/ui-patterns.md` |
 | 改日历 / 周起始 / 日期选择器 | `stores.ts` 的 `weekStart` 派生 store（**唯一来源**）+ `diary.ts::leadingBlanks`/`calendarWeekdayHeaders` + `ledger.ts::ledgerCalendarCells`/`weekStartOf`；设置项 `features.weekStart` | 本文件 3.10 + `references/frontend.md` |
 | 改临期高亮 / 任务日期展示 | 纯逻辑 `src/lib/dueHighlight.ts`（有单测）+ `TaskCard.svelte` 的 `due-soon` 类 + `workspace.css`；配色按页存在 `appearance.dueColors[nodeId]`，入口在列表三点菜单「临期高亮色」 | `references/frontend.md` |
@@ -184,7 +193,7 @@ $: backGuard(open, onClose);
 | `references/pitfalls-linux.md` | Linux 坑位 6 条（apt 依赖清单与 release.sh 门控含 libxdo 例外、**裸 cargo 构建出 dev 模式制品导致整窗白屏**、托盘依赖 appindicator 宿主、AppImage 需要 FUSE、cargo 直接可用、WSLg XWayland 丢光标与 AppImage 强制 x11） | 在 Linux/WSL 上构建或运行；Linux 制品白屏；托盘不出现；AppImage 跑不起来；光标消失；改 `release.sh` 的依赖门控 |
 | `references/pitfalls-android.md` | Android 20 条（gen/android 的所有权、返回键、Kotlin 桥、dialog 的 content:// URI、触摸长按语义、**坐标与 uiScale**、**模块循环 TDZ 白屏**、用 Playwright 模拟移动端、签名与升级、APK 产物策略、图标同步、通知、能力门控优先于 isMobile、**`isMobile` 是 writable store**、夹行三件套、ContextMenu 限高、**transform 缩放影响一切 rect**、首屏量尺寸全是 0、软键盘两连击、菜单限高不能顶到视口顶部） | 构建 APK；改 `src-tauri/gen/android/`；写 Kotlin 桥；改移动端手势/浮层/菜单/测量逻辑；没有真机要验证移动端 UX；签名或升级链出问题 |
 | `references/history/README.md` | history 目录的定位与用法 | 想知道「这个目录是什么、该往哪写」 |
-| `references/history/v0.4.md`<br>`v0.5.md`<br>`v0.6.md`<br>`v0.7.0-v0.7.4.md`<br>`v0.7.5-v0.7.8.md`<br>`v0.8.md`<br>`v0.8.1.md` | 按版本归档的**改动索引**（原文粗体小标题 → 现在住在哪），v0.7 那两份还带**逐版流水账全文**（v0.7.3 打磨 ①–⑦、v0.7.4 界面改写 ①–⑩、v0.7.5 ①–⑪、v0.7.6 ①–⑬、v0.7.7 ①–⑧、v0.7.8 ①–⑪，合计 43 条）；`v0.8.md` 是 v0.8.0（**正确性 + 性能 + 卫生版，无新功能**）的七个批次全档 + vitest 挖出的 6 个正确性问题 + **明确决定不做的事清单** + perf-bench 实测数字；`v0.8.1.md` 是 v0.8.0 的回归修复（八个可感问题 + 返回键失灵 + 资料同步不回来）与八项新需求，含 CLI review 十条的逐条处理 | 追溯「这一版为什么这么改」「某个方案试过又被推翻的经过」「某个方案为什么明确不做」；**改记账界面之前必读 v0.7 那两份**（很多当前界面细节只在那里）；改渲染/性能/CLI 分页/图片入库前读 v0.8.md 对应批次 |
+| `references/history/v0.4.md`<br>`v0.5.md`<br>`v0.6.md`<br>`v0.7.0-v0.7.4.md`<br>`v0.7.5-v0.7.8.md`<br>`v0.8.md`<br>`v0.8.1.md`<br>`v0.8.2.md` | 按版本归档的**改动索引**（原文粗体小标题 → 现在住在哪），v0.7 那两份还带**逐版流水账全文**（v0.7.3 打磨 ①–⑦、v0.7.4 界面改写 ①–⑩、v0.7.5 ①–⑪、v0.7.6 ①–⑬、v0.7.7 ①–⑧、v0.7.8 ①–⑪，合计 43 条）；`v0.8.md` 是 v0.8.0（**正确性 + 性能 + 卫生版，无新功能**）的七个批次全档 + vitest 挖出的 6 个正确性问题 + **明确决定不做的事清单** + perf-bench 实测数字；`v0.8.1.md` 是 v0.8.0 的回归修复（八个可感问题 + 返回键失灵 + 资料同步不回来）与八项新需求，含 CLI review 十条的逐条处理；`v0.8.2.md` 是 v0.8.1 的收尾（**零新需求**：十二条回归 + 顺手挖出的七条 + 编辑器与任务项渲染口径 + 五条新铁律） | 追溯「这一版为什么这么改」「某个方案试过又被推翻的经过」「某个方案为什么明确不做」；**改记账界面之前必读 v0.7 那两份**（很多当前界面细节只在那里）；改渲染/性能/CLI 分页/图片入库前读 v0.8.md 对应批次；改首帧缓存/两阶段渲染/返回键层级/超链接增强前读 v0.8.2.md |
 
 **几条最常用的组合**：
 

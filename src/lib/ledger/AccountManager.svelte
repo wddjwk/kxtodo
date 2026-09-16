@@ -91,6 +91,9 @@
   } else if (startWithAdd) {
     beginAdd();
   }
+  /** 打开时直接落在表单/转账面板（资产视图的添加/编辑/转账入口）：用户没见过列表面板，
+   *  返回就该直接关掉浮层回到他来时的页面，而不是先退到一个「陌生的账户列表」再关。 */
+  const startedOutsideList = panel !== "list";
 
   function beginAdd(): void {
     editingId = "";
@@ -135,11 +138,18 @@
   }
 
   onMount(() =>
-    // 安卓返回键：表单/转账面板先退回列表，列表态才关浮层——否则返回会把底下的页面
-    // 弹掉而浮层留在原地（与桌面 Esc 的两段式同一口径）
+    // 安卓返回键逐级退：类型小表单 → 账户表单/转账 → 列表 → 关浮层。
+    // 早先漏了 typeFormOpen 这一级（从类型表单返回会连账户表单一起跳过），
+    // 也没有「直达表单」的语义（从资产页点添加进来的，返回却退到一个用户
+    // 从没见过的列表面板——「返回到奇怪的位置」正是这个）。
     addBackInterceptor(() => {
+      if (typeFormOpen) {
+        typeFormOpen = false;
+        return true;
+      }
       if (panel !== "list") {
-        backToList();
+        if (startedOutsideList) onClose();
+        else backToList();
         return true;
       }
       onClose();

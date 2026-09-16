@@ -329,3 +329,51 @@ fn nav_items_and_layout_are_validated_and_local() {
         json!(["my-day", "planned", "important", "diary", "ledger", "scheduled", "toolbox"])
     );
 }
+
+#[test]
+fn due_colors_whole_map_write() {
+    let env = TestEnv::fresh();
+    // GUI 是整份写入（不带 --map-key）：v0.8.1 把 dueColors 误标成 is_map，
+    // 走进了 uiColors 那条「--map-key + 单个颜色」的分支，GUI 改配色永远报
+    // MAP_KEY_REQUIRED（--map-key 是 CLI 概念，GUI 用户无从下手）。
+    env.ok(&[
+        "config",
+        "set",
+        "appearance.dueColors",
+        "{\"entry-abc\":[\"#d93025\",\"#eab308\",\"#3b82f6\"]}",
+    ]);
+    let got = env.ok(&["config", "get", "appearance.dueColors"]);
+    assert_eq!(
+        got["value"]["entry-abc"],
+        json!(["#d93025", "#eab308", "#3b82f6"])
+    );
+    // 共享子集：写 dueColors 要刷新设置的 LWW 时间戳（多端同步靠它）
+    assert!(kxtodo_core::ops_config::is_shared_settings_path("appearance.dueColors"));
+    // 校验：三色不齐 / 非法色值都拒绝
+    env.err(
+        &["config", "set", "appearance.dueColors", "{\"e\":[\"#d93025\"]}"],
+        2,
+    );
+    env.err(
+        &[
+            "config",
+            "set",
+            "appearance.dueColors",
+            "{\"e\":[\"red\",\"#eab308\",\"#3b82f6\"]}",
+        ],
+        2,
+    );
+    // 非 map 字段带 --map-key：明确拒绝而不是静默忽略
+    env.err(
+        &[
+            "config",
+            "set",
+            "appearance.dueColors",
+            "#ffffff",
+            "--map-key",
+            "entry-abc",
+        ],
+        2,
+    );
+}
+

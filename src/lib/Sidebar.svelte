@@ -24,7 +24,7 @@
   import ContextMenu from "./menu/ContextMenu.svelte";
   import MenuItem from "./menu/MenuItem.svelte";
   import MenuSeparator from "./menu/MenuSeparator.svelte";
-  import { isMobile, mobileView, showMobileContent, showMobileDiary, showMobileLedger, showMobileToolbox } from "./platform";
+  import { isMobile, mobileView, showMobileContent, showMobileDiary, showMobileLedger, showMobileToolbox, createBackGuard } from "./platform";
   import { caps } from "./capabilities";
   import type { NavItemId } from "./nav";
   import { longpress, isLongPressSuppressed } from "./longpress";
@@ -45,6 +45,11 @@
   $: treeMenuNode = treeMenu ? $appState.nodes.find((n) => n.id === treeMenu?.id) : null;
   $: treeMoveTargets = treeMenuNode ? moveTargetOptions(treeMenuNode.id, $appState.nodes) : [];
   $: selectedIconPickerList = iconPickerListId ? $appState.nodes.find((n) => n.id === iconPickerListId) : null;
+  // 图标选择器是懒加载的：chunk 在途的窗口里组件还没挂载、它自己的 guard 也没注册，
+  // 返回键这一下会把底下的页面弹掉。按本地标志先守一层（组件挂载后它的 guard
+  // 注册得更晚、先被问到，两层不冲突）。
+  const iconPickerGuard = createBackGuard();
+  $: iconPickerGuard(iconPickerListId !== null, () => (iconPickerListId = null));
   $: resolvedAvatar = resolveAvatarSrc($appSettings.profile.avatar, $avatarCache);
   $: avStyle = avatarStyle(resolvedAvatar);
   $: avInitial = avatarInitial($appSettings.profile.displayName);

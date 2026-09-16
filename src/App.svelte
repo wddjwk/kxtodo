@@ -9,11 +9,12 @@
     isHydrated, diaryOpen, diaryEditor, editorDraftNode, ledgerOpen, ledgerEditor, ledgerData, toolboxOpen,
     hydrate as hydrateStores
   } from "./lib/stores";
-  import { replaceTaskEmojis, selectNode as selectNodeAction, syncNow as syncNowAction } from "./lib/actions";
+  import { replaceTaskEmojis, selectNode as selectNodeAction, setConfig, syncNow as syncNowAction } from "./lib/actions";
   import { isMobile, mobileView, startMobileRouter } from "./lib/platform";
   import { imeViewport, startImeViewport } from "./lib/imeViewport";
   import { startAutoSync } from "./lib/syncRunner";
   import { revealMainWindow } from "./lib/backend";
+  import { oversizedAvatarShrink } from "./lib/images";
   import { checkForUpdate } from "./lib/updater";
   import TitleBar from "./lib/TitleBar.svelte";
   import Toast from "./lib/Toast.svelte";
@@ -56,7 +57,14 @@
     // 移动端输入法跟随：键盘弹起时把 shell 收到键盘之上，页面不再被浏览器顶上去
     const stopImeViewport = get(isMobile) ? startImeViewport() : () => {};
     // 调度引擎在 Rust Background Host 中运行，前端不再持有调度循环。
-    void hydrateStores();
+    void hydrateStores().then(() => {
+      // 旧安装的大头像一次性收缩（v0.8.1 之前移动端上传的没有压缩闸）：几 MB 的
+      // dataURL 撑爆首帧资料缓存、拖大每轮同步——压到与新上传同口径（256px）再写回。
+      const shrunk = oversizedAvatarShrink($appSettings.profile.avatar);
+      void shrunk.then((avatar) => {
+        if (avatar) void setConfig("profile.avatar", avatar);
+      });
+    });
     void revealMainWindow();
     // 自动同步循环（全平台：配对后按 intervalSeconds 周期 pull+push）
     startAutoSync();

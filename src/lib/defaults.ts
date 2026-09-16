@@ -351,6 +351,7 @@ function normalizeNode(raw: unknown): AppNode | null {
             : "未命名条目",
     icon: typeof source.icon === "string" ? source.icon : kind === "category" ? "folder" : "notebook",
     parentId: typeof source.parentId === "string" || source.parentId === null ? source.parentId : typeof source.parent === "string" ? source.parent : null,
+    order: typeof source.order === "number" && Number.isFinite(source.order) ? source.order : undefined,
     collapsed: Boolean(source.collapsed),
     cardStyle: source.cardStyle === "card" ? "card" : undefined,
     createdAt: typeof source.createdAt === "string" ? source.createdAt : now()
@@ -382,6 +383,7 @@ const TAG_COLORS: TagColor[] = [
   "cyan",
   "blue",
   "purple",
+  "pink",
   "gray",
   "custom"
 ];
@@ -442,12 +444,17 @@ function normalizeTask(raw: unknown, fallbackNodeId: string): Task | null {
   return {
     id: typeof source.id === "string" && source.id ? source.id : createId("task"),
     nodeId: typeof source.nodeId === "string" ? source.nodeId : typeof source.listId === "string" ? source.listId : fallbackNodeId,
+    order: typeof source.order === "number" && Number.isFinite(source.order) ? source.order : undefined,
     markdown,
     completed: Boolean(source.completed),
     important: Boolean(source.important),
     myDay: Boolean(source.myDay),
     plannedDate: typeof source.plannedDate === "string" ? source.plannedDate : undefined,
     dueDate: typeof source.dueDate === "string" ? source.dueDate : undefined,
+    // **dueTime 曾经被这里漏掉**：任务时刻（v0.7.3 起）写进了 core，但任何一次快照
+    // 刷新（normalizeState）都会把它从前端状态里抹掉——卡片上的时刻显示不出来、
+    // 「精确到分钟」勾选框勾上又弹回。normalize 的字段清单必须与 Task 类型对齐。
+    dueTime: typeof source.dueTime === "string" && source.dueTime ? source.dueTime : undefined,
     completedAt: typeof source.completedAt === "string" ? source.completedAt : source.completed ? (typeof source.updatedAt === "string" ? source.updatedAt : now()) : undefined,
     tags: normalizeTags(source.tags),
     emojis: normalizeEmojis(source.emojis, source.emoji),
@@ -1265,12 +1272,64 @@ export function cachedAppearance(): Partial<Settings["appearance"]> {
   }
 }
 
+/** 上一次真正写进 localStorage 的序列化结果：值没变就跳过 setItem——
+ *  同步存储写入是**同步磁盘 I/O**，设置 store 每换一次对象身份就写一遍（哪怕内容
+ *  一模一样）纯属浪费，还会在动画帧中间插进来一脚（安卓上几毫秒到几十毫秒）。 */
+let lastAppearanceJson: string | null = null;
+
 export function writeAppearanceCache(appearance: Settings["appearance"]): void {
   if (typeof localStorage === "undefined") return;
+  const json = JSON.stringify(appearance);
+  if (json === lastAppearanceJson) return;
+  lastAppearanceJson = json;
   try {
-    localStorage.setItem(APPEARANCE_CACHE_KEY, JSON.stringify(appearance));
+    localStorage.setItem(APPEARANCE_CACHE_KEY, json);
   } catch {
     // 写不进（隐私模式等）就算了，最坏退回首帧跳变
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 特性开关缓存（首帧不闪「先按默认档画一遍再改回来」）
+// ---------------------------------------------------------------------------
+
+const FEATURES_CACHE_KEY = "kxtodo-features-cache";
+/** 上一次真正写进 localStorage 的序列化结果：值没变就跳过 setItem（理由同 writeAppearanceCache） */
+let lastFeaturesJson: string | null = null;
+
+/**
+ * 外观缓存解决了「缩放/字号/导航排布」的首帧跳变，但**特性开关**同样参与首帧渲染：
+ * 状态缓存让任务列表在第一帧就画出来（见 `cachedState`），于是 `dueHighlight`
+ * 决定卡片底色、`linkRender` 决定正文里的链接长什么样。开关没缓存时第一帧一律按
+ * 默认值画，设置到了再改——用户看到的是「先闪一下再变成我设的样子」。
+ *
+ * 开关全是布尔与短枚举，没有大字段也没有密钥，整份缓存不存在配额与泄露问题。
+ * 读回来照样过 normalizeSettings：缓存可能是旧版本写的或被人手改过。
+ */
+export function cachedFeatures(): Settings["features"] {
+  // 开关是一层扁平的布尔与短枚举，浅拷贝就是全拷贝（不许把 defaultSettings 的对象直接交出去）
+  const fallback = (): Settings["features"] => ({ ...defaultSettings.features });
+  if (typeof localStorage === "undefined") return fallback();
+  try {
+    const raw = localStorage.getItem(FEATURES_CACHE_KEY);
+    if (!raw) return fallback();
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return fallback();
+    return normalizeSettings({ features: parsed as Partial<Settings["features"]> }).features;
+  } catch {
+    return fallback();
+  }
+}
+
+export function writeFeaturesCache(features: Settings["features"]): void {
+  if (typeof localStorage === "undefined") return;
+  const json = JSON.stringify(features);
+  if (json === lastFeaturesJson) return;
+  lastFeaturesJson = json;
+  try {
+    localStorage.setItem(FEATURES_CACHE_KEY, json);
+  } catch {
+    // 写不进就算了，最坏退回首帧闪一下
   }
 }
 
@@ -1280,6 +1339,8 @@ export function writeAppearanceCache(appearance: Settings["appearance"]): void {
 
 const PROFILE_CACHE_KEY = "kxtodo-profile-cache";
 const CACHED_PROFILE_KEYS = ["displayName", "email", "avatar"] as const;
+/** 上一次写缓存时的输入（值没变就跳过，理由同 writeAppearanceCache） */
+let lastProfile = { displayName: "\u0000", email: "\u0000", avatar: "\u0000" };
 
 /** 水合前侧栏只能按默认资料渲染一帧（Example User + 默认头像），设置到了再跳——
  * 与外观缓存同一条思路：上一次退出时的资料存 localStorage，初始 store 直接用它。 */
@@ -1310,6 +1371,16 @@ export function cachedProfile(): Partial<Settings["profile"]> {
  */
 export function writeProfileCache(profile: Settings["profile"]): void {
   if (typeof localStorage === "undefined") return;
+  // 值没变就一个字节都不写：头像可能是大 dataURL，反复 stringify + setItem 是
+  // 同步 I/O，落在动画帧里就是掉帧（理由同 writeAppearanceCache）。
+  if (
+    lastProfile.displayName === profile.displayName &&
+    lastProfile.email === profile.email &&
+    lastProfile.avatar === profile.avatar
+  ) {
+    return;
+  }
+  lastProfile = { displayName: profile.displayName, email: profile.email, avatar: profile.avatar };
   const put = (avatar: string): boolean => {
     try {
       localStorage.setItem(
@@ -1323,4 +1394,58 @@ export function writeProfileCache(profile: Settings["profile"]): void {
   };
   if (put(profile.avatar)) return;
   put("");
+}
+
+// ---------------------------------------------------------------------------
+// 首帧状态缓存（节点树 + 任务 + 选中节点 + 背景）
+// ---------------------------------------------------------------------------
+
+const STATE_CACHE_KEY = "kxtodo-state-cache-v1";
+/** 超过这个规模就不做全量尝试，直接从降级档开始（省一次注定失败的同步 setItem）。 */
+const STATE_CACHE_FULL_LIMIT = 4_500_000;
+
+/**
+ * 冷启动第一帧的完整界面。
+ *
+ * 水合（core 读盘 + IPC + normalize）是异步的，此前 appState 只能按 emptyState 渲染——
+ * 侧栏先是一棵只有「收集箱」的树、工作区先是一个空列表，数据到了再整页跳变。
+ * 安卓上 WebView 被系统回收后「重新解锁亮屏」也是一次冷启动，同样闪。用户的要求是
+ * 一步到位：上次退出时的界面状态整个缓存下来，初始 store 直接用它，水合到了再对账
+ * （绝大多数时候两边一字不差，界面纹丝不动）。
+ *
+ * 缓存里**不含 scheduler**（运行时状态，冷启动本来就要重新拉）。
+ */
+export function cachedState(): AppState | null {
+  if (typeof localStorage === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(STATE_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    return normalizeState(parsed);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 写首帧缓存。配额不够时逐级降级：**先丢已完成任务**（首帧列表本来默认就折叠它们），
+ * 再不行只留节点树与选中节点（至少侧栏与标题不闪）——每一档都比整条放弃强。
+ */
+export function writeStateCache(state: AppState): boolean {
+  if (typeof localStorage === "undefined") return false;
+  const { scheduler: _scheduler, ...rest } = state;
+  const put = (json: string): boolean => {
+    if (json.length > STATE_CACHE_FULL_LIMIT) return false;
+    try {
+      localStorage.setItem(STATE_CACHE_KEY, json);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (put(JSON.stringify(rest))) return true;
+  const withoutCompleted = { ...rest, tasks: rest.tasks.filter((task) => !task.completed) };
+  if (put(JSON.stringify(withoutCompleted))) return true;
+  return put(JSON.stringify({ ...rest, tasks: [] }));
 }

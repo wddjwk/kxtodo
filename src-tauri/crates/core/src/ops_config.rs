@@ -142,7 +142,11 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         path: "appearance.dueColors",
         kind: "object",
         description: "临期高亮配色：{ 节点id: [今天色, 明天色, 后天色] }",
-        is_map: true,
+        // **不是 is_map**：map 分支是给 uiColors 那种「--map-key + 单个颜色」的形态写的，
+        // dueColors 的值是每节点一个三色数组，整份对象一次写入（expect_due_colors 校验）。
+        // 早先误标成 is_map，GUI 写配色永远撞 MAP_KEY_REQUIRED——那条校验的 --map-key
+        // 提示还是给 CLI 用户看的，GUI 用户无从下手。
+        is_map: false,
     },
     FieldMeta {
         path: "appearance.tagPresets",

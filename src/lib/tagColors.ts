@@ -28,6 +28,7 @@ export const TAG_COLOR_SPECS: TagColorSpec[] = [
   { color: "cyan", label: "青", swatch: "#0b7285", background: "#e0f3f6", border: "#b3e0e8", text: "#0b7285" },
   { color: "blue", label: "蓝", swatch: "#1a73e8", background: "#e8f0fe", border: "#c4dafc", text: "#1a73e8" },
   { color: "purple", label: "紫", swatch: "#8430ce", background: "#f3e8fd", border: "#ddc2f5", text: "#8430ce" },
+  { color: "pink", label: "粉", swatch: "#d81b60", background: "#fde8f0", border: "#f3c1d4", text: "#c2185b" },
   { color: "gray", label: "灰", swatch: "#5f6368", background: "#f1f3f4", border: "#dadce0", text: "#5f6368" }
 ];
 

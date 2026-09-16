@@ -1,7 +1,7 @@
 // CodeMirror 6 编辑器装配：Markdown 语法高亮 + 应用主题一致的配色。
 // 独立成模块，便于 MarkdownEditorModal 与未来其他编辑场景复用。
 
-import { EditorState, type Extension } from "@codemirror/state";
+import { EditorState, Prec, type Extension } from "@codemirror/state";
 import {
   EditorView,
   keymap,
@@ -59,6 +59,10 @@ export function createMarkdownEditor(
     dropCursor(),
     EditorState.allowMultipleSelections.of(true),
     syntaxHighlighting(mdHighlight),
+    // 空列表项上的回车（退一级/顶级清标识）必须压过 lang-markdown 自带的
+    // 「回车续列表」——markdown() 在扩展数组里排在前头，它那份 keymap 优先级更高，
+    // 不用 Prec.high 就永远轮不到这条。非空行返回 false，续列表照旧。
+    Prec.high(keymap.of([{ key: "Enter", run: outdentEmptyListItem }])),
     markdown({ base: markdownLanguage, codeLanguages: languages }),
     EditorView.lineWrapping,
     placeholder(handlers.placeholder ?? ""),
@@ -163,14 +167,42 @@ export function indentListItem(view: EditorView, direction: 1 | -1): boolean {
   const state = view.state;
   const range = state.selection.main;
   const first = state.doc.lineAt(range.from).number;
-  const last = state.doc.lineAt(range.to).number;
+  let last = state.doc.lineAt(range.to).number;
+  const caret = range.empty;
+  const isContinuation = (text: string): boolean => !LIST_ITEM_RE.test(text) && /^\s+\S/.test(text);
+  // 光标（无选区）停在一个列表项上时，把它自己的续行一起纳入——松散列表
+  // 「1. 甲 ⏎ 缩进正文」是一个条目，只缩标记行会把条目缩散架。
+  if (caret && LIST_ITEM_RE.test(state.doc.line(first).text)) {
+    while (last < state.doc.lines && isContinuation(state.doc.line(last + 1).text)) last += 1;
+  }
   const changes: Array<{ from: number; to: number; insert: string }> = [];
   let touched = 0;
+  // 光标要落在**最后一个被改的行的行尾**（新文档坐标）：缩进是整行前缀改写，
+  // 早先把光标钉在 changes.last.from（行首），用户缩进完得重新点到行尾才能续写。
+  // 行尾位置 = 原行尾 + 到这一行为止的净位移（前面每行的前缀增删都会挪动它）。
+  let cursorAnchor = -1;
+  let delta = 0;
+  let inItem = false;
   for (let n = first; n <= last; n++) {
     const line = state.doc.line(n);
     const match = LIST_ITEM_RE.exec(line.text);
-    if (!match) continue;
+    if (!match) {
+      // 缩进续行：跟着所属条目一起动；其它行（空行/正文）不打断也不处理
+      if (inItem && isContinuation(line.text)) {
+        const ownIndent = line.text.length - line.text.trimStart().length;
+        const removeLen = direction === 1 ? 0 : Math.min(2, ownIndent);
+        const insert = direction === 1 ? "  " : "";
+        changes.push({ from: line.from, to: line.from + removeLen, insert });
+        delta += insert.length - removeLen;
+        cursorAnchor = line.to + delta;
+        touched += 1;
+      } else if (!isContinuation(line.text)) {
+        inItem = false;
+      }
+      continue;
+    }
     touched += 1;
+    inItem = true;
     const indent = match[1];
     const marker = match[2];
     const ordered = /^\d/.test(marker);
@@ -182,18 +214,50 @@ export function indentListItem(view: EditorView, direction: 1 | -1): boolean {
     const nextMarker = ordered ? marker : bulletFor(nextIndent.length);
     const nextText = nextIndent + nextMarker + match[3] + (match[4] ?? "");
     changes.push({ from: line.from, to: line.from + match[0].length, insert: nextText });
+    delta += nextText.length - match[0].length;
+    cursorAnchor = line.to + delta;
   }
   if (touched === 0) return false;
-  view.dispatch({ changes, selection: { anchor: changes[changes.length - 1].from } });
-  renumberOrderedList(view, view.state.doc.lineAt(range.from).number);
+  // 行号必须在 dispatch **之前**取：反缩进会把文档变短，旧选区位置随之越界
+  const anchorLine = state.doc.lineAt(range.from).number;
+  view.dispatch({ changes, selection: { anchor: cursorAnchor }, scrollIntoView: true });
+  renumberOrderedList(view, anchorLine);
   return true;
 }
 
 /**
- * 把一段连续的有序列表重新编号（同缩进的一段从 1 数起）。
+ * 空列表项上的回车 = 往左退一级（顶级则整个清掉列表标识），**不是**再换一行。
+ * 与主流 markdown 编辑器同口径：连按两次回车就能退出列表。光标留在原行。
+ * 有内容的行返回 false，落回 lang-markdown 自己的「续列表/自增编号」。
+ */
+export function outdentEmptyListItem(view: EditorView): boolean {
+  const state = view.state;
+  const range = state.selection.main;
+  if (!range.empty) return false;
+  const line = state.doc.lineAt(range.head);
+  const match = LIST_ITEM_RE.exec(line.text);
+  if (!match) return false;
+  if (line.text.slice(match[0].length).trim() !== "") return false;
+  if (match[1].length >= 2) return indentListItem(view, -1);
+  // 顶级空项：标识（含 `- [ ] ` 勾选框）整个删掉，行留下、光标停在行首
+  view.dispatch({
+    changes: { from: line.from, to: line.to, insert: "" },
+    selection: { anchor: line.from },
+    scrollIntoView: true
+  });
+  renumberOrderedList(view, line.number);
+  return true;
+}
+
+/**
+ * 把一段连续的有序列表重新编号（每个缩进层级各自从 1 数起）。
  *
  * 从 `lineNumber` 往上/下扩到整个列表块（列表项与缩进续行都算块内，空行断开），
- * 再逐行扫：缩进一样且都是有序项就算作同一段，遇到别的就重新从 1 开始。
+ * 再逐行扫。**计数按缩进层级记在 Map 里**，不是「连续同级才累加」：
+ * - 嵌套块结束后回到外层，外层的序号要接着数（`1. 甲 → 嵌套 → 2. 乙`），
+ *   早先按「与上一行同缩进才 +1」实现，乙会被错编成 1.；
+ * - 松散列表的续行（缩进正文）不打断任何层级的计数；
+ * - 回到较浅层级时清掉更深层级的计数（那一段已经结束了）。
  */
 function renumberOrderedList(view: EditorView, lineNumber: number): void {
   const state = view.state;
@@ -203,21 +267,21 @@ function renumberOrderedList(view: EditorView, lineNumber: number): void {
   while (start > 1 && isListish(state.doc.line(start - 1).text)) start -= 1;
   while (end < state.doc.lines && isListish(state.doc.line(end + 1).text)) end += 1;
   const changes: Array<{ from: number; to: number; insert: string }> = [];
-  let previousIndent = "";
-  let counter = 0;
+  const counters = new Map<string, number>();
   for (let n = start; n <= end; n++) {
     const line = state.doc.line(n);
     const match = LIST_ITEM_RE.exec(line.text);
-    if (!match || !/^\d/.test(match[2])) {
-      previousIndent = "";
-      counter = 0;
-      continue;
+    if (!match) continue; // 续行等非列表项行：不动计数
+    if (!/^\d/.test(match[2])) continue; // 无序项不参与编号，也不打断计数
+    const indent = match[1];
+    for (const key of [...counters.keys()]) {
+      if (key.length > indent.length) counters.delete(key);
     }
-    counter = match[1] === previousIndent ? counter + 1 : 1;
-    previousIndent = match[1];
-    const next = `${counter}.`;
-    if (match[2] === next) continue;
-    changes.push({ from: line.from + match[1].length, to: line.from + match[1].length + match[2].length, insert: next });
+    const next = (counters.get(indent) ?? 0) + 1;
+    counters.set(indent, next);
+    const text = `${next}.`;
+    if (match[2] === text) continue;
+    changes.push({ from: line.from + indent.length, to: line.from + indent.length + match[2].length, insert: text });
   }
   if (changes.length === 0) return;
   view.dispatch({ changes });

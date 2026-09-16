@@ -10,7 +10,7 @@ use crate::error::{CoreError, CoreResult};
 pub const SKILL_NAME: &str = "kxtodo";
 /// SKILL 文档格式版本：frontmatter 的 `version` 不许高于它（`cmd_validate` 会拒）。
 /// v2 = 按「怎么用 / 有哪些功能 / 什么注意事项」重排，补上 `--jq` 与分页语义。
-pub const SKILL_VERSION: u32 = 3;
+pub const SKILL_VERSION: u32 = 4;
 
 /// SKILL 内容在编译期嵌入二进制（与帮助信息一样），不依赖任何外部文件。
 const SKILL_CONTENT: &str = include_str!("../../../../skills/kxtodo/SKILL.md");

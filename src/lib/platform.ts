@@ -1,7 +1,7 @@
 import { get, writable } from "svelte/store";
 import { onDestroy } from "svelte";
 import { platform as tauriPlatform } from "@tauri-apps/plugin-os";
-import { diaryEditor, editorDraftNode, editorTaskId, ledgerEditor, searchQuery, showSettings } from "./stores";
+import { diaryEditor, editorDraftNode, editorTaskId, ledgerEditor, searchQuery, showSettings, taskEmojiPicker } from "./stores";
 
 /**
  * Mobile detection is intentionally user-agent based so the Windows desktop
@@ -215,6 +215,27 @@ export function startMobileRouter(): void {
     }
   });
 
+  // 表情/图标选择器不占历史栈，组件挂载后有自己的 guard——但它是**懒加载**的：
+  // chunk 在途的窗口里（首开、冷缓存）组件还没挂载，返回键这一下会把底下的页面
+  // 弹掉。这里按 store 兜底：开着就接管返回键直接关（组件挂载后它的 guard 注册得
+  // 更晚、先被问到，两层不冲突；store 清空时这层自动注销）。
+  let pickerGuardRelease: (() => void) | null = null;
+  taskEmojiPicker.subscribe((target) => {
+    if (!get(isMobile)) return;
+    if (target !== null) {
+      if (!pickerGuardRelease) {
+        pickerGuardRelease = addBackInterceptor(() => {
+          if (get(taskEmojiPicker) === null) return false;
+          taskEmojiPicker.set(null);
+          return true;
+        });
+      }
+    } else if (pickerGuardRelease) {
+      pickerGuardRelease();
+      pickerGuardRelease = null;
+    }
+  });
+
   // 搜索态不压历史栈（pushState 条目进 WebView 会话恢复后，「搜索过再退出、
   // 重开必闪退一次」就是从那来的）。返回键改由 MainActivity 问这条桥：
   // 搜索态消费掉（清词），其余返回 false 交给 WebView 历史 / finish。
@@ -317,15 +338,21 @@ function registerBackHandler(): void {
   const w = window as Window & { kxtodoBackHandler?: () => boolean };
   w.kxtodoBackHandler = () => {
     if (!get(isMobile)) return false;
-    for (let i = backInterceptors.length - 1; i >= 0; i--) {
-      if (backInterceptors[i]()) return true;
-    }
+    if (consumeBackInterceptors()) return true;
     if (get(searchQuery).trim()) {
       searchQuery.set("");
       return true;
     }
     return false;
   };
+}
+
+/** 后注册的先问（栈语义）；第一个返回 true 的消费掉这一记返回。 */
+function consumeBackInterceptors(): boolean {
+  for (let i = backInterceptors.length - 1; i >= 0; i--) {
+    if (backInterceptors[i]()) return true;
+  }
+  return false;
 }
 
 // 模块顶层不能挂路由：platform→stores→backend→capabilities→platform 存在
@@ -390,12 +417,15 @@ export function showMobileList(): void {
 }
 
 /**
- * 「返回上一级」的按钮口径（移动端页面左上角的返回箭头）：与安卓返回键同一条历史栈，
- * 有层就退一层，没有层（已经在列表上）就什么都不做。Esc 那种"再点一次退出"的语义
- * 刻意不给——按钮在列表页根本不渲染。
+ * 「返回上一级」的按钮口径（移动端页面左上角的返回箭头）：与安卓返回键**同一条链**——
+ * 先问浮层拦截器（齿轮面板、菜单、选择器开着时先收它们），再退历史栈的一层，
+ * 没有层（已经在列表上）就什么都不做。早先它绕过拦截器直接 history.back()：
+ * 开着浮层点箭头，浮层底下的整页被弹掉、浮层反而留在原地。
+ * Esc 那种"再点一次退出"的语义刻意不给——按钮在列表页根本不渲染。
  */
 export function goBackLevel(): void {
   if (!get(isMobile) || typeof history === "undefined") return;
+  if (consumeBackInterceptors()) return;
   if (currentLayer() !== undefined) {
     history.back();
     return;

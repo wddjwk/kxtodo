@@ -542,7 +542,7 @@ fn modify_tags_and_emojis() {
             "--id",
             &item_id,
             "--add-tag",
-            "pink:无效",
+            "magenta:无效",
         ],
         2,
     );
@@ -1067,4 +1067,29 @@ fn due_time_round_trips_normalizes_and_clears() {
     assert!(unscheduled["plannedDate"].is_null());
     assert!(unscheduled["dueDate"].is_null());
     assert_eq!(unscheduled["dueTime"], "");
+}
+
+#[test]
+fn tag_colors_include_pink_and_custom_hex() {
+    let env = TestEnv::fresh();
+    let (_category_id, entry_id) = setup_entry(&env);
+    // 具名色 pink（v0.8.2 补进十色盘）
+    let added = env.ok(&[
+        "task", "add", "--type", "item", "--entry-id", &entry_id, "--markdown", "粉色标签", "--tag", "pink:急",
+    ]);
+    assert_eq!(added["tags"][0]["color"], "pink");
+    assert_eq!(added["tags"][0]["text"], "急");
+    // `#rrggbb` 直接给色：记成 custom + hex
+    let custom = env.ok(&[
+        "task", "add", "--type", "item", "--entry-id", &entry_id, "--markdown", "自定义色", "--tag", "#123456:特",
+    ]);
+    assert_eq!(custom["tags"][0]["color"], "custom");
+    assert_eq!(custom["tags"][0]["hex"], "#123456");
+    // `custom` 单独给没有 hex：原样存 custom（不带 hex），渲染端按灰色画
+    // （core Tag::effective_color 与前端 normalizeTags 同口径的显示级降级）
+    let bare = env.ok(&[
+        "task", "add", "--type", "item", "--entry-id", &entry_id, "--markdown", "裸custom", "--tag", "custom:x",
+    ]);
+    assert_eq!(bare["tags"][0]["color"], "custom");
+    assert!(bare["tags"][0].get("hex").is_none() || bare["tags"][0]["hex"].is_null());
 }

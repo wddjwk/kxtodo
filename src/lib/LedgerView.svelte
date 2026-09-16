@@ -160,7 +160,9 @@
     closeOverlays();
     if (mode === view) return;
     if (mode === "calendar") cursor = monthOf(selectedDate);
-    if (mode === "list") resetScroll();
+    // 换视图一律回到顶部：滚动容器是同一个，旧视图留下的 scrollTop 会把新视图
+    // 钳到半截（内容高度不同还会触发一次滚动钳制跳变——「切过去页面闪一下」）。
+    resetScroll();
     void setConfig("ledger.view", mode);
   }
 

@@ -1,6 +1,6 @@
 ---
 name: kxtodo
-version: 3
+version: 4
 cliHelp: kxtodo-cli --help
 description: 用 KXToDo 的命令行管理本机的「待办任务 + 日记 + 记账」三类数据，外加定时任务、桌面通知、存储清理、导入导出备份与多端同步。能力：分类/条目/任务的增删改查与关键词搜索、标签与截止日期、按日期区间检索日记、记一笔与转账、资金账户与两级分类管理、收支统计与大类占比、净资产与余额、Excel 与 Markdown 压缩包导入导出、定时跑脚本或弹通知、设置项读写。**典型场景**：用户说「记一下 / 加个待办 / 提醒我 / 建个清单」「写今天的日记 / 补记某天」「记一笔账 / 转账 / 查余额 / 查净资产」「今天花了多少 / 这个月开销 / 钱都花在哪 / 资产总览」「这周·这个月·今年做了些什么 / 帮我写周报月报年度总结」「导出备份 / 换机搬家 / 导入回来」「占了多少空间 / 清理一下」「配一下多设备同步 / 同步不动了」——这些都应优先落到 KXToDo，而不是另建临时文件或散在对话里。
 ---
@@ -97,7 +97,7 @@ kxtodo-cli diary list --from 2026-09-01 --to 2026-09-30 --jq '.data.total'
 
 ## 5. diary 日记
 
-- **写**：`diary add --markdown "..."`，可带 `--title` / `--mood <emoji>` / `--weather <emoji>` / `--tag "color:text"`（可重复；只给 `color` 就是无文字标签）。颜色是九选一：`red` `orange` `yellow` `green` `cyan` `blue` `purple` `gray` `custom`，或**直接给 `#rrggbb`**（自动记成自定义色；`custom` 单独给会退回灰色）/ `--time <HH:MM>`。**标题与正文不能同时为空**。长正文用 `--markdown-file`。
+- **写**：`diary add --markdown "..."`，可带 `--title` / `--mood <emoji>` / `--weather <emoji>` / `--tag "color:text"`（可重复；只给 `color` 就是无文字标签）。颜色是十选一：`red` `orange` `yellow` `green` `cyan` `blue` `purple` `pink` `gray` `custom`，或**直接给 `#rrggbb`**（自动记成自定义色；`custom` 单独给会退回灰色）/ `--time <HH:MM>`。**标题与正文不能同时为空**。长正文用 `--markdown-file`。
 - **`--date` 是「归属日期」不是创建时间**：补写昨天就传昨天的日期，`createdAt` 仍是现在（要连写作时刻一起补就加 `--time`）。同一天可以有多篇。
 - **读**：`diary list [--date 某天 | --from 起 --to 止]`，按日期由近及远、同一天内按写作先后。
   **不传 `--limit` 就返回全部**（与 task 的默认 50 刻意不同：月度回顾要的是整月）；要分页给 `--limit` + `--cursor`，`--all` 强制全部。

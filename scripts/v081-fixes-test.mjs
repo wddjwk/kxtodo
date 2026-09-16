@@ -238,23 +238,27 @@ const context = await browser.newContext({ viewport: { width: 1440, height: 900 
   await page.locator(".context-menu .menu-item-button", { hasText: "标签" }).first().click();
   await page.waitForSelector(".tag-panel", { timeout: 8000 });
   const pills = await page.locator(".tag-panel .tag-color-pill").count();
-  check("配色是两排九颗胶囊", pills === 9, `${pills} 颗`);
+  check("配色是两排十颗胶囊（v0.8.2 补粉色 + 炫彩色盘）", pills === 10, `${pills} 颗`);
   const rows = await page.$$eval(".tag-panel .tag-color-row", (nodes) =>
     nodes.map((node) => node.querySelectorAll(".tag-color-pill").length)
   );
-  check("两排分别是 5 + 4", rows[0] === 5 && rows[1] === 4, rows.join("+"));
-  check("面板里有预置标签区", (await page.locator(".tag-panel .tag-panel-label").count()) >= 2);
+  check("两排分别是 5 + 5", rows[0] === 5 && rows[1] === 5, rows.join("+"));
+  check("面板里没有分区标题文字（v0.8.2 去掉）", (await page.locator(".tag-panel .tag-panel-label").count()) === 0);
+  check("预置流末尾有加号胶囊", (await page.locator(".tag-panel .tag-preset-new").count()) === 1);
   check("没有「清除所有标签」按钮", (await page.locator(".tag-clear-all").count()) === 0);
-  check("输入框旁有「存入预置」勾选且默认勾上", await page.isChecked(".tag-panel .tag-keep-row input"));
+  check(
+    "输入框旁有「存入预置」勾选且默认勾上",
+    await page.isChecked(".tag-panel .tag-keep-box input")
+  );
 
-  await page.fill(".tag-panel .tag-input-row input", "工作");
-  await page.click(".tag-panel .tag-submit");
+  await page.fill(".tag-panel .tag-editor-input-row input", "工作");
+  await page.press(".tag-panel .tag-editor-input-row input", "Enter");
   await page.waitForTimeout(400);
   const presetCount = await page.evaluate(
     (key) => (JSON.parse(localStorage.getItem(key) ?? "{}")?.appearance?.tagPresets ?? []).length,
     SETTINGS_KEY
   );
-  check("新标签同时进了预置", presetCount === 1, `${presetCount} 条`);
+  check("回车添加且新标签同时进了预置", presetCount === 1, `${presetCount} 条`);
   check("任务菜单没有报错", errors.length === 0, errors[0] ?? "");
   await page.close();
 }
@@ -279,6 +283,11 @@ const context = await browser.newContext({ viewport: { width: 1440, height: 900 
   await page.waitForSelector(".toolbox-rmb-result", { timeout: 8000 });
   const rmb = (await page.textContent(".toolbox-rmb-result"))?.trim();
   check("金额转大写正确", rmb === "壹仟贰佰叁拾肆元伍角陆分", rmb ?? "");
+  // v0.8.2：反向识别（中文金额 → 数字）
+  await page.fill(".toolbox-text-input", "壹仟贰佰叁拾肆元伍角陆分");
+  await page.waitForTimeout(300);
+  const back = (await page.textContent(".toolbox-rmb-result"))?.trim();
+  check("大写转回金额正确", back === "1234.56", back ?? "");
 
   await page.click(".toolbox-sub-back");
   await page.waitForSelector(".toolbox-list", { timeout: 8000 });
@@ -286,13 +295,18 @@ const context = await browser.newContext({ viewport: { width: 1440, height: 900 
   await page.waitForSelector(".toolbox-sub-actions", { timeout: 8000 });
   const align = await page.evaluate(() => {
     const actions = document.querySelector(".toolbox-sub-actions");
-    const tool = document.querySelector(".toolbox-sub");
+    const rows = document.querySelectorAll(".toolbox-field-row");
+    const countRow = rows[rows.length - 1];
     return {
       justify: getComputedStyle(actions).justifyContent,
-      gap: tool.getBoundingClientRect().bottom - actions.getBoundingClientRect().bottom
+      belowCount: actions.getBoundingClientRect().top - countRow.getBoundingClientRect().bottom
     };
   });
-  check("生成按钮贴右下角", align.justify === "flex-end", JSON.stringify(align));
+  check(
+    "生成按钮在「数量」下一行、右对齐（v0.8.2 调整）",
+    align.justify === "flex-end" && align.belowCount >= -2 && align.belowCount < 60,
+    JSON.stringify(align)
+  );
   await page.close();
 }
 
@@ -314,9 +328,9 @@ const context = await browser.newContext({ viewport: { width: 1440, height: 900 
   );
   check("点第一颗勾选框写回 markdown", markdown.includes("- [x] 第一件事"), JSON.stringify(markdown));
   const struck = await page.evaluate(
-    () => getComputedStyle(document.querySelector("li:has(.md-task-box:checked)")).textDecorationLine
+    () => getComputedStyle(document.querySelector("li.md-task-done > .md-task-label")).textDecorationLine
   );
-  check("勾上的那行有删除线", struck.includes("line-through"), struck);
+  check("勾上的那行有删除线（只划自己那行，v0.8.2 起打在 .md-task-label 上）", struck.includes("line-through"), struck);
   check("任务框交互没有报错", errors.length === 0, errors[0] ?? "");
   await page.close();
 }

@@ -9,6 +9,9 @@
  * - `card`：所有 http(s) 超链接都换成一张预览卡（[链接图标] 站点 + 复制链接按钮 /
  *   标题 / 正文预览）。抓不到元数据就退回原样链接。
  *
+ * 三档随时可以来回拨：增强是**可逆**的（见 `revertUnwanted`），拨完就地重跑一遍即可，
+ * 不必等 markdown 重渲——渲染有记忆化，等重渲等于「设置改了、画面不动」。
+ *
  * 元数据在核心侧抓（`gui.link-meta`，Rust 抓 + 解析 + 落盘缓存）；浏览器 dev 预览
  * 没有 Tauri，直接在页面里 fetch（测试可用 Playwright 的 route 打桩）。
  * 这里再叠一层会话缓存与并发闸门：一篇文档里几十个链接也只按 4 条并发地抓，
@@ -218,6 +221,14 @@ function line(className: string, text: string): HTMLSpanElement {
   return el;
 }
 
+/** 增强是**破坏性**的：卡片档把整个 anchor 换成卡片容器，标题档覆写 textContent。
+ *  不留后路就退不回「原样链接」——档位往低拨时画面会一动不动（渲染缓存让 markdown
+ *  不重渲，增强过的节点能一直留到用户改正文为止）。两张表各存各的退路：
+ *  卡片存**原节点**（属性与文字原封不动放回原位），标题存被覆写前的文字与 title
+ *  （用户手写的 `[地址](地址 "提示")` 也算裸链接，它的 tooltip 不能被顺手抹掉）。 */
+const cardOriginalAnchor = new WeakMap<HTMLElement, HTMLAnchorElement>();
+const titleOriginal = new WeakMap<HTMLAnchorElement, { text: string; title: string }>();
+
 /** 把一条链接换成预览卡片：站点行（[网页图标] 站点 + 悬浮在右上角的复制按钮）/
  *  标题（最多两行）/ 正文预览（最多两行）。
  *  标题与摘要一律走 textContent——网页内容是不可信输入，绝不拼 HTML。 */
@@ -262,6 +273,7 @@ function renderCard(anchor: HTMLAnchorElement, meta: LinkMeta): void {
   });
 
   card.append(main, copy);
+  cardOriginalAnchor.set(card, anchor);
   anchor.replaceWith(card);
 }
 
@@ -278,11 +290,41 @@ function favicon(icon: string | undefined, href: string): Element {
   return img;
 }
 
+/** 卡片退回原样链接：原节点整个放回卡片的位置（属性、文字都是原来的）。 */
+function revertCards(root: HTMLElement): void {
+  for (const card of [...root.querySelectorAll<HTMLElement>(".kx-link-card[data-kx-link='card']")]) {
+    const original = cardOriginalAnchor.get(card);
+    // 没有退路的卡片不是这一轮增强出来的，不动它（宁可按原样留着，也不能把链接删掉）
+    if (original) card.replaceWith(original);
+  }
+}
+
+/** 标题退回原样链接：还原被覆写的文字与 title。 */
+function revertTitles(root: HTMLElement): void {
+  for (const anchor of [...root.querySelectorAll<HTMLAnchorElement>("a[data-kx-link='title']")]) {
+    const original = titleOriginal.get(anchor);
+    if (!original) continue;
+    anchor.textContent = original.text;
+    if (original.title) anchor.title = original.title;
+    else anchor.removeAttribute("title");
+    delete anchor.dataset.kxLink;
+  }
+}
+
+/** 按当前档位退回不该存在的增强。退回后还要重新增强一遍（标题档下，刚从卡片退回来的
+ *  裸链接得再变成标题），所以这一步必须排在收集 anchor 之前。 */
+function revertUnwanted(root: HTMLElement, render: Settings["features"]["linkRender"]): void {
+  if (render !== "card") revertCards(root);
+  if (render === "off") revertTitles(root);
+}
+
 /** 处理容器里的所有超链接（幂等：处理过的节点带 data-kx-link 标记；
- *  在途的带 data-kx-pending——同一条链接不会因为重渲被并发处理两遍）。 */
+ *  在途的带 data-kx-pending——同一条链接不会因为重渲被并发处理两遍）。
+ *  档位往低拨时先退回旧增强，所以「拨完就地重跑」是真的能重跑出正确画面。 */
 export async function enhanceLinks(root: HTMLElement): Promise<void> {
   const features = get(appSettings).features;
   if (!features) return;
+  revertUnwanted(root, features.linkRender);
   const anchors = [...root.querySelectorAll<HTMLAnchorElement>("a[href]")];
   for (const anchor of anchors) {
     const mode = modeFor(anchor, features.linkRender);
@@ -301,11 +343,15 @@ async function applyTo(anchor: HTMLAnchorElement, mode: LinkMode): Promise<void>
     // 新节点会在下一轮 enhanceLinks 里重来一遍）
     if (!anchor.isConnected) return;
     if (!meta) return;
+    // 抓的这会儿档位也可能被拨走：只按**当前**档位落地，否则用户刚关掉的卡片
+    // 会在抓取回来的那一刻又被画上去（而这一轮已经没有下一次重跑会去退它）
+    if (modeFor(anchor, get(appSettings).features.linkRender) !== mode) return;
     if (mode === "card") {
       renderCard(anchor, meta);
       return;
     }
     if (meta.title) {
+      titleOriginal.set(anchor, { text: anchor.textContent ?? "", title: anchor.getAttribute("title") ?? "" });
       anchor.dataset.kxLink = "title";
       anchor.textContent = truncateTitle(meta.title);
       anchor.title = href;

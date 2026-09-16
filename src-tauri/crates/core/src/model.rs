@@ -151,7 +151,7 @@ pub struct Node {
 /// 标签配色：七彩虹 + 灰 + 自定义。
 ///
 /// **`Custom` 必须配 [`Tag::hex`]**（`#rrggbb`）；hex 缺失或非法时按 [`TagColor::Gray`] 渲染，
-/// 见 `Tag::effective_color`。早先只有五个固定色，用户没得挑。
+/// 见 `Tag::effective_color`。九个具名色 = 七彩虹 + 粉 + 灰。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
 pub enum TagColor {
     Red,
@@ -161,6 +161,7 @@ pub enum TagColor {
     Cyan,
     Blue,
     Purple,
+    Pink,
     Gray,
     Custom,
 }
@@ -175,6 +176,7 @@ impl TagColor {
             TagColor::Cyan => "cyan",
             TagColor::Blue => "blue",
             TagColor::Purple => "purple",
+            TagColor::Pink => "pink",
             TagColor::Gray => "gray",
             TagColor::Custom => "custom",
         }
@@ -189,6 +191,7 @@ impl TagColor {
             "cyan" => Some(TagColor::Cyan),
             "blue" => Some(TagColor::Blue),
             "purple" => Some(TagColor::Purple),
+            "pink" => Some(TagColor::Pink),
             "gray" => Some(TagColor::Gray),
             "custom" => Some(TagColor::Custom),
             _ => None,

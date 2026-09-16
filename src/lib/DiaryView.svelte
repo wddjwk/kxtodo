@@ -113,6 +113,7 @@
     entryMenu = null;
     showGear = false;
     listMenuAt = null;
+    monthPopOpen = false;
   }
 
   function switchView(mode: DiaryViewMode): void {

@@ -1,6 +1,6 @@
 import { writable, derived, get } from "svelte/store";
 import type { AppNotification, AppState, AppNode, DiaryEditorTarget, DiaryEntry, EmojiPickerTarget, LedgerBook, LedgerEditorTarget, LedgerSide, NotificationTone, SchedulerState, Settings, Task } from "./types";
-import { cachedAppearance, cachedProfile, defaultSchedulerRuntimes, defaultSettings, emptyState, normalizeDiaryEntries, normalizeLedger, normalizeState, normalizeSettings, schedulerRuntimeKeys, seedLedgerBook, writeAppearanceCache, writeProfileCache } from "./defaults";
+import { cachedAppearance, cachedFeatures, cachedProfile, cachedState, defaultSchedulerRuntimes, defaultSettings, emptyState, normalizeDiaryEntries, normalizeLedger, normalizeState, normalizeSettings, schedulerRuntimeKeys, seedLedgerBook, writeAppearanceCache, writeFeaturesCache, writeProfileCache, writeStateCache } from "./defaults";
 import {
   loadState, saveState, loadSettings, saveSettings, loadScheduler, saveScheduler,
   loadDiary, saveDiary, loadLedger, saveLedger,
@@ -107,16 +107,26 @@ export function fileToDataUrl(file: File): Promise<string> {
 // Core stores
 // ---------------------------------------------------------------------------
 
-export const appState = writable<AppState>(emptyState());
+/**
+ * appState 的第一帧就用上次退出时缓存的界面状态（节点树/任务/选中节点/背景）：
+ * 水合是异步的，等 core 快照回来再渲染，冷启动就会先闪一帧「收集箱 + 空列表」
+ * （安卓 WebView 被系统回收后，解锁亮屏也是一次冷启动，同样闪）。缓存没水合出的
+ * 数据新鲜度差通常在百毫秒级，快照到了自然对账——绝大多数时候两边一字不差。
+ */
+export const appState = writable<AppState>(cachedState() ?? emptyState());
 // 首帧就用上一次退出时缓存的外观（缩放/字号）：水合是异步的，等设置回来再应用
 // 会先按默认缩放渲染一帧再跳变（安卓上观感是「卡卡的、不稳定」）
 const initialSettings = clone(defaultSettings);
 Object.assign(initialSettings.appearance, cachedAppearance());
 Object.assign(initialSettings.profile, cachedProfile());
+// 特性开关也进首帧（理由见 cachedFeatures）：状态缓存让卡片第一帧就画出来，
+// 开关若还是默认值，临期底色与链接样式都会「先按默认画一遍再改回来」。
+initialSettings.features = cachedFeatures();
 export const appSettings = writable<Settings>(initialSettings);
 appSettings.subscribe((settings) => {
   writeAppearanceCache(settings.appearance);
   writeProfileCache(settings.profile);
+  writeFeaturesCache(settings.features);
 });
 /**
  * 一周从周几开始（0 = 周日，1 = 周一）。设置项 `features.weekStart` 归一后的值，
@@ -130,6 +140,60 @@ export const weekStart = derived(appSettings, ($settings) => weekStartIndex($set
  */
 export const diaryEntries = writable<DiaryEntry[]>([]);
 export const isHydrated = writable(false);
+
+/**
+ * 首帧状态缓存的写入：防抖 800ms（每次勾选/编辑都同步写一份几 MB 的 JSON 会把
+ * 交互拖垮——写缓存自己绝不能成为新的卡顿源），内容没变一个字节都不写；
+ * 退到后台（visibilitychange/pagehide）立刻补写一次——安卓随时可能杀进程，
+ * 缓存最多陈旧「最后一次防抖窗口」这么久。只在**水合完成后**写：水合前 store 里
+ * 是缓存种子本身，回写没有意义，core 初始化失败时更不许拿它盖掉好数据。
+ * （这一块必须声明在 isHydrated 之后：subscribe 回调在订阅那一刻就会跑一次。）
+ */
+let stateCacheTimer: number | undefined;
+let lastStateCacheJson = "";
+
+function writeStateCacheNow(state: AppState): void {
+  window.clearTimeout(stateCacheTimer);
+  stateCacheTimer = undefined;
+  const { scheduler: _scheduler, ...rest } = state;
+  let json = "";
+  try {
+    json = JSON.stringify(rest);
+  } catch {
+    return;
+  }
+  if (json === lastStateCacheJson) return;
+  if (writeStateCache(state)) lastStateCacheJson = json;
+}
+
+function scheduleStateCache(state: AppState): void {
+  window.clearTimeout(stateCacheTimer);
+  stateCacheTimer = window.setTimeout(() => writeStateCacheNow(state), 800);
+}
+
+appState.subscribe((state) => {
+  if (!get(isHydrated)) return;
+  scheduleStateCache(state);
+});
+
+// 水合完成本身也要写一次：appState 的 set 发生在 isHydrated 翻真**之前**，
+// 那次订阅回调被门控挡掉——不补这一笔，「启动后什么都不动就退出」的会话
+// 永远留着上上次的缓存。
+isHydrated.subscribe((ready) => {
+  if (ready) scheduleStateCache(get(appState));
+});
+
+if (typeof document !== "undefined" && typeof window !== "undefined") {
+  const flushStateCache = (): void => {
+    if (!get(isHydrated)) return;
+    writeStateCacheNow(get(appState));
+  };
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushStateCache();
+  });
+  window.addEventListener("pagehide", flushStateCache);
+}
+
 export const showSettings = writable(false);
 export const searchQuery = writable("");
 export const taskEmojiPicker = writable<EmojiPickerTarget | null>(null);
@@ -435,6 +499,19 @@ export let coreMode = false;
  *  没有这道判断，同一次写入就是两轮完整的快照往返（读盘 + 序列化 + IPC + 全量 normalize）。 */
 const appliedRevisions = new Map<string, number>();
 
+/**
+ * 写命令的信封自带落盘后的 revision（`meta.revisionDomain` / `meta.revision`）。
+ * 前端已经乐观更新过 store 的写入（config.set、gui.set-*-ui）把它记下来，紧随其后的
+ * 域事件就被水位判断挡住——省掉一整轮快照往返，更要紧的是省掉「同一个值换一次对象
+ * 身份」引发的全树响应式重跑：那一轮要是落在饼图入场动画中间，就是肉眼可见的掉帧。
+ */
+export function noteEnvelopeRevision(meta: Record<string, unknown> | undefined): void {
+  const domain = meta?.revisionDomain;
+  const revision = meta?.revision;
+  if (typeof domain !== "string" || typeof revision !== "number") return;
+  appliedRevisions.set(domain, Math.max(appliedRevisions.get(domain) ?? 0, revision));
+}
+
 function noteRevisions(snapshot: Awaited<ReturnType<typeof coreSnapshot>>): void {
   const revisions = snapshot.revisions;
   if (!revisions) return;
@@ -445,9 +522,19 @@ function noteRevisions(snapshot: Awaited<ReturnType<typeof coreSnapshot>>): void
 
 function applySnapshot(snapshot: Awaited<ReturnType<typeof coreSnapshot>>, domains?: Set<string>): void {
   const wantAll = !domains;
+  // 先留一份旧水位再记新的：只有**真的前进了**的域才值得换一次对象身份。
+  // 写命令信封记过水位（noteEnvelopeRevision）而 store 里已经是同一个值的，
+  // 这一份快照整体跳过——身份不变，订阅者一个都不惊动。
+  const previous = new Map(appliedRevisions);
   noteRevisions(snapshot);
+  const advanced = (domain: "data" | "settings" | "diary" | "ledger" | "schedule"): boolean => {
+    const incoming = snapshot.revisions?.[domain];
+    // 快照没带这个域的 revision（不该发生）就保守照旧应用
+    if (typeof incoming !== "number") return true;
+    return incoming > (previous.get(domain) ?? 0);
+  };
   // 每个分支都要判 `snapshot.<域>` 存在：快照现在按域裁剪，没请求的域不在载荷里。
-  if ((wantAll || domains?.has("data")) && snapshot.data) {
+  if ((wantAll || domains?.has("data")) && snapshot.data && advanced("data")) {
     const current = get(appState);
     const normalized = normalizeState({
       ...snapshot.data,
@@ -455,16 +542,16 @@ function applySnapshot(snapshot: Awaited<ReturnType<typeof coreSnapshot>>, domai
     });
     appState.set({ ...normalized, scheduler: current.scheduler });
   }
-  if ((wantAll || domains?.has("settings")) && snapshot.settings !== undefined) {
+  if ((wantAll || domains?.has("settings")) && snapshot.settings !== undefined && advanced("settings")) {
     appSettings.set(normalizeSettings(snapshot.settings));
   }
-  if ((wantAll || domains?.has("diary")) && snapshot.diary !== undefined) {
+  if ((wantAll || domains?.has("diary")) && snapshot.diary !== undefined && advanced("diary")) {
     diaryEntries.set(normalizeDiaryEntries(snapshot.diary));
   }
-  if ((wantAll || domains?.has("ledger")) && snapshot.ledger !== undefined) {
+  if ((wantAll || domains?.has("ledger")) && snapshot.ledger !== undefined && advanced("ledger")) {
     ledgerData.set(normalizeLedger(snapshot.ledger));
   }
-  if ((wantAll || domains?.has("schedule")) && snapshot.schedule) {
+  if ((wantAll || domains?.has("schedule")) && snapshot.schedule && advanced("schedule")) {
     const current = get(appState);
     const entries = snapshot.schedule.tasks as ScheduleEntryV9[];
     scheduleEntries.set(new Map(entries.map((entry) => [entry.id, entry])));

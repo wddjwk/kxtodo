@@ -56,7 +56,7 @@
 
 ### 标签配色（v0.8.1）
 
-标签配色是**全应用共用**的（记账/日记/待办同一套 `TagColor`），九个值：七彩虹（`red` `orange` `yellow` `green` `cyan` `blue` `purple`）+ `gray` + `custom`。
+标签配色是**全应用共用**的（记账/日记/待办同一套 `TagColor`），十个值：七彩虹（`red` `orange` `yellow` `green` `cyan` `blue` `purple`）+ `pink` + `gray` + `custom`。
 - `custom` 必须配 `Tag.hex`（`#rrggbb`），缺失或非法一律按 `gray` 渲染——两端同一口径：前端 `defaults.ts::normalizeTagHex`、Rust `model::tag_hex`，另有 `Tag::effective_color` / `custom_hex` 兜底。
 - 色值只定义在 `src/lib/tagColors.ts`（色盘圆点 / 胶囊底色 / 描边 / 文字四组），`workspace.css` 的 `.task-tag.tag-*` 与 `.tag-preset.tag-*` 是同一组色；**自定义色走内联 CSS 变量**（`--tag-bg` / `--tag-fg`，由 `.task-tag.tag-custom` 消费），因为颜色是用户选的、没有对应类名。
 - 选择器 `TagColorPicker.svelte` 是**两排胶囊**（5 + 4，各自 flex 均分填满），最后一格是盖在胶囊上的 `<input type="color">`。**别换成圆形色点**：胶囊是用户点名要的样式，而且两排等分在窄面板（右键菜单 216px）里也不会换行。

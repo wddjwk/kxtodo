@@ -285,7 +285,7 @@ fn normalize_parent(parent_id: Option<&str>) -> Option<String> {
 
 /// 标签输入：`颜色:文字`，也可以写成 `#rrggbb:文字`（自定义配色）。
 ///
-/// 颜色是已知名（red/orange/yellow/green/cyan/blue/purple/gray/custom）就直接用；
+/// 颜色是已知名（red/orange/yellow/green/cyan/blue/purple/pink/gray/custom）就直接用；
 /// 是一个合法 `#rrggbb` 则记成 `custom` + hex；`custom` 单独给没有 hex，退回灰色。
 #[derive(Debug, Clone, Deserialize)]
 pub struct TagInput {
@@ -309,7 +309,7 @@ pub fn parse_tag_input(raw: &str) -> CoreResult<TagInput> {
         return Err(CoreError::validation(
             "INVALID_TAG_COLOR",
             format!(
-                "无效标签颜色 `{token}`，支持 red/orange/yellow/green/cyan/blue/purple/gray                  或 `#rrggbb`"
+                "无效标签颜色 `{token}`，支持 red/orange/yellow/green/cyan/blue/purple/pink/gray 或 `#rrggbb`"
             ),
         ));
     };

@@ -17,7 +17,7 @@ export type AppNode = {
   createdAt: string;
 };
 
-/// 七彩虹 + 灰 + 自定义（`custom` 必须配 `hex`，否则按 gray 渲染）
+/// 七彩虹 + 粉 + 灰 + 自定义（`custom` 必须配 `hex`，否则按 gray 渲染）
 export type TagColor =
   | "red"
   | "orange"
@@ -26,6 +26,7 @@ export type TagColor =
   | "cyan"
   | "blue"
   | "purple"
+  | "pink"
   | "gray"
   | "custom";
 

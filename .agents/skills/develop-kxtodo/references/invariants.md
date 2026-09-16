@@ -140,6 +140,14 @@ v0.8.0 起的几条补充（来龙去脉在 `history/v0.8.md` 批次 1）：
 
 ### 前端 / Svelte / 渲染
 
+- 「**首帧缓存是四件套**：appearance / profile / **features** / **state**」：v0.8.1 只缓存了外观与资料，v0.8.2 补上特性开关（`kxtodo-features-cache`）与界面状态（`kxtodo-state-cache-v1`：节点树 + 任务 + 选中节点 + 背景）。**凡是参与首帧渲染的设置都必须进缓存**，否则第一帧按默认值画、水合后再改回来就是用户眼里的「闪一下」；状态缓存让卡片第一帧就画出来，开关没缓存反而**放大**了闪烁面（`linkRender` 默认 card → 第一帧就把链接建成卡片）。写入规则：防抖 800ms、**先 stringify 比对，值不变一个字节都不写**、剥掉 scheduler、超配额三档降级（全量 → 去掉已完成任务 → 只留节点）、`visibilitychange`/`pagehide` flush、`isHydrated` 门控 **+ 水合完成补写一次**（`appState.set` 发生在 `isHydrated` 翻真之前会被门控挡掉）——`history/v0.8.2.md` 一.3 + 四.2
+- 「**写命令回来必须记信封 revision**」：`actions.ts` 里 `noteEnvelopeRevision(envelope.meta)`（读 `meta.revisionDomain`/`revision` 写 `appliedRevisions` 水位），`applySnapshot` 再按域比较、没前进就跳过 `set`。漏记 = **一次写入让 store 换两次身份**（乐观更新一遍、域事件回来又应用一遍快照）→ 所有 `$:` 重算、饼图出场动画重启（v0.8.2 的掉帧与「日历→统计闪一下」）。`gui.*` 不发域事件不用记；带 `expectedUpdatedAt` 冲突检测的（`task.modify`）**刻意不记**，否则自己的下一次写入被误判成冲突。**挡掉那一轮快照就撤掉了「快照兜一致性」**，所以 `setConfig` 改用信封带回的落盘后权威值兜（`config.set` 的 `data.value` 是写完从文件读回的），与乐观值 `sameValue`（键序无关的深比较）不同才再 set 一次——core 会 clamp 的字段目前前端夹的是同一道界，但两边各夹一次早晚漂——`history/v0.8.2.md` 一.2 + 四.1
+- 「**命令式 DOM 增强必须可逆，且落地前重读当前设置**」：`linkPreview.ts` 的两种增强都是破坏性的（卡片换掉整个 anchor、标题档覆写 textContent），不留退路就出现「设置拨了、画面一动不动」——markdown 有记忆化，`{@html}` 拿到同一个字符串根本不动 DOM，靠重渲纠正等于永远不纠正。修法：两张 WeakMap 存**原节点**与原文，`revertUnwanted` 在收集 anchor 之前先退（退完还要重新增强：标题档下刚从卡片退回来的裸链接得再变标题），`applyTo` 在 await 之后**重读档位**，不匹配就不落地（否则用户刚关掉的卡片会在抓取回来那一刻又画上去）——`history/v0.8.2.md` 二
+- 「**长文档两阶段渲染，短文档一条老路**」：`renderMarkdownFast`（跳过 hljs；公式用 `restoreMathSource` 摆回转义源码）同步上屏，双 rAF 后完整版升级；`fastCache` 与 `blockCache` 分开，缓存键是 `nodeId markdown`（**图片解析进度不进键**——插图是占位符 + `data-md-img`，由 `markdownWire` 从缓存异步填 src）。两版 HTML 逐字节相同时跳过第二次 `apply`。门槛 `TWO_PHASE_MIN_CHARS = 1000`：短文档（绝大多数）不许为长文档付任何代价。插图预热走 `preloadMarkdownImages(markdown, nodeId)`——`history/v0.8.2.md` 一.1
+- 「**`normalizeTask`/`normalizeNode` 是逐字段白名单：core 加字段前端必须同步加**」，漏一个等于「每次快照刷新都把用户的值抹掉」。`dueTime` 与 `order` 从 v0.7.3 漏到 v0.8.2——症状是日期浮层的「精确到分钟」勾选框**勾不上**（勾上 → 写盘 → 域事件 → 快照 → normalize 抹掉 → 勾选框弹回、浮层重渲，看着像「日历缩小闪烁」），以及指定过的时刻被 now 覆盖——`history/v0.8.2.md` 一.4 + 四.5
+- 「**`text-decoration` 会传播进嵌套子列表，且子级无法取消**（不是继承属性）」：勾选任务的删除线必须打在 `span.md-task-label` 上，不能打在 `li` 上。标记由渲染期的 DOM pass `markCheckedTaskItems` 生成：tight 列表打 `li.md-task-done` 并把「勾选框之后到嵌套 `ul/ol` 之前」的兄弟包进 span；loose 列表给 `p` 加同一个类。（v0.8.1 的「`<input>` 是原子行内盒不会被划穿，所以不必包 span」只对**当前行**成立，子列表照样被划掉）——`history/v0.8.2.md` 一.9
+- 「**测返回键走 `window.kxtodoBackHandler()`**」：安卓硬件返回键的真实链路是 MainActivity → evaluateJavascript → 它（true = 前端吃掉，false 才让 WebView 退历史/finish）。测试里 `page.goBack()` 量的是历史栈，**问不到浮层拦截器**。多层浮层要逐级退（`AccountManager` 三层 + `startedOutsideList` 语义）；懒加载浮层要 **store 级兜底 guard**（chunk 在途时组件自己的 guard 还没注册）；`goBackLevel()`（左上角箭头）也必须先 `consumeBackInterceptors()`——`history/v0.8.2.md` 一.6 + 四.4
+
 - 「**首帧可见的东西必须进外观/资料缓存**」：外观缓存收**整个 `appearance`**（早先只白名单了 7 个数字字段，`navLayout`（双列）这类字符串字段从来没缓存过 → 每次冷启动先按单列画一帧再跳）；读回来要过一遍 `normalizeSettings`。资料缓存（名字 / 邮箱 / 头像）**写入失败要退一步只写名字邮箱**——头像在移动端是几 MB 的 dataURL，`setItem` 抛配额错时早先整条放弃，把名字邮箱一起拖去闪默认值。头像上传前先压到 256px（`images.ts::compressAvatarImage`）——`history/v0.8.1.md` 一.1
 - 「**页面响应优先于资源节省**」：`setConfig` **先本地生效、再落盘**（等 IPC + settings.json 原子写回来才翻 UI，表现成「点一下顿一下」；失败按原值回滚）；展开态的重活**双 rAF 之后再算**（`lib/deferredMarkdown.ts`，单 rAF 仍在当帧绘制前触发）；懒加载要有预取与失败路径。任何「为了省资源而让点击变慢」的改动都不成立——`history/v0.8.1.md` 一.3/一.4/一.5
 - 「**受控输入框不要每键写盘**」：名字/邮箱这类直连 `config.set` 的输入框改成**本地草稿 + 失焦/回车提交**——逐键写盘会让 `value` 回写打断 IME 组合输入（表现成「越打越多、字符乱跳」）——同上 一.2
@@ -156,7 +164,7 @@ v0.8.0 起的几条补充（来龙去脉在 `history/v0.8.md` 批次 1）：
 - 「测量类 action 一律配 ResizeObserver 观察元素自身」（「首屏量尺寸全是 0」）——`pitfalls-android.md` 第 18 条
 - 「rect 是视觉像素、`offsetHeight`/`scrollHeight` 是布局像素……两边别混用」；「所有用 clientX/Y 定位的浮层都要除以 `uiScaleValue()` 换算逻辑坐标」——`pitfalls-android.md` 第 17、6 条
 - 「`isMobile` 是 writable store，不是布尔……组件里 `import { isMobile }` 后当布尔用永远为真」——`pitfalls-android.md` 第 14 条
-- 「**展开态只认存储值**」：「`isExpanded = task.expanded === true`，`canExpand`（多行或标题溢出，量出来的易失值）只门控手势与按钮」；日记卡片「同样只认存储值 `entry.expanded === true`」——`ui-patterns.md`「任务卡片」「日记」
+- 「**展开态只认存储值**」：「`isExpanded = task.expanded === true`，`canExpand`（多行 ∪ 标题溢出 ∪ **当前就是展开的**，前两项是量出来的易失值）只门控手势与按钮」；日记卡片「同样只认存储值 `entry.expanded === true`」。**第三项是 v0.8.2 补的**：展开态挂载时 `measureTitle` 根本不在树上（它只挂在折叠分支），`titleOverflow` 永远 false，单行超长的折行卡片就被判成不可折叠——不画加号、双击收不起，但全局展开/折叠按钮能识别（它不看 `canExpand`）——`ui-patterns.md`「任务卡片」「日记」
 - 「配套铁律：**红叉隐藏态必须 `pointer-events: none`**……隐藏但可点的话触屏第一下往往正落在它上面，表现成「点一下标签直接删除」」——`ui-patterns.md`「任务卡片」
 - 「**不能用 `margin-left:auto`**——auto margin 与 `flex-grow` 抢同一份剩余空间，两者同时存在时标签会停在中间」；「**不要写死偏移量**」——同上
 - 「订阅的**初始触发不许 back**（上次会话残留的栈顶 + 空词，挂载期间动历史栈会和 WebView 初始化抢）」；「程序化跳转用 `dropSearchLayer()`（replaceState 原地撤层），否则异步 back 会和随后的 push 抢栈」——`ui-patterns.md`「全局搜索混排」

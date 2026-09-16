@@ -11,9 +11,106 @@ const LOCAL_PREFIX = "img:";
  */
 const RETRY_DELAYS = [1200, 4000, 10000];
 
+// ---------------------------------------------------------------------------
+// 头像缩略图缓存（冷启动第一帧就有头像，不闪默认圆圈）
+// ---------------------------------------------------------------------------
+
+/**
+ * 桌面端头像是**文件名**，要经一次 IPC 才解析得出可显示的 URL——冷启动第一帧
+ * 注定是空的（默认圆圈），解析到了再跳成头像。把解析结果压成小缩略图存进
+ * localStorage，模块初始化时同步种进 avatarCache：第一帧直接用缩略图渲染，
+ * 头像从此不参与「先默认再跳变」。显示尺寸最大不到 100px，160px 缩略图肉眼无差。
+ */
+const AVATAR_THUMB_KEY = "kxtodo-avatar-thumbs-v1";
+const AVATAR_THUMB_EDGE = 160;
+const AVATAR_THUMB_MAX = 8;
+/** 解析结果短于这个长度就原样存（Windows 的 asset 协议 URL 只有百来字节）；
+ *  更长的（Linux/安卓的 base64 dataURL）先压成缩略图，不然几个头像就顶爆配额。 */
+const AVATAR_THUMB_INLINE_MAX = 40_000;
+
+function readAvatarThumbs(): Record<string, string> {
+  if (typeof localStorage === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(AVATAR_THUMB_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof value === "string" && value) out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** 把任意可显示 URL 压成缩略图 dataURL；跨源画布污染、解码失败一律回 null（宁缺毋假）。 */
+async function toThumbDataUrl(url: string, maxEdge: number): Promise<string | null> {
+  try {
+    const img = new Image();
+    if (!url.startsWith("data:")) img.crossOrigin = "anonymous";
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error("image load failed"));
+      img.src = url;
+    });
+    const natural = Math.max(img.naturalWidth, img.naturalHeight);
+    if (!natural) return null;
+    const scale = Math.min(1, maxEdge / natural);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const context = canvas.getContext("2d");
+    if (!context) return null;
+    context.drawImage(img, 0, 0, canvas.width, canvas.height);
+    // 可能带透明通道的格式保 PNG（铺成 JPEG 透明区会变黑），照片类出 JPEG
+    const mime = /^data:image\/(png|webp|gif)/i.test(url) || /\.(png|webp|gif)([?#]|$)/i.test(url) ? "image/png" : "image/jpeg";
+    return canvas.toDataURL(mime, 0.88);
+  } catch {
+    return null;
+  }
+}
+
+function persistAvatarThumb(filename: string, url: string): void {
+  if (typeof localStorage === "undefined") return;
+  void (async () => {
+    let thumb = url;
+    if (url.length > AVATAR_THUMB_INLINE_MAX) {
+      const shrunk = await toThumbDataUrl(url, AVATAR_THUMB_EDGE);
+      if (!shrunk) return;
+      thumb = shrunk;
+    }
+    const map = readAvatarThumbs();
+    delete map[filename];
+    map[filename] = thumb;
+    for (const key of Object.keys(map)) {
+      if (Object.keys(map).length <= AVATAR_THUMB_MAX) break;
+      delete map[key];
+    }
+    try {
+      localStorage.setItem(AVATAR_THUMB_KEY, JSON.stringify(map));
+    } catch {
+      // 存不下就算了：下次冷启动退回异步解析路径
+    }
+  })();
+}
+
+/**
+ * 旧安装的大头像一次性收缩：移动端头像是直接存进 settings 的 dataURL，v0.8.1 之前
+ * 上传的没有压缩闸，几 MB 的原文会撑爆 localStorage 的资料缓存（头像缓存不进去 →
+ * 冷启动闪默认头像），还把 settings.json 与每轮同步载荷拖大。水合后发现超过阈值就
+ * 压到与新上传同一口径（256px）再写回——显示尺寸下肉眼无差，用户无感。
+ */
+export async function oversizedAvatarShrink(avatar: string): Promise<string | null> {
+  if (!avatar.startsWith("data:") || avatar.length <= 400_000) return null;
+  return toThumbDataUrl(avatar, 256);
+}
+
 // filename -> resolved displayable URL (asset-protocol URL, not base64)
 export const imageCache = writable<Record<string, string>>({});
-export const avatarCache = writable<Record<string, string>>({});
+// 头像缓存用缩略图做同步种子：冷启动第一帧就能画出头像（见上）
+export const avatarCache = writable<Record<string, string>>(readAvatarThumbs());
 export const mdImageCache = writable<Record<string, string>>({});
 
 const pending = new Set<string>();
@@ -143,8 +240,17 @@ function ensureAvatarLoaded(filename: string): void {
   load(
     `av:${filename}`,
     () => avatarImageUrl(filename),
-    (url) => boundedPut(avatarCache, filename, url, AVATAR_CACHE_BUDGET)
+    (url) => {
+      boundedPut(avatarCache, filename, url, AVATAR_CACHE_BUDGET);
+      persistAvatarThumb(filename, url);
+    }
   );
+}
+
+/** 上传头像成功后立刻种缓存（不等下一次冷启动解析），并把缩略图落进首帧缓存。 */
+export function primeAvatarCache(filename: string, url: string): void {
+  boundedPut(avatarCache, filename, url, AVATAR_CACHE_BUDGET);
+  persistAvatarThumb(filename, url);
 }
 
 export function isAvatarFilename(ref?: string): ref is string {
@@ -183,6 +289,35 @@ function ensureMdImageLoaded(nodeId: string, filename: string): void {
 export function primeMdImageCache(nodeId: string, filename: string, url: string): void {
   const key = mdCacheKey(nodeId, filename);
   boundedPut(mdImageCache, key, url, MD_CACHE_BUDGET);
+}
+
+/**
+ * 触发 markdown 里全部本地插图的异步加载（**不改写文本**）。
+ *
+ * 渲染走占位通道之后（见 markdown.ts::transformLocalImages），卡片挂载时调它预热：
+ * 等用户展开卡片，字节多半已经在缓存里，占位符一挂上就被填掉。幂等——已缓存或
+ * 在途的直接跳过。
+ */
+export function preloadMarkdownImages(markdown: string, nodeId: string): void {
+  if (!markdown.includes("![")) return;
+  for (const match of markdown.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)) {
+    const src = match[1];
+    if (!src || /^(https?:|data:|blob:)/i.test(src)) continue;
+    ensureMdImageLoaded(nodeId, src);
+  }
+}
+
+/**
+ * 给 markdownWire 填图用：缓存里有就返回 URL；没有就触发（或经退避重试）加载并返回 null。
+ * key 即 `data-md-img` 的值（`nodeId/filename`，两者都不含 `/`）。
+ */
+export function mdImageSrcForKey(key: string): string | null {
+  const cached = get(mdImageCache)[key];
+  if (cached) return cached;
+  const at = key.indexOf("/");
+  if (at <= 0 || at === key.length - 1) return null;
+  ensureMdImageLoaded(key.slice(0, at), key.slice(at + 1));
+  return null;
 }
 
 // -- 上传前的本地压缩 --

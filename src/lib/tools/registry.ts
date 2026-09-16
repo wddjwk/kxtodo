@@ -36,8 +36,8 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     id: "rmb",
-    name: "人民币大写",
-    desc: "金额转财务大写（壹仟贰佰叁拾肆元伍角陆分）",
+    name: "人民币大小写",
+    desc: "金额与财务大写互转（壹仟贰佰叁拾肆元伍角陆分 ⇄ 1234.56）",
     icon: Banknote,
     load: () => import("./RmbTool.svelte")
   }

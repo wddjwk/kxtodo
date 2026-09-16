@@ -341,23 +341,51 @@ pre.diagram-source {
 
 /* ---------- GFM 任务列表（- [ ] / - [x]）：只留 checkbox，不要列表圆点 ---------- */
 
-/* 用后代选择器而不是 `>`：松散列表里 marked 把勾选框放进了 `<li><p>` 里 */
-.markdown-body li:has(input[type="checkbox"]) {
+/* 任务项：去圆点、整体左移抵消列表容器的 2em 缩进。
+   只认「自己的勾选框」（直接子级、或松散列表第一个 p 的直接子级）——
+   后代选择器会把「嵌套了任务列表的祖先 li」也一起命中，缩进就乱了。 */
+.markdown-body li:has(> input.md-task-box),
+.markdown-body li:has(> p:first-child > input.md-task-box) {
   list-style: none;
   margin-left: -1.4em;
 }
 
+/* 嵌套缩进：下一级的勾选框正好对齐到「上一级勾选框 + 一个空格」的下面。
+   3em = 子项自己拉回的 1.4em + 勾选框 0.95em + 右距 0.4em + 一个空格 ≈ 0.25em */
+.markdown-body li:has(> input.md-task-box) > ul,
+.markdown-body li:has(> input.md-task-box) > ol,
+.markdown-body li:has(> p:first-child > input.md-task-box) > ul,
+.markdown-body li:has(> p:first-child > input.md-task-box) > ol {
+  padding-left: 3em;
+}
+
+/* 行距：松散列表的 <p> 上下各 16px（github-markdown-css 默认）太疏松，
+   收到略小于正文段距；同一列表里相邻项之间保持一点呼吸感。 */
+.markdown-body li > p {
+  margin-top: 0.2em;
+  margin-bottom: 0.2em;
+}
+
+.markdown-body li > p:first-child {
+  margin-top: 0;
+}
+
+.markdown-body li > p:last-child {
+  margin-bottom: 0;
+}
+
 /* 勾选框自己画：跟着当前页的主题色（--accent，与待办卡片的勾选圆点同色），
    方角圆边、点得动。原生 `accent-color` 在安卓 WebView 上只有勾不换框，
-   整行划掉的任务项看着像没生效。 */
+   整行划掉的任务项看着像没生效。
+   尺寸比一个正文字略小（0.95em），行内垂直居中。 */
 .markdown-body input[type="checkbox"].md-task-box {
   appearance: none;
   -webkit-appearance: none;
   position: relative;
-  width: 1.02em;
-  height: 1.02em;
-  margin: 0 0.45em 0 0;
-  vertical-align: -0.14em;
+  width: 0.95em;
+  height: 0.95em;
+  margin: 0 0.4em 0 0;
+  vertical-align: -0.1em;
   border: 1.6px solid var(--accent, #0969da);
   border-radius: 0.24em;
   background: transparent;
@@ -383,9 +411,11 @@ pre.diagram-source {
   transform: rotate(45deg);
 }
 
-/* 勾掉的任务项整行划掉。`text-decoration` 不会画到原子行内级子元素上，
-   所以 `<input>` 自己不会被划线穿过 —— 不用额外包一层 span。 */
-.markdown-body li:has(input[type="checkbox"]:checked) {
+/* 勾掉的只划「这一行」：.md-task-label 是渲染阶段圈到行自己内容上的标记
+   （markdown.ts::markCheckedTaskItems；松散列表打在第一个 <p> 上）。
+   line-through 不能直接放 li——text-decoration 会**传播**进嵌套子列表且子级
+   无法取消，勾一个父项整棵子树全被划线；`<input>` 是原子行内盒，不会被划穿。 */
+.markdown-body li.md-task-done > .md-task-label {
   text-decoration: line-through;
   text-decoration-thickness: 1px;
   opacity: 0.68;

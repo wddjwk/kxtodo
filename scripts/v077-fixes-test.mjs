@@ -121,21 +121,27 @@ async function switchView(page, label) {
 /** 种一本带流水的账（趋势图才有多个采样点） */
 async function seedBook(page) {
   await page.evaluate(() => {
+    // 本地日期：toISOString 是 UTC，凌晨跑会差一天（账按本地日归月）
+    const iso = (value) =>
+      `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
     const day = (offset) => {
       const d = new Date();
       d.setDate(d.getDate() - offset);
-      return d.toISOString().slice(0, 10);
+      return iso(d);
     };
     const now = new Date().toISOString();
     localStorage.setItem(
-      "kxtodo-ledger-book",
+      "todo-note-ledger-v1",
       JSON.stringify({
         accounts: [
           { id: "lacc-01", name: "现金", kind: "cash", icon: "Wallet", color: "#f0862c", initialCents: 100000, createdAt: now },
           { id: "lacc-02", name: "储蓄卡", kind: "储蓄卡", icon: "Landmark", color: "#4a90d9", initialCents: 500000, createdAt: now }
         ],
+        // 餐饮带两个二级：编辑器的「二级搁板」那几项断言要有子分类才展开得出来
         categories: [
           { id: "lcat-exp-01", name: "餐饮", side: "expense", icon: "Utensils", color: "#e0654f", parentId: "", createdAt: now },
+          { id: "lcat-exp-02", name: "早餐", side: "expense", icon: "Utensils", color: "#e0654f", parentId: "lcat-exp-01", createdAt: now },
+          { id: "lcat-exp-03", name: "夜宵", side: "expense", icon: "Utensils", color: "#e0654f", parentId: "lcat-exp-01", createdAt: now },
           { id: "lcat-inc-01", name: "工资", side: "income", icon: "Wallet", color: "#2f9e6e", parentId: "", createdAt: now }
         ],
         entries: [0, 3, 6, 9, 12].flatMap((offset, i) => [

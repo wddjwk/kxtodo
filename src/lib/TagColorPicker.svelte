@@ -1,8 +1,8 @@
 <script lang="ts">
   /**
-   * 标签配色选择：**九宫格两排**——第一排七彩虹里的五个，第二排三个加一个色盘。
-   * 胶囊形状、两排各自左右填满（flex 均分），所以任何宽度下都排得整整齐齐。
-   * 「色盘」那一格是个 `<input type="color">` 盖在胶囊上，点它出系统调色板。
+   * 标签配色选择：**两排各五枚胶囊**（九个具名色 + 末位色盘），flex 均分、
+   * 任何宽度下两排都刚好左右填满。色盘那枚平时是炫彩渐变，点它出系统调色板；
+   * 选过色之后胶囊就显示用户选的那个颜色（所见即所得）。
    */
   import { createEventDispatcher } from "svelte";
   import { TAG_COLOR_SPECS } from "./tagColors";
@@ -13,8 +13,6 @@
   export let hex = "";
 
   const dispatch = createEventDispatcher<{ change: { color: TagColor; hex: string } }>();
-
-  const DEFAULT_CUSTOM = "#8430ce";
 
   function pick(next: TagColor, nextHex = ""): void {
     dispatch("change", { color: next, hex: nextHex });
@@ -47,15 +45,16 @@
         on:click={() => pick(spec.color)}
       ></button>
     {/each}
+    <!-- svelte-ignore a11y_label_has_associated_control -->
     <label
       class="tag-color-pill tag-color-custom"
       class:selected={color === "custom"}
-      style={`--pill: ${hex || DEFAULT_CUSTOM}`}
+      style={hex ? `--pill: ${hex}` : ""}
       title="自定义颜色"
     >
       <input
         type="color"
-        value={hex || DEFAULT_CUSTOM}
+        value={hex || "#8430ce"}
         aria-label="自定义颜色"
         on:input={(event) => pick("custom", event.currentTarget.value)}
       />

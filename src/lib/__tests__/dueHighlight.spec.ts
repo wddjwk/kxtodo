@@ -94,6 +94,16 @@ describe("dueHighlightOf（配色）", () => {
     expect(middle?.color).toBe(mixHex(DEFAULT_DUE_COLORS[0], DEFAULT_DUE_COLORS[1], 0.5));
   });
 
+  it("渐变模式：只有日期没有时刻的不插值，直接按档位取色", () => {
+    // 按 23:59:59 插值会把「今天到期」推到几乎纯明天色——没有时刻就没有可插值的时间
+    expect(dueHighlightOf({ dueDate: "2026-09-16" }, "gradient", undefined, NOW)?.color)
+      .toBe(DEFAULT_DUE_COLORS[0]);
+    expect(dueHighlightOf({ dueDate: "2026-09-17" }, "gradient", undefined, NOW)?.color)
+      .toBe(DEFAULT_DUE_COLORS[1]);
+    expect(dueHighlightOf({ dueDate: "2026-09-18" }, "gradient", undefined, NOW)?.color)
+      .toBe(DEFAULT_DUE_COLORS[2]);
+  });
+
   it("自定义配色：用这一页自己的三色；非法项逐条回退默认", () => {
     const custom = ["#112233", "#445566", "#778899"];
     expect(dueHighlightOf({ dueDate: "2026-09-17" }, "solid", custom, NOW)?.color).toBe("#445566");

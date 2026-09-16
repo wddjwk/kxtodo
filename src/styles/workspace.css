@@ -163,6 +163,25 @@ h1 {
   padding: 5px 9px;
 }
 
+/* 临期高亮色：三个色块 + 默认按钮固定一行（不折行、不带文字注释）。
+   不能复用 .ui-color-row——那是三列 grid，装五个孩子会折成乱掉的两行。 */
+.due-color-row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.due-color-row .ui-color-picker {
+  flex: 0 0 auto;
+}
+
+.due-color-row .menu-action-button {
+  min-height: 30px;
+  margin-left: auto;
+  padding: 5px 9px;
+}
+
 .color-grid {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
@@ -2168,6 +2187,12 @@ h1 {
   color: #8430ce;
 }
 
+.task-tag.tag-pink {
+  background: #fde8f0;
+  border-color: #f3c1d4;
+  color: #c2185b;
+}
+
 .task-tag.tag-gray {
   background: #f1f3f4;
   border-color: #dadce0;
@@ -2236,6 +2261,50 @@ h1 {
   filter: none;
 }
 
+/* 「存入预置」勾选框：与输入框同一行、同高（28px）、同圆角（6px）。
+   原生 checkbox 直接放进来会矮一截还换行——做成一个盒子，真 input 铺满透明，
+   勾中态由 :has() 驱动盒子自己画（accent 底 + 白勾）。 */
+.tag-keep-box {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 28px;
+  border: 1px solid #dedede;
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+}
+
+.tag-keep-box input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.tag-keep-box:has(input:checked) {
+  border-color: var(--accent, #2564cf);
+  /* 必须有回退色：任务编辑器浮层没有 --accent（日记编辑器才内联） */
+  background: var(--accent, #2564cf);
+}
+
+.tag-keep-box:has(input:checked)::after {
+  content: "";
+  width: 12px;
+  height: 7px;
+  border-left: 2px solid white;
+  border-bottom: 2px solid white;
+  transform: rotate(-45deg) translate(1px, -1px);
+}
+
 /* ---------- 标签配色：胶囊、两排各自左右填满 ---------- */
 
 .tag-color-grid {
@@ -2288,6 +2357,12 @@ h1 {
   opacity: 0;
 }
 
+/* 色盘那枚胶囊：没选过色时是炫彩渐变（一眼看出「这里是自选色」），
+   选过色后 --pill 接管、显示用户选的那个颜色（所见即所得） */
+.tag-color-pill.tag-color-custom {
+  background: var(--pill, linear-gradient(100deg, #d93025, #e8710a, #f9ab00, #188038, #0b7285, #1a73e8, #8430ce));
+}
+
 /* ---------- 右键菜单的标签面板 ---------- */
 
 .tag-panel {
@@ -2298,18 +2373,6 @@ h1 {
 
 .tag-panel.compact {
   gap: 8px;
-}
-
-.tag-panel-block {
-  display: grid;
-  gap: 6px;
-  width: 100%;
-}
-
-.tag-panel-label {
-  color: #8b929e;
-  font-size: calc(var(--font-control) - 6px);
-  font-weight: 600;
 }
 
 /* 预置标签：按内容宽度自动排版（长短不一也排得整齐），放不下就换行 */
@@ -2339,6 +2402,7 @@ h1 {
 .tag-preset.tag-cyan { background: #e0f3f6; border-color: #b3e0e8; color: #0b7285; }
 .tag-preset.tag-blue { background: #e8f0fe; border-color: #c4dafc; color: #1a73e8; }
 .tag-preset.tag-purple { background: #f3e8fd; border-color: #ddc2f5; color: #8430ce; }
+.tag-preset.tag-pink { background: #fde8f0; border-color: #f3c1d4; color: #c2185b; }
 .tag-preset.tag-gray { background: #f1f3f4; border-color: #dadce0; color: #5f6368; }
 .tag-preset.tag-custom { background: var(--tag-bg, #f1f3f4); border-color: var(--tag-fg, #dadce0); color: var(--tag-fg, #5f6368); }
 
@@ -2379,79 +2443,30 @@ h1 {
   opacity: 1;
 }
 
-.tag-preset-empty {
-  margin: 0;
-  color: #9aa1ac;
-  font-size: calc(var(--font-control) - 6px);
-  line-height: 1.5;
-}
-
-/* 末尾右下的加号：把输入框里的标签存成预置 */
-.tag-preset-actions {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.tag-preset-add {
-  display: flex;
+/* 预置流末尾的「+」：也是一枚胶囊，跟着预置标签一起排（不是钉死在右下角） */
+.tag-preset-new {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  flex-shrink: 0;
+  width: 32px;
   padding: 0;
   border: 1px dashed #c8ccd2;
-  border-radius: 50%;
+  border-radius: 999px;
   background: transparent;
   color: #6b7280;
   cursor: pointer;
   line-height: 0;
 }
 
-.tag-preset-add:hover:not(:disabled) {
-  border-color: #2564cf;
-  color: #2564cf;
+.tag-preset-new:hover:not(:disabled) {
+  border-color: var(--accent, #2564cf);
+  color: var(--accent, #2564cf);
 }
 
-.tag-preset-add:disabled {
+.tag-preset-new:disabled {
   opacity: 0.35;
   cursor: default;
-}
-
-.tag-submit {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  /* 必须有回退色：任务编辑器浮层没有 --accent（日记编辑器才内联），裸 var 会失效成
-     透明底，白图标落在白浮层上就是「加号按钮渲染丢了但功能还在」 */
-  background: var(--accent, #2564cf);
-  color: white;
-  cursor: pointer;
-  line-height: 0;
-  outline: none;
-}
-
-.tag-submit:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.tag-keep-row {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: #6b7280;
-  font-size: calc(var(--font-control) - 6px);
-  cursor: pointer;
-}
-
-.tag-keep-row input[type="checkbox"] {
-  accent-color: var(--accent, #2564cf);
 }
 
 /* ---------- Task emoji badge ----------

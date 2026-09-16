@@ -790,7 +790,9 @@
 
   {#if $appSettings.features.dueHighlight !== "off" && !settingsPrefix}
     <div class="menu-section-title">临期高亮色</div>
-    <div class="ui-color-row">
+    <!-- 三个色块 + 默认按钮**一行排完**：早先复用 .ui-color-row 的三列 grid，
+         五个孩子被折成两行还各归各列，排版整个乱掉；今/明/后的说明收进 title -->
+    <div class="due-color-row">
       {#each dueColorLabels as label, index (label)}
         <label class="ui-color-picker" title={`${label}的高亮色`}>
           <span style={`--swatch: ${dueColorValue(index)}`}></span>
@@ -801,8 +803,7 @@
           />
         </label>
       {/each}
-      <span class="ui-color-value">今天 / 明天 / 后天</span>
-      <button class="menu-action-button" type="button" on:click={resetDueColors}>默认</button>
+      <button class="menu-action-button" type="button" title="恢复默认配色（今天红 / 明天黄 / 后天蓝）" on:click={resetDueColors}>默认</button>
     </div>
   {/if}
 

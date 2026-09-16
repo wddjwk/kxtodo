@@ -8,6 +8,7 @@ import type { Mermaid } from "mermaid";
 import { copyText } from "./clipboard";
 import { enhanceLinks } from "./linkPreview";
 import { decodeDiagramSource, isMarkmapLang } from "./markdown";
+import { mdImageCache, mdImageSrcForKey } from "./images";
 import { addBackInterceptor } from "./platform";
 import { appSettings } from "./stores";
 
@@ -76,6 +77,19 @@ async function fillDiagram(canvas: HTMLElement): Promise<void> {
 export function renderDiagramsIn(container: HTMLElement): void {
   container.querySelectorAll<HTMLElement>(".diagram-canvas[data-source]").forEach((canvas) => {
     void fillDiagram(canvas);
+  });
+}
+
+/**
+ * 本地插图占位的填充（与 mermaid 同模式）：渲染阶段 `<img src="" data-md-img="nodeId/file">`，
+ * 这里把缓存里解析好的 URL 填进 src；还没解析出来的由 mdImageSrcForKey 触发加载，
+ * 等 mdImageCache 更新（订阅在 markdownWire 里）再来一轮。幂等：有 src 的一张都不碰。
+ */
+export function fillImagesIn(container: HTMLElement): void {
+  container.querySelectorAll<HTMLImageElement>("img[data-md-img]").forEach((img) => {
+    if (img.getAttribute("src")) return;
+    const url = mdImageSrcForKey(img.dataset.mdImg ?? "");
+    if (url) img.setAttribute("src", url);
   });
 }
 
@@ -389,18 +403,25 @@ function wireInteractions(root: HTMLElement): void {
 export function markdownWire(node: HTMLElement): { update: () => void; destroy: () => void } {
   wireInteractions(node);
   renderDiagramsIn(node);
+  fillImagesIn(node);
   void enhanceLinks(node);
   // 特性开关（自动标题 / 卡片）随时可能被拨动：订阅设置，拨完就地重跑一遍，
   // 不必等下一次重渲（已处理过的节点自带标记，重跑很便宜）
   const unsubscribe = appSettings.subscribe(() => {
     void enhanceLinks(node);
   });
-  // {@html} 重渲会换掉 canvas 节点，而无参 action 的 update 不会被调用——
-  // 用 MutationObserver 盯住子树，新占位框一出现就填（fillDiagram 有 rendered 守卫）。
+  // 插图字节是异步到的（同步收尾还会 retryFailedImages 轻推一把）：缓存每更新一轮
+  // 就把还空着的占位再填一遍——已经填过的不动，不会重新解码任何图。
+  const unsubscribeImages = mdImageCache.subscribe(() => {
+    fillImagesIn(node);
+  });
+  // {@html} 重渲会换掉 canvas/img 节点，而无参 action 的 update 不会被调用——
+  // 用 MutationObserver 盯住子树，新占位框一出现就填（fillDiagram/fillImagesIn 都有守卫）。
   const observer =
     typeof MutationObserver !== "undefined"
       ? new MutationObserver(() => {
           renderDiagramsIn(node);
+          fillImagesIn(node);
           void enhanceLinks(node);
         })
       : null;
@@ -408,11 +429,13 @@ export function markdownWire(node: HTMLElement): { update: () => void; destroy: 
   return {
     update() {
       renderDiagramsIn(node);
+      fillImagesIn(node);
       void enhanceLinks(node);
     },
     destroy() {
       observer?.disconnect();
       unsubscribe();
+      unsubscribeImages();
     }
   };
 }

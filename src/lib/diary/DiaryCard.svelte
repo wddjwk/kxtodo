@@ -8,7 +8,7 @@
   import { createDeferredMarkdown } from "../deferredMarkdown";
   import { markdownWire } from "../markdownControls";
   import { observeResize } from "../measureBus";
-  import { mdImageCache, resolveMarkdownImages } from "../images";
+  import { preloadMarkdownImages } from "../images";
   import { isMobile as isMobileStore } from "../platform";
   import { longpress, isLongPressSuppressed } from "../longpress";
   import {
@@ -52,26 +52,29 @@
   $: images = diaryImageCount(entry.markdown);
   // 与 todo 卡片同一条口径：多行/带图/摘要被截断/摘要两行放不下/标题显示不全，都算可展开。
   // 「单行但特别长」靠量（excerptOverflow/titleOverflow），字符数阈值识别不了它。
+  // **当前就是展开的**也算：以展开态挂载的卡片（编辑器保存后重挂载）量不到折叠态，
+  // 不并进来的话就会被判成不可折叠——双击收不起来（TaskCard 同款修复）。
   $: canExpand =
     Boolean(entry.markdown.trim()) &&
     (excerpt.length >= EXCERPT_LIMIT ||
       excerptSource.trim().split(/\r?\n/).filter((line) => line.trim()).length > 1 ||
       images > 0 ||
       excerptOverflow ||
-      titleOverflow);
+      titleOverflow ||
+      isExpanded);
   // 展开态只认存储值：canExpand 是量出来的易失值（滚动条出现/消失、宽度变化都会翻转），
   // 拿它门控渲染会出现「动了别的卡片这张自己展开/收起」（v0.6.8 在 todo 卡片修过同一病）。
   $: isExpanded = entry.expanded === true;
   // **只在展开时渲染完整 markdown**：Svelte 的 `$:` 是急切求值，早先折叠态的卡片也白跑一遍
   // 完整渲染，而结果只有下面 `{#if isExpanded}` 那一支会消费。
-  // 渲染时机交给 createDeferredMarkdown：命中记忆化或短文本同步出，长正文让一帧再算，
-  // 免得「点开」那一次同步 flush 被几百毫秒的渲染占住（TaskCard 同款）。
-  $: resolvedMd = resolveMarkdownImages(entry.markdown, DIARY_IMAGE_NODE, $mdImageCache);
+  // 渲染时机交给 createDeferredMarkdown：命中记忆化或短文本一步到位，长正文先给快速版、
+  // 完整装饰异步补上（TaskCard 同款）。插图走占位异步填充，这里只预热字节。
+  $: preloadMarkdownImages(entry.markdown, DIARY_IMAGE_NODE);
   let fullHtml = "";
   const fullRender = createDeferredMarkdown((html) => {
     fullHtml = html;
   });
-  $: syncFullRender(isExpanded, resolvedMd);
+  $: syncFullRender(isExpanded, entry.markdown);
 
   function syncFullRender(expanded: boolean, markdown: string): void {
     if (!expanded) {
@@ -79,7 +82,7 @@
       if (fullHtml !== "") fullHtml = "";
       return;
     }
-    fullRender.schedule(markdown);
+    fullRender.schedule(markdown, DIARY_IMAGE_NODE);
   }
   $: dayNumber = entry.date.slice(8, 10);
   $: monthLabel = `${Number.parseInt(entry.date.slice(5, 7), 10)}月`;
