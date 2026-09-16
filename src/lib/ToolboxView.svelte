@@ -8,26 +8,51 @@
   import { ChevronLeft, Toolbox } from "@lucide/svelte";
   import type { Component } from "svelte";
   import MobileBack from "./MobileBack.svelte";
+  import { showToast } from "./stores";
+  import { createBackGuard } from "./platform";
   import { availableTools, type ToolDefinition } from "./tools/registry";
 
   let activeToolId: string | null = null;
   let toolComponent: Component | null = null;
+  let loadFailed = false;
 
   $: tools = availableTools();
   $: activeTool = tools.find((tool) => tool.id === activeToolId) ?? null;
+  // 列表一露头就把各工具的 chunk 取回来：工具箱里的组件都是小件（注册表约定），
+  // 而「点一下先看到正在打开…」是纯亏——用户看到的是没反馈，省下的是几 KB。
+  // 放在这里而不是启动时：启动包不受影响，进工具箱又一定是瞬开。
+  $: if (!activeTool) void Promise.all(tools.map((tool) => tool.load().catch(() => undefined)));
 
   async function openTool(tool: ToolDefinition): Promise<void> {
     activeToolId = tool.id;
     toolComponent = null;
-    const module = await tool.load();
-    // 加载期间用户可能已经返回列表或换了工具：只有还停在它身上才挂
-    if (activeToolId === tool.id) toolComponent = module.default;
+    loadFailed = false;
+    // 首次点开（预取还没回来）时 chunk 请求可能失败：**不能让它永远停在「正在打开…」**，
+    // 重试一次再失败就明确报错给用户。
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const module = await tool.load();
+        if (activeToolId === tool.id) toolComponent = module.default;
+        return;
+      } catch (error) {
+        if (attempt === 1 && activeToolId === tool.id) {
+          loadFailed = true;
+          showToast(`打开「${tool.name}」失败：${String(error)}`);
+        }
+      }
+    }
   }
 
   function backToList(): void {
     activeToolId = null;
     toolComponent = null;
+    loadFailed = false;
   }
+
+  // 工具详情是工具箱整页里的一个层级（不占历史栈）：返回键先退回工具列表，
+  // 再按一次才轮到历史栈把整页弹掉。
+  const backGuard = createBackGuard();
+  $: backGuard(activeToolId !== null, backToList);
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -60,6 +85,8 @@
       </button>
       {#if toolComponent}
         <svelte:component this={toolComponent} />
+      {:else if loadFailed}
+        <p class="toolbox-empty">打开失败，请返回后重试。</p>
       {:else}
         <p class="toolbox-empty">正在打开…</p>
       {/if}

@@ -104,9 +104,24 @@ KXToDo 是 Windows / Linux / Android 三端应用，**任何更改、新增功�
 - 全局 CSS 非 Svelte scoped（`{@html}` 渲染的 Markdown 没有 scoped 属性，触及不到）。
 - **别拿全局类名当状态类名**（`.collapsed` 曾被代码块折叠态复用，整块代码被转 90°）。**夹行只写 `-webkit-` 三件套**，别「两个都写以求兼容」。
 
-### 3.8 浮层与安全区
+### 3.8 浮层、安全区与返回键
 
-**任何「JS 命令式建的全屏/浮层」都要先问一句：移动端顶部避让了吗？**（`env(safe-area-inset-*) × var(--safe-inv)`；浮层要挂进 `.app-shell` 而不是 body，否则拿不到 `--safe-inv`。）这条安全区坑**已经踩过三次**（v0.6.8 编辑器全屏、v0.6.8 链接预览标题栏、v0.6.9 图全屏工具栏）。配套：不占历史栈的覆盖层要注册 `addBackInterceptor`，否则安卓返回键会把底下的页面弹掉而浮层留在原地。
+**任何「JS 命令式建的全屏/浮层」都要先问两句**：① 移动端顶部避让了吗？（`env(safe-area-inset-*) × var(--safe-inv)`；浮层要挂进 `.app-shell` 而不是 body，否则拿不到 `--safe-inv`——这条安全区坑**已经踩过三次**：v0.6.8 编辑器全屏、v0.6.8 链接预览标题栏、v0.6.9 图全屏工具栏）；② **系统返回键接管了吗、还回去了吗？**
+
+第二条用 `platform.ts::createBackGuard` 一句话搞定，但**两种写法不能混**：
+
+```svelte
+// 由调用方 {#if} 挂载式（菜单 / 图标选择器 / 日期选择器）——「挂着就等于开着」
+const backGuard = createBackGuard();
+$: backGuard(true, () => close());
+
+// open 是 prop 的（Dropdown / MonthPopover）——收放自动
+$: backGuard(open, onClose);
+```
+
+**`createBackGuard()` 内部注册了 `onDestroy`**：组件一销毁（不管是因为浮层关了、还是开着浮层时整页被切走）拦截器就自动摘掉，不需要调用点自己记得。**别绕过它直接用 `addBackInterceptor`**——那个要手动配对注销，漏一次的症状是**返回键被一个已经看不见的浮层永久吃掉**（v0.8.1 踩过：菜单开过一次之后，整页返回键再也没反应）；另一个方向的症状是**返回键跳过当前浮层去弹下面的页面**（漏注册，v0.6.9 起一批浮层补过）。两个方向症状完全不同，排查时先问「当前有几层、哪一层该吃掉这一记」。
+
+配套：`{#await import(...)}` 一律配 `{:catch}`（懒加载失败不能让用户「点开什么都没有也退不出去」）；不占历史栈的覆盖层还要注册 `addBackInterceptor`（`createBackGuard` 就是它的封装），否则安卓返回键会把底下的页面弹掉而浮层留在原地。
 
 ### 3.9 测试与一致性地基（v0.8.0 起）
 
@@ -114,7 +129,14 @@ KXToDo 是 Windows / Linux / Android 三端应用，**任何更改、新增功�
 - **跨语言的同口径数字要有测试钉住**：日粒度门槛 62（core `DAY_GRAIN_MAX_DAYS` ↔ `ledger.ts::bucketOf`）、图标目录（`tests/ledger_icons.rs`）、金额解析（`parse_cents` ↔ `parseYuanToCents`）。手法是 `include_str!` 前端 TS 源码直接比对——**只写注释说「两边要一致」一定会漂**。
 - **改 `skills/kxtodo/SKILL.md` 必须重跑 `kxtodo-cli skills validate`**：`cmd_validate` 的正则会把任何 `task|diary|schedule|config|skills` 后跟的小写英文词当命令名、任何 `--xxx` 当参数名去比对目录，文档里写一个不存在的子命令或参数会直接挂测试。
 
-### 3.10 还有一大批（去 invariants.md 查）
+### 3.10 首帧与响应（v0.8.1）
+
+两条硬优先级，排在「省资源」前面：
+
+- **首帧不许闪**：一切首帧可见的东西都要进 `localStorage` 的外观/资料缓存（**外观缓存收整个 `appearance`**，别只白名单数字字段——冷启动「先单列再跳双列」就是这么来的）；缓存写入失败要**退一步保住能保的**（头像撑爆配额时仍然写名字与邮箱）。水合是异步的，首帧只能用缓存。
+- **点击不许顿**：`setConfig` **先本地生效、再落盘**；展开一张长卡片的完整渲染**双 rAF 之后再算**（`deferredMarkdown.ts`，单 rAF 仍在当帧绘制前触发）；懒加载组件要预取 + 有失败路径。任何「为了省资源而让点击变慢」的改动都不成立。
+
+### 3.11 还有一大批（去 invariants.md 查）
 
 数据与写路径 / 同步 / 前端 Svelte 与渲染 / 记账 / 图片与导入导出与清理 / 构建发布 CI / 平台与窗口——七组共 100+ 条硬约束速查（每条原文照引 + 出处），全在 **`references/invariants.md` 第九节**。
 
@@ -128,16 +150,20 @@ KXToDo 是 Windows / Linux / Android 三端应用，**任何更改、新增功�
 | 扩 CLI 的 `--jq` 子集 | `crates/core/src/jq.rs`（`SUPPORT_SUMMARY` 错误 hint 与 `JQ_SUBSET_DOC` 要同步改，有测试钉住两边） | `references/cli.md` |
 | 改列表命令的分页 / 合计 | `ops_task.rs` 的 `Page`/`paginate` + `core.rs` 的 `page_from`/`unbounded_page_from` + `render.rs` 的合计行；`ledger list`/`diary list` 默认返回全部，**金融数据不许静默截断** | `references/cli.md` |
 | 加 GUI 写操作 | `crates/core/src/ops_gui.rs` 加命令 → `actions.ts` 加 coreDispatch 包装 → 组件调用 actions；**纯 UI 命令要进 `repo.rs::UI_ONLY_COMMANDS` 白名单**（不进审计台账） | `references/frontend.md`（actions.ts）+ `references/invariants.md` |
-| 改渲染性能 / 测量 / 记忆化 | `src/lib/markdown.ts`（block/inline LRU + `window.__kxtodoRenderStats`）+ `src/lib/measureBus.ts`（全应用共享 RO/resize/rAF 的 `observeResize`）；卡片 `fullHtml` **只在展开时渲染**（`$:` 是急切求值） | `references/frontend.md` + `references/history/v0.8.md` 批次 2 |
-| 写前端纯逻辑单测 | `src/lib/__tests__/*.spec.ts` + 独立 `vitest.config.ts`（node 环境）；跑 `npm run test:unit`；**断言必须时区无关** | 本文件 3.9 + `references/frontend.md` |
+| 改渲染性能 / 展开时机 / 测量 / 记忆化 | `src/lib/markdown.ts`（block/inline LRU + `window.__kxtodoRenderStats`）+ `src/lib/deferredMarkdown.ts`（**展开时双 rAF 后再算**）+ `src/lib/measureBus.ts`（全应用共享 RO/resize/rAF 的 `observeResize`）；卡片 `fullHtml` **只在展开时渲染**（`$:` 是急切求值） | `references/frontend.md` + `references/history/v0.8.md` 批次 2 + `references/history/v0.8.1.md` 一.3 |
+| 写前端纯逻辑单测 | `src/lib/__tests__/*.spec.ts` + 独立 `vitest.config.ts`（node 环境）；跑 `npm run test:unit`；**断言必须时区无关**。纯逻辑要**单独成模块**（不 import marked/DOMPurify）才跑得进 node——`markdownTasks.ts` / `rmb.ts` / `dueHighlight.ts` 都是这么拆的 | 本文件 3.9 + `references/frontend.md` |
 | 加设置项 | `model.rs` SettingsFile + `defaults.ts` 默认值/normalize + `SettingsDrawer.svelte` UI | `references/frontend.md` + `references/ui-patterns.md`（设置抽屉）+ `references/sync.md`（若该项要同步） |
 | 加调度触发/动作类型 | `model.rs`（discriminator 分支）+ `ops_schedule.rs` 白名单校验 + `plan.rs`/`scheduler.rs` 执行 + `scheduleAdapter.ts` 适配 + `ScheduledTasksView.svelte` 编辑表单 | `references/ui-patterns.md`（定时任务）+ `references/frontend.md`（scheduleAdapter.ts） |
 | 改记账 | 数据与命令：`model.rs`（LedgerFile/LedgerEntry/LedgerAccount/LedgerCategory/LedgerSettings + `seed_defaults` 确定性种子）+ `repo.rs`（Domain::Ledger / load_ledger（缺文件内存种子）/ write_ledger（首写落种子）/ ensure_initialized）+ `ops_ledger.rs`（ledger.add/get/list/modify/remove/transfer/accounts/accountAdd…/categories/categoryAdd…/stats/balance/export/import）+ `ledger_archive.rs`（xlsx 四表 zip 打包与解析）+ `ops_config.rs` 的 `ledger.*` 五个路径 + `cli.rs` 的 Ledger 子命令树（kebab 名）+ `schema.rs` risk_for + `src-tauri/src/lib.rs` 的 `ledger_export_zip`/`ledger_import_zip`（**两个 invoke_handler 都要注册**）；同步：`merge.rs`（Scopes 五 bool / ledger 三种 kind 的 stamp·payload·apply·normalize / settings 共享子集 ledger 块）+ `engine.rs` 五处 + `ops_sync.rs` 与 `cli.rs` 的 `--sync-diary/--sync-ledger`；前端：`ledger.ts`（按天/热力/统计/余额纯逻辑）+ `ledgerIcons.ts`（lucide 白名单与账户类型默认图标）→ `stores.ledgerData` → `LedgerView.svelte`（四视图 + 齿轮 + 段控 + FAB）→ `ledger/LedgerRow|LedgerList|LedgerCalendar|LedgerStats|LedgerAssets|LedgerEditor|LedgerEntryMenu|CategoryManager|AccountManager.svelte` → `actions.ts` 的 ledger 包装 → `ledger.css` + mobile.css 的 `.view-ledger` | `references/ledger.md` + `references/history/v0.7.0-v0.7.4.md` + `references/history/v0.7.5-v0.7.8.md` |
 | 加一类**要同步的**实体 | 日记（kind `diary`）是现成样板：`model.rs` 新领域文件结构 + 自己的 SCHEMA_VERSION → `repo.rs`（Domain 变体 + layout 路径 + load_/write_ + `ensure_initialized` 里补一条）→ `merge.rs`（payload 剥本机 UI 态 / extract / `*_entity_stamp` / `apply_*_record` **连删除分支一起** / `normalize_*_orders`）→ `engine.rs` **五处**（拉取分桶、合并事务、对账水位 match、全新设备推送抑制、`resolve_conflict`）→ `host.rs` 的 `emit_domain_event` match（新 Domain 变体不补会直接编不过）→ `core.rs` 与 `cli.rs` 的 schemaVersions → `lib.rs` 的 `core_snapshot`（**`wanted()` 名单与 `put_snapshot_domain` 调用都要加**，它按域过滤）→ 前端 `CoreSnapshot`/`applySnapshot`/`normalize*`/`commit*`。**server 一行都不用改**（entities 表没有 kind 列，kind 只在密文里）。搭现有 scope 的车（日记跟「同步数据」）就不用动 `Scopes`/scopeSignature/三勾选框/CLI 范围参数 | `references/sync.md` + `references/architecture.md` |
 | 改外观 | 全局 CSS 文件按区域找；配色变量在 base.css；菜单样式统一在 menu.css | `references/frontend.md`（CSS 全部）+ `references/invariants.md`（CSS 铁律） |
-| 改超链接增强（标题 / 预览卡片） | 抓取与解析在 `crates/core/src/linkmeta.rs`（命令 `gui.link-meta`，缓存 `runtime/linkmeta.json`——**改了元数据字段就把 `CACHE_VERSION` 抬一格**，否则老缓存命中不到新字段）；渲染在 `src/lib/linkPreview.ts`（由 `markdownControls.ts::markdownWire` 驱动）+ `markdown-ext.css` 的 `.kx-link-card`；设置项 `features.autoLinkTitle/linkCards`（设置页合成一行「超链接渲染样式」的 标题/卡片 两档）走 model.rs/ops_config/defaults.ts/types.ts/SettingsDrawer | `references/ui-patterns.md`（markdown 扩展渲染）+ `references/history/v0.7.5-v0.7.8.md`（v0.7.7 ⑧ / v0.7.8 ⑦） |
+| 改超链接增强（标题 / 预览卡片） | 抓取与解析在 `crates/core/src/linkmeta.rs`（命令 `gui.link-meta`，缓存 `runtime/linkmeta.json`——**改了元数据字段就把 `CACHE_VERSION` 抬一格**，否则老缓存命中不到新字段）；渲染在 `src/lib/linkPreview.ts`（由 `markdownControls.ts::markdownWire` 驱动）+ `markdown-ext.css` 的 `.kx-link-card`；设置项 `features.linkRender`（**三档单选** `off|title|card`，默认 card；设置页三个 radio）走 model.rs/ops_config/defaults.ts/types.ts/SettingsDrawer | `references/ui-patterns.md`（markdown 扩展渲染）+ `references/history/v0.7.5-v0.7.8.md`（v0.7.7 ⑧ / v0.7.8 ⑦） |
+| 加浮层 / 弹层 / 全屏查看 | `platform.ts::createBackGuard`（**挂载式必须 `onDestroy(dispose)`**，见 3.8）+ 安全区避让 | 本文件 3.8 + `references/ui-patterns.md` |
+| 改日历 / 周起始 / 日期选择器 | `stores.ts` 的 `weekStart` 派生 store（**唯一来源**）+ `diary.ts::leadingBlanks`/`calendarWeekdayHeaders` + `ledger.ts::ledgerCalendarCells`/`weekStartOf`；设置项 `features.weekStart` | 本文件 3.10 + `references/frontend.md` |
+| 改临期高亮 / 任务日期展示 | 纯逻辑 `src/lib/dueHighlight.ts`（有单测）+ `TaskCard.svelte` 的 `due-soon` 类 + `workspace.css`；配色按页存在 `appearance.dueColors[nodeId]`，入口在列表三点菜单「临期高亮色」 | `references/frontend.md` |
+| 改标签（配色 / 预置） | 配色 `src/lib/tagColors.ts` + `workspace.css` 的 `.task-tag.tag-*`；面板 `TagMenuPanel.svelte` / `TagColorPicker.svelte`；`TagColor` 九值 + `Tag.hex`（Rust `model::TagColor`/`tag_hex` 同口径）；预置住在 `appearance.tagPresets` | `references/ledger.md` + `references/frontend.md` |
 | 加原生能力 | Tauri 命令/插件，桌面专有逻辑必须 `#[cfg(desktop)]` 隔离并在移动端给空实现（前端 invoke 不能炸） | `references/invariants.md`（跨平台铁律）+ `references/pitfalls-android.md` + `references/frontend.md`（capabilities.ts） |
-| 改图片入库（压缩 / 体积闸 / 文件名安全） | `src-tauri/src/lib.rs` 的 `shrink_oversized_image`（5MB 闸，GIF/WebP 不动，`spawn_blocking`）与 `safe_image_name`（委托 core `diary_archive.rs::is_safe_image_name`——全项目唯一一份实现） | 本文件 3.1 + `references/history/v0.8.md` 批次 6 |
+| 改图片入库（压缩 / 体积闸 / 文件名安全） | `src-tauri/src/lib.rs` 的 `ImageGate`（**三档**：插图 5MB / 背景 2MB 且压完超 10MB 拒收 / 头像一律 256px；只处理 JPEG·PNG，GIF·WebP 可能是动图一律原样；`spawn_blocking`）+ `safe_image_name`（委托 core `diary_archive.rs::is_safe_image_name`——全项目唯一一份实现）；前端上传前的第一道压缩在 `src/lib/images.ts`（`compressAvatarImage` / `compressBackgroundImage`，`BACKGROUND_MAX_EDGE = 2560` 与 Rust 同值） | 本文件 3.1 + `references/history/v0.8.md` 批次 6 + `references/history/v0.8.1.md` 二 |
 | 改同步协议/加密 | `crates/core/src/sync/`（crypto=密钥派生+加解密、merge=LWW 纯函数、**transport=HTTP 客户端（三方式共用）**、**endpoint=「连哪儿」（加新通信方式只改这里 + model 的 SyncMode）**、engine=编排、images=图片 blob 通道、discovery=局域网发现客户端、state=runtime/sync.json + sync-host.json、**credentials=明文凭据留档（runtime/sync-credentials.json，配对成功时写，解除配对不清）**）+ `crates/server/src/`（api/db 两侧同步改，discovery=UDP 应答、daemon=后台运行、**host=可嵌入的 serve()/ServerHandle**）；改信封结构要同步动 `merge.rs` 的 SyncEnvelope 与测试，改图片元数据要同步动 `images.rs` 与 `db.rs`/`api.rs`，**改「连哪儿」不许动 merge/crypto**（分层的全部意义） | `references/sync.md` |
 | 部署/运维 kxtodo-server | 单二进制 `kxtodo-server --name 家里的服务器 [--listen 0.0.0.0:52177 --db 路径 --data-dir 目录]`；`--daemon` 后台静默运行 + `--stop` 结束；`--update` 自升级（下载失败自动回退 ghfast.top 代理）；升级密钥/盐算法前想清楚——改了派生参数所有设备全部失配 | `references/sync.md`（server 运维 / 管理控制台）+ `references/build-and-release.md` |
 | Agent 技能文档 | 只编辑 `skills/kxtodo/SKILL.md`（编译期 include_str! 嵌入，发布 exe 自包含）；**改完必须重跑 `kxtodo-cli skills validate`**（本文件 3.9）。`skills persist` 不指定位置时默认写 `~/.agents/skills/kxtodo/SKILL.md`（v0.6.11）；已存在的 SKILL.md 直接覆盖，路径被同名文件/目录挡住时未加 `--yes` 报 confirmation（退出码 10）询问 y/N；结果里的 `data.path` 就是最终落地路径 | `references/cli.md`（Agent 技能文档） |
@@ -158,12 +184,12 @@ KXToDo 是 Windows / Linux / Android 三端应用，**任何更改、新增功�
 | `references/pitfalls-linux.md` | Linux 坑位 6 条（apt 依赖清单与 release.sh 门控含 libxdo 例外、**裸 cargo 构建出 dev 模式制品导致整窗白屏**、托盘依赖 appindicator 宿主、AppImage 需要 FUSE、cargo 直接可用、WSLg XWayland 丢光标与 AppImage 强制 x11） | 在 Linux/WSL 上构建或运行；Linux 制品白屏；托盘不出现；AppImage 跑不起来；光标消失；改 `release.sh` 的依赖门控 |
 | `references/pitfalls-android.md` | Android 20 条（gen/android 的所有权、返回键、Kotlin 桥、dialog 的 content:// URI、触摸长按语义、**坐标与 uiScale**、**模块循环 TDZ 白屏**、用 Playwright 模拟移动端、签名与升级、APK 产物策略、图标同步、通知、能力门控优先于 isMobile、**`isMobile` 是 writable store**、夹行三件套、ContextMenu 限高、**transform 缩放影响一切 rect**、首屏量尺寸全是 0、软键盘两连击、菜单限高不能顶到视口顶部） | 构建 APK；改 `src-tauri/gen/android/`；写 Kotlin 桥；改移动端手势/浮层/菜单/测量逻辑；没有真机要验证移动端 UX；签名或升级链出问题 |
 | `references/history/README.md` | history 目录的定位与用法 | 想知道「这个目录是什么、该往哪写」 |
-| `references/history/v0.4.md`<br>`v0.5.md`<br>`v0.6.md`<br>`v0.7.0-v0.7.4.md`<br>`v0.7.5-v0.7.8.md`<br>`v0.8.md` | 按版本归档的**改动索引**（原文粗体小标题 → 现在住在哪），v0.7 那两份还带**逐版流水账全文**（v0.7.3 打磨 ①–⑦、v0.7.4 界面改写 ①–⑩、v0.7.5 ①–⑪、v0.7.6 ①–⑬、v0.7.7 ①–⑧、v0.7.8 ①–⑪，合计 43 条）；`v0.8.md` 是 v0.8.0（**正确性 + 性能 + 卫生版，无新功能**）的七个批次全档 + vitest 挖出的 6 个正确性问题 + **明确决定不做的事清单** + perf-bench 实测数字 | 追溯「这一版为什么这么改」「某个方案试过又被推翻的经过」「某个方案为什么明确不做」；**改记账界面之前必读 v0.7 那两份**（很多当前界面细节只在那里）；改渲染/性能/CLI 分页/图片入库前读 v0.8.md 对应批次 |
+| `references/history/v0.4.md`<br>`v0.5.md`<br>`v0.6.md`<br>`v0.7.0-v0.7.4.md`<br>`v0.7.5-v0.7.8.md`<br>`v0.8.md`<br>`v0.8.1.md` | 按版本归档的**改动索引**（原文粗体小标题 → 现在住在哪），v0.7 那两份还带**逐版流水账全文**（v0.7.3 打磨 ①–⑦、v0.7.4 界面改写 ①–⑩、v0.7.5 ①–⑪、v0.7.6 ①–⑬、v0.7.7 ①–⑧、v0.7.8 ①–⑪，合计 43 条）；`v0.8.md` 是 v0.8.0（**正确性 + 性能 + 卫生版，无新功能**）的七个批次全档 + vitest 挖出的 6 个正确性问题 + **明确决定不做的事清单** + perf-bench 实测数字；`v0.8.1.md` 是 v0.8.0 的回归修复（八个可感问题 + 返回键失灵 + 资料同步不回来）与八项新需求，含 CLI review 十条的逐条处理 | 追溯「这一版为什么这么改」「某个方案试过又被推翻的经过」「某个方案为什么明确不做」；**改记账界面之前必读 v0.7 那两份**（很多当前界面细节只在那里）；改渲染/性能/CLI 分页/图片入库前读 v0.8.md 对应批次 |
 
 **几条最常用的组合**：
 
 - 改记账界面 → `ledger.md` + `history/v0.7.0-v0.7.4.md` + `history/v0.7.5-v0.7.8.md`（+ `ui-patterns.md` 若涉及共用组件）
-- 改渲染 / 排查卡顿 / 动测量逻辑 → `frontend.md` + `history/v0.8.md`（批次 2/3 + 实测数字；性能基线跑 `node scripts/perf-bench.mjs`）
+- 改渲染 / 排查卡顿 / 动测量逻辑 → `frontend.md` + `history/v0.8.md`（批次 2/3 + 实测数字）+ `history/v0.8.1.md` 一（「点一下顿一下」的四个根因；性能基线跑 `node scripts/perf-bench.mjs`）
 - 改任务卡片 / 列表 / 树 / 菜单 → `ui-patterns.md` + `frontend.md`（CSS）+ `invariants.md`
 - 改同步 / 排查同步 → `sync.md`（+ `architecture.md` 的分层图）
 - 发版 / 打 tag / 推送 → `build-and-release.md` + 本文件 3.4–3.6

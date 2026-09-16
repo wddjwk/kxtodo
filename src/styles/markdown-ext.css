@@ -341,17 +341,54 @@ pre.diagram-source {
 
 /* ---------- GFM 任务列表（- [ ] / - [x]）：只留 checkbox，不要列表圆点 ---------- */
 
-.markdown-body li:has(> input[type="checkbox"]) {
+/* 用后代选择器而不是 `>`：松散列表里 marked 把勾选框放进了 `<li><p>` 里 */
+.markdown-body li:has(input[type="checkbox"]) {
   list-style: none;
   margin-left: -1.4em;
 }
 
-.markdown-body li > input[type="checkbox"] {
-  width: 0.95em;
-  height: 0.95em;
-  margin: 0 0.5em 0 0;
-  vertical-align: -0.12em;
-  accent-color: var(--accent, #0969da);
+/* 勾选框自己画：跟着当前页的主题色（--accent，与待办卡片的勾选圆点同色），
+   方角圆边、点得动。原生 `accent-color` 在安卓 WebView 上只有勾不换框，
+   整行划掉的任务项看着像没生效。 */
+.markdown-body input[type="checkbox"].md-task-box {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 1.02em;
+  height: 1.02em;
+  margin: 0 0.45em 0 0;
+  vertical-align: -0.14em;
+  border: 1.6px solid var(--accent, #0969da);
+  border-radius: 0.24em;
+  background: transparent;
+  cursor: pointer;
+  flex: none;
+  transition: background-color 0.12s ease;
+}
+
+.markdown-body input[type="checkbox"].md-task-box:checked {
+  background: var(--accent, #0969da);
+}
+
+/* 纯 CSS 画的勾：一段右下角的两边描边转 45°，不需要额外图片资源 */
+.markdown-body input[type="checkbox"].md-task-box:checked::after {
+  content: "";
+  position: absolute;
+  left: 30%;
+  top: 8%;
+  width: 26%;
+  height: 56%;
+  border: solid var(--kxtodo-check-mark, #fff);
+  border-width: 0 0.14em 0.14em 0;
+  transform: rotate(45deg);
+}
+
+/* 勾掉的任务项整行划掉。`text-decoration` 不会画到原子行内级子元素上，
+   所以 `<input>` 自己不会被划线穿过 —— 不用额外包一层 span。 */
+.markdown-body li:has(input[type="checkbox"]:checked) {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  opacity: 0.68;
 }
 
 /* ---------- 拖拽图/插图时禁止框选文本 ---------- */

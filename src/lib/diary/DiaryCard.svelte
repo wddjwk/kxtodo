@@ -1,7 +1,11 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy } from "svelte";
   import { Image as ImageIcon, PenLine } from "@lucide/svelte";
-  import { markdownTitle, renderMarkdown } from "../markdown";
+  import { markdownTitle } from "../markdown";
+  import { taskToggleIndex, toggleMarkdownTask } from "../markdownTasks";
+  import { updateDiaryEntry } from "../actions";
+  import { tagChipStyle } from "../tagColors";
+  import { createDeferredMarkdown } from "../deferredMarkdown";
   import { markdownWire } from "../markdownControls";
   import { observeResize } from "../measureBus";
   import { mdImageCache, resolveMarkdownImages } from "../images";
@@ -60,9 +64,23 @@
   $: isExpanded = entry.expanded === true;
   // **只在展开时渲染完整 markdown**：Svelte 的 `$:` 是急切求值，早先折叠态的卡片也白跑一遍
   // 完整渲染，而结果只有下面 `{#if isExpanded}` 那一支会消费。
-  $: fullHtml = isExpanded
-    ? renderMarkdown(resolveMarkdownImages(entry.markdown, DIARY_IMAGE_NODE, $mdImageCache))
-    : "";
+  // 渲染时机交给 createDeferredMarkdown：命中记忆化或短文本同步出，长正文让一帧再算，
+  // 免得「点开」那一次同步 flush 被几百毫秒的渲染占住（TaskCard 同款）。
+  $: resolvedMd = resolveMarkdownImages(entry.markdown, DIARY_IMAGE_NODE, $mdImageCache);
+  let fullHtml = "";
+  const fullRender = createDeferredMarkdown((html) => {
+    fullHtml = html;
+  });
+  $: syncFullRender(isExpanded, resolvedMd);
+
+  function syncFullRender(expanded: boolean, markdown: string): void {
+    if (!expanded) {
+      fullRender.cancel();
+      if (fullHtml !== "") fullHtml = "";
+      return;
+    }
+    fullRender.schedule(markdown);
+  }
   $: dayNumber = entry.date.slice(8, 10);
   $: monthLabel = `${Number.parseInt(entry.date.slice(5, 7), 10)}月`;
   $: dayLabel = relativeDayLabel(entry.date, today);
@@ -72,6 +90,7 @@
 
   onDestroy(() => {
     if (tapTimer !== undefined) window.clearTimeout(tapTimer);
+    fullRender.cancel();
   });
 
   /** 标题是单行 nowrap + 省略号：比宽度就知道显示全不全。 */
@@ -192,6 +211,13 @@
       dispatch("openLink", { href: link.href, title: (link.textContent ?? "").trim() });
       return;
     }
+    // 任务列表的勾选框：点一下就把正文里的 `- [ ]` / `- [x]` 翻过来存回去
+    const boxIndex = taskToggleIndex(event, event.currentTarget as Element);
+    if (boxIndex !== null) {
+      event.preventDefault();
+      void updateDiaryEntry(entry.id, { markdown: toggleMarkdownTask(entry.markdown, boxIndex) });
+      return;
+    }
     if (mobile) handleMobileTap(event);
   }
 
@@ -241,7 +267,7 @@
 
     {#if isExpanded}
       <div class="markdown-body markdown-content diary-card-content" use:markdownWire on:click={handleBodyClick}>
-        {@html fullHtml}
+        {#if fullHtml}{@html fullHtml}{:else if excerpt}<p class="diary-card-excerpt">{excerpt}</p>{/if}
       </div>
     {:else if excerpt}
       <p class="diary-card-excerpt" use:measureExcerpt={excerpt}>{excerpt}</p>
@@ -250,7 +276,7 @@
     {#if entry.tags.length}
       <div class="diary-card-tags">
         {#each entry.tags as tag (tag.id)}
-          <span class={`task-tag tag-${tag.color}`}>{tag.text || ""}</span>
+          <span class={`task-tag tag-${tag.color}`} style={tagChipStyle(tag)}>{tag.text || ""}</span>
         {/each}
       </div>
     {/if}

@@ -1,4 +1,5 @@
 import { get, writable } from "svelte/store";
+import { onDestroy } from "svelte";
 import { platform as tauriPlatform } from "@tauri-apps/plugin-os";
 import { diaryEditor, editorDraftNode, editorTaskId, ledgerEditor, searchQuery, showSettings } from "./stores";
 
@@ -233,6 +234,78 @@ export function addBackInterceptor(interceptor: BackInterceptor): () => void {
     const at = backInterceptors.indexOf(interceptor);
     if (at >= 0) backInterceptors.splice(at, 1);
   };
+}
+
+/**
+ * 「浮层开着就接管系统返回键」的现成写法，给组件里的 `$:` 用：
+ *
+ * ```svelte
+ * const guard = createBackGuard();
+ * $: guard(showPicker, () => (showPicker = false));
+ * ```
+ *
+ * 为什么要有它：`addBackInterceptor` 得配对地注销，直接在组件里手写很容易漏掉
+ * 「关掉之后没注销」——那样返回键会一直喂给一个已经不可见的浮层，按下去什么也不发生
+ *（用户眼里就是「返回键失灵了」）。这里按 `active` 的翻转注册/注销，回调只更新不重排，
+ * 栈位置稳定；**只在移动端注册**，桌面没有系统返回键，也免得平白占一层。
+ */
+export type BackGuard = ((active: boolean, onBack: () => void) => void) & {
+  /**
+   * 立刻注销并复位。**「挂着就等于开着」的组件（`{#if}` 里挂载的菜单 / 选择器）
+   * 必须在 `onDestroy` 里调它**：那种组件从头到尾只会用 `true` 调一次，
+   * 卸载时不会自己走 `active=false` 那条分支——不注销的话拦截器永远留在栈里，
+   * 返回键被一个已经不可见的浮层吃掉，用户眼里就是「返回键失灵」。
+   */
+  dispose: () => void;
+};
+
+export function createBackGuard(): BackGuard {
+  let release: (() => void) | null = null;
+  let wasActive = false;
+  let current: () => void = () => undefined;
+  let disposed = false;
+  const sync = (active: boolean, onBack: () => void): void => {
+    if (active === wasActive) {
+      current = onBack;
+      return;
+    }
+    wasActive = active;
+    if (active) {
+      current = onBack;
+      if (get(isMobile)) {
+        release = addBackInterceptor(() => {
+          current();
+          return true;
+        });
+      }
+    } else if (release) {
+      release();
+      release = null;
+    }
+  };
+  sync.dispose = (): void => {
+    disposed = true;
+    if (release) {
+      release();
+      release = null;
+    }
+    wasActive = false;
+    current = () => undefined;
+  };
+  // **组件销毁时自动摘掉**，不需要每个调用点自己记得写 `onDestroy`。
+  //
+  // 早先只给了手动 dispose，靠自觉调用——而「挂着就等于开着」的浮层只要漏一处，
+  // 拦截器就永久留在栈里、返回键被一个已经不可见的浮层吃掉（用户眼里=返回键失灵）。
+  // 组件在 `{#if}` 里被拆掉时同样会走到这里，所以「开着浮层时整个页面被切走」这种情况
+  // 也一并覆盖了。`onDestroy` 只能在组件初始化期间调，非组件环境（不存在）回退成手动。
+  try {
+    onDestroy(() => {
+      if (!disposed) sync.dispose();
+    });
+  } catch {
+    // 不在组件初始化上下文中：交给调用方自己 dispose
+  }
+  return sync;
 }
 
 /**

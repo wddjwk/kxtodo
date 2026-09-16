@@ -183,8 +183,8 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.locator(".editor-dialog .cm-content").click();
   await page.keyboard.insertText("ESC 测试");
   await page.locator(".editor-meta-trigger.editor-tag-add").click();
-  await page.waitForSelector(".editor-tag-pop input", { timeout: 5000 });
-  await page.fill(".editor-tag-pop input", "标签甲");
+  await page.waitForSelector(".editor-tag-pop .tag-editor-input-row input", { timeout: 5000 });
+  await page.fill(".editor-tag-pop .tag-editor-input-row input", "标签甲");
   await page.waitForTimeout(200);
   await page.keyboard.press("Escape");
   await page.waitForTimeout(300);
@@ -199,8 +199,8 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.locator(".task-card .edit-button").first().click();
   await page.waitForSelector(".editor-dialog .cm-content", { timeout: 8000 });
   await page.locator(".editor-meta-trigger.editor-tag-add").click();
-  await page.waitForSelector(".editor-tag-pop input", { timeout: 5000 });
-  await page.fill(".editor-tag-pop input", "标签乙");
+  await page.waitForSelector(".editor-tag-pop .tag-editor-input-row input", { timeout: 5000 });
+  await page.fill(".editor-tag-pop .tag-editor-input-row input", "标签乙");
   await page.locator(".editor-tag-pop .tag-add-btn").click();
   await page.waitForTimeout(300);
   await page.keyboard.press("Escape");
@@ -212,7 +212,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   check("内联标签编辑里 Esc 关编辑器（2）", (await page.$$(".editor-overlay")).length === 0);
 
   // 7 + 8 超链接：先只看「标题」档（显式关掉卡片，v0.7.8 起卡片是默认档）
-  await setFeatures(page, { linkCards: false, autoLinkTitle: true });
+  await setFeatures(page, { linkRender: "title" });
   await seedLinkTask(page, MARKDOWN);
   const links = await page.$$eval(".task-card .markdown-content a", (els) =>
     els.map((el) => ({ text: el.textContent.trim(), href: el.getAttribute("href") ?? "" }))
@@ -228,7 +228,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   check("关掉卡片档就不出卡片（8）", (await page.$$(".task-card .kx-link-card")).length === 0);
 
   // 8 打开「渲染超链接为卡片」
-  await setFeatures(page, { linkCards: true });
+  await setFeatures(page, { linkRender: "card" });
   await stubLinks(page);
   await page.waitForTimeout(1500);
   const cards = await page.$$eval(".task-card .kx-link-card", (els) =>
@@ -263,7 +263,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   check("用户原文没有被改动（8）", ((await page.textContent(".task-card .markdown-content")) ?? "").includes("手写的链接"));
 
   // 7 关掉自动标题：裸链接保持原样
-  await setFeatures(page, { linkCards: false, autoLinkTitle: false });
+  await setFeatures(page, { linkRender: "off" });
   await stubLinks(page);
   await page.waitForTimeout(800);
   const plainText = await page.$$eval(".task-card .markdown-content a", (els) => els.map((el) => el.textContent.trim()));
@@ -453,7 +453,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.waitForTimeout(400);
 
   // 7 + 8 移动端：超链接同样渲染成卡片
-  await setFeatures(page, { linkCards: true });
+  await setFeatures(page, { linkRender: "card" });
   await stubLinks(page);
   await seedLinkTask(page, MARKDOWN);
   await page.locator(".tree-row:has-text('链接测试')").first().click();

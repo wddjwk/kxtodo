@@ -1,6 +1,6 @@
 ---
 name: kxtodo
-version: 2
+version: 3
 cliHelp: kxtodo-cli --help
 description: 用 KXToDo 的命令行管理本机的「待办任务 + 日记 + 记账」三类数据，外加定时任务、桌面通知、存储清理、导入导出备份与多端同步。能力：分类/条目/任务的增删改查与关键词搜索、标签与截止日期、按日期区间检索日记、记一笔与转账、资金账户与两级分类管理、收支统计与大类占比、净资产与余额、Excel 与 Markdown 压缩包导入导出、定时跑脚本或弹通知、设置项读写。**典型场景**：用户说「记一下 / 加个待办 / 提醒我 / 建个清单」「写今天的日记 / 补记某天」「记一笔账 / 转账 / 查余额 / 查净资产」「今天花了多少 / 这个月开销 / 钱都花在哪 / 资产总览」「这周·这个月·今年做了些什么 / 帮我写周报月报年度总结」「导出备份 / 换机搬家 / 导入回来」「占了多少空间 / 清理一下」「配一下多设备同步 / 同步不动了」——这些都应优先落到 KXToDo，而不是另建临时文件或散在对话里。
 ---
@@ -89,6 +89,7 @@ kxtodo-cli diary list --from 2026-09-01 --to 2026-09-30 --jq '.data.total'
 - **分页**：`task list` / `task find` 默认每页 50（`--limit`），翻页用 `--cursor`（取上一页的 `meta.nextCursor`），`--all` 忽略分页一次拿全。**做汇总务必带 `--all`**，否则只统计到前 50 条。
 - **写**：`task add --type category|entry|item`；item 必须给 `--entry-id`，正文用 `--markdown`（长文用 `--markdown-file <path|->`），空正文会被拒。
 - **日期与时刻**：`--due-date` 配 `--due-time <HH:MM>`（可选，精确到分钟），`--due-time ""` 清除回到只精确到天。
+- 条目视图里的 `plannedDate` / `dueDate` / `dueTime` **永远在场**（没有就是 `null` / 空串），可以按固定形状解析，不必先判键在不在。
 - **删**：`task remove --type ... --id ... --yes`；非空节点要 `--cascade`（会连带子节点与任务，先 `--dry-run` 看数量）。
 - **一般卡片的 Markdown 压缩包导出/导入只在 GUI 里**（条目的三点菜单），CLI 没有对应命令 —— 用户要这个就引导他到界面，别去找不存在的子命令。日记与记账的导入导出才有 CLI（见下两节）。
 
@@ -96,7 +97,7 @@ kxtodo-cli diary list --from 2026-09-01 --to 2026-09-30 --jq '.data.total'
 
 ## 5. diary 日记
 
-- **写**：`diary add --markdown "..."`，可带 `--title` / `--mood <emoji>` / `--weather <emoji>` / `--tag "color:text"`（可重复；只给 `color` 就是无文字标签）/ `--time <HH:MM>`。**标题与正文不能同时为空**。长正文用 `--markdown-file`。
+- **写**：`diary add --markdown "..."`，可带 `--title` / `--mood <emoji>` / `--weather <emoji>` / `--tag "color:text"`（可重复；只给 `color` 就是无文字标签）。颜色是九选一：`red` `orange` `yellow` `green` `cyan` `blue` `purple` `gray` `custom`，或**直接给 `#rrggbb`**（自动记成自定义色；`custom` 单独给会退回灰色）/ `--time <HH:MM>`。**标题与正文不能同时为空**。长正文用 `--markdown-file`。
 - **`--date` 是「归属日期」不是创建时间**：补写昨天就传昨天的日期，`createdAt` 仍是现在（要连写作时刻一起补就加 `--time`）。同一天可以有多篇。
 - **读**：`diary list [--date 某天 | --from 起 --to 止]`，按日期由近及远、同一天内按写作先后。
   **不传 `--limit` 就返回全部**（与 task 的默认 50 刻意不同：月度回顾要的是整月）；要分页给 `--limit` + `--cursor`，`--all` 强制全部。
@@ -186,7 +187,7 @@ kxtodo-cli schedule add --spec @schedule.json --yes --idempotency-key <唯一键
 
 改：`schedule modify --id ... --patch '<json>'`（patch 里 CLI 专属字段要原样带上）。
 运行控制：`schedule enable|disable|run|stop`，历史 `schedule logs --id ... --limit 20`，状态 `schedule status`。
-触发器有 once / interval / calendar / condition，动作有 脚本 / 可执行文件 / 通知。**启用与运行都是 high-risk-write**（会真的执行代码）。
+触发器有 once / interval / calendar / condition，动作有 脚本 / 可执行文件 / 通知。**启用与运行都是 high-risk-write，但是条件式的**：只有动作是脚本 / 可执行文件（会真的执行代码）才需要 `--yes`，纯通知动作不需要。拿不准就 `schema schedule.enable`（返回里的 `riskCondition` 写明何时要 `--yes`）。
 定时任务只在桌面端有调度引擎（GUI 常驻 Host 才跑得起来），移动端没有。
 
 ---
@@ -194,10 +195,10 @@ kxtodo-cli schedule add --spec @schedule.json --yes --idempotency-key <唯一键
 ## 8. 其余命令
 
 - **`notify`** — 发桌面通知：`notify "构建完成" --title "CI" --tone success --duration 5s`，`--wait` 等窗口关闭。通知由与目标数据目录匹配的常驻 Host 持有；Host 不在会尝试拉起 GUI 同目录的程序，找不到报 `GUI_NOT_FOUND`。
-- **`storage`** — 用户问「占了多少空间 / 清理一下」：先 `storage usage`（只读盘点：总体积 + 插图/背景/头像各自的总量与**无引用量** + 临时残留 + 旧服务器日志 + 备份），报数字给用户并得到同意后再 `storage clean --yes`（删无引用图片与空目录、临时残留、旧日志；**保留最新两份日志且绝不删今天的**）。返回 `freedBytes` 与逐项计数，单个文件删不动只进 `warnings`。
+- **`storage`** — 用户问「占了多少空间 / 清理一下」：先 `storage usage`（只读盘点：总体积 + 插图/背景/头像各自的总量与**无引用量** + **领域文件 / 历史记录 / 运行时 / 同步服务器（含 WAL）/ 服务器日志 / 备份**分项 + 临时残留），报数字给用户并得到同意后再 `storage clean --yes`（删无引用图片与空目录、临时残留、旧日志；**保留最新两份日志且绝不删今天的**）。返回 `freedBytes` 与逐项计数，单个文件删不动只进 `warnings`。
   **它永远不碰**：五个领域 JSON（数据本体）、`runtime/`（同步状态）、`history/`、`backups/`、服务器数据库与账户令牌。删除不可恢复。
 - **`config`** — 读写设置：`config get appearance.uiScale`、`config list --prefix appearance`、`config set <路径> <值>`、`config unset`、`config reset`（高风险，先 `--dry-run`）、`config path`、`config validate`。动态 map（如 `appearance.uiColors`）必须带 `--map-key <entry-id>`。
-  常用：字号 `appearance.uiFontSize`(14-22) / `markdownFontSize` / `ledgerFontSize` / `diaryFontSize`(14-26)；固定导航 `appearance.navItems`（字符串数组，可选 `my-day`/`planned`/`important`/`diary`/`ledger`/`scheduled`/`toolbox`，顺序即显示顺序）与 `appearance.navLayout`（`list|grid|icons`），数组用 `config set appearance.navItems --json-value '["diary","my-day"]'`。
+  常用：字号 `appearance.uiFontSize`(14-22) / `markdownFontSize` / `ledgerFontSize` / `diaryFontSize`(14-26)；固定导航 `appearance.navItems`（字符串数组，可选 `my-day`/`planned`/`important`/`diary`/`ledger`/`scheduled`/`toolbox`，顺序即显示顺序）与 `appearance.navLayout`（`list|grid|icons`）；一周起始 `features.weekStart`（`monday`（默认）|`sunday`）、超链接渲染样式 `features.linkRender`（`off|title|card`，默认 `card`）、临期高亮 `features.dueHighlight`（`off|solid|gradient`，默认 `off`）；预置标签 `appearance.tagPresets`（标签数组，跟设置一起同步），数组用 `config set appearance.navItems --json-value '["diary","my-day"]'`。
   **视图偏好是本机状态不跨设备同步**（`diary.view` / `ledger.view`），**外观是同步的**（日记与记账的主题色与背景）。
 - **`doctor`** — 体检：数据目录、五个领域文件的完整性与 schema 版本、常驻 Host、脚本环境。排查「数据好像不对」先跑它。
 - **`schema`** — 机读的命令与结构定义：`schema task.add`、`schema schedule.spec [--example <名>]`、`schema jq`、`schema notification`、`schema match`。**要字段清单就查它，别猜**。

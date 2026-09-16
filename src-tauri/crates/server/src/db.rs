@@ -108,10 +108,32 @@ impl Db {
         }
         let conn = Connection::open(path)?;
         conn.execute_batch(SCHEMA)?;
-        conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
+        // `wal_autocheckpoint` 只是让 WAL 到阈值时把页挪回主库，**WAL 文件本身不会缩小**
+        // （复用已有的那一段，所以通常停在 4MB 上下）。真正把它收回去要靠 TRUNCATE 模式的
+        // checkpoint，见 [`Db::checkpoint`]——内置主机在手机上跑，磁盘是按 GB 心疼的。
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA wal_autocheckpoint = 1000;",
+        )?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
+    }
+
+    /// 把 WAL 里的页并回主库并把 WAL 文件截断到 0。
+    ///
+    /// 内置主机（手机上那个 `server/data.db`）常年只增不减：SQLite 的自动检查点会把页
+    /// 挪回主库，但**不会缩小 WAL 文件**，于是磁盘占用看着只涨不落。定期做一次 TRUNCATE
+    /// 检查点，占用就跟着真实数据量走。
+    ///
+    /// 任何失败都只回一条错误——这是维护动作，不该让调用方（服务循环）挂掉。
+    /// 有别的连接持着读快照时 SQLite 会拒绝截断，下次再试即可。
+    pub fn checkpoint(&self) -> ServerResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+            let _busy: i64 = row.get(0)?;
+            Ok(())
+        })?;
+        Ok(())
     }
 
     /// 本库的身份：建库时生成一次，重启不变，库文件被重建就会变。

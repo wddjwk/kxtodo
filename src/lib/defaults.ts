@@ -99,6 +99,8 @@ export const defaultSettings: Settings = {
     editorHeightPercent: 86,
     tagFontSize: 14,
     themePresets: themePresets.map((preset) => ({ ...preset })),
+    tagPresets: [],
+    dueColors: {},
     uiColors: {},
     navItems: [...NAV_ITEM_IDS],
     navLayout: "list",
@@ -156,9 +158,10 @@ export const defaultSettings: Settings = {
     sync: true,
     editorToolbar: true,
     mobileBack: false,
-    autoLinkTitle: true,
-    // v0.7.8 起默认渲染为卡片（特性开关里「超链接渲染样式」的默认档）
-    linkCards: true
+    weekStart: "monday",
+    dueHighlight: "off",
+    // 「超链接渲染样式」的默认档（v0.7.8 起默认渲染为卡片）
+    linkRender: "card",
   },
   diary: {
     view: "list",
@@ -354,7 +357,44 @@ function normalizeNode(raw: unknown): AppNode | null {
   };
 }
 
-const TAG_COLORS: TagColor[] = ["red", "yellow", "blue", "green", "gray"];
+/**
+ * 临期高亮配色：`{ 节点id: ["#rrggbb", "#rrggbb", "#rrggbb"] }`。
+ * 只收合法三色（长度不足或非法一律丢弃整条）——配色是「用户点出来的」，
+ * 缺一项就退回默认，比留一半自定义一半默认更好预期。
+ */
+function normalizeDueColors(raw: unknown): Record<string, string[]> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, string[]> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!Array.isArray(value)) continue;
+    const colors = value.slice(0, 3).map((item) => normalizeTagHex(item));
+    if (colors.length !== 3 || colors.some((item) => item === null)) continue;
+    out[key] = colors as string[];
+  }
+  return out;
+}
+
+const TAG_COLORS: TagColor[] = [
+  "red",
+  "orange",
+  "yellow",
+  "green",
+  "cyan",
+  "blue",
+  "purple",
+  "gray",
+  "custom"
+];
+
+/**
+ * `#rrggbb` 归一（带不带 `#`、大小写都行）；非法回 null。
+ * 与 Rust 的 `model::tag_hex` 同一口径——两端渲染同一个标签必须得到同一种颜色。
+ */
+export function normalizeTagHex(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const lower = raw.trim().replace(/^#/, "").toLowerCase();
+  return /^[0-9a-f]{6}$/.test(lower) ? `#${lower}` : null;
+}
 
 function normalizeTags(raw: unknown): Tag[] {
   if (!Array.isArray(raw)) return [];
@@ -362,10 +402,18 @@ function normalizeTags(raw: unknown): Tag[] {
     .map((item): Tag | null => {
       if (!item || typeof item !== "object") return null;
       const tag = item as Partial<Tag>;
-      const color = TAG_COLORS.includes(tag.color as TagColor) ? tag.color as TagColor : "gray";
+      let color = TAG_COLORS.includes(tag.color as TagColor) ? tag.color as TagColor : "gray";
+      const hex = normalizeTagHex(tag.hex);
+      // 自定义但没给（或给了非法）hex：退回灰色，别留一个画不出来的颜色
+      if (color === "custom" && !hex) color = "gray";
       const id = typeof tag.id === "string" && tag.id ? tag.id : createId("tag");
       const text = typeof tag.text === "string" ? tag.text.trim().slice(0, 20) : undefined;
-      return { id, color, text: text || undefined };
+      return {
+        id,
+        color,
+        text: text || undefined,
+        hex: color === "custom" && hex ? hex : undefined
+      };
     })
     .filter((tag): tag is Tag => tag !== null);
 }
@@ -976,6 +1024,11 @@ export function normalizeSettings(raw: unknown): Settings {
     }
     return legacyShortcuts.find((shortcut) => shortcut.id === key)?.combo ?? fallback;
   };
+  const normalizeDueHighlight = (value: unknown): Settings["features"]["dueHighlight"] =>
+    value === "solid" || value === "gradient" ? value : "off";
+
+  const normalizeLinkRender = (value: unknown): Settings["features"]["linkRender"] =>
+    value === "off" || value === "title" || value === "card" ? value : defaultSettings.features.linkRender;
   const normalizeUiScale = (value: unknown): number | null =>
     typeof value === "number" && Number.isFinite(value) ? Math.min(1.5, Math.max(0.5, value)) : null;
   // isFinite 不能省：NaN 也是 "number"，Math.min/max/round 一路把 NaN 传下去，
@@ -1059,6 +1112,9 @@ export function normalizeSettings(raw: unknown): Settings {
       ),
       tagFontSize: normalizeFontSize(source?.appearance?.tagFontSize, defaultSettings.appearance.tagFontSize, 11, 30),
       themePresets: normalizeThemePresets(source?.appearance?.themePresets),
+      // 预置标签最多 64 条（与 core 的 expect_tag_presets 同一个上限）
+      tagPresets: normalizeTags(source?.appearance?.tagPresets).slice(0, 64),
+      dueColors: normalizeDueColors(source?.appearance?.dueColors),
       uiColors: normalizeUiColors(source?.appearance?.uiColors),
       navItems: normalizeNavItems(source?.appearance?.navItems),
       navLayout: normalizeNavLayout(source?.appearance?.navLayout),
@@ -1150,14 +1206,9 @@ export function normalizeSettings(raw: unknown): Settings {
         typeof source?.features?.mobileBack === "boolean"
           ? source.features.mobileBack
           : defaultSettings.features.mobileBack,
-      autoLinkTitle:
-        typeof source?.features?.autoLinkTitle === "boolean"
-          ? source.features.autoLinkTitle
-          : defaultSettings.features.autoLinkTitle,
-      linkCards:
-        typeof source?.features?.linkCards === "boolean"
-          ? source.features.linkCards
-          : defaultSettings.features.linkCards
+      weekStart: source?.features?.weekStart === "sunday" ? "sunday" : "monday",
+      dueHighlight: normalizeDueHighlight(source?.features?.dueHighlight),
+      linkRender: normalizeLinkRender(source?.features?.linkRender),
     },
     diary: {
       view: normalizeDiaryView(source?.diary?.view),
@@ -1187,33 +1238,28 @@ export function normalizeSettings(raw: unknown): Settings {
 // ---------------------------------------------------------------------------
 
 const APPEARANCE_CACHE_KEY = "kxtodo-appearance-cache";
-const CACHED_APPEARANCE_KEYS = [
-  "uiScale",
-  "uiFontSize",
-  "markdownFontSize",
-  "ledgerFontSize",
-  "diaryFontSize",
-  "editorFontSize",
-  "tagFontSize"
-] as const;
 
 /**
  * 水合是异步的（安卓要等 core 把设置读出来），第一帧只能用默认外观渲染，设置到了再跳
  * 到用户定制值——表现成「先渲染一次再缩放，卡卡的」。上一次退出时的外观缓存在
  * localStorage 里，初始 store 直接用它，首帧即到位。
+ *
+ * **整个 appearance 都进缓存**（它全是短值）。早先只白名单了 7 个数字字段，于是
+ * `navLayout`（双列/图标）、`navItems`（固定分组显示与排序）、`uiColors`、`themePresets`、
+ * `newNodeDefaults`、`editorWidthPercent` 全都没缓存过——「设了双列，冷启动先单列闪一下」
+ * 就是这么来的（字符串字段被 `typeof value === "number"` 挡掉）。
+ *
+ * 读回来的值**过一遍 normalizeSettings**：缓存可能来自旧版本或被人手改过，
+ * 直接铺进 store 会带进非法值（快照到达前没有别的东西会校验它）。
  */
 export function cachedAppearance(): Partial<Settings["appearance"]> {
   if (typeof localStorage === "undefined") return {};
   try {
     const raw = localStorage.getItem(APPEARANCE_CACHE_KEY);
     if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const out: Record<string, number> = {};
-    for (const key of CACHED_APPEARANCE_KEYS) {
-      const value = parsed[key];
-      if (typeof value === "number" && Number.isFinite(value)) out[key] = value;
-    }
-    return out as Partial<Settings["appearance"]>;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return normalizeSettings({ appearance: parsed as Partial<Settings["appearance"]> }).appearance;
   } catch {
     return {};
   }
@@ -1222,9 +1268,7 @@ export function cachedAppearance(): Partial<Settings["appearance"]> {
 export function writeAppearanceCache(appearance: Settings["appearance"]): void {
   if (typeof localStorage === "undefined") return;
   try {
-    const payload: Record<string, number> = {};
-    for (const key of CACHED_APPEARANCE_KEYS) payload[key] = appearance[key];
-    localStorage.setItem(APPEARANCE_CACHE_KEY, JSON.stringify(payload));
+    localStorage.setItem(APPEARANCE_CACHE_KEY, JSON.stringify(appearance));
   } catch {
     // 写不进（隐私模式等）就算了，最坏退回首帧跳变
   }
@@ -1245,28 +1289,38 @@ export function cachedProfile(): Partial<Settings["profile"]> {
     const raw = localStorage.getItem(PROFILE_CACHE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const out: Record<string, string> = {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const source: Partial<Settings["profile"]> = {};
     for (const key of CACHED_PROFILE_KEYS) {
       const value = parsed[key];
-      if (typeof value === "string") out[key] = value;
+      if (typeof value === "string") source[key] = value;
     }
-    return out as Partial<Settings["profile"]>;
+    return normalizeSettings({ profile: source }).profile;
   } catch {
     return {};
   }
 }
 
+/**
+ * 资料缓存。**写入失败必须退一步只写名字邮箱，不能整条放弃**——头像在移动端是
+ * dataURL（手机原图能到几 MB），`setItem` 会因配额抛错；早先只写了「头像超 1.5MB 就不带它」
+ * 的静态判断，超出判断的大图仍会把整条 `setItem` 拖崩，于是名字、邮箱、头像**三个一起**
+ * 退回默认值闪一帧（用户报的「昵称头像都闪回 Example User」正是这一条）。
+ * 头像本身另有一道入库压缩（见 SettingsDrawer 的上传路径），这里只是最后一道保险。
+ */
 export function writeProfileCache(profile: Settings["profile"]): void {
   if (typeof localStorage === "undefined") return;
-  try {
-    // 头像是 dataURL 时可能很大：超过上限就不缓存它（最坏退回首帧闪一下头像），
-    // 名字邮箱照缓存
-    const avatar = profile.avatar.length > 1_500_000 ? "" : profile.avatar;
-    localStorage.setItem(
-      PROFILE_CACHE_KEY,
-      JSON.stringify({ displayName: profile.displayName, email: profile.email, avatar })
-    );
-  } catch {
-    // 写不进就算了
-  }
+  const put = (avatar: string): boolean => {
+    try {
+      localStorage.setItem(
+        PROFILE_CACHE_KEY,
+        JSON.stringify({ displayName: profile.displayName, email: profile.email, avatar })
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (put(profile.avatar)) return;
+  put("");
 }

@@ -1,9 +1,15 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy } from "svelte";
   import { Check, ChevronUp, PenLine, Plus, X } from "@lucide/svelte";
-  import { collapsedMarkdownLine, hasMultipleMarkdownLines, renderInlineMarkdown, renderMarkdown } from "./markdown";
+  import { collapsedMarkdownLine, hasMultipleMarkdownLines, renderInlineMarkdown } from "./markdown";
+  import { taskToggleIndex, toggleMarkdownTask } from "./markdownTasks";
+  import { tagChipStyle } from "./tagColors";
+  import { dueHighlightOf, dueHighlightStyle } from "./dueHighlight";
+  import { fullDayLabel } from "./diary";
+  import { createDeferredMarkdown } from "./deferredMarkdown";
   import { mdImageCache, resolveMarkdownImages } from "./images";
   import { appSettings } from "./stores";
+  import { saveTaskMarkdown } from "./actions";
   import { isMobile as isMobileStore, touchOnly } from "./platform";
   import { uiScaleValue } from "./styles";
   import { longpress, isLongPressSuppressed } from "./longpress";
@@ -66,10 +72,35 @@
   // 而结果只有下面 `{#if isExpanded}` 那一支会用到。一屏 300 张折叠卡就是 300 次白渲染，
   // 而且每次列表变化都要重来。`resolvedMd` 仍然照旧 eagerly 算——它负责触发插图预加载，
   // 改成惰性会让「展开才看到图」变成一次可感知的等待。
-  $: fullHtml = isExpanded ? renderMarkdown(resolvedMd) : "";
+  //
+  // 但「算的时机」不能落在展开那一次同步 flush 里：长卡片一整套跑完要几百毫秒，
+  // 用户点下去到浏览器画面之间全被占住，表现成「点了没反应」（安卓尤其明显）。
+  // 改由 createDeferredMarkdown 调度：命中记忆化或短文本同步出，其余让一帧再算。
+  // 让帧期间画的是折叠态内容，卡片该展开就展开，内容随后换上来。
+  let fullHtml = "";
+  const fullRender = createDeferredMarkdown((html) => {
+    fullHtml = html;
+  });
+  $: syncFullRender(isExpanded, resolvedMd);
+
+  function syncFullRender(expanded: boolean, markdown: string): void {
+    if (!expanded) {
+      fullRender.cancel();
+      if (fullHtml !== "") fullHtml = "";
+      return;
+    }
+    fullRender.schedule(markdown);
+  }
+  // 日期展示：`9月8日 周二` / `9月8日 周二 18:30`（有时刻才带时刻）
   $: formattedDate = task.dueDate
-    ? `${formatDate(task.dueDate)}${task.dueTime ? ` ${task.dueTime}` : ""}`
+    ? `${fullDayLabel(task.dueDate.slice(0, 10))}${task.dueTime ? ` ${task.dueTime}` : ""}`
     : "";
+  // 临期高亮：配色按**本页**（这个节点）自己的三色走，没配过就用默认红 → 橙黄 → 浅黄。
+  // 已完成的卡片不画——它有自己的一整套完成态样式。
+  $: dueHighlight =
+    task.completed || !task.dueDate
+      ? null
+      : dueHighlightOf(task, $appSettings.features.dueHighlight, $appSettings.appearance.dueColors[nodeId]);
   $: canExpand = hasMultipleMarkdownLines(task.markdown) || titleOverflow;
   // 把可展开性同步给列表：**延后一个微任务**再派发——首次检查发生在组件挂载期间，
   // 同步派发会让父组件在渲染途中改状态。
@@ -83,6 +114,7 @@
 
   onDestroy(() => {
     if (tapTimer !== undefined) window.clearTimeout(tapTimer);
+    fullRender.cancel();
   });
 
   /**
@@ -127,11 +159,6 @@
         release();
       }
     };
-  }
-
-  function formatDate(dateStr: string): string {
-    const parts = dateStr.slice(0, 10).split("-").map(Number);
-    return `${parts[1]}月${parts[2]}日`;
   }
 
   /** 日期弹窗用 fixed 浮层：absolute 会被卡片/任务列表的 overflow 裁剪。
@@ -264,6 +291,13 @@
       dispatch("openLink", { href: link.href, title: (link.textContent ?? "").trim() });
       return;
     }
+    // 任务列表的勾选框：点一下就把源码里的 `- [ ]` / `- [x]` 翻过来存回去
+    const boxIndex = taskToggleIndex(event, event.currentTarget as Element);
+    if (boxIndex !== null) {
+      event.preventDefault();
+      void saveTaskMarkdown(task.id, toggleMarkdownTask(task.markdown, boxIndex), isExpanded);
+      return;
+    }
     if (mobile) handleMobileTap(event);
   }
 
@@ -330,7 +364,10 @@
   class:multiline={canExpand}
   class:plain
   class:selected
+  class:due-soon={dueHighlight !== null}
+  class:due-strong={dueHighlight?.strong === true}
   class="task-card"
+  style={dueHighlightStyle(dueHighlight)}
   use:longpress={handleLongPress}
   on:mousedown={handleCardMouseDown}
   on:click={handleCardClick}
@@ -351,7 +388,7 @@
     <section class="task-body">
       {#if isExpanded}
         <div class="markdown-body markdown-content" use:markdownWire on:click={handleMarkdownClick}>
-          {@html fullHtml}
+          {#if fullHtml}{@html fullHtml}{:else}{@html collapsedHtml}{/if}
         </div>
       {:else}
         <div class="markdown-body markdown-title-row" class:clamped={titleOverflow} use:measureTitle={collapsedHtml} on:click={handleMarkdownClick}>
@@ -387,6 +424,7 @@
           {:else}
             <span
               class={`task-tag tag-${tag.color}`}
+              style={tagChipStyle(tag)}
               title={tag.text || "点击编辑标签"}
               class:reveal-delete={revealedTagId === tag.id}
               on:click|stopPropagation={() => handleTagTap(tag.id, tag.text || "")}
@@ -412,6 +450,7 @@
                 on:select={(e) => handlePick(e.detail)}
                 on:selectTime={(e) => handlePickTime(e.detail)}
                 on:clear={handleClearDate}
+                on:close={() => (showPicker = false)}
               />
             </div>
           {/if}

@@ -529,6 +529,13 @@
         onPick={pickIcon}
         onClose={() => (iconPickerListId = null)}
       />
+    {:catch error}
+      <!-- 拉不到 chunk（网络/缓存出问题）时**必须说一声**：只写 then 的话
+           点开图标选择器会是「什么都没有」，用户不知道发生了什么也退不出去 -->
+      <div class="lazy-fallback" role="alert">
+        打开图标选择器失败：{String(error)}
+        <button class="settings-button" type="button" on:click={() => (iconPickerListId = null)}>关闭</button>
+      </div>
     {/await}
   {/if}
 

@@ -23,6 +23,7 @@
   import { mdImageUrl } from "./backend";
   import MenuItem from "./menu/MenuItem.svelte";
   import MobileBack from "./MobileBack.svelte";
+  import { createBackGuard } from "./platform";
   import MonthPopover from "./MonthPopover.svelte";
   import ListMenu from "./workspace/ListMenu.svelte";
   import LedgerDayCard from "./ledger/LedgerDayCard.svelte";
@@ -125,6 +126,13 @@
       ? selectedDate !== today || cursor.year !== thisMonth.year || cursor.month !== thisMonth.month
       : cursor.year !== thisMonth.year || cursor.month !== thisMonth.month;
   $: showTodayButton = awayFromToday;
+
+  // 齿轮面板与月份浮层是这一页的浮层：返回键先收它们（其余浮层各自有 guard）
+  const backGuard = createBackGuard();
+  $: backGuard(showGear || monthPopOpen, () => {
+    showGear = false;
+    monthPopOpen = false;
+  });
 
   export function closeOverlays(): void {
     showGear = false;

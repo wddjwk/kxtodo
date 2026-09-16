@@ -268,7 +268,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.waitForTimeout(400);
 
   // 7 超链接：标题档 60 字
-  await setFeatures(page, { linkCards: false, autoLinkTitle: true });
+  await setFeatures(page, { linkRender: "title" });
   await seedTasks(page, [{ id: "task-link", markdown: MARKDOWN, expanded: true }]);
   await page.waitForTimeout(1400);
   const titleText = await page.$$eval(".task-card .markdown-content a", (els) =>
@@ -282,7 +282,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   );
 
   // 7 卡片档：铺满宽度 / 圆角 6px / 复制按钮悬浮右上角且只是图标 / 标题摘要两行封顶 / 网页图标
-  await setFeatures(page, { linkCards: true, autoLinkTitle: true });
+  await setFeatures(page, { linkRender: "card" });
   await page.waitForTimeout(1600);
   const cardInfo = await page.$$eval(".task-card .kx-link-card", (els) =>
     els.map((el) => {
@@ -343,7 +343,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   const hoverDecoration = await page.$eval(".task-card .kx-link-card-main", (el) => getComputedStyle(el).textDecorationLine);
   check("悬浮到卡片上不加下划线（7.5）", hoverDecoration === "none", hoverDecoration);
 
-  // 7.6 特性开关合并成一组「超链接渲染样式」
+  // 7.6 特性开关合并成一组「超链接渲染样式」（v0.8.1 起是三档单选，不再是两个勾选框）
   await page.keyboard.press("Control+,");
   await page.waitForSelector("aside.settings-drawer", { timeout: 8000 });
   await page.waitForTimeout(500);
@@ -352,11 +352,25 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
     const row = rows.find((el) => (el.textContent ?? "").includes("超链接渲染样式"));
     if (!row) return null;
     const labels = [...row.querySelectorAll("label")].map((label) => (label.textContent ?? "").trim());
-    const boxes = [...row.querySelectorAll("input[type=checkbox]")].map((box) => box.checked);
-    return { labels, boxes, legacy: document.body.textContent.includes("自动解析超链接标题") || document.body.textContent.includes("渲染超链接为卡片") };
+    const checked = [...row.querySelectorAll("input")].map((box) => box.checked);
+    const names = [...new Set([...row.querySelectorAll("input")].map((box) => box.name))];
+    return {
+      labels,
+      checked,
+      names,
+      legacy: document.body.textContent.includes("自动解析超链接标题") || document.body.textContent.includes("渲染超链接为卡片")
+    };
   });
-  check("特性开关只有一组「超链接渲染样式」（7.6）", linkRow !== null && linkRow.labels.join("|") === "标题|卡片", JSON.stringify(linkRow));
-  check("两个档位默认都勾选（卡片即默认样式）（7.6）", linkRow?.boxes.every(Boolean) === true, JSON.stringify(linkRow?.boxes));
+  check(
+    "超链接渲染样式是三档单选「不渲染|标题|卡片」（7.6/v0.8.1）",
+    linkRow !== null && linkRow.labels.join("|") === "不渲染|标题|卡片" && linkRow.names.length === 1,
+    JSON.stringify(linkRow)
+  );
+  check(
+    "三档里恰好选中一档（不存在两个都勾）（7.6/v0.8.1）",
+    linkRow?.checked.filter(Boolean).length === 1 && linkRow.checked[2] === true,
+    JSON.stringify(linkRow?.checked)
+  );
   check("旧的「自动解析超链接标题」「渲染超链接为卡片」两行没了（7.6）", linkRow?.legacy === false, String(linkRow?.legacy));
 
   // 9 同步账户长度下限：不够时点「开始同步」给提示（toast）
@@ -577,7 +591,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.waitForTimeout(300);
 
   // 7 移动端卡片同样铺满宽度 + 复制按钮只有图标
-  await setFeatures(page, { linkCards: true });
+  await setFeatures(page, { linkRender: "card" });
   await stubLinks(page);
   await seedTasks(page, [{ id: "task-link", markdown: MARKDOWN, expanded: true }]);
   await page.waitForTimeout(1200);

@@ -283,10 +283,16 @@ fn normalize_parent(parent_id: Option<&str>) -> Option<String> {
     }
 }
 
+/// 标签输入：`颜色:文字`，也可以写成 `#rrggbb:文字`（自定义配色）。
+///
+/// 颜色是已知名（red/orange/yellow/green/cyan/blue/purple/gray/custom）就直接用；
+/// 是一个合法 `#rrggbb` 则记成 `custom` + hex；`custom` 单独给没有 hex，退回灰色。
 #[derive(Debug, Clone, Deserialize)]
 pub struct TagInput {
     pub color: TagColor,
     pub text: Option<String>,
+    #[serde(default)]
+    pub hex: Option<String>,
 }
 
 pub fn parse_tag_input(raw: &str) -> CoreResult<TagInput> {
@@ -294,14 +300,21 @@ pub fn parse_tag_input(raw: &str) -> CoreResult<TagInput> {
         Some((color, text)) => (color, Some(text.trim().to_string())),
         None => (raw, None),
     };
-    let color = TagColor::parse(color_raw).ok_or_else(|| {
-        CoreError::validation(
+    let token = color_raw.trim();
+    let (color, hex) = if let Some(color) = TagColor::parse(token) {
+        (color, None)
+    } else if let Some(hex) = crate::model::tag_hex(Some(token)) {
+        (TagColor::Custom, Some(hex))
+    } else {
+        return Err(CoreError::validation(
             "INVALID_TAG_COLOR",
-            format!("无效标签颜色 `{color_raw}`，支持 red/yellow/blue/green/gray"),
-        )
-    })?;
+            format!(
+                "无效标签颜色 `{token}`，支持 red/orange/yellow/green/cyan/blue/purple/gray                  或 `#rrggbb`"
+            ),
+        ));
+    };
     let text = text.filter(|value| !value.is_empty());
-    Ok(TagInput { color, text })
+    Ok(TagInput { color, text, hex })
 }
 
 pub(crate) fn build_tag(input: &TagInput) -> Tag {
@@ -312,6 +325,7 @@ pub(crate) fn build_tag(input: &TagInput) -> Tag {
             .text
             .clone()
             .map(|value| value.chars().take(20).collect()),
+        hex: input.hex.clone(),
         extra: Map::new(),
     }
 }
@@ -465,16 +479,13 @@ pub fn item_view(data: &DataFile, item: &Item) -> Value {
         "tags": item.tags,
         "emojis": item.emojis,
         "createdAt": item.created_at,
+        // 三个日期字段**永远出现**（没有就给 null）：早先是条件插入，于是「未排期」的条目
+        // 干脆没有这三个键——按固定形状解析的客户端（Agent 的 jq 表达式、脚本）一遇到
+        // 没排期的条目就取到 undefined，还得为此写两套分支。
+        "plannedDate": item.planned_date,
+        "dueDate": item.due_date,
+        "dueTime": item.due_time,
     });
-    if let Some(value) = &item.planned_date {
-        view["plannedDate"] = json!(value);
-    }
-    if let Some(value) = &item.due_date {
-        view["dueDate"] = json!(value);
-    }
-    if !item.due_time.is_empty() {
-        view["dueTime"] = json!(item.due_time);
-    }
     if let Some(value) = &item.completed_at {
         view["completedAt"] = json!(value);
     }

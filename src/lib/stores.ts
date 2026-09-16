@@ -11,10 +11,12 @@ import {
 import { buildListCounts, buildSearchHits, buildVisibleTasks, getBackground } from "./nodes";
 import { accentForNode, uiScaleValue } from "./styles";
 import { entryToUi, type ScheduleEntryV9 } from "./scheduleAdapter";
+import { weekStartIndex } from "./diary";
 import { caps } from "./capabilities";
 
 /** 运行时版本号：构建期由 build.rs 从 git tag/commit 注入（KXTODO_VERSION），hydrate 时填充。 */
 export const appVersion = writable("");
+
 
 /**
  * 与同步服务器的连接状态。来源是后台同步循环/探测写进 `runtime/sync.json` 的缓存，
@@ -116,6 +118,12 @@ appSettings.subscribe((settings) => {
   writeAppearanceCache(settings.appearance);
   writeProfileCache(settings.profile);
 });
+/**
+ * 一周从周几开始（0 = 周日，1 = 周一）。设置项 `features.weekStart` 归一后的值，
+ * 日历视图、日期选择器、周统计与「本周」分组统一读它——**不许各自去读设置**，
+ * 否则同一个界面里会出现两个不同的「周一」。
+ */
+export const weekStart = derived(appSettings, ($settings) => weekStartIndex($settings.features.weekStart));
 /**
  * 日记（diary.json，独立的第四个领域）。跟 scheduleEntries 一样单独成 store：
  * 它有自己的 revision 与域事件，塞进 appState 会让「只刷新日记」变成刷新整个数据域。

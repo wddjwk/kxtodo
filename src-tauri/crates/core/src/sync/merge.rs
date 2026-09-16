@@ -279,12 +279,15 @@ pub fn settings_payload(settings: &SettingsFile) -> Value {
             "themePresets": settings.appearance.theme_presets,
             "uiColors": settings.appearance.ui_colors,
             "newNodeDefaults": settings.appearance.new_node_defaults,
+            "tagPresets": settings.appearance.tag_presets,
+            "dueColors": settings.appearance.due_colors,
         },
         "features": {
             "showCategoryBadges": settings.features.show_category_badges,
-            // 渲染偏好：一端开了，其它端跟着开（「自动标题」「卡片」这类只跟内容观感有关）
-            "autoLinkTitle": settings.features.auto_link_title,
-            "linkCards": settings.features.link_cards,
+            // 临期高亮是观感偏好：一端开了三端一起开
+            "dueHighlight": settings.features.due_highlight,
+            // 渲染偏好：一端改了，其它端跟着改（只跟内容观感有关）
+            "linkRender": settings.features.link_render,
         },
         "updates": {
             "autoCheck": settings.updates.auto_check,
@@ -676,8 +679,26 @@ fn apply_settings_record(record: &EntityRecord, settings: &mut SettingsFile) -> 
     let payload: SharedSettings =
         serde_json::from_value(record.data.clone()).map_err(|e| e.to_string())?;
     if let Some(profile) = payload.profile {
-        if let Ok(parsed) = serde_json::from_value::<crate::model::ProfileSettings>(profile) {
-            settings.profile = parsed;
+        // **逐字段覆盖，缺哪个键就不动哪个键**。原先整块反序列化成 `ProfileSettings`：
+        // 那个结构体的字段有 serde 默认值（名字 "Example User"、邮箱 "example@example.com"），
+        // 于是对方载荷里少一个键，本机就被静默改回默认值——资料是从别处同步过来的，
+        // 「缺字段」只该理解为「这条记录没提它」，不该理解成「把它清成默认」。
+        if let Some(map) = profile.as_object() {
+            if let Ok(parsed) = serde_json::from_value::<String>(
+                map.get("displayName").cloned().unwrap_or(Value::Null),
+            ) {
+                settings.profile.display_name = parsed;
+            }
+            if let Ok(parsed) =
+                serde_json::from_value::<String>(map.get("email").cloned().unwrap_or(Value::Null))
+            {
+                settings.profile.email = parsed;
+            }
+            if let Ok(parsed) =
+                serde_json::from_value::<String>(map.get("avatar").cloned().unwrap_or(Value::Null))
+            {
+                settings.profile.avatar = parsed;
+            }
         }
     }
     if let Some(appearance) = payload.appearance {

@@ -1049,8 +1049,6 @@ pub fn pair_device(
     let device_id = crate::ids::gen_device_id();
     // 重新配对：进程内「图片已齐全」的旧结论作废（服务端数据可能被删过）
     crate::sync::images::invalidate_manifest_cache();
-    // 已有本地设置才推送设置实体；全新设备不把默认设置推上去覆盖服务端。
-    let settings_existed = repo.layout.settings_file().exists();
 
     let (_file, _outcome) = repo.write_settings(None, None, "sync.pair", |file| {
         file.sync.enabled = true;
@@ -1076,9 +1074,19 @@ pub fn pair_device(
             file.sync.sync_settings = scopes.settings;
             file.sync.sync_schedules = scopes.schedules;
         }
-        if file.sync.sync_settings && file.sync_updated_at.is_none() && settings_existed {
-            file.sync_updated_at = Some(now_iso());
-        }
+        // **配对时绝不替本机盖设置时间戳**。
+        //
+        // 早先的规则是「本机已有 settings.json 就把此刻记成设置的最新时间」，用意是
+        // 「别让全新设备的默认设置盖掉服务端」。判据本身是假的：用户为了配对，必然先在
+        // 设置面板里填过用户名密码，而 `sync.username` 是一次 `config.set` —— 那一下就把
+        // settings.json 建出来了。于是**任何**设备配对的瞬间都会盖上一个「现在」，带着
+        // 默认头像 / 昵称 / 邮箱的本地设置实体就此赢得 LWW，推到服务端再把别的设备也改掉
+        //（重装、清数据之后尤为明显：明明服务端有头像，同步回来却是 Example User）。
+        //
+        // 真正该判断的是「本地有没有用户改过的共享设置」，而这件事 `sync_updated_at`
+        // 自己就是答案：`ops_config::set_value` 只对共享子集里的路径调
+        // `bump_sync_updated_at`，所以**没有时间戳 = 从没改过共享设置**。
+        // 没改过就不推，等服务端那一份；用户日后改任意一项共享设置，那一笔自会带上时间戳。
         Ok(json!({ "paired": true, "registered": registered }))
     })?;
     // 登录成功才记历史：设置页「历史」按钮据此一键回填方式/地址或主机名/用户名/密码

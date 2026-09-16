@@ -26,7 +26,7 @@
     Plus, Trash2, Wallet, X
   } from "@lucide/svelte";
   import { appSettings, showToast, todayIso, ledgerCategoryDraft, fileToDataUrl } from "../stores";
-  import { isMobile } from "../platform";
+  import { createBackGuard, isMobile } from "../platform";
   import { caps } from "../capabilities";
   import { imeInset } from "../imeInset";
   import { fieldKeydown } from "../shortcuts";
@@ -177,6 +177,10 @@
     openPicker = "";
     ledgerCategoryDraft.set({ side, parentId });
   }
+
+  // 编辑器里的日期 / 账户浮层：返回键先收掉它们，再按一次才轮到历史栈把整个编辑器弹掉
+  const backGuard = createBackGuard();
+  $: backGuard(openPicker !== "", () => (openPicker = ""));
 
   function togglePicker(name: typeof openPicker): void {
     openPicker = openPicker === name ? "" : name;
@@ -627,6 +631,7 @@
               on:select={(event) => { date = event.detail; openPicker = ""; }}
               on:selectTime={(event) => { time = event.detail; }}
               on:clear={() => { date = today; openPicker = ""; }}
+              on:close={() => (openPicker = "")}
             />
           </div>
         {/if}

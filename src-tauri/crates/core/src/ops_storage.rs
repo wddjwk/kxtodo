@@ -75,6 +75,17 @@ struct Scan {
     server_logs: Tally,
     cleanable_logs: Vec<(PathBuf, u64)>,
     backups: Tally,
+    /// 五个领域 JSON（data/settings/tasks/diary/ledger）
+    domain_files: Tally,
+    /// history/：审计与调度历史
+    history_dir: Tally,
+    /// runtime/：同步水位、凭据留档、链接元数据缓存
+    runtime_dir: Tally,
+    /// server/ 里除 log 之外的全部文件（含 data.db 与 -wal）
+    server_dir: Tally,
+    /// 其中 SQLite 的 WAL。单列出来是因为它会自己长大——客户端看到这条明显偏大就知道
+    /// 该让服务端做一次 checkpoint 了。
+    server_wal_bytes: u64,
     /// 孤儿图删完后可以顺手清掉的空 `img/data/<id>` 目录（id 不是现存节点也不是 diary）
     prunable_dirs: Vec<PathBuf>,
 }
@@ -150,9 +161,42 @@ fn scan(ctx: &ExecContext) -> CoreResult<Scan> {
     let settings = ctx.repo.load_settings()?;
     let mut out = Scan::default();
 
+    // 按目录分类统计。**每个文件只归一类**：img/ 与 backups/ 与 server/log/ 各自由下面
+    // 各自的扫描统计（要顺带算孤儿清单），这里跳过，免得同一份体积被算两遍。
+    let domain_names: Vec<&str> = [
+        Domain::Data,
+        Domain::Settings,
+        Domain::Schedule,
+        Domain::Diary,
+        Domain::Ledger,
+    ]
+    .iter()
+    .map(|domain| domain.file_name())
+    .collect();
     for (path, len) in collect_files(&layout.root, true) {
-        let _ = path;
         out.total_bytes += len;
+        let Ok(rel) = path.strip_prefix(&layout.root) else {
+            continue;
+        };
+        let mut parts = rel.components().filter_map(|part| part.as_os_str().to_str());
+        let first = parts.next().unwrap_or("");
+        let second = parts.next().unwrap_or("");
+        match first {
+            "img" | "backups" => {}
+            // 临时文件另有 tempFiles 统计，别两头都算
+            _ if first.starts_with('.') && first.ends_with(".tmp") => {}
+            "history" => out.history_dir.add(len),
+            "runtime" => out.runtime_dir.add(len),
+            "server" if second == "log" => {}
+            "server" => {
+                out.server_dir.add(len);
+                if second == "data.db-wal" {
+                    out.server_wal_bytes += len;
+                }
+            }
+            name if domain_names.contains(&name) => out.domain_files.add(len),
+            _ => {}
+        }
     }
 
     // ---- 插图（img/data/<id>/，含日记伪条目）----
@@ -338,6 +382,11 @@ fn storage_usage(_inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreR
         "orphanAvatars": orphan_view(&scan.orphan_avatars),
         "tempFiles": orphan_view(&scan.temp_files),
         "serverLogs": scan.server_logs.view(),
+        "domainFiles": scan.domain_files.view(),
+        "historyDir": scan.history_dir.view(),
+        "runtimeDir": scan.runtime_dir.view(),
+        "serverDir": scan.server_dir.view(),
+        "serverWalBytes": scan.server_wal_bytes,
         "cleanableLogs": orphan_view(&scan.cleanable_logs),
         "backups": scan.backups.view(),
     }))

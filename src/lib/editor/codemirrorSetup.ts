@@ -79,6 +79,16 @@ export function createMarkdownEditor(
           return true;
         }
       },
+      // 列表里的 Tab 先按列表语义缩进（连标记与编号一起改），不在列表里才落回
+      // CodeMirror 的 indentWithTab —— 返回 false 就是「我不管」，后面的绑定接着跑。
+      // `indentWithTab` 是个 KeyBinding（Tab → indentMore、Shift-Tab → indentLess），
+      // 自己那两条要在它前面，否则列表行永远走不到。
+      {
+        key: "Tab",
+        preventDefault: true,
+        run: (view) => indentListItem(view, 1) || Boolean(indentWithTab.run?.(view))
+      },
+      { key: "Shift-Tab", preventDefault: true, run: (view) => indentListItem(view, -1) },
       indentWithTab,
       ...defaultKeymap,
       ...historyKeymap
@@ -118,6 +128,99 @@ export function createMarkdownEditor(
   });
   view.dispatch({ scrollIntoView: true });
   return view;
+}
+
+/** 整篇替换（预览里点勾选框时用）：内容没变就什么都不做，免得白记一条撤销历史。 */
+export function replaceDocument(view: EditorView, text: string): void {
+  const current = view.state.doc.toString();
+  if (current === text) return;
+  view.dispatch({ changes: { from: 0, to: current.length, insert: text } });
+}
+
+/** 列表行：`缩进 + 标记 + 可选的 `[ ] ` 勾选框 + 空白`。 */
+const LIST_ITEM_RE = /^(\s*)([-*+]|\d+[.)])(\s+)(\[[ xX]\]\s+)?/;
+
+/** 无序标记按层级轮换，缩进一眼能看出嵌套关系。 */
+const BULLETS = ["-", "*", "+"];
+
+function bulletFor(indent: number): string {
+  return BULLETS[Math.floor(indent / 2) % BULLETS.length];
+}
+
+/**
+ * 列表语义的缩进 / 反缩进（Tab / Shift-Tab）。
+ *
+ * CodeMirror 自带的 `indentWithTab` 只会往行首塞两个空格：标记与编号一概不管，
+ * 于是缩进去之后编号还是原来的（`1. 2. 3.` 里插一层就变成 `1. 1. 2.`），
+ * 无序列表的标记也不变，看不出层级。这里按列表语义整块处理：
+ * - 选区里每一行**只要是列表项**就整行缩进两格（反缩进最少回到行首）；
+ * - 无序标记按层级轮换成 `-` / `*` / `+`（含 `- [ ]` 这种待办项，勾选框原样保留）；
+ * - 整块里的有序列表**重新编号**（同缩进连续的一段从 1 数起）。
+ *
+ * 选区里一行列表项都没有就返回 false —— 调用方据此落回 CodeMirror 的默认 Tab。
+ */
+export function indentListItem(view: EditorView, direction: 1 | -1): boolean {
+  const state = view.state;
+  const range = state.selection.main;
+  const first = state.doc.lineAt(range.from).number;
+  const last = state.doc.lineAt(range.to).number;
+  const changes: Array<{ from: number; to: number; insert: string }> = [];
+  let touched = 0;
+  for (let n = first; n <= last; n++) {
+    const line = state.doc.line(n);
+    const match = LIST_ITEM_RE.exec(line.text);
+    if (!match) continue;
+    touched += 1;
+    const indent = match[1];
+    const marker = match[2];
+    const ordered = /^\d/.test(marker);
+    const nextIndent =
+      direction === 1
+        ? indent + "  "
+        : indent.slice(0, Math.max(0, indent.length - 2));
+    // 有序列表的标记交给重新编号那一步改写，这里只动缩进
+    const nextMarker = ordered ? marker : bulletFor(nextIndent.length);
+    const nextText = nextIndent + nextMarker + match[3] + (match[4] ?? "");
+    changes.push({ from: line.from, to: line.from + match[0].length, insert: nextText });
+  }
+  if (touched === 0) return false;
+  view.dispatch({ changes, selection: { anchor: changes[changes.length - 1].from } });
+  renumberOrderedList(view, view.state.doc.lineAt(range.from).number);
+  return true;
+}
+
+/**
+ * 把一段连续的有序列表重新编号（同缩进的一段从 1 数起）。
+ *
+ * 从 `lineNumber` 往上/下扩到整个列表块（列表项与缩进续行都算块内，空行断开），
+ * 再逐行扫：缩进一样且都是有序项就算作同一段，遇到别的就重新从 1 开始。
+ */
+function renumberOrderedList(view: EditorView, lineNumber: number): void {
+  const state = view.state;
+  const isListish = (text: string): boolean => LIST_ITEM_RE.test(text) || /^\s+\S/.test(text);
+  let start = Math.min(Math.max(lineNumber, 1), state.doc.lines);
+  let end = start;
+  while (start > 1 && isListish(state.doc.line(start - 1).text)) start -= 1;
+  while (end < state.doc.lines && isListish(state.doc.line(end + 1).text)) end += 1;
+  const changes: Array<{ from: number; to: number; insert: string }> = [];
+  let previousIndent = "";
+  let counter = 0;
+  for (let n = start; n <= end; n++) {
+    const line = state.doc.line(n);
+    const match = LIST_ITEM_RE.exec(line.text);
+    if (!match || !/^\d/.test(match[2])) {
+      previousIndent = "";
+      counter = 0;
+      continue;
+    }
+    counter = match[1] === previousIndent ? counter + 1 : 1;
+    previousIndent = match[1];
+    const next = `${counter}.`;
+    if (match[2] === next) continue;
+    changes.push({ from: line.from + match[1].length, to: line.from + match[1].length + match[2].length, insert: next });
+  }
+  if (changes.length === 0) return;
+  view.dispatch({ changes });
 }
 
 /** 在光标处插入文本（无选区）或替换选区，并把光标移到插入内容之后。 */

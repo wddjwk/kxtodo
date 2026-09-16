@@ -871,3 +871,21 @@
 .update-available .settings-button {
   margin-top: 2px;
 }
+
+/* 懒加载 chunk 拉不到时的兜底块（编辑器 / 图标选择器 / 表情选择器共用） */
+.lazy-fallback {
+  position: fixed;
+  z-index: 4000;
+  left: 50%;
+  top: 40%;
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  padding: 18px 22px;
+  transform: translate(-50%, -50%);
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 22%);
+  color: #374151;
+  font-size: calc(var(--ui-font-size) - 3px);
+}

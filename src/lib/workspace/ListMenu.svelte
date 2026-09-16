@@ -4,7 +4,7 @@
   import MenuItem from "../menu/MenuItem.svelte";
   import MenuSeparator from "../menu/MenuSeparator.svelte";
   import { ArrowUpDown, CalendarRange, Download, Eraser, Eye, EyeOff, FileArchive, FolderInput, Image, LayoutGrid, ListTodo, PenLine, RefreshCw, RotateCcw, Trash2, Upload } from "@lucide/svelte";
-  import { appSettings, appState, selectedBackground, accent, showToast, now, safeFileName, fileToDataUrl, appVersion } from "../stores";
+  import { appSettings, appState, selectedBackground, accent, showToast, now, safeFileName, appVersion } from "../stores";
   import {
     deleteNodeCascade as deleteNodeCascadeAction,
     importState as importStateAction,
@@ -33,7 +33,8 @@
     importBackgroundImage, backgroundImageUrl, deleteNodeImages, saveBackgroundImageFromDataUrl
   } from "../backend";
   import { caps } from "../capabilities";
-  import { isLocalImageRef, localImageFilename, localImageRef, primeImageCache } from "../images";
+  import { isLocalImageRef, localImageFilename, localImageRef, primeImageCache, compressBackgroundImage } from "../images";
+  import { DEFAULT_DUE_COLORS } from "../dueHighlight";
   import { showMobileList } from "../platform";
   import { sortLabels, type SortMode } from "../sort";
   import type { AppNode, ListBackground } from "../types";
@@ -239,7 +240,7 @@
     const target = event.currentTarget;
     if (!(target instanceof HTMLInputElement) || !target.files?.[0]) return;
     try {
-      const dataUrl = await fileToDataUrl(target.files[0]);
+      const dataUrl = await compressBackgroundImage(target.files[0]);
       if (isTauriRuntime) {
         // Tauri（移动端 + 桌面兜底）：dataURL 交给 Rust 落盘为本地图片文件。
         const previous = bg.image;
@@ -318,6 +319,40 @@
     }
     if (!node) return;
     void unsetUiColorAction(node.id);
+  }
+
+  // ---- 临期高亮色（每个页面一套，存在 appearance.dueColors[节点id]）----
+  const dueColorLabels = ["今天到期", "明天到期", "后天到期"];
+
+  /** 这一页当前的三色：没配过就用默认（红 → 橙黄 → 浅黄） */
+  function dueColorValue(index: number): string {
+    const stored = $appSettings.appearance.dueColors[dueColorKey()];
+    const candidate = stored?.[index];
+    return candidate && /^#[0-9a-f]{6}$/i.test(candidate) ? candidate : DEFAULT_DUE_COLORS[index];
+  }
+
+  /** 配色的归属键：普通列表用节点 id；日记/记账那种按域存（settingsPrefix） */
+  function dueColorKey(): string {
+    return settingsPrefix ? settingsPrefix : (node?.id ?? "");
+  }
+
+  function updateDueColor(index: number, color: string): void {
+    const key = dueColorKey();
+    if (!key) return;
+    const next = [...[0, 1, 2].map((slot) => dueColorValue(slot))];
+    next[index] = color;
+    void setConfigAction("appearance.dueColors", {
+      ...$appSettings.appearance.dueColors,
+      [key]: next
+    });
+  }
+
+  function resetDueColors(): void {
+    const key = dueColorKey();
+    if (!key) return;
+    const next = { ...$appSettings.appearance.dueColors };
+    delete next[key];
+    void setConfigAction("appearance.dueColors", next);
   }
 
   function resetBackgroundToDefault(): void {
@@ -752,6 +787,24 @@
     <span class="ui-color-value">{accentValue}</span>
     <button class="menu-action-button" type="button" on:click={resetUiColor}>默认</button>
   </div>
+
+  {#if $appSettings.features.dueHighlight !== "off" && !settingsPrefix}
+    <div class="menu-section-title">临期高亮色</div>
+    <div class="ui-color-row">
+      {#each dueColorLabels as label, index (label)}
+        <label class="ui-color-picker" title={`${label}的高亮色`}>
+          <span style={`--swatch: ${dueColorValue(index)}`}></span>
+          <input
+            type="color"
+            value={dueColorValue(index)}
+            on:input={(event) => updateDueColor(index, event.currentTarget.value)}
+          />
+        </label>
+      {/each}
+      <span class="ui-color-value">今天 / 明天 / 后天</span>
+      <button class="menu-action-button" type="button" on:click={resetDueColors}>默认</button>
+    </div>
+  {/if}
 
   <div class="menu-section-title">背景颜色</div>
   <div class="color-grid">

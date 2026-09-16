@@ -2,8 +2,11 @@
   import { onDestroy, onMount, tick } from "svelte";
   import { CalendarDays, Check, CloudSun, Eye, ImagePlus, PenLine, Plus, Smile, Tag as TagIcon, X } from "@lucide/svelte";
   import type { EditorView } from "@codemirror/view";
-  import { createMarkdownEditor, insertAtCursor } from "../editor/codemirrorSetup";
+  import { createMarkdownEditor, insertAtCursor, replaceDocument } from "../editor/codemirrorSetup";
   import { renderMarkdown } from "../markdown";
+  import TagColorPicker from "../TagColorPicker.svelte";
+  import { tagChipStyle } from "../tagColors";
+  import { taskToggleIndex, toggleMarkdownTask } from "../markdownTasks";
   import { markdownWire } from "../markdownControls";
   import { mdImageCache, primeMdImageCache, resolveMarkdownImages } from "../images";
   import { isTauriRuntime, mdImageUrl, pickImageFile, saveMdImage, saveMdImageFromDataUrl } from "../backend";
@@ -22,7 +25,7 @@
     fullDayLabel, relativeDayLabel, todayDate
   } from "../diary";
   import type { DiaryEditorTarget, Tag, TagColor } from "../types";
-  import { isMobile, touchOnly } from "../platform";
+  import { createBackGuard, isMobile, touchOnly } from "../platform";
   import { imeInset } from "../imeInset";
   import { fieldKeydown } from "../shortcuts";
 
@@ -30,13 +33,6 @@
   export let onClose: () => void = () => {};
   export let onOpenLink: (url: string, title?: string) => void = () => {};
 
-  const TAG_COLORS: Array<{ color: TagColor; label: string }> = [
-    { color: "red", label: "红色" },
-    { color: "yellow", label: "黄色" },
-    { color: "blue", label: "蓝色" },
-    { color: "green", label: "绿色" },
-    { color: "gray", label: "灰色" }
-  ];
 
   const editingId = "id" in target ? target.id : null;
   const existing = editingId ? get(diaryEntries).find((entry) => entry.id === editingId) : undefined;
@@ -64,6 +60,7 @@
   let openPicker: "" | "date" | "mood" | "weather" | "tag" = "";
   let tagDraft = "";
   let tagColor: TagColor = "yellow";
+  let tagHex = "";
   /** 触屏上被点了一下、露出删除叉的标签（桌面靠 hover，不用它） */
   let revealedTagId = "";
   let editingTagId = "";
@@ -197,6 +194,11 @@
     }
   }
 
+  // 编辑器里的日期 / 心情 / 天气 / 标签浮层：返回键先收掉它们，再按一次才轮到
+  // 历史栈把整个编辑器弹掉（编辑器本身是历史栈的一层）。
+  const backGuard = createBackGuard();
+  $: backGuard(openPicker !== "", () => (openPicker = ""));
+
   function togglePicker(name: typeof openPicker): void {
     openPicker = openPicker === name ? "" : name;
     if (openPicker) {
@@ -228,7 +230,12 @@
     const text = tagDraft.trim();
     tags = [
       ...tags,
-      { id: `tag-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, color: tagColor, text: text || undefined }
+      {
+        id: `tag-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        color: tagColor,
+        text: text || undefined,
+        hex: tagColor === "custom" ? tagHex || undefined : undefined
+      }
     ];
     tagDraft = "";
   }
@@ -336,6 +343,16 @@
   }
 
   function handlePreviewClick(event: MouseEvent): void {
+    // 预览里的任务勾选框：点一下改源码里的 `- [ ]` / `- [x]`，编辑器内容跟着更新
+    const boxIndex = taskToggleIndex(event, event.currentTarget as Element);
+    if (boxIndex !== null) {
+      event.preventDefault();
+      event.stopPropagation();
+      const next = toggleMarkdownTask(text, boxIndex);
+      if (view) replaceDocument(view, next);
+      else text = next;
+      return;
+    }
     const link = (event.target as HTMLElement | null)?.closest("a[href]");
     if (!(link instanceof HTMLAnchorElement)) return;
     event.preventDefault();
@@ -393,6 +410,7 @@
               on:select={(event) => pickDate(event.detail)}
               on:selectTime={(event) => pickTime(event.detail)}
               on:clear={() => pickDate(today)}
+              on:close={() => (openPicker = "")}
             />
           </div>
         {/if}
@@ -443,6 +461,7 @@
           {:else}
             <span
               class={`task-tag tag-${tag.color}`}
+              style={tagChipStyle(tag)}
               class:reveal-delete={revealedTagId === tag.id}
               on:click|stopPropagation={() => handleTagTap(tag.id, tag.text || "")}
             >
@@ -470,17 +489,14 @@
                 <Plus size={15} />
               </button>
             </div>
-            <div class="tag-editor-colors">
-              {#each TAG_COLORS as preset (preset.color)}
-                <button
-                  class={`color-circle ${preset.color}`}
-                  class:selected={tagColor === preset.color}
-                  type="button"
-                  title={preset.label}
-                  on:click|stopPropagation={() => (tagColor = preset.color)}
-                ></button>
-              {/each}
-            </div>
+            <TagColorPicker
+              color={tagColor}
+              hex={tagHex}
+              on:change={(event) => {
+                tagColor = event.detail.color;
+                tagHex = event.detail.hex;
+              }}
+            />
           </div>
         {/if}
       </div>

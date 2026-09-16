@@ -185,6 +185,69 @@ export function primeMdImageCache(nodeId: string, filename: string, url: string)
   boundedPut(mdImageCache, key, url, MD_CACHE_BUDGET);
 }
 
+// -- 上传前的本地压缩 --
+
+function readFileAsDataUrl(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error("读取文件失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * 把用户挑的图片压成小 dataURL（长边 ≤ maxEdge）。
+ *
+ * 移动端没有原生文件对话框，挑图走的就是 dataURL 这条路：一张手机原图能有几 MB，
+ * 直接往上传的后果是三重的——① 几十 MB 的字符串过一次 IPC；② 落盘后每次冷启动都要
+ * 读出来重新 base64（表现成「背景图先空一帧再出现」）；③ 头像那种直接存进 settings.json
+ * 的还会撑爆 localStorage 的资料缓存，把名字邮箱一起拖去闪默认值。
+ *
+ * 出 PNG 还是 JPEG 看**源格式**（`opaque` 为真时一律 JPEG）：PNG/WebP/GIF 可能带透明
+ * 通道，铺成 JPEG 会把透明背景变黑。解码失败、画布拿不到、压完反而更大，一律原样返回
+ * ——压缩是优化，不许把用户的图弄丢。
+ */
+async function compressImageToDataUrl(
+  file: File,
+  maxEdge: number,
+  { quality = 0.9, opaque = false }: { quality?: number; opaque?: boolean } = {}
+): Promise<string> {
+  const original = await readFileAsDataUrl(file);
+  const keepAlpha = !opaque && /png|webp|gif|svg/i.test(file.type || "");
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) return original;
+    context.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close();
+    const compressed = canvas.toDataURL(keepAlpha ? "image/png" : "image/jpeg", quality);
+    // 「压完更大」也算失败：PNG 截图转 PNG 常常反而涨，那就原样留着
+    return compressed && compressed.length < original.length ? compressed : original;
+  } catch {
+    return original;
+  }
+}
+
+/** 头像：显示尺寸只有几十像素，256px 足够；带透明通道的源格式仍出 PNG。 */
+export function compressAvatarImage(file: File): Promise<string> {
+  return compressImageToDataUrl(file, 256);
+}
+
+/** 列表背景：铺满窗口，2560 长边在手机与桌面上都看不出差别；背景不透明，一律 JPEG。 */
+export function compressBackgroundImage(file: File): Promise<string> {
+  return compressImageToDataUrl(file, BACKGROUND_MAX_EDGE, { opaque: true });
+}
+
+/** 背景图长边上限。与 Rust 侧 `ImageGate::Background` 同一个值，改要一起改。 */
+export const BACKGROUND_MAX_EDGE = 2560;
+
 /**
  * Resolve markdown ![](filename) references to asset-protocol URLs.
  * Called with the raw markdown and the node ID to resolve local image references.

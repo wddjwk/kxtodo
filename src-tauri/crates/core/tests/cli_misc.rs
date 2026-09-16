@@ -534,3 +534,127 @@ fn jq_overrides_format_but_says_so_on_stderr_only() {
     assert_eq!(envelope["ok"], false);
     assert_eq!(envelope["error"]["code"], "JQ_TYPE");
 }
+
+/// 文档里的每一段 `示例：kxtodo-cli ...` 都必须真的能解析。
+///
+/// 早先 `ledger account-remove` 那三条写成了 core 内部名（`accountRemove` /
+/// `categoryModify` / `categoryRemove`），照抄必失败——而 help 是用户与 Agent
+/// 唯一会照着敲的东西。这条测试把「示例」纳入回归：命令树一改名，示例不改就红。
+#[test]
+fn help_examples_parse() {
+    use clap::{CommandFactory, Parser};
+    use kxtodo_core::cli::Cli;
+
+    /// 收集所有层级 `long_about` 里的示例命令行
+    fn collect(cmd: &clap::Command, out: &mut Vec<String>) {
+        for sub in cmd.get_subcommands() {
+            let path = sub.get_name().to_string();
+            if let Some(text) = sub.get_long_about().or_else(|| sub.get_about()) {
+                for line in text.to_string().lines() {
+                    let line = line.trim();
+                    let Some(rest) = line.strip_prefix("kxtodo-cli ") else {
+                        continue;
+                    };
+                    // 跳过元语法（`<command>`、`a|b` 这类占位写法）
+                    if rest.contains('<') || rest.contains('|') || rest.contains('…') {
+                        continue;
+                    }
+                    out.push(rest.to_string());
+                }
+            }
+            let _ = path;
+            collect(sub, out);
+        }
+    }
+
+    /// 按 shell 的习惯切词（示例里会写 `--markdown "完成 XXX 需求"`），
+    /// 直接 split_whitespace 会把引号里的内容拆成好几个参数。
+    fn split_shell(line: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut current = String::new();
+        let mut quote: Option<char> = None;
+        for ch in line.chars() {
+            match quote {
+                Some(mark) if ch == mark => quote = None,
+                Some(_) => current.push(ch),
+                None if ch == '"' || ch == '\'' => quote = Some(ch),
+                // `#` 起头的词是行尾注释（示例里会写「# 这个月写了几篇」这类说明）
+                None if ch == '#' && current.is_empty() => break,
+                None if ch.is_whitespace() => {
+                    if !current.is_empty() {
+                        out.push(std::mem::take(&mut current));
+                    }
+                }
+                None => current.push(ch),
+            }
+        }
+        if !current.is_empty() {
+            out.push(current);
+        }
+        out
+    }
+
+    let root = Cli::command();
+    let mut examples = Vec::new();
+    collect(&root, &mut examples);
+    assert!(
+        examples.len() >= 20,
+        "示例数量太少（{}），收集逻辑可能已经失效",
+        examples.len()
+    );
+    for example in examples {
+        let args = split_shell(&example);
+        let parsed = Cli::try_parse_from(std::iter::once("kxtodo-cli".to_string()).chain(args));
+        if let Err(error) = parsed {
+            use clap::error::ErrorKind;
+            // 只关心「命令/参数名写错」这两类：示例里的占位值（id、路径）不参与解析，
+            // 但缺少必需值这类错误在示例里是正常的（示例常常只演示一部分参数）
+            assert!(
+                !matches!(
+                    error.kind(),
+                    ErrorKind::InvalidSubcommand | ErrorKind::UnknownArgument
+                ),
+                "help 示例解析不过：`kxtodo-cli {example}`\n{error}"
+            );
+        }
+    }
+}
+
+/// v0.8.1：`-` 开头的文本值必须能传进去（markdown 列表、破折号开头的备注都是常见写法）。
+#[test]
+fn hyphen_leading_text_values_are_accepted() {
+    let env = TestEnv::fresh();
+    let entry = env.ok(&["task", "add", "--type", "entry", "--name", "收件箱"]);
+    let entry_id = entry["id"].as_str().unwrap().to_string();
+
+    let item = env.ok(&[
+        "task", "add", "--type", "item", "--entry-id", &entry_id,
+        "--markdown", "- 列表项一\n- 列表项二",
+    ]);
+    assert_eq!(item["markdown"], "- 列表项一\n- 列表项二");
+    // 破折号开头的备注（记账的 --note 是自由文本）
+    let account = env.ok(&["ledger", "account-add", "--name", "零钱", "--yes"]);
+    assert!(account["id"].as_str().is_some());
+    let entry_note = env.ok(&[
+        "ledger", "add", "--amount", "12.50", "--account", "零钱", "--note", "-备注", "--yes",
+    ]);
+    assert_eq!(entry_note["note"], "-备注");
+
+    let diary = env.ok(&[
+        "diary", "add", "--markdown", "- 今天做完了这些\n- 还有这些",
+    ]);
+    assert!(diary["id"].as_str().unwrap().starts_with("diary-"));
+
+    // 期初为负（信用卡）：`--initial -1234.56` 不加等号也要认
+    let account = env.ok(&[
+        "ledger", "account-add", "--name", "信用卡", "--initial", "-1234.56", "--yes",
+    ]);
+    assert_eq!(account["initialCents"], -123456);
+
+    // 但金额本身不许为负：报业务错误（不是 clap 的「未知参数」）
+    let bad = env.run(&[
+        "ledger", "add", "--amount", "-30", "--account", "信用卡", "--yes",
+    ]);
+    assert_eq!(bad.code, 2, "{}", bad.stderr);
+    assert_eq!(bad.stderr_envelope()["error"]["code"], "LEDGER_AMOUNT_INVALID");
+}

@@ -65,7 +65,6 @@
       onCommit={(v) => (randomCount = v)}
     />
   </div>
-  <button class="settings-button primary" type="button" on:click={generateRandom}>生成</button>
   {#if randomResults.length}
     <div class="toolbox-results">
       {#each randomResults as value, index (index)}
@@ -73,4 +72,7 @@
       {/each}
     </div>
   {/if}
+  <div class="toolbox-sub-actions">
+    <button class="settings-button primary" type="button" on:click={generateRandom}>生成</button>
+  </div>
 </div>

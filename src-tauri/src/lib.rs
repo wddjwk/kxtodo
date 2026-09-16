@@ -740,7 +740,7 @@ async fn save_background_image(app: AppHandle, data_url: String) -> Result<Strin
     // （v0.5.0 修同步命令时踩过同一个坑）。所有图片入库一律走阻塞线程池。
     tauri::async_runtime::spawn_blocking(move || {
         let bytes = decode_data_url_payload(&data_url)?;
-        store_image_bytes(&dest, bytes)?;
+        store_image_bytes(&dest, bytes, ImageGate::Background)?;
         Ok(filename)
     })
     .await
@@ -777,38 +777,72 @@ fn next_image_filename(prefix: &str, ext: &str) -> String {
 }
 
 /// 读一张用户挑的图片并落盘（顺带过体积闸）。
-fn store_image_from_path(src: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
+fn store_image_from_path(
+    src: &std::path::Path,
+    dest: &std::path::Path,
+    gate: ImageGate,
+) -> Result<(), String> {
     if !src.is_file() {
         return Err("File not found".to_string());
     }
     let bytes = fs::read(src).map_err(|error| error.to_string())?;
-    store_image_bytes(dest, bytes)
+    store_image_bytes(dest, bytes, gate)
 }
 
-fn store_image_bytes(dest: &std::path::Path, bytes: Vec<u8>) -> Result<(), String> {
-    fs::write(dest, shrink_oversized_image(bytes)).map_err(|error| error.to_string())
+fn store_image_bytes(dest: &std::path::Path, bytes: Vec<u8>, gate: ImageGate) -> Result<(), String> {
+    fs::write(dest, gate_image(bytes, gate)?).map_err(|error| error.to_string())
 }
 
-/// 图片入库前的体积闸：**只在超过 5MB 时动手**（小图重新编码只有看不见的损失、没有收益）。
-///
-/// 做法是「按最长边等比缩 + 高质量重编码」，且**只处理 JPEG 与 PNG**：
-/// - JPEG（多半是手机原图，实测有 19MB 的列表背景）：长边收到 2560、质量 90，
-///   在背景/插图的显示尺寸下肉眼无差，体积通常掉到 1MB 上下；
-/// - PNG（多半是票据与长截图，以文字为主）：长边上限放宽到 4096、仍然无损编码，
-///   宁可省得少也不糊字；
+/// 图片入库的体积闸预设。三类图的显示尺寸差着数量级，用同一套阈值要么白压要么不够压。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ImageGate {
+    /// markdown 插图：只在超 5MB 时动手——小图重新编码只有看不见的损失、没有收益。
+    Markdown,
+    /// 列表背景：铺满整个窗口。**门槛压到 2MB**：手机原图动辄十几 MB，落盘后每次冷启动
+    /// 都要读出来 base64 才能显示（`image_data_url`），大文件就是「背景先空一帧再出现」。
+    /// 压完仍超 10MB 直接拒收——那种图继续留着只会每次都卡，不如当场说清楚。
+    Background,
+    /// 头像：显示尺寸只有几十像素。**一律收到 256px**（不分来源大小），
+    /// 因为移动端的头像是以 dataURL 直接存进 settings.json 的（要跟着同步走），
+    /// 原图几 MB 会撑爆 localStorage 的资料缓存、也会让每轮同步白带几 MB。
+    Avatar,
+}
+
+/// 背景图体积上限：压完还超这个数就不收（见 `ImageGate::Background`）。
+const MAX_BACKGROUND_BYTES: usize = 10 * 1024 * 1024;
+
+/// 图片入库前的体积闸：按预设「按最长边等比缩 + 高质量重编码」，**只处理 JPEG 与 PNG**：
+/// - JPEG（多半是手机原图，实测有 19MB 的列表背景）：长边收到上限、质量 90；
+/// - PNG（多半是票据与长截图，以文字为主）：长边上限放宽，仍然无损编码，宁可省得少也不糊字；
 /// - 其它格式一律原样保留：GIF / WebP 可能是动图，解码只拿得到第一帧，重编码等于把动画弄丢。
 ///
 /// 三条兜底，任何一条不满足都原样返回：**压缩永远不许弄丢或弄坏用户的图**——
 /// 解码失败、重编码失败、重编码后反而没变小（那就白搭一次画质损失）。
-fn shrink_oversized_image(bytes: Vec<u8>) -> Vec<u8> {
+fn gate_image(bytes: Vec<u8>, gate: ImageGate) -> Result<Vec<u8>, String> {
+    let (threshold, max_edge_jpeg, max_edge_lossless, quality) = match gate {
+        // 与前端 `images.ts::BACKGROUND_MAX_EDGE` 同一个值，改要一起改
+        ImageGate::Background => (2 * 1024 * 1024, 2560, 4096, 90),
+        ImageGate::Avatar => (0, 256, 256, 88),
+        ImageGate::Markdown => (5 * 1024 * 1024, 2560, 4096, 90),
+    };
+
+    let out = shrink_image(bytes, threshold, max_edge_jpeg, max_edge_lossless, quality);
+    if gate == ImageGate::Background && out.len() > MAX_BACKGROUND_BYTES {
+        return Err("图片过大：压缩后仍超过 10MB，请换一张更小的图".to_string());
+    }
+    Ok(out)
+}
+
+fn shrink_image(
+    bytes: Vec<u8>,
+    threshold: usize,
+    max_edge_jpeg: u32,
+    max_edge_lossless: u32,
+    quality: u8,
+) -> Vec<u8> {
     use image::ImageEncoder;
 
-    const THRESHOLD: usize = 5 * 1024 * 1024;
-    const MAX_EDGE_JPEG: u32 = 2560;
-    const MAX_EDGE_LOSSLESS: u32 = 4096;
-    const JPEG_QUALITY: u8 = 90;
-
-    if bytes.len() <= THRESHOLD {
+    if bytes.len() <= threshold {
         return bytes;
     }
     let Ok(format) = image::guess_format(&bytes) else {
@@ -821,7 +855,7 @@ fn shrink_oversized_image(bytes: Vec<u8>) -> Vec<u8> {
         return bytes;
     };
     let jpeg = format == image::ImageFormat::Jpeg;
-    let max_edge = if jpeg { MAX_EDGE_JPEG } else { MAX_EDGE_LOSSLESS };
+    let max_edge = if jpeg { max_edge_jpeg } else { max_edge_lossless };
     let (width, height) = (decoded.width(), decoded.height());
     let resized = if width.max(height) > max_edge {
         // 等比缩：长边落到上限，短边按比例算，至少 1px
@@ -841,7 +875,7 @@ fn shrink_oversized_image(bytes: Vec<u8>) -> Vec<u8> {
     let pixels = resized.as_bytes();
     let encoded = if jpeg {
         // JPEG 没有 alpha：走到这一支说明源图本来就是 JPEG，不会有透明通道
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY).write_image(
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality).write_image(
             pixels, width, height, color,
         )
     } else {
@@ -886,15 +920,15 @@ fn extension_for_path(path: &str) -> String {
 }
 
 /// Copy a picked image file into the images dir without any base64 round-trip.
-/// Returns the stored filename. Works for arbitrarily large images（超过 5MB 的会先过
-/// `shrink_oversized_image` 那道体积闸）。
+/// Returns the stored filename. Works for arbitrarily large images（超过闸门阈值的会先过
+/// `gate_image` 那道体积闸；压完仍超 10MB 的会在这里被拒收）。
 #[tauri::command]
 async fn import_background_image(app: AppHandle, src_path: String) -> Result<String, String> {
     let dir = images_dir(&app)?;
     let filename = next_image_filename("bg", &extension_for_path(&src_path));
     let dest = dir.join(&filename);
     tauri::async_runtime::spawn_blocking(move || {
-        store_image_from_path(std::path::Path::new(&src_path), &dest)?;
+        store_image_from_path(std::path::Path::new(&src_path), &dest, ImageGate::Background)?;
         Ok(filename)
     })
     .await
@@ -1010,7 +1044,7 @@ async fn save_avatar_image(app: AppHandle, src_path: String) -> Result<String, S
                 let _ = fs::remove_file(entry.path());
             }
         }
-        store_image_from_path(std::path::Path::new(&src_path), &dest)?;
+        store_image_from_path(std::path::Path::new(&src_path), &dest, ImageGate::Avatar)?;
         Ok(filename)
     })
     .await
@@ -1044,7 +1078,7 @@ async fn save_md_image(app: AppHandle, src_path: String, node_id: String) -> Res
     let filename = next_image_filename("md", &extension_for_path(&src_path));
     let dest = dir.join(&filename);
     tauri::async_runtime::spawn_blocking(move || {
-        store_image_from_path(std::path::Path::new(&src_path), &dest)?;
+        store_image_from_path(std::path::Path::new(&src_path), &dest, ImageGate::Markdown)?;
         Ok(filename)
     })
     .await
@@ -1103,7 +1137,7 @@ async fn save_md_image_data(
     let dest = dir.join(&filename);
     tauri::async_runtime::spawn_blocking(move || {
         let bytes = decode_data_url_payload(&data_url)?;
-        store_image_bytes(&dest, bytes)?;
+        store_image_bytes(&dest, bytes, ImageGate::Markdown)?;
         Ok(filename)
     })
     .await

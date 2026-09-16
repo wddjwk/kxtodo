@@ -3,6 +3,7 @@
     Check, Clock3, FileCode2, FolderOpen, Plus, Power, Settings, Trash2
   } from "@lucide/svelte";
   import { appState, showToast } from "./stores";
+  import { createBackGuard } from "./platform";
   import {
     addSchedule as addScheduleAction, modifySchedule as modifyScheduleAction,
     removeSchedule as removeScheduleAction, setScheduleEnabled as setScheduleEnabledAction,
@@ -63,6 +64,10 @@
   ];
 
   let showRuntimeSettings = false;
+
+  // 运行设置面板是这一页的浮层：返回键先收它
+  const backGuard = createBackGuard();
+  $: backGuard(showRuntimeSettings, () => (showRuntimeSettings = false));
 
   $: scheduledTasks = $appState.scheduler.tasks;
 

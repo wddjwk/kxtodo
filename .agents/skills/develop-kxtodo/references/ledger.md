@@ -54,6 +54,16 @@
 - core 侧 `ledger stats` 从 O(keys × entries) 改单趟聚合（桶键借 `file` 的 `&str` 零分配；分类聚合先建 `HashMap<&str,&LedgerCategory>` 索引 + `Vec<CategoryGroup>` 槽位表；**JSON 最后才组装**，字段顺序与旧实现逐字节一致——serde_json 开了 `preserve_order`、`sort_by` 稳定排序），输出等价性由 golden 测试钉死 series 与 categories 的序列化文本。grain/series 的 CLI 语义见 `cli.md`「列表分页与合计」。
 - 死代码已删（`signedCents`/`signedLabel`/`accountName`/`categoryName`、`ledgerIcons.ts` 的 SIDE_COLOR/SIDE_LABEL）：别再按这些名字找。
 
+### 标签配色（v0.8.1）
+
+标签配色是**全应用共用**的（记账/日记/待办同一套 `TagColor`），九个值：七彩虹（`red` `orange` `yellow` `green` `cyan` `blue` `purple`）+ `gray` + `custom`。
+- `custom` 必须配 `Tag.hex`（`#rrggbb`），缺失或非法一律按 `gray` 渲染——两端同一口径：前端 `defaults.ts::normalizeTagHex`、Rust `model::tag_hex`，另有 `Tag::effective_color` / `custom_hex` 兜底。
+- 色值只定义在 `src/lib/tagColors.ts`（色盘圆点 / 胶囊底色 / 描边 / 文字四组），`workspace.css` 的 `.task-tag.tag-*` 与 `.tag-preset.tag-*` 是同一组色；**自定义色走内联 CSS 变量**（`--tag-bg` / `--tag-fg`，由 `.task-tag.tag-custom` 消费），因为颜色是用户选的、没有对应类名。
+- 选择器 `TagColorPicker.svelte` 是**两排胶囊**（5 + 4，各自 flex 均分填满），最后一格是盖在胶囊上的 `<input type="color">`。**别换成圆形色点**：胶囊是用户点名要的样式，而且两排等分在窄面板（右键菜单 216px）里也不会换行。
+- 面板 `TagMenuPanel.svelte`（右键菜单与日记条目菜单共用）从上到下三块：预置标签（点=加到条目上、右侧叉=删这条预置、右下角加号=把输入框内容存成预置且**不加到条目**）→ 输入框 + 「存入预置」勾选（默认勾）→ 两排配色。**没有「清除所有标签」按钮**（卡片上点标签就能删单个，为了「一键清空」在菜单里留个危险按钮不值当）。
+- 预置标签住在 `appearance.tagPresets`（**跟着设置同步**，上限 64 条，core 侧 `expect_tag_presets` 校验），不是 localStorage——它是用户攒的内容，换台设备也该能用。
+- CLI 侧 `--tag` / `--add-tag` / `--replace-tags` 的颜色段接受具名色或 `#rrggbb`（后者自动记成 `custom` + hex）；报错文案里列全了九个名字。
+
 ### 组织单位是「天」，与日记卡片同一条语言
 
 列表视图顶部是**标题级的月份行**（`.ledger-month-bar`：‹ 2026年9月 › + 收/支/结余，**只有列表视图渲染**——其余三视图的顶栏自带周期与合计；v0.7.1 把它做成标题下小字，窄屏上会被视图切换图标挡住）+ 月份分隔行 + 一天一张 `LedgerDayCard`：**单列**——标题行 = 主题色日期号 + 日期 + 周几 + 右端当天收/支与「在这天记一笔」，下面每一笔一行左对齐（分类图标圆片 + 名称/备注 + 账户 + 带符号金额），**不折叠**——一天的笔数本来就该一眼看完；滚到底接上一个月、滚到顶接回下一个月（`months` 栈 + `handleScroll`，月份行的 ‹ › 直接换月并把栈重置）。标题行的日期用 `dayTitle`（今天/昨天/前天或「9月10日」）——`relativeDayLabel` 的完整形式自带周几，会和旁边那格重复。**日历** = 日记同款月历（居中），格子里写当天收/支数额（紧凑格式 `compactCents` 去掉无意义的 .00；不做热力图——数额本身就是最直白的信息）；选中日的日头与当天卡片**左对齐铺满内容宽**（与日记日历视图同一条排版，不跟着月历居中）。**统计** = 汇总卡（收/支/结余）+ 手写 SVG 曲线 + 分类占比环 + 排行进度条（子分类金额并进大类；**不引图表库**：包体积与风格都不值，server 管理台的活动曲线是先例）；**收/支是顶部一个总开关**，曲线只画当前侧一条线——两条线共用一根纵轴时一笔工资就能把整月支出压成地板线。统计与资产两块**铺满内容宽**（右缘对齐头部齿轮；v0.7.1 的 900px 上限在正常桌面窗口下右侧留一大片空白）；占比环带**引线标签**（占比 ≥4.5% 的分类才画，同侧上下挨太近的名字推开防叠字），**点一片沿中角拉出来加粗，环心换成它的名字/金额/占比笔数**，再点回总额（`focusId`，换周期或换收支侧时清空）。**资产** = 净资产卡 + 账户行（点行进编辑）+ 添加/转账。

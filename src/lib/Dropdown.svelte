@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher, tick } from "svelte";
   import { Check, ChevronDown } from "@lucide/svelte";
+  import { createBackGuard } from "./platform";
 
   export let value: string;
   export let options: Array<{ value: string; label: string }> = [];
@@ -13,6 +14,9 @@
   let menuEl: HTMLElement;
 
   $: current = options.find((o) => o.value === value);
+
+  const backGuard = createBackGuard();
+  $: backGuard(open, () => (open = false));
 
   /** 打开后测量菜单高度，超出窗口下缘则向上展开。 */
   async function adjustPosition(): Promise<void> {

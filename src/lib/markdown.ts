@@ -45,7 +45,19 @@ import { ADMONITION_ICONS, ADMONITION_ICON_BY_TYPE } from "./admonitionIcons";
 
 marked.use({
   gfm: true,
-  breaks: true
+  breaks: true,
+  renderer: {
+    /**
+     * 任务列表的勾选框：加一个类名，并且**去掉 `disabled`**。
+     *
+     * 渲染出来的框是要能点的（点一下改回源码里的 `- [ ]` / `- [x]`，见 markdownControls
+     * 与各卡片的点击处理）；而 disabled 的表单控件在浏览器里根本不派发 click 事件，
+     * 点上去什么都不会发生。marked 默认给的就是 `disabled=""`（它预期渲染结果只读）。
+     */
+    checkbox({ checked }: { checked?: boolean }) {
+      return `<input type="checkbox" class="md-task-box"${checked ? " checked" : ""}>`;
+    }
+  }
 });
 
 hljs.registerLanguage("bash", bash);
@@ -464,6 +476,20 @@ const inlineCache = new RenderCache(800, 400_000);
 
 if (typeof window !== "undefined") {
   (window as unknown as Record<string, unknown>).__kxtodoRenderStats = renderStats;
+}
+
+/**
+ * 记忆化命中就同步给出 HTML，没命中回 null（**不触发渲染**）。
+ *
+ * 展开一张卡片时用它决定走哪条路：命中的（刚收起又展开、列表刷新后重挂）立刻画出来，
+ * 没命中的才需要让一帧（见 TaskCard/DiaryCard 的 `syncFullRender`）。
+ */
+export function peekMarkdown(markdown: string): string | null {
+  const hit = blockCache.get(markdown);
+  // 命中也要记数：走记忆化就不经过 `renderMarkdown` 了（展开卡片那条路径正是这样），
+  // 不记的话性能基准里的 blockHit 永远是 0，「记忆化到底有没有生效」就测不出来
+  if (hit !== undefined) renderStats.blockHit += 1;
+  return hit ?? null;
 }
 
 /** 完整渲染：front-matter / callout / 公式 / 代码折叠 / 图框占位。 */

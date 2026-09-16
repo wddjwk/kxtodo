@@ -641,24 +641,46 @@ export async function setBackground(
 
 export async function setConfig(path: string, value: unknown): Promise<boolean> {
   if (coreMode) {
-    try {
-      await coreDispatch("config.set", { path, value });
-    } catch (error) {
-      await report(error, "设置保存失败");
-      return false;
-    }
-    // 本地即时生效（事件会兜底一致性）
+    // **先本地生效、再落盘**。config.set 是一次完整的往返：IPC + settings.json 全量原子写
+    //（fs2 锁 + fsync + revision + 域事件），安卓上是几十到上百毫秒。等它回来才翻 UI，
+    // 表现就是「点一下视图切换，按钮先顿一下」——视图切换、开关这类操作必须立刻有反馈，
+    // 这个优先级高于任何资源节省。设置是本机权威、没有冲突语义，本地先生效没有数据风险；
+    // 失败按原值回滚并提示（域事件回来时还会用快照兜一次一致性）。
+    const previous = clone(get(appSettings));
     appSettings.update((current) => {
       const next = clone(current);
       applySettingsPath(next, path, value);
       return next;
     });
-    return true;
+    try {
+      await coreDispatch("config.set", { path, value });
+      return true;
+    } catch (error) {
+      appSettings.update((current) => {
+        // 这期间又被改过（值已经不是我们写进去的那个）就不动它，免得把后一次改动也抹掉
+        if (readSettingsPath(current, path) !== value) return current;
+        const next = clone(current);
+        applySettingsPath(next, path, readSettingsPath(previous, path));
+        return next;
+      });
+      await report(error, "设置保存失败");
+      return false;
+    }
   }
   const next = clone(settings());
   applySettingsPath(next, path, value);
   commitSettings(next);
   return true;
+}
+
+/** 按 `a.b.c` 读设置里的一个叶子值（`setConfig` 回滚用；路径不存在回 undefined）。 */
+function readSettingsPath(target: Settings, path: string): unknown {
+  let cursor: unknown = target;
+  for (const segment of path.split(".")) {
+    if (typeof cursor !== "object" || cursor === null) return undefined;
+    cursor = (cursor as Record<string, unknown>)[segment];
+  }
+  return cursor;
 }
 
 export async function unsetUiColor(nodeId: string): Promise<boolean> {
@@ -2214,6 +2236,16 @@ export type StorageUsage = {
   serverLogs: StorageCategory;
   cleanableLogs: StorageCategory;
   backups: StorageCategory;
+  /** 五个领域 JSON（data / settings / tasks / diary / ledger） */
+  domainFiles: StorageCategory;
+  /** history/：审计与调度历史 */
+  historyDir: StorageCategory;
+  /** runtime/：同步水位、凭据留档、链接元数据缓存 */
+  runtimeDir: StorageCategory;
+  /** server/ 里的全部文件（data.db + wal + 它的 settings.json） */
+  serverDir: StorageCategory;
+  /** 其中 SQLite 的 WAL 单独一段；明显偏大说明该让它做一次检查点 */
+  serverWalBytes: number;
 };
 
 export type StorageCleanResult = {

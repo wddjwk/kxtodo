@@ -18,8 +18,8 @@
   display: none;
 }
 
-/* 桌面容器：与日记/记账同一套盒子算法（主区域左上 12px 圆角 + 同内边距），
-   内容宽度收着——工具卡拉满宽屏会很难看 */
+/* 桌面容器：与日记/记账同一套盒子算法（主区域左上 12px 圆角 + 同内边距）。
+   内容铺满主区域宽度：卡片两列、工具内部左右对齐，与其它整页视图同一条左边线。 */
 .app-shell:not(.mobile) .toolbox-view {
   position: relative;
   display: flex;
@@ -36,7 +36,11 @@
 .app-shell:not(.mobile) .toolbox-list,
 .app-shell:not(.mobile) .toolbox-sub-host {
   width: 100%;
-  max-width: 720px;
+}
+
+/* 桌面：工具卡两列；移动端窄，仍是单列（下面 .toolbox-list 的默认值） */
+.app-shell:not(.mobile) .toolbox-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 /* ---------- 壳与卡片（两端共享；mobile.css 的容器段在级联后面，专管移动端覆盖） ---------- */
@@ -114,10 +118,12 @@
 }
 
 .toolbox-sub-host {
-  display: grid;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
   gap: 14px;
-  justify-items: start;
-  align-content: start;
+  align-items: stretch;
 }
 
 .toolbox-sub-back {
@@ -139,11 +145,47 @@
 }
 
 .toolbox-sub {
-  display: grid;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
   gap: 14px;
-  justify-items: start;
-  align-content: start;
+  align-items: stretch;
   width: 100%;
+}
+
+/* 工具自己的操作行：贴到内容区右下角（「生成」这类按钮不该缩在左下角） */
+.toolbox-sub-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: auto;
+}
+
+/* 工具里的纯文本输入（金额这类没有步进语义的字段） */
+.toolbox-text-input {
+  min-width: 0;
+  flex: 1;
+  max-width: 260px;
+  padding: 8px 10px;
+  border: 1px solid #d7dbe0;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f2937;
+  font-size: calc(var(--font-control) - 3px);
+  text-align: right;
+}
+
+.toolbox-text-input:focus {
+  outline: none;
+  border-color: #2564cf;
+}
+
+.toolbox-rmb-result {
+  color: #1f2937;
+  font-size: calc(var(--font-control) + 1px);
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 .toolbox-sub-title {

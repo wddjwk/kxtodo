@@ -218,9 +218,29 @@ export type DiaryCalendarCell = {
 
 const WEEKDAY_HEADERS = ["日", "一", "二", "三", "四", "五", "六"];
 
-export const calendarWeekdayHeaders = WEEKDAY_HEADERS;
+/** 一周从周几开始：0 = 周日，1 = 周一。设置项是 `features.weekStart`（默认周一）。 */
+export type WeekStart = 0 | 1;
 
-export function calendarCells(cursor: MonthCursor, byDate: Map<string, DiaryEntry[]>): DiaryCalendarCell[] {
+/** 设置里的字符串归一成 0/1；认不出来一律当周一（默认档）。 */
+export function weekStartIndex(value: unknown): WeekStart {
+  return value === "sunday" ? 0 : 1;
+}
+
+/** 一周七天的表头，按周起始旋转——`weekStart=1` 出「一 二 三 四 五 六 日」。 */
+export function calendarWeekdayHeaders(weekStart: WeekStart = 1): string[] {
+  return WEEKDAY_HEADERS.slice(weekStart).concat(WEEKDAY_HEADERS.slice(0, weekStart));
+}
+
+/** 某月 1 号所在的那一周，从周起始到 1 号之间要垫几个空格子。 */
+export function leadingBlanks(year: number, month: number, weekStart: WeekStart): number {
+  return (new Date(year, month, 1).getDay() - weekStart + 7) % 7;
+}
+
+export function calendarCells(
+  cursor: MonthCursor,
+  byDate: Map<string, DiaryEntry[]>,
+  weekStart: WeekStart = 1
+): DiaryCalendarCell[] {
   const { year, month } = cursor;
   const cells: DiaryCalendarCell[] = [];
   const push = (cellYear: number, cellMonth: number, day: number, current: boolean): void => {
@@ -236,7 +256,7 @@ export function calendarCells(cursor: MonthCursor, byDate: Map<string, DiaryEntr
   };
   const first = new Date(year, month, 1);
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const leading = first.getDay();
+  const leading = leadingBlanks(year, month, weekStart);
   const prevMonthDays = new Date(year, month, 0).getDate();
   for (let index = leading - 1; index >= 0; index--) {
     push(year, month - 1, prevMonthDays - index, false);

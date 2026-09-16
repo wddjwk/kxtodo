@@ -148,33 +148,49 @@ pub struct Node {
     pub extra: Map<String, Value>,
 }
 
+/// 标签配色：七彩虹 + 灰 + 自定义。
+///
+/// **`Custom` 必须配 [`Tag::hex`]**（`#rrggbb`）；hex 缺失或非法时按 [`TagColor::Gray`] 渲染，
+/// 见 `Tag::effective_color`。早先只有五个固定色，用户没得挑。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
 pub enum TagColor {
     Red,
+    Orange,
     Yellow,
-    Blue,
     Green,
+    Cyan,
+    Blue,
+    Purple,
     Gray,
+    Custom,
 }
 
 impl TagColor {
     pub fn as_str(self) -> &'static str {
         match self {
             TagColor::Red => "red",
+            TagColor::Orange => "orange",
             TagColor::Yellow => "yellow",
-            TagColor::Blue => "blue",
             TagColor::Green => "green",
+            TagColor::Cyan => "cyan",
+            TagColor::Blue => "blue",
+            TagColor::Purple => "purple",
             TagColor::Gray => "gray",
+            TagColor::Custom => "custom",
         }
     }
 
     pub fn parse(raw: &str) -> Option<Self> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "red" => Some(TagColor::Red),
+            "orange" => Some(TagColor::Orange),
             "yellow" => Some(TagColor::Yellow),
-            "blue" => Some(TagColor::Blue),
             "green" => Some(TagColor::Green),
+            "cyan" => Some(TagColor::Cyan),
+            "blue" => Some(TagColor::Blue),
+            "purple" => Some(TagColor::Purple),
             "gray" => Some(TagColor::Gray),
+            "custom" => Some(TagColor::Custom),
             _ => None,
         }
     }
@@ -200,9 +216,38 @@ pub struct Tag {
     pub color: TagColor,
     #[serde(rename = "text", skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// 自定义配色的 `#rrggbb`（只在 `color == Custom` 时有意义）。
+    #[serde(rename = "hex", skip_serializing_if = "Option::is_none")]
+    pub hex: Option<String>,
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
+}
+
+impl Tag {
+    /// 实际配色：`Custom` 但 hex 缺失/非法时退回灰色（同步过来的数据可能是手改的）。
+    pub fn effective_color(&self) -> TagColor {
+        if self.color == TagColor::Custom && tag_hex(self.hex.as_deref()).is_none() {
+            TagColor::Gray
+        } else {
+            self.color
+        }
+    }
+
+    /// 自定义配色的合法值（非 `Custom` 或非法时 None）。
+    pub fn custom_hex(&self) -> Option<String> {
+        if self.color != TagColor::Custom {
+            return None;
+        }
+        tag_hex(self.hex.as_deref())
+    }
+}
+
+/// `#rrggbb`（三字节十六进制，带不带 `#` 都行；返回带 `#` 的小写形式）。
+pub fn tag_hex(raw: Option<&str>) -> Option<String> {
+    let text = raw?.trim().trim_start_matches('#');
+    let lower = text.to_ascii_lowercase();
+    (lower.len() == 6 && lower.chars().all(|ch| ch.is_ascii_hexdigit())).then(|| format!("#{lower}"))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -951,6 +996,14 @@ pub struct AppearanceSettings {
     pub nav_layout: String,
     #[serde(rename = "themePresets", default = "default_theme_presets")]
     pub theme_presets: Vec<ThemePreset>,
+    /// 临期高亮配色：`{ 节点id: ["#rrggbb", "#rrggbb", "#rrggbb"] }`（今天/明天/后天），
+    /// **每个页面一套**，所以按节点 id 存。
+    #[serde(rename = "dueColors", default)]
+    pub due_colors: Map<String, Value>,
+    /// 预置标签（v0.8.1）：右键菜单「标签」面板里可一键添加的常用标签。
+    /// 跨设备共享——同一份标签库在每台设备上都该能用。
+    #[serde(rename = "tagPresets", default)]
+    pub tag_presets: Vec<Tag>,
     #[serde(rename = "uiColors", default)]
     pub ui_colors: Map<String, Value>,
     #[serde(rename = "newNodeDefaults", default)]
@@ -1062,6 +1115,8 @@ impl Default for AppearanceSettings {
             ledger_font_size: default_ledger_font_size(),
             diary_font_size: default_diary_font_size(),
             nav_items: default_nav_items(),
+            tag_presets: Vec::new(),
+            due_colors: Map::new(),
             nav_layout: default_nav_layout(),
             theme_presets: default_theme_presets(),
             ui_colors: Map::new(),
@@ -1080,6 +1135,18 @@ pub struct LifecycleSettings {
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
+}
+
+fn default_due_highlight() -> String {
+    "off".to_string()
+}
+
+fn default_link_render() -> String {
+    "card".to_string()
+}
+
+fn default_week_start() -> String {
+    "monday".to_string()
 }
 
 fn default_true() -> bool {
@@ -1489,14 +1556,18 @@ pub struct FeatureSettings {
     /// 移动端页面左上角返回按钮（特性开关，默认关；桌面无感）
     #[serde(rename = "mobileBack", default)]
     pub mobile_back: bool,
-    /// 超链接渲染样式的「标题」档（特性开关，默认开）：裸链接抓网页标题，
-    /// 按 [标题](链接) 渲染；用户手写的 [文字](链接) 一律不动。
-    #[serde(rename = "autoLinkTitle", default = "default_true")]
-    pub auto_link_title: bool,
-    /// 超链接渲染样式的「卡片」档（特性开关，默认开）：所有超链接渲染成预览卡；
-    /// 抓不到元数据就退回原样链接。
-    #[serde(rename = "linkCards", default = "default_true")]
-    pub link_cards: bool,
+    /// 超链接渲染样式（**三档单选**，默认 "card"）："off" 原样链接；
+    /// "title" 裸链接抓网页标题按 [标题](链接) 渲染；"card" 所有超链接渲染成预览卡。
+    /// v0.8.1 之前是两个独立布尔（autoLinkTitle / linkCards），四种组合里有两组等价。
+    #[serde(rename = "linkRender", default = "default_link_render")]
+    pub link_render: String,
+    /// 一周的第一天："monday"（默认，国内习惯）或 "sunday"。日历视图、日期选择器、
+    /// 周统计与「本周」分组共用这一个值。
+    #[serde(rename = "weekStart", default = "default_week_start")]
+    pub week_start: String,
+    /// 临期高亮（v0.8.1）："off"（默认）/"solid" 按档取整色 /"gradient" 按剩余时间插值
+    #[serde(rename = "dueHighlight", default = "default_due_highlight")]
+    pub due_highlight: String,
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
@@ -1509,8 +1580,9 @@ impl Default for FeatureSettings {
             sync: true,
             editor_toolbar: true,
             mobile_back: false,
-            auto_link_title: true,
-            link_cards: true,
+            week_start: default_week_start(),
+            due_highlight: default_due_highlight(),
+            link_render: default_link_render(),
             extra: Map::new(),
         }
     }

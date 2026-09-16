@@ -17,12 +17,24 @@ export type AppNode = {
   createdAt: string;
 };
 
-export type TagColor = "red" | "yellow" | "blue" | "green" | "gray";
+/// 七彩虹 + 灰 + 自定义（`custom` 必须配 `hex`，否则按 gray 渲染）
+export type TagColor =
+  | "red"
+  | "orange"
+  | "yellow"
+  | "green"
+  | "cyan"
+  | "blue"
+  | "purple"
+  | "gray"
+  | "custom";
 
 export type Tag = {
   id: string;
   color: TagColor;
   text?: string;
+  /** 自定义配色的 `#rrggbb`（只在 color === "custom" 时有意义） */
+  hex?: string;
 };
 
 export type Task = {
@@ -199,11 +211,16 @@ export type Settings = {
     editorHeightPercent: number;
     tagFontSize: number;
     themePresets: ThemePreset[];
+    /** 预置标签：右键菜单「标签」面板里可一键添加的常用标签（跟着设置同步） */
+    tagPresets: Tag[];
     uiColors: Record<string, string>;
     /** 固定导航里显示哪些行、按什么顺序（id 见 nav.ts） */
     navItems: NavItemId[];
     /** 固定导航的展示方式：单列 / 双列 / 只图标 */
     navLayout: NavLayout;
+    /** 临期高亮配色：按节点 id 存三个色（今天/明天/后天）。
+     *  **每个页面一套**，不全局统一；没有条目的页面用默认三色。 */
+    dueColors: Record<string, string[]>;
     /** 新建分组/条目的默认外观；空串 = 不配置，跟随应用默认 */
     newNodeDefaults: {
       accent: string;
@@ -269,11 +286,14 @@ export type Settings = {
     editorToolbar: boolean;
     /** 移动端页面左上角的返回箭头（默认关，桌面无感） */
     mobileBack: boolean;
-    /** 超链接渲染样式的「标题」档：裸链接抓网页标题按 [标题](链接) 渲染（默认开） */
-    autoLinkTitle: boolean;
-    /** 超链接渲染样式的「卡片」档：所有超链接渲染成预览卡（默认开；
-     *  抓不到网页信息就退回原样链接） */
-    linkCards: boolean;
+    /** 超链接渲染样式（三档单选，默认 card）：off = 原样链接；
+     *  title = 裸链接抓网页标题按 [标题](链接) 渲染；card = 所有超链接渲染成预览卡
+     *  （抓不到网页信息就退回原样链接）。**不可多选**——「都选」没有额外含义。 */
+    linkRender: "off" | "title" | "card";
+    /** 一周的第一天（日历视图 / 日期选择器 / 周统计 /「本周」分组共用） */
+    weekStart: "monday" | "sunday";
+    /** 临期高亮：off 不画；solid 按档取整色；gradient 按剩余时间在三个锚点间插值 */
+    dueHighlight: "off" | "solid" | "gradient";
   };
   /** 日记偏好。view 是本机状态；主题色与背景跟着设置同步走（外观该多端一致）。 */
   diary: {

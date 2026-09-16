@@ -10,11 +10,12 @@
    * 一段样式把滚动条藏掉（「选 emoji 不要展示滚动条」）。
    */
   import "emoji-picker-element";
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { X } from "@lucide/svelte";
   import IconGlyph from "./IconGlyph.svelte";
   import { LEDGER_ICON_GROUPS } from "./ledgerIcons";
   import { loadRecentIcons, rememberIcon } from "./recentIcons";
+  import { createBackGuard } from "./platform";
 
   export let selected = "";
   export let mode: "icon" | "emoji" = "icon";
@@ -22,6 +23,11 @@
   export let onClose: () => void;
 
   const ALL_GROUP = "全部";
+
+  // 选择器由调用方的 `{#if}` 挂载（挂载中 = 打开着），返回键直接收掉它
+  const backGuard = createBackGuard();
+  $: backGuard(true, onClose);
+  onDestroy(() => backGuard.dispose());
 
   const taskEmojiPresets = [
     "🚩", "🏁", "⚑", "🔴", "🟡", "🟢", "🔵", "⚪",

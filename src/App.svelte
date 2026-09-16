@@ -78,6 +78,14 @@
     };
   });
 
+  /** 懒加载失败时把对应的浮层状态收掉（不然浮层状态还挂着，点别处都进不来） */
+  function dismissLazyFailure(): void {
+    closeTaskEditor();
+    diaryEditor.set(null);
+    ledgerEditor.set(null);
+    taskEmojiPicker.set(null);
+  }
+
   function closeOverlays(): void {
     // sidebar 的一次性抑制标志只保护 sidebar 自身浮层，不应阻断设置抽屉关闭
     if (!sidebarRef?.shouldSuppressClose()) {
@@ -188,6 +196,13 @@
         onClose={closeTaskEditor}
         onOpenLink={(url) => workspaceRef?.openLinkUrl(url)}
       />
+    {:catch error}
+      <!-- 懒加载的 chunk 拉不到（网络/缓存出问题）时**必须说一声并收掉浮层**：
+           早先只写了 `then`，失败就是无限空白——用户点开什么都没有，也退不出去。 -->
+      <div class="lazy-fallback" role="alert">
+        打开失败：{String(error)}
+        <button class="settings-button" type="button" on:click={dismissLazyFailure}>关闭</button>
+      </div>
     {/await}
   {/if}
 
@@ -199,6 +214,13 @@
         onClose={() => diaryEditor.set(null)}
         onOpenLink={(url, title) => workspaceRef?.openLinkUrl(url, title)}
       />
+    {:catch error}
+      <!-- 懒加载的 chunk 拉不到（网络/缓存出问题）时**必须说一声并收掉浮层**：
+           早先只写了 `then`，失败就是无限空白——用户点开什么都没有，也退不出去。 -->
+      <div class="lazy-fallback" role="alert">
+        打开失败：{String(error)}
+        <button class="settings-button" type="button" on:click={dismissLazyFailure}>关闭</button>
+      </div>
     {/await}
   {/if}
 
@@ -210,6 +232,13 @@
         book={$ledgerData}
         onClose={() => ledgerEditor.set(null)}
       />
+    {:catch error}
+      <!-- 懒加载的 chunk 拉不到（网络/缓存出问题）时**必须说一声并收掉浮层**：
+           早先只写了 `then`，失败就是无限空白——用户点开什么都没有，也退不出去。 -->
+      <div class="lazy-fallback" role="alert">
+        打开失败：{String(error)}
+        <button class="settings-button" type="button" on:click={dismissLazyFailure}>关闭</button>
+      </div>
     {/await}
   {/if}
 
@@ -225,6 +254,13 @@
         onPick={handleEmojiPick}
         onClose={() => taskEmojiPicker.set(null)}
       />
+    {:catch error}
+      <!-- 懒加载的 chunk 拉不到（网络/缓存出问题）时**必须说一声并收掉浮层**：
+           早先只写了 `then`，失败就是无限空白——用户点开什么都没有，也退不出去。 -->
+      <div class="lazy-fallback" role="alert">
+        打开失败：{String(error)}
+        <button class="settings-button" type="button" on:click={dismissLazyFailure}>关闭</button>
+      </div>
     {/await}
   {/if}
 </div>

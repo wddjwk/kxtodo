@@ -10,7 +10,7 @@
     searchQuery, searchHits, selectedNode, visibleTasks, selectedBackground,
     accent, isSearching, todayIso, yesterdayIso, dateOnly,
     taskEmojiPicker, editorTaskId, editorDraftNode, diaryEditor, diaryEntries, ledgerData, ledgerEditor,
-    fileToDataUrl
+    fileToDataUrl, weekStart
   } from "./stores";
   import {
     updateTask as updateTaskAction, deleteTask as deleteTaskAction,
@@ -40,9 +40,11 @@
   import MenuSeparator from "./menu/MenuSeparator.svelte";
   import MoveTargetTree from "./menu/MoveTargetTree.svelte";
   import ListMenu from "./workspace/ListMenu.svelte";
+  import TagMenuPanel from "./TagMenuPanel.svelte";
   import { sortTasks, type SortMode } from "./sort";
   import { filterPlannedTasks, plannedGroupOptions, plannedSections, type PlannedGroupKey } from "./plannedGroups";
-  import { isMobile, mobileView } from "./platform";
+  import { calendarWeekdayHeaders } from "./diary";
+  import { createBackGuard, isMobile, mobileView } from "./platform";
   import { caps } from "./capabilities";
   import type { AppNode, CardStyle, TagColor, Task } from "./types";
 
@@ -110,10 +112,6 @@
   /** 菜单是三点按钮开的（true）还是齿轮面板转过来的（false）——前者的按钮要能 toggle */
   let listMenuFromButton = false;
   let listMenuButtonEl: HTMLButtonElement;
-  let tagInputText = "";
-  let selectedTagColor: TagColor = "yellow";
-  let editingTagIdInMenu = "";
-  let editingTagTextInMenu = "";
   let headerRenaming = false;
   let headerRenameDraft = "";
   let headerRenameInput: HTMLInputElement;
@@ -189,7 +187,7 @@
   $: isMyDayHistory = isMyDay && myDayViewDate !== todayIso();
   $: sortedTasks = sortTasks($visibleTasks, sortMode);
   // dayTick 仅用于提供响应式依赖（每分钟重算一次标签，跨天不陈旧）
-  $: plannedOptions = dayTick >= 0 ? plannedGroupOptions(todayIso()) : [];
+  $: plannedOptions = dayTick >= 0 ? plannedGroupOptions(todayIso(), $weekStart) : [];
   $: plannedGroupLabel = plannedOptions.find((option) => option.key === plannedGroup)?.label ?? "全部";
   $: plannedSortedTasks = isPlanned
     ? sortTasks(filterPlannedTasks($visibleTasks, plannedGroup, todayIso()), sortMode)
@@ -274,7 +272,6 @@
   );
   $: allExpanded = expandableTasks.length > 0 && expandableTasks.every((task) => task.expanded);
   $: allCollapsed = expandableTasks.every((task) => !task.expanded);
-  $: if (!taskMenu) { tagInputText = ""; selectedTagColor = "yellow"; editingTagIdInMenu = ""; editingTagTextInMenu = ""; }
 
   // My Day suggestions
   $: suggestedTasks = (() => {
@@ -316,7 +313,7 @@
   $: weekSummary = (() => {
     const d = new Date(myDayViewDate + "T00:00:00");
     const start = new Date(d);
-    start.setDate(start.getDate() - d.getDay());
+    start.setDate(start.getDate() - ((d.getDay() - $weekStart + 7) % 7));
     const days: Array<{ date: string; label: string; tasks: Task[] }> = [];
     for (let i = 0; i < 7; i++) {
       const cur = new Date(start);
@@ -333,7 +330,8 @@
 
   $: weekSummaryTotal = weekSummary.reduce((sum, day) => sum + day.tasks.length, 0);
 
-  const weekDayLabels = ["日", "一", "二", "三", "四", "五", "六"];
+  // 一周从周几开始跟着设置走（默认周一）：表头、月历网格、周汇总、周区间同一个来源
+  $: weekDayLabels = calendarWeekdayHeaders($weekStart);
 
   function formatMyDayDate(dateStr: string): string {
     const d = new Date(dateStr + "T00:00:00");
@@ -344,7 +342,7 @@
   function calMonthDays(): Array<{ date: string; day: number; current: boolean; hasTask: boolean }> {
     const first = new Date(calYear, calMonth, 1);
     const last = new Date(calYear, calMonth + 1, 0);
-    const startDow = first.getDay();
+    const startDow = (first.getDay() - $weekStart + 7) % 7;
     const totalDays = last.getDate();
     const cells: Array<{ date: string; day: number; current: boolean; hasTask: boolean }> = [];
     const prevLast = new Date(calYear, calMonth, 0);
@@ -368,7 +366,7 @@
   function calWeekRange(): string {
     const d = new Date(myDayViewDate + "T00:00:00");
     const start = new Date(d);
-    start.setDate(start.getDate() - d.getDay());
+    start.setDate(start.getDate() - ((d.getDay() - $weekStart + 7) % 7));
     const end = new Date(start);
     end.setDate(end.getDate() + 6);
     return `${start.getMonth() + 1}月${start.getDate()}日 – ${end.getMonth() + 1}月${end.getDate()}日`;
@@ -393,6 +391,21 @@
       (b.completedAt ?? b.createdAt).localeCompare(a.completedAt ?? a.createdAt)
     );
   }
+
+  /** 这一页有没有浮层开着（链接预览 / 建议 / 日历 / 分组面板 / 三个菜单）。 */
+  $: workspaceOverlayOpen =
+    showSuggestions ||
+    showCalendar ||
+    showHeaderMenu ||
+    showPlannedGroups ||
+    linkPreviewUrl !== "" ||
+    taskMenu !== null ||
+    diaryMenu !== null ||
+    listMenuAt !== null;
+
+  // 返回键先收掉本页浮层（与「点外面」同一个动作），再往下才轮到历史栈。
+  const backGuard = createBackGuard();
+  $: backGuard(workspaceOverlayOpen, closeOverlays);
 
   export function closeOverlays(): void {
     showSuggestions = false;
@@ -521,30 +534,21 @@
     taskMenu = null;
   }
 
-  function addTagToTask(taskId: string, color: TagColor, text?: string): void {
+  function addTagToTask(
+    taskId: string,
+    tag: { color: TagColor; hex?: string; text?: string }
+  ): void {
     const task = $appState.tasks.find((item) => item.id === taskId);
     if (!task) return;
     void replaceTaskTagsAction(taskId, [
       ...task.tags,
-      { id: `tag-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, color, text: text?.trim() || undefined }
+      {
+        id: `tag-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        color: tag.color,
+        text: tag.text?.trim() || undefined,
+        hex: tag.color === "custom" ? tag.hex : undefined
+      }
     ]);
-  }
-
-  function submitTagInput(): void {
-    if (!taskMenu || !taskMenuTask) return;
-    const text = tagInputText.trim();
-    addTagToTask(taskMenuTask.id, selectedTagColor, text);
-    tagInputText = "";
-  }
-
-  function submitTagEditInMenu(): void {
-    if (!taskMenu || !taskMenuTask || !editingTagIdInMenu) return;
-    editTagAtTask(taskMenuTask.id, editingTagIdInMenu, editingTagTextInMenu);
-    editingTagIdInMenu = "";
-  }
-
-  function clearTagsFromTask(taskId: string): void {
-    void replaceTaskTagsAction(taskId, []);
   }
 
   function removeTagFromTask(taskId: string, tagId: string): void {
@@ -1219,6 +1223,7 @@
             on:select={(event) => setTaskDate(taskMenuTask.id, event.detail)}
             on:selectTime={(event) => setTaskTime(taskMenuTask.id, event.detail)}
             on:clear={() => setTaskDate(taskMenuTask.id, "")}
+            on:close={() => (taskMenu = null)}
           />
         </div>
       </MenuItem>
@@ -1228,64 +1233,8 @@
         onSelect={() => { void updateTaskAction(taskMenuTask.id, { important: !taskMenuTask.important }); taskMenu = null; }}
       />
       <MenuItem icon={Tag} label="标签">
-        <div slot="submenu" class="tag-editor-panel" on:click|stopPropagation={() => { editingTagIdInMenu = ""; }}>
-          {#if taskMenuTask.tags.length > 0}
-            {#each taskMenuTask.tags as tag (tag.id)}
-              {#if editingTagIdInMenu === tag.id}
-                <div class="tag-editor-input-row" on:click|stopPropagation>
-                  <input
-                    type="text"
-                    maxlength="20"
-                    value={editingTagTextInMenu}
-                    on:input={(e) => editingTagTextInMenu = e.currentTarget.value}
-                    on:keydown|stopPropagation={(e) => { if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) submitTagEditInMenu(); }}
-                    on:blur={submitTagEditInMenu}
-                  />
-                  <button class="tag-add-btn" type="button" on:click|stopPropagation={submitTagEditInMenu}>
-                    <Plus size={15} />
-                  </button>
-                </div>
-              {:else}
-                <div
-                  class={`tag-list-item bg-${tag.color}`}
-                  on:click|stopPropagation={() => { editingTagIdInMenu = tag.id; editingTagTextInMenu = tag.text || ""; }}
-                >
-                  <span class="tag-list-text">{tag.text || "(无文字)"}</span>
-                  <button class="tag-list-delete" type="button" title="删除此标签" on:click|stopPropagation={() => removeTagFromTask(taskMenuTask.id, tag.id)}>
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              {/if}
-            {/each}
-          {/if}
-          <div class="tag-editor-input-row">
-            <input
-              type="text"
-              placeholder="输入标签文字..."
-              maxlength="20"
-              value={tagInputText}
-              on:input={(e) => tagInputText = e.currentTarget.value}
-              on:keydown|stopPropagation={(e) => { if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) submitTagInput(); }}
-            />
-            <button class="tag-add-btn" type="button" title="添加标签" on:click|stopPropagation={submitTagInput}>
-              <Plus size={15} />
-            </button>
-          </div>
-          <div class="tag-editor-colors">
-            {#each [["red", "红色"], ["yellow", "黄色"], ["blue", "蓝色"], ["green", "绿色"], ["gray", "灰色"]] as [color, label]}
-              <button
-                class={`color-circle ${color}`}
-                class:selected={selectedTagColor === color}
-                title={label}
-                on:click|stopPropagation={() => selectedTagColor = color as TagColor}
-              ></button>
-            {/each}
-          </div>
-          {#if taskMenuTask.tags.length > 0}
-            <button class="menu-item menu-item-button danger tag-clear-all" on:click|stopPropagation={() => clearTagsFromTask(taskMenuTask.id)}>
-              <Trash2 size={14} /> 清除所有标签
-            </button>
-          {/if}
+        <div slot="submenu" class="tag-editor-panel" on:click|stopPropagation>
+          <TagMenuPanel onAdd={(tag) => addTagToTask(taskMenuTask.id, tag)} />
         </div>
       </MenuItem>
       <MenuItem icon={SmilePlus} label="添加表情" onSelect={() => openEmojiPickerForTask(taskMenuTask.id)} />

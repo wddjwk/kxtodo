@@ -27,7 +27,9 @@
 
 - 加 GUI 写操作走的是另一条：`crates/core/src/ops_gui.rs` 加命令 → `actions.ts` 加 coreDispatch 包装 → 组件调用 actions。CLI 与 GUI 共用同一条业务命令层（Domain Core 的 Invocation → 域分发 → envelope 输出），见 `architecture.md`「进程拓扑」。
 - 加一类**要同步的**实体时，`core.rs` 与 `cli.rs` 的 `schemaVersions` 也要跟着改（完整清单见 SKILL.md 路由表那一行）。
+- **help 里的「示例」是回归对象**：`cli_misc.rs::help_examples_parse` 会遍历所有层的 `long_about`，把 `kxtodo-cli ...` 开头的示例逐条 `try_parse_from`（按 shell 习惯切词、跳过带 `<`/`|` 的元语法、`#` 起头的词当行尾注释）。命令改名而示例没改会直接红——v0.8.1 之前 `ledger account-remove` 那三条写的是 core 内部名（`accountRemove`），照抄必失败。
 - 调度触发/动作类型的白名单校验在 `ops_schedule.rs`，执行在 `plan.rs` / `scheduler.rs`。
+- **`item_view` 的日期字段永远在场**（v0.8.1）：`plannedDate` / `dueDate` / `dueTime` 缺失时分别给 `null` / `null` / `""`。早先是条件插入，于是「未排期」的条目干脆没有这三个键——按固定形状解析的客户端（Agent 的 jq 表达式、脚本）一遇到没排期的条目就取到 undefined，还得写两套分支。
 - **有真实默认值的分页参数要在 clap 上写 `default_value`**（v0.8.0 补齐：`task list`/`task find`/`schedule list`/`schedule find` 的 `--limit` = 50、`schedule logs` = 20——core 里本来就是这些值，`schedule logs` 是 `unwrap_or(20)`；写上后 `--help` 与 `schema` 都能机读默认值、行为不变）。**`ledger list` / `diary list` 的 `--limit` 刻意不加**：它们没有默认值 = 返回全部（见「列表分页与合计」）。`--cursor` 的帮助文案统一是「分页游标（取上一页 meta.nextCursor）」、`--all` 是「输出全部（忽略分页）」。
 
 ## 命令名口径：core 是 camel，CLI 是 kebab
@@ -40,7 +42,8 @@
 
 - **一个动作只有一道门**：记账的分发层 `ledger_dispatch` 对 add/transfer/modify/accountAdd/accountModify/categoryAdd/categoryModify 统一 `require_confirmation`，而 remove/accountRemove/categoryRemove/import 保留各自信息量更大的内部门。未带 `--yes` 返回**退出码 10**，文案明确告诉 Agent「金融数据敏感，先向用户说明这次增删改并得到同意」；只读动作不设门。全文见 `ledger.md` 的「CLI 改账本必须先过确认门（v0.7.2）」。
 - **GUI/Android 桥恒带 `controls.yes = true`**，确认门不适用于 GUI（GUI 操作即用户确认）——见 `invariants.md`。
-- `schema.rs::risk_for` 是动作风险等级的唯一来源，这些写账动作全是 high-risk-write。
+- `schema.rs::risk_for` 是动作风险等级的唯一来源，这些写账动作全是 high-risk-write。**条件式风险**（`riskCondition`）：`schedule.enable` / `schedule.run` 报的是**最坏情况** high-risk-write，真正要 `--yes` 的只有 `action.type` 为 `script`/`executable`（会执行代码）那类——schema 与 help 都这么说，差别由 `schema.rs::risk_condition` 结构化给出（v0.8.1 之前三处说法不一致：schema 说 high-risk、help 说 write、实际是条件式）。
+- **`-` 开头的文本值要能传进去**：纯文本/名称类参数（`--markdown` / `--name` / `--title` / `--note` / `--account` / `--category` / `--query` / `--initial` / `--balance` / `--amount`…）都带 `allow_hyphen_values = true`，否则 `--markdown "- 列表项"` 会被 clap 当成 flag 报错（v0.8.1 补齐 38 处）。**两条例外**：`--spec` / `--patch` / `--value-file` **不许加**（会破坏 `-` 表 stdin 的语义）；多值参数（`--tag` 这种可重复的）也不加——漏写一个值会被静默吞成下一个参数。`--amount` 加了是为了让「金额必须大于 0」这条**业务错误**浮上来，而不是 clap 的「未知参数」。
 - 退出码散见各处，按错误查：
   - **3** = 资源不存在 / `DATA_DIR_NOT_FOUND`（CLI 最终没有 `data.json`，**CLI 永不静默创建数据**）→ `architecture.md`「数据目录解析」
   - **4** = 歧义或状态冲突，如 `sync now` 在暂停时报 `SYNC_PAUSED`、server `--daemon` 起不来告警 → `sync.md`
@@ -89,6 +92,8 @@
 - **② PowerShell 5.1 跑 CLI 测试脚本要 `[Console]::OutputEncoding=UTF8`**，否则 GBK 解码 UTF-8 JSON 炸。
 
 ## Agent 技能文档（skills/kxtodo/SKILL.md）
+
+**`skills validate` 的域名单是从 clap 命令树现推的，不是手写白名单**（v0.8.1 修）：早先正则里硬编码了 `task|diary|schedule|config|skills|doctor|notify|schema|version`，后来加的 `ledger` / `storage` / `sync` 三个域压根不在里面——金融数据的命令名写错也不会有任何校验报错，校验等于漏了一半。现在凡顶层子命令都自动进正则，有子命令的域才把第二个词当动作名去比对 `command_catalog()`。
 
 路由表原文：
 

@@ -28,8 +28,8 @@
   import { ledgerIcon } from "../ledgerIcons";
   import { fitAmount } from "../fitText";
   import { todayDate } from "../diary";
-  import { appSettings } from "../stores";
-  import { isMobile } from "../platform";
+  import { appSettings, weekStart } from "../stores";
+  import { createBackGuard, isMobile } from "../platform";
   import { uiScaleValue } from "../styles";
   import { clampPopoverToViewport } from "../popover";
   import LedgerDonut from "./LedgerDonut.svelte";
@@ -86,7 +86,7 @@
 
   $: modes = $isMobile ? MODES.filter((item) => item.id !== "week") : MODES;
   $: sideText = (key: Side) => ($isMobile ? SIDE_LABELS[key].short : SIDE_LABELS[key].full);
-  $: bounds = statsBounds(entries, mode, cursor, weekAnchor, customFrom, customTo);
+  $: bounds = statsBounds(entries, mode, cursor, weekAnchor, customFrom, customTo, $weekStart);
   $: periodLabel = statsPeriodLabel(mode, bounds, cursor);
   // 曲线、占比、排行都吃同一个窗口——早前占比拿全量数据配当期汇总，两个数字对不上
   $: rangeEntries = statsEntries(entries, bounds);
@@ -190,6 +190,10 @@
       : hoverPoint.key.replaceAll("-", "/")
     : "";
   $: tipLeft = hoverIndex !== null ? Math.min(88, Math.max(12, (pointX(hoverIndex) / W) * 100)) : 0;
+
+  // 周期 / 自定义区间的日期气泡：返回键直接收掉
+  const backGuard = createBackGuard();
+  $: backGuard(popOpen !== "", () => (popOpen = ""));
 
   function step(delta: number): void {
     popOpen = "";
@@ -316,6 +320,7 @@
                   if (customTo < customFrom) customTo = customFrom;
                   popOpen = "";
                 }}
+                on:close={() => (popOpen = "")}
               />
             </div>
           {/if}
@@ -338,6 +343,7 @@
                   if (customFrom > customTo) customFrom = customTo;
                   popOpen = "";
                 }}
+                on:close={() => (popOpen = "")}
               />
             </div>
           {/if}
@@ -384,6 +390,7 @@
               weekAnchor = event.detail;
               popOpen = "";
             }}
+            on:close={() => (popOpen = "")}
           />
         </div>
       {/if}

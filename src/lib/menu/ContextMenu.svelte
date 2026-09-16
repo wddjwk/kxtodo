@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { onMount, tick } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
   import { ChevronLeft } from "@lucide/svelte";
   import { appSettings } from "../stores";
-  import { isMobile as isMobileStore } from "../platform";
+  import { createBackGuard, isMobile as isMobileStore } from "../platform";
   import { uiScaleValue } from "../styles";
   import { openSubmenus, requestSubmenuClose } from "./submenu";
 
@@ -40,6 +40,16 @@
   function goBack(): void {
     requestSubmenuClose();
   }
+
+  // 菜单也是浮层：移动端返回键先退子菜单、再收整个菜单。菜单本体由调用方的 `{#if}`
+  // 挂载，所以「挂载中 = 打开着」，这里按常量注册即可（卸载时 createBackGuard 会注销）。
+  const backGuard = createBackGuard();
+  $: backGuard(true, () => {
+    if (subOpen) goBack();
+    else onClose();
+  });
+  // 菜单是「挂载中 = 打开着」，卸载时得自己把拦截器摘掉（见 createBackGuard::dispose）
+  onDestroy(() => backGuard.dispose());
 
   /** 视口边缘保留的逻辑像素边距。 */
   const MENU_MARGIN_PX = 8;

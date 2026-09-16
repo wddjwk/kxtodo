@@ -6,6 +6,7 @@
   import { createEventDispatcher } from "svelte";
   import { ChevronLeft, ChevronRight } from "@lucide/svelte";
   import { calendarWeekdayHeaders, shiftMonth } from "../diary";
+  import { weekStart } from "../stores";
   import { compactCents, dayGroup, ledgerCalendarCells, monthTotals } from "../ledger";
   import { swipeX } from "../swipe";
   import MonthPopover from "../MonthPopover.svelte";
@@ -31,7 +32,7 @@
     context: { id: string; x: number; y: number };
   }>();
 
-  $: cells = ledgerCalendarCells(cursor, book.entries);
+  $: cells = ledgerCalendarCells(cursor, book.entries, $weekStart);
   $: monthLabel = `${cursor.year}年${cursor.month + 1}月`;
   $: totals = monthTotals(book.entries, cursor);
   $: group = dayGroup(book.entries, selectedDate);
@@ -79,7 +80,7 @@
   </div>
 
   <div class="ledger-calendar-grid">
-    {#each calendarWeekdayHeaders as label (label)}
+    {#each calendarWeekdayHeaders($weekStart) as label (label)}
       <span class="ledger-calendar-head">{label}</span>
     {/each}
     {#each cells as cell (cell.date)}

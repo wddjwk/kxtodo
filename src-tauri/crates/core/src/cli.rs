@@ -224,7 +224,7 @@ pub struct NotifyArgs {
     pub message_flag: Option<String>,
 
     /// 通知标题（默认 KXToDo）
-    #[arg(long, value_name = "text")]
+    #[arg(long, value_name = "text", allow_hyphen_values = true)]
     pub title: Option<String>,
 
     /// 显示时长，如 5s、5200ms
@@ -294,7 +294,7 @@ pub struct TaskAddArgs {
     #[arg(long, value_name = "category|entry|item")]
     pub r#type: String,
     /// 名称（category/entry 必填）
-    #[arg(long, value_name = "text")]
+    #[arg(long, value_name = "text", allow_hyphen_values = true)]
     pub name: Option<String>,
     /// 父级分类 ID 或 root
     #[arg(long, value_name = "category-id|root")]
@@ -309,7 +309,7 @@ pub struct TaskAddArgs {
     #[arg(long, value_name = "entry-id")]
     pub entry_id: Option<String>,
     /// Markdown 正文（item，与 --markdown-file 二选一）
-    #[arg(long, value_name = "text", conflicts_with = "markdown_file")]
+    #[arg(long, value_name = "text", conflicts_with = "markdown_file", allow_hyphen_values = true)]
     pub markdown: Option<String>,
     /// 从文件或标准输入读取 Markdown
     #[arg(long, value_name = "path|-")]
@@ -435,7 +435,7 @@ pub struct TaskListArgs {
 #[serde(rename_all = "camelCase")]
 pub struct TaskFindArgs {
     /// 关键词（必填）
-    #[arg(long, value_name = "text")]
+    #[arg(long, value_name = "text", allow_hyphen_values = true)]
     pub query: String,
     /// 类型范围（默认 all）
     #[arg(long, value_name = "system|category|entry|item|all")]
@@ -515,7 +515,7 @@ pub struct TaskModifyArgs {
     #[arg(long, value_name = "id")]
     pub id: String,
     /// 新名称
-    #[arg(long, value_name = "text")]
+    #[arg(long, value_name = "text", allow_hyphen_values = true)]
     pub name: Option<String>,
     /// 新图标
     #[arg(long, value_name = "icon")]
@@ -530,7 +530,7 @@ pub struct TaskModifyArgs {
     #[arg(long, value_name = "entry-id")]
     pub entry_id: Option<String>,
     /// 替换 Markdown
-    #[arg(long, value_name = "text", conflicts_with = "markdown_file")]
+    #[arg(long, value_name = "text", conflicts_with = "markdown_file", allow_hyphen_values = true)]
     pub markdown: Option<String>,
     /// 从文件或标准输入读取 Markdown
     #[arg(long, value_name = "path|-")]
@@ -665,19 +665,19 @@ pub struct DiaryAddArgs {
     #[arg(long, value_name = "time")]
     pub time: Option<String>,
     /// 标题
-    #[arg(long, value_name = "text")]
+    #[arg(long, value_name = "text", allow_hyphen_values = true)]
     pub title: Option<String>,
     /// Markdown 正文（与 --markdown-file 二选一）
-    #[arg(long, value_name = "text", conflicts_with = "markdown_file")]
+    #[arg(long, value_name = "text", conflicts_with = "markdown_file", allow_hyphen_values = true)]
     pub markdown: Option<String>,
     /// 从文件或标准输入读取 Markdown
     #[arg(long, value_name = "path|-")]
     pub markdown_file: Option<String>,
     /// 心情（emoji）
-    #[arg(long, value_name = "emoji")]
+    #[arg(long, value_name = "emoji", allow_hyphen_values = true)]
     pub mood: Option<String>,
     /// 天气（emoji）
-    #[arg(long, value_name = "emoji")]
+    #[arg(long, value_name = "emoji", allow_hyphen_values = true)]
     pub weather: Option<String>,
     /// 标签（可重复）
     #[arg(long = "tag", value_name = "color:text")]
@@ -720,19 +720,19 @@ pub struct DiaryModifyArgs {
     #[arg(long, value_name = "time")]
     pub time: Option<String>,
     /// 新标题（空串清除）
-    #[arg(long, value_name = "text")]
+    #[arg(long, value_name = "text", allow_hyphen_values = true)]
     pub title: Option<String>,
     /// 替换 Markdown 正文
-    #[arg(long, value_name = "text", conflicts_with = "markdown_file")]
+    #[arg(long, value_name = "text", conflicts_with = "markdown_file", allow_hyphen_values = true)]
     pub markdown: Option<String>,
     /// 从文件或标准输入读取 Markdown
     #[arg(long, value_name = "path|-")]
     pub markdown_file: Option<String>,
     /// 心情（空串清除）
-    #[arg(long, value_name = "emoji")]
+    #[arg(long, value_name = "emoji", allow_hyphen_values = true)]
     pub mood: Option<String>,
     /// 天气（空串清除）
-    #[arg(long, value_name = "emoji")]
+    #[arg(long, value_name = "emoji", allow_hyphen_values = true)]
     pub weather: Option<String>,
     /// 整体替换标签列表
     #[arg(long = "replace-tags", value_name = "color:text", num_args = 0..)]
@@ -813,7 +813,7 @@ pub enum LedgerAction {
     AccountModify(LedgerAccountModifyArgs),
     /// 删除资金账户（Risk: high-risk-write）
     #[command(
-        long_about = "Risk: high-risk-write\n\n名下还有账目的账户不允许删除（先删账或改到别的账户）。未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger accountRemove --id lacc-xxxx --yes"
+        long_about = "Risk: high-risk-write\n\n名下还有账目的账户不允许删除（先删账或改到别的账户）。未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger account-remove --id lacc-xxxx --yes"
     )]
     #[command(name = "account-remove")]
     AccountRemove(LedgerIdArgs),
@@ -854,13 +854,13 @@ pub enum LedgerAction {
     CategoryAdd(LedgerCategoryAddArgs),
     /// 修改分类（Risk: high-risk-write）
     #[command(
-        long_about = "Risk: high-risk-write\n\n改名/换父级/改图标颜色。--parent 传空串即提升为大类。\n未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger categoryModify --id lcat-xxxx --name 下午茶 --yes"
+        long_about = "Risk: high-risk-write\n\n改名/换父级/改图标颜色。--parent 传空串即提升为大类。\n未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger category-modify --id lcat-xxxx --name 下午茶 --yes"
     )]
     #[command(name = "category-modify")]
     CategoryModify(LedgerCategoryModifyArgs),
     /// 删除分类（Risk: high-risk-write）
     #[command(
-        long_about = "Risk: high-risk-write\n\n删大类会连带它的子分类一起删；名下账目保留但变为「未分类」。未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger categoryRemove --id lcat-xxxx --yes"
+        long_about = "Risk: high-risk-write\n\n删大类会连带它的子分类一起删；名下账目保留但变为「未分类」。未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger category-remove --id lcat-xxxx --yes"
     )]
     #[command(name = "category-remove")]
     CategoryRemove(LedgerIdArgs),
@@ -907,13 +907,13 @@ pub struct LedgerAddArgs {
     #[arg(long, value_name = "kind")]
     pub kind: Option<String>,
     /// 金额（元）
-    #[arg(long, value_name = "yuan")]
+    #[arg(long, value_name = "yuan", allow_hyphen_values = true)]
     pub amount: String,
     /// 账户名或 ID（支出 = 付款账户，收入 = 收款账户）
-    #[arg(long, value_name = "name|id")]
+    #[arg(long, value_name = "name|id", allow_hyphen_values = true)]
     pub account: String,
     /// 分类名或 ID
-    #[arg(long, value_name = "name|id")]
+    #[arg(long, value_name = "name|id", allow_hyphen_values = true)]
     pub category: Option<String>,
     /// 归属日期 YYYY-MM-DD 或相对写法 +Nd（缺省为本地今天）
     #[arg(long, value_name = "date")]
@@ -922,7 +922,7 @@ pub struct LedgerAddArgs {
     #[arg(long, value_name = "time")]
     pub time: Option<String>,
     /// 备注
-    #[arg(long, value_name = "text")]
+    #[arg(long, value_name = "text", allow_hyphen_values = true)]
     pub note: Option<String>,
     /// 附图文件名（img/data/ledger/ 下的裸文件名；可重复传多张）
     #[arg(long = "image", value_name = "file", action = ArgAction::Append)]
@@ -940,7 +940,7 @@ pub struct LedgerTransferArgs {
     #[arg(long, value_name = "name|id")]
     pub to: String,
     /// 金额（元）
-    #[arg(long, value_name = "yuan")]
+    #[arg(long, value_name = "yuan", allow_hyphen_values = true)]
     pub amount: String,
     /// 归属日期（缺省为本地今天）
     #[arg(long, value_name = "date")]
@@ -949,7 +949,7 @@ pub struct LedgerTransferArgs {
     #[arg(long, value_name = "time")]
     pub time: Option<String>,
     /// 备注
-    #[arg(long, value_name = "text")]
+    #[arg(long, value_name = "text", allow_hyphen_values = true)]
     pub note: Option<String>,
     /// 附图文件名（可重复传多张）
     #[arg(long = "image", value_name = "file", action = ArgAction::Append)]
@@ -973,10 +973,10 @@ pub struct LedgerListArgs {
     #[arg(long, value_name = "kind")]
     pub kind: Option<String>,
     /// 按账户过滤（名或 ID；转账任一侧命中都算）
-    #[arg(long, value_name = "name|id")]
+    #[arg(long, value_name = "name|id", allow_hyphen_values = true)]
     pub account: Option<String>,
     /// 按分类过滤（名或 ID）
-    #[arg(long, value_name = "name|id")]
+    #[arg(long, value_name = "name|id", allow_hyphen_values = true)]
     pub category: Option<String>,
     /// 最多返回条数（不传则返回全部；刻意没有 task list 那样的默认 50）
     #[arg(long, value_name = "n")]
@@ -999,16 +999,16 @@ pub struct LedgerModifyArgs {
     #[arg(long, value_name = "kind")]
     pub kind: Option<String>,
     /// 新金额（元）
-    #[arg(long, value_name = "yuan")]
+    #[arg(long, value_name = "yuan", allow_hyphen_values = true)]
     pub amount: Option<String>,
     /// 新账户（名或 ID）
-    #[arg(long, value_name = "name|id")]
+    #[arg(long, value_name = "name|id", allow_hyphen_values = true)]
     pub account: Option<String>,
     /// 新转入账户（仅转账；传空串清除）
     #[arg(long, value_name = "name|id")]
     pub to: Option<String>,
     /// 新分类（名或 ID；传空串清除）
-    #[arg(long, value_name = "name|id")]
+    #[arg(long, value_name = "name|id", allow_hyphen_values = true)]
     pub category: Option<String>,
     /// 新归属日期
     #[arg(long, value_name = "date")]
@@ -1017,7 +1017,7 @@ pub struct LedgerModifyArgs {
     #[arg(long, value_name = "time")]
     pub time: Option<String>,
     /// 新备注
-    #[arg(long, value_name = "text")]
+    #[arg(long, value_name = "text", allow_hyphen_values = true)]
     pub note: Option<String>,
     /// 新附图文件名（可重复传多张；整体替换现有列表，传一个空串清除全部附图）
     #[arg(long = "image", value_name = "file", action = ArgAction::Append)]
@@ -1029,7 +1029,7 @@ pub struct LedgerModifyArgs {
 #[serde(rename_all = "camelCase")]
 pub struct LedgerAccountAddArgs {
     /// 账户名（唯一）
-    #[arg(long, value_name = "name")]
+    #[arg(long, value_name = "name", allow_hyphen_values = true)]
     pub name: String,
     /// 账户类型（自由字符串；credit = 信用卡，负余额计入总负债）
     #[arg(long, value_name = "kind")]
@@ -1041,10 +1041,10 @@ pub struct LedgerAccountAddArgs {
     #[arg(long, value_name = "color")]
     pub color: Option<String>,
     /// 期初余额（元，可为负）
-    #[arg(long, value_name = "yuan")]
+    #[arg(long, value_name = "yuan", allow_hyphen_values = true)]
     pub initial: Option<String>,
     /// 备注
-    #[arg(long, value_name = "text")]
+    #[arg(long, value_name = "text", allow_hyphen_values = true)]
     pub note: Option<String>,
 }
 
@@ -1055,7 +1055,7 @@ pub struct LedgerAccountModifyArgs {
     #[arg(long, value_name = "id")]
     pub id: String,
     /// 新名字（唯一）
-    #[arg(long, value_name = "name")]
+    #[arg(long, value_name = "name", allow_hyphen_values = true)]
     pub name: Option<String>,
     /// 新类型
     #[arg(long, value_name = "kind")]
@@ -1067,13 +1067,13 @@ pub struct LedgerAccountModifyArgs {
     #[arg(long, value_name = "color")]
     pub color: Option<String>,
     /// 新期初余额（元）
-    #[arg(long, value_name = "yuan")]
+    #[arg(long, value_name = "yuan", allow_hyphen_values = true)]
     pub initial: Option<String>,
     /// 直设当前余额（元）：自动反推期初 = 目标余额 − 流水推导和；与 --initial 互斥
-    #[arg(long, value_name = "yuan")]
+    #[arg(long, value_name = "yuan", allow_hyphen_values = true)]
     pub balance: Option<String>,
     /// 新备注
-    #[arg(long, value_name = "text")]
+    #[arg(long, value_name = "text", allow_hyphen_values = true)]
     pub note: Option<String>,
 }
 
@@ -1081,7 +1081,7 @@ pub struct LedgerAccountModifyArgs {
 #[serde(rename_all = "camelCase")]
 pub struct LedgerAccountTypeAddArgs {
     /// 类型名（唯一）
-    #[arg(long, value_name = "name")]
+    #[arg(long, value_name = "name", allow_hyphen_values = true)]
     pub name: String,
     /// 图标名（ledger icon-list 账户目录里的 lucide 名）
     #[arg(long, value_name = "icon")]
@@ -1098,7 +1098,7 @@ pub struct LedgerAccountTypeModifyArgs {
     #[arg(long, value_name = "id")]
     pub id: String,
     /// 新名字（唯一）
-    #[arg(long, value_name = "name")]
+    #[arg(long, value_name = "name", allow_hyphen_values = true)]
     pub name: Option<String>,
     /// 新图标
     #[arg(long, value_name = "icon")]
@@ -1120,7 +1120,7 @@ pub struct LedgerCategoriesArgs {
 #[serde(rename_all = "camelCase")]
 pub struct LedgerCategoryAddArgs {
     /// 分类名
-    #[arg(long, value_name = "name")]
+    #[arg(long, value_name = "name", allow_hyphen_values = true)]
     pub name: String,
     /// 归属侧 expense|income（缺省 expense）
     #[arg(long, value_name = "side")]
@@ -1143,7 +1143,7 @@ pub struct LedgerCategoryModifyArgs {
     #[arg(long, value_name = "id")]
     pub id: String,
     /// 新名字
-    #[arg(long, value_name = "name")]
+    #[arg(long, value_name = "name", allow_hyphen_values = true)]
     pub name: Option<String>,
     /// 新父级（名或 ID；空串提升为大类）
     #[arg(long, value_name = "name|id")]
@@ -1233,7 +1233,7 @@ pub enum ScheduleAction {
     List(ScheduleListArgs),
     /// 按关键词搜索定时任务（Risk: read）
     #[command(
-        alias = "search",
+        visible_alias = "search",
         long_about = "Risk: read\n\n搜索名称、脚本路径与通知文本；其余过滤同 schedule list。"
     )]
     Find(ScheduleFindArgs),
@@ -1247,9 +1247,9 @@ pub enum ScheduleAction {
         long_about = "Risk: high-risk-write\n\n删除定义；正在运行时先停止并回收子进程。需要 --yes；--dry-run 预览。"
     )]
     Remove(ScheduleIdArgs),
-    /// 启用任务（Risk: write；代码执行需 --yes）
+    /// 启用任务（Risk: high-risk-write；仅代码执行类需要 --yes）
     #[command(
-        long_about = "Risk: write（script/executable 需 --yes）\n\n启用前重新校验 spec/runtime/path；重算 nextRunAt。"
+        long_about = "Risk: high-risk-write（条件式：只有 script/executable 这类会执行代码的任务才要 --yes，纯通知任务不需要）\n\n启用前重新校验 spec/runtime/path；重算 nextRunAt。"
     )]
     Enable(ScheduleIdArgs),
     /// 禁用任务（Risk: write）
@@ -1257,9 +1257,9 @@ pub enum ScheduleAction {
         long_about = "Risk: write\n\n阻止后续运行但不终止当前实例；立即终止用 schedule stop。"
     )]
     Disable(ScheduleIdArgs),
-    /// 立即执行一次（Risk: high-risk-write）
+    /// 立即执行一次（Risk: high-risk-write；仅代码执行类需要 --yes）
     #[command(
-        long_about = "Risk: high-risk-write\n\n默认入队后立即返回；--wait 等待最终退出码与输出。代码执行需要 --yes。"
+        long_about = "Risk: high-risk-write（条件式：只有 script/executable 这类会执行代码的任务才要 --yes，纯通知任务不需要）\n\n默认入队后立即返回；--wait 等待最终退出码与输出。"
     )]
     Run(ScheduleRunArgs),
     /// 终止正在运行的任务（Risk: write）
@@ -1359,7 +1359,7 @@ pub struct ScheduleListArgs {
 #[serde(rename_all = "camelCase")]
 pub struct ScheduleFindArgs {
     /// 关键词
-    #[arg(long, value_name = "text")]
+    #[arg(long, value_name = "text", allow_hyphen_values = true)]
     pub query: String,
     /// 启用状态过滤
     #[arg(long, value_name = "true|false")]
@@ -1450,7 +1450,7 @@ pub enum RuntimeAction {
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeSetArgs {
     /// 运行时名称
-    #[arg(value_name = "python|node|pwsh|bash|make")]
+    #[arg(value_name = "python|node|pwsh|bash|make", allow_hyphen_values = true)]
     pub name: String,
     /// 解释器路径（空字符串清除自定义）
     #[arg(value_name = "path")]
@@ -1476,7 +1476,7 @@ pub enum SyncAction {
         long_about = "Risk: read\n\n在固定 UDP 端口 52177 上广播/组播一次查询，收集局域网内主机（内置服务器或独立 kxtodo-server）\n的单播应答，再用 /healthz 复核。发现端口与主机 TCP 端口无关（应答里带真实 TCP 端口），\n但主机必须监听在非回环地址上、且 UDP 52177 可用；否则只能手填 ip:port 走自建服务方式。\n\n输出 name / host / port / url / instanceId：局域网方式用 name 选定主机\n（sync configure --lan-peer <name> 或 sync pair --lan-peer <name>），\n自建服务方式用 url 作为 --server 的值。"
     )]
     Discover(SyncDiscoverArgs),
-    /// 立即执行一次同步（Risk: write）
+    /// 立即执行一次（Risk: high-risk-write；仅代码执行类需要 --yes）
     Now,
     /// 调整通信方式/主机角色/同步范围/开关/间隔（Risk: write）
     #[command(
@@ -1701,7 +1701,7 @@ pub enum SkillsAction {
     /// 校验 SKILL 与当前 CLI 的一致性（Risk: read）
     Validate,
     /// 将嵌入的 SKILL 落地到指定 skills 根目录（Risk: write）
-    #[command(alias = "persistant")]
+    #[command(alias = "persistent")]
     Persist(SkillsPersistArgs),
     /// 原样输出嵌入的 SKILL Markdown（Risk: read）
     Echo(SkillsReadArgs),
@@ -1710,14 +1710,14 @@ pub enum SkillsAction {
 #[derive(Debug, Args)]
 pub struct SkillsReadArgs {
     /// SKILL 名称（当前版本为 kxtodo）
-    #[arg(value_name = "name")]
+    #[arg(value_name = "name", allow_hyphen_values = true)]
     pub name: String,
 }
 
 #[derive(Debug, Args)]
 pub struct SkillsPersistArgs {
     /// SKILL 名称（当前版本为 kxtodo）
-    #[arg(value_name = "name")]
+    #[arg(value_name = "name", allow_hyphen_values = true)]
     pub name: String,
     /// 目标目录；非 skills 目录会自动追加 skills。不指定时默认 ~/.agents
     /// （最终写入 ~/.agents/skills/<name>/SKILL.md）
@@ -1894,6 +1894,8 @@ fn supports_idempotency(command: &str) -> bool {
             | "config.set"
             | "config.unset"
             | "config.reset"
+            // storage.clean 也是纯「删没人引用的东西」，重跑一次结果一样
+            | "storage.clean"
     )
 }
 

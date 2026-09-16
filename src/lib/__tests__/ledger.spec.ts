@@ -383,33 +383,41 @@ describe("monthDayGroups / monthTotals / dayGroup（按天分组）", () => {
 // ---------------------------------------------------------------------------
 
 describe("ledgerCalendarCells（月历格）", () => {
-  it("正常路径：2026-09 收成 35 格（末尾整周全是下个月）", () => {
+  it("正常路径：2026-09 收成 35 格（末尾整周全是下个月），周一打头", () => {
     const cells = ledgerCalendarCells(SEP, []);
     expect(cells).toHaveLength(35);
-    expect(cells[0].date).toBe("2026-08-30");
-    expect(cells[34].date).toBe("2026-10-03");
-    expect(cells.filter((cell) => cell.otherMonth)).toHaveLength(5); // 8/30、8/31、10/1、10/2、10/3
+    expect(cells[0].date).toBe("2026-08-31"); // 周一
+    expect(cells[34].date).toBe("2026-10-04");
+    expect(cells.filter((cell) => cell.otherMonth)).toHaveLength(5); // 8/31、10/1~10/4
     expect(cells[0].otherMonth).toBe(true);
-    expect(cells[2].otherMonth).toBe(false); // 9/1
-    expect(cells[2].day).toBe(1);
+    expect(cells[1].otherMonth).toBe(false); // 9/1
+    expect(cells[1].day).toBe(1);
   });
 
   it("正常路径：2026-08 需要第六周 → 42 格", () => {
     const cells = ledgerCalendarCells(AUG, []);
     expect(cells).toHaveLength(42);
-    expect(cells[0].date).toBe("2026-07-26");
-    expect(cells[41].date).toBe("2026-09-05");
+    expect(cells[0].date).toBe("2026-07-27"); // 周一
+    expect(cells[41].date).toBe("2026-09-06");
   });
 
-  it("边界：首格永远是周日，格子连续不重不漏", () => {
-    for (const cursor of [SEP, AUG, { year: 2026, month: 1 }, { year: 2024, month: 1 }]) {
-      const cells = ledgerCalendarCells(cursor, []);
-      expect(new Date(`${cells[0].date}T00:00:00`).getDay()).toBe(0);
-      cells.forEach((cell, index) => {
-        if (index === 0) return;
-        expect(cell.date).toBe(shiftDays(cells[index - 1].date, 1));
-      });
-      expect(new Set(cells.map((cell) => cell.date)).size).toBe(cells.length);
+  it("设置成周日打头时首格是周日", () => {
+    const cells = ledgerCalendarCells(SEP, [], 0);
+    expect(cells[0].date).toBe("2026-08-30"); // 周日
+    expect(cells[cells.length - 1].date).toBe("2026-10-03");
+  });
+
+  it("边界：首格永远是一周的第一天（默认周一），格子连续不重不漏", () => {
+    for (const weekStart of [0, 1] as const) {
+      for (const cursor of [SEP, AUG, { year: 2026, month: 1 }, { year: 2024, month: 1 }]) {
+        const cells = ledgerCalendarCells(cursor, [], weekStart);
+        expect(new Date(`${cells[0].date}T00:00:00`).getDay()).toBe(weekStart);
+        cells.forEach((cell, index) => {
+          if (index === 0) return;
+          expect(cell.date).toBe(shiftDays(cells[index - 1].date, 1));
+        });
+        expect(new Set(cells.map((cell) => cell.date)).size).toBe(cells.length);
+      }
     }
   });
 
@@ -418,12 +426,12 @@ describe("ledgerCalendarCells（月历格）", () => {
       makeEntry({ id: "a", amountCents: 1050, date: "2026-09-01" }),
       makeEntry({ id: "b", kind: "income", amountCents: 20000, date: "2026-09-01" }),
       makeEntry({ id: "c", kind: "transfer", amountCents: 500, date: "2026-09-01", toAccountId: "lacc-02" }),
-      makeEntry({ id: "d", amountCents: 300, date: "2026-08-30" }) // 补格里的上个月
+      makeEntry({ id: "d", amountCents: 300, date: "2026-08-31" }) // 补格里的上个月（周一）
     ];
     const cells = ledgerCalendarCells(SEP, entries);
     const first = cells.find((cell) => cell.date === "2026-09-01");
     expect(first).toEqual({ date: "2026-09-01", day: 1, otherMonth: false, income: 20000, expense: 1050, count: 3 });
-    const padding = cells.find((cell) => cell.date === "2026-08-30");
+    const padding = cells.find((cell) => cell.date === "2026-08-31");
     expect(padding?.otherMonth).toBe(true);
     expect(padding?.expense).toBe(300);
     expect(padding?.count).toBe(1);
@@ -448,6 +456,10 @@ describe("statsBounds / weekStartOf（统计周期）", () => {
     expect(weekStartOf("2026-09-16")).toBe("2026-09-14"); // 周三 → 周一
     expect(weekStartOf("2026-09-14")).toBe("2026-09-14"); // 周一不动
     expect(weekStartOf("2026-09-20")).toBe("2026-09-14"); // 周日仍属这一周
+    // 设置成周日打头：9/20 是周日 → 它就是这一周的第一天
+    expect(weekStartOf("2026-09-16", 0)).toBe("2026-09-13");
+    expect(weekStartOf("2026-09-20", 0)).toBe("2026-09-20");
+    expect(statsBounds([], "week", SEP, "2026-09-16", "", "", 0)).toEqual({ from: "2026-09-13", to: "2026-09-19" });
     expect(statsBounds([], "week", SEP, "2026-09-16")).toEqual({ from: "2026-09-14", to: "2026-09-20" });
     expect(statsBounds([], "month", SEP)).toEqual({ from: "2026-09-01", to: "2026-09-30" });
     expect(statsBounds([], "month", { year: 2024, month: 1 })).toEqual({ from: "2024-02-01", to: "2024-02-29" }); // 闰月

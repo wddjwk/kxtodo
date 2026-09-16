@@ -19,6 +19,14 @@ use serde::Serialize;
 /// 管理台「操作日志」里保留的条数（进程内，重启即空）
 const RECENT_CAP: usize = 400;
 
+/// 单个日志文件的体积上限（8MB）。
+///
+/// 保留策略只管**文件数**（最近 7 天），不管单文件多大：一个卡在错误重试里的客户端
+/// （同步循环最短 5 秒一轮、每轮都失败就会每轮写一行）一天能堆出几百 MB，而这类循环
+/// 恰恰是最容易出现的故障形态。到顶之后只停写文件、`stdout` 照旧——诊断当下看控制台，
+/// 文件里留下的前 8MB 已经包含了故障开始的那段上下文。
+const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LogLine {
@@ -32,6 +40,8 @@ pub struct Logger {
     inner: Option<std::sync::Arc<Mutex<File>>>,
     current_date: Option<String>,
     recent: VecDeque<LogLine>,
+    /// 今天这个文件已经写到多少字节（到 `MAX_FILE_BYTES` 就只走 stdout）
+    written: u64,
 }
 
 impl Logger {
@@ -41,6 +51,7 @@ impl Logger {
             inner: None,
             current_date: None,
             recent: VecDeque::new(),
+            written: 0,
         }
     }
 
@@ -50,6 +61,7 @@ impl Logger {
             inner: None,
             current_date: None,
             recent: VecDeque::new(),
+            written: 0,
         }
     }
 
@@ -65,6 +77,8 @@ impl Logger {
         let path = Self::log_file_path(&self.dir, date);
         match OpenOptions::new().create(true).append(true).open(&path) {
             Ok(file) => {
+                // 接着上次的写入位置续算（进程重启时不能从 0 重新数）
+                self.written = file.metadata().map(|meta| meta.len()).unwrap_or(0);
                 self.inner = Some(std::sync::Arc::new(Mutex::new(file)));
                 self.current_date = Some(date.to_string());
                 self.prune_old_logs();
@@ -113,9 +127,14 @@ impl Logger {
         }
         let date = now.format("%Y%m%d").to_string();
         self.rotate_if_needed(&date);
-        if let Some(file) = &self.inner {
-            if let Ok(mut handle) = file.lock() {
-                let _ = writeln!(handle, "{line}");
+        if self.written < MAX_FILE_BYTES {
+            if let Some(file) = &self.inner {
+                if let Ok(mut handle) = file.lock() {
+                    if writeln!(handle, "{line}").is_ok() {
+                        // 行首一个时间戳 + 换行，粗算即可（这里只用来判断要不要停写）
+                        self.written += line.len() as u64 + 1;
+                    }
+                }
             }
         }
         self.recent.push_back(LogLine {

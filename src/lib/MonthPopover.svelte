@@ -5,6 +5,7 @@
    * 浮层这一层统一走这里，省得四个调用点各写一遍。
    */
   import { onMount } from "svelte";
+  import { createBackGuard } from "./platform";
   import MonthPicker from "./MonthPicker.svelte";
   import { anchoredPopoverStyle } from "./popover";
   import { appSettings } from "./stores";
@@ -17,6 +18,10 @@
   export let mode: "month" | "year" = "month";
   export let onSelect: (next: { year: number; month: number }) => void = () => {};
   export let onClose: () => void = () => {};
+
+  // 月份/年份浮层：返回键先收它（`open` 是 prop，收放都靠这一条）
+  const backGuard = createBackGuard();
+  $: backGuard(open, onClose);
 
   const WIDTH = 240;
   const HEIGHT = 258;

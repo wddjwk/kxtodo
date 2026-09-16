@@ -6,6 +6,7 @@
   import { createEventDispatcher } from "svelte";
   import { CalendarDays, Image as ImageIcon, PenLine, Trash2, Wallet } from "@lucide/svelte";
   import ContextMenu from "../menu/ContextMenu.svelte";
+  import { requestSubmenuClose } from "../menu/submenu";
   import MenuItem from "../menu/MenuItem.svelte";
   import MenuSeparator from "../menu/MenuSeparator.svelte";
   import DatePicker from "../DatePicker.svelte";
@@ -74,6 +75,7 @@
         on:select={(event) => setDate(event.detail)}
         on:selectTime={(event) => void setTime(event.detail)}
         on:clear={() => void setDate(todayDate())}
+        on:close={requestSubmenuClose}
       />
     </div>
   </MenuItem>

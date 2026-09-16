@@ -767,12 +767,14 @@ mod tests {
                 id: "tag-1".to_string(),
                 color: TagColor::Blue,
                 text: Some("工作".to_string()),
+                hex: None,
                 extra: serde_json::Map::new(),
             },
             Tag {
                 id: "tag-2".to_string(),
                 color: TagColor::Green,
                 text: None,
+                hex: None,
                 extra: serde_json::Map::new(),
             },
         ];

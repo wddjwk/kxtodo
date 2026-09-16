@@ -20,12 +20,19 @@ pub fn is_shared_settings_path(path: &str) -> bool {
             | "appearance.themePresets"
             | "appearance.uiColors"
             // 新建分组/条目的默认外观同 uiColors 一个待遇：换台设备建出来的条目不该变脸
+            // 预置标签是内容（用户攒的一份常用标签库），换台设备也该能用
+            | "appearance.tagPresets"
+            | "appearance.dueColors"
             | "appearance.newNodeDefaults.accent"
             | "appearance.newNodeDefaults.backgroundColor"
             | "appearance.newNodeDefaults.backgroundImage"
             | "appearance.newNodeDefaults.backgroundOpacity"
             | "updates.autoCheck"
             | "features.showCategoryBadges"
+            // 超链接渲染样式是内容观感：一端改了三端跟着改（从前漏了这两项，
+            // merge 载荷里带着它们却从不刷新 LWW 时间戳，改了等于白改）
+            | "features.linkRender"
+            | "features.dueHighlight"
             // 日记的主题色与背景是外观，跟条目背景/uiColors 一个待遇；
             // diary.view 刻意不在这里——每台设备各看各的视图
             | "diary.accent"
@@ -129,6 +136,18 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         path: "appearance.diaryFontSize",
         kind: "integer(14-26)",
         description: "日记页字号",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "appearance.dueColors",
+        kind: "object",
+        description: "临期高亮配色：{ 节点id: [今天色, 明天色, 后天色] }",
+        is_map: true,
+    },
+    FieldMeta {
+        path: "appearance.tagPresets",
+        kind: "array",
+        description: "预置标签列表（右键菜单「标签」里可一键添加的常用标签）",
         is_map: false,
     },
     FieldMeta {
@@ -384,15 +403,21 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         is_map: false,
     },
     FieldMeta {
-        path: "features.autoLinkTitle",
-        kind: "boolean",
-        description: "超链接自动解析标题：裸链接抓网页标题按 [标题](链接) 渲染（默认开）",
+        path: "features.dueHighlight",
+        kind: "enum(off|solid|gradient)",
+        description: "临期高亮（默认 off）：off 不画 / solid 按今天明天后天取整色 / gradient 按剩余时间插值",
         is_map: false,
     },
     FieldMeta {
-        path: "features.linkCards",
-        kind: "boolean",
-        description: "超链接渲染为预览卡片（默认关；抓不到元数据就退回原样链接）",
+        path: "features.weekStart",
+        kind: "enum(monday|sunday)",
+        description: "一周的第一天：monday（默认）/ sunday（日历视图、日期选择器、周统计共用）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "features.linkRender",
+        kind: "enum(off|title|card)",
+        description: "超链接渲染样式（三档单选，默认 card）：off 原样 / title 裸链接解析标题 / card 预览卡片",
         is_map: false,
     },
     FieldMeta {
@@ -508,6 +533,8 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "appearance.ledgerFontSize" => json!(settings.appearance.ledger_font_size),
         "appearance.diaryFontSize" => json!(settings.appearance.diary_font_size),
         "appearance.navItems" => json!(settings.appearance.nav_items),
+        "appearance.tagPresets" => json!(settings.appearance.tag_presets),
+        "appearance.dueColors" => json!(settings.appearance.due_colors),
         "appearance.navLayout" => json!(settings.appearance.nav_layout),
         "appearance.themePresets" => json!(settings.appearance.theme_presets),
         "appearance.uiColors" => json!(settings.appearance.ui_colors),
@@ -556,8 +583,9 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "features.sync" => json!(settings.features.sync),
         "features.editorToolbar" => json!(settings.features.editor_toolbar),
         "features.mobileBack" => json!(settings.features.mobile_back),
-        "features.autoLinkTitle" => json!(settings.features.auto_link_title),
-        "features.linkCards" => json!(settings.features.link_cards),
+        "features.linkRender" => json!(settings.features.link_render),
+        "features.weekStart" => json!(settings.features.week_start),
+        "features.dueHighlight" => json!(settings.features.due_highlight),
         "diary.view" => json!(settings.diary.view.as_str()),
         "diary.accent" => json!(settings.diary.accent),
         "diary.backgroundColor" => json!(settings.diary.background_color),
@@ -740,6 +768,62 @@ fn expect_color(path: &str, value: &Value) -> CoreResult<String> {
 
 /// 固定导航行清单：必须全是已知 id（写进去一个不存在的 id 只会让那一行凭空消失，
 /// CLI/Agent 的笔误要当场拒绝），重复项去掉、顺序保留（顺序就是显示顺序）。
+/// 预置标签列表：逐项反序列化成 [`Tag`]，颜色与 hex 都过一遍校验。
+///
+/// 上限 64 条——预置标签是「一眼扫到、点一下就用」的快捷方式，不是标签库；
+/// 允许无限加只会让那两列列表变成长长的滚动区，反而不好用。
+/// 临期高亮配色：每个值必须是三个合法 `#rrggbb`。
+fn expect_due_colors(path: &str, value: &Value) -> CoreResult<Map<String, Value>> {
+    let map = value
+        .as_object()
+        .ok_or_else(|| invalid_value(path, "应为 { 节点id: [三色] } 对象"))?;
+    let mut out = Map::new();
+    for (key, entry) in map {
+        let list = entry
+            .as_array()
+            .ok_or_else(|| invalid_value(path, "每项应为颜色数组"))?;
+        if list.len() != 3 {
+            return Err(invalid_value(path, "每项应为三个颜色（今天/明天/后天）"));
+        }
+        let colors: Vec<Value> = list
+            .iter()
+            .map(|item| {
+                crate::model::tag_hex(item.as_str())
+                    .map(Value::String)
+                    .ok_or_else(|| invalid_value(path, "颜色应为 #rrggbb"))
+            })
+            .collect::<CoreResult<_>>()?;
+        out.insert(key.clone(), Value::Array(colors));
+    }
+    Ok(out)
+}
+
+fn expect_tag_presets(path: &str, value: &Value) -> CoreResult<Vec<crate::model::Tag>> {
+    const MAX_PRESETS: usize = 64;
+    let items = value
+        .as_array()
+        .ok_or_else(|| invalid_value(path, "应为标签数组"))?;
+    if items.len() > MAX_PRESETS {
+        return Err(invalid_value(path, format!("最多 {MAX_PRESETS} 个预置标签")));
+    }
+    let mut out = Vec::new();
+    for item in items {
+        let tag: crate::model::Tag = serde_json::from_value(item.clone())
+            .map_err(|error| invalid_value(path, format!("标签格式不正确：{error}")))?;
+        // 自定义色缺 hex 就退回灰色（与前端 normalizeTags / Tag::effective_color 同口径）
+        if tag.color == crate::model::TagColor::Custom && tag.custom_hex().is_none() {
+            out.push(crate::model::Tag {
+                color: crate::model::TagColor::Gray,
+                hex: None,
+                ..tag
+            });
+            continue;
+        }
+        out.push(tag);
+    }
+    Ok(out)
+}
+
 fn expect_nav_items(path: &str, value: &Value) -> CoreResult<Vec<String>> {
     let items = value
         .as_array()
@@ -881,6 +965,12 @@ pub fn set_value(
         }
         "appearance.diaryFontSize" => {
             settings.appearance.diary_font_size = expect_int(path, &value, 14, 26)? as u32;
+        }
+        "appearance.tagPresets" => {
+            settings.appearance.tag_presets = expect_tag_presets(path, &value)?;
+        }
+        "appearance.dueColors" => {
+            settings.appearance.due_colors = expect_due_colors(path, &value)?;
         }
         "appearance.navItems" => {
             settings.appearance.nav_items = expect_nav_items(path, &value)?;
@@ -1081,11 +1171,26 @@ pub fn set_value(
         "features.mobileBack" => {
             settings.features.mobile_back = expect_bool(path, &value)?;
         }
-        "features.autoLinkTitle" => {
-            settings.features.auto_link_title = expect_bool(path, &value)?;
+        "features.linkRender" => {
+            let raw = expect_string(path, &value)?.trim().to_ascii_lowercase();
+            if raw != "off" && raw != "title" && raw != "card" {
+                return Err(invalid_value(path, "应为 off/title/card"));
+            }
+            settings.features.link_render = raw;
         }
-        "features.linkCards" => {
-            settings.features.link_cards = expect_bool(path, &value)?;
+        "features.weekStart" => {
+            let raw = expect_string(path, &value)?.trim().to_ascii_lowercase();
+            if raw != "monday" && raw != "sunday" {
+                return Err(invalid_value(path, "应为 monday/sunday"));
+            }
+            settings.features.week_start = raw;
+        }
+        "features.dueHighlight" => {
+            let raw = expect_string(path, &value)?.trim().to_ascii_lowercase();
+            if raw != "off" && raw != "solid" && raw != "gradient" {
+                return Err(invalid_value(path, "应为 off/solid/gradient"));
+            }
+            settings.features.due_highlight = raw;
         }
         "diary.view" => {
             let raw = expect_string(path, &value)?;
@@ -1256,6 +1361,10 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "appearance.diaryFontSize" => {
             target.appearance.diary_font_size = defaults.appearance.diary_font_size
         }
+        "appearance.tagPresets" => {
+            target.appearance.tag_presets = defaults.appearance.tag_presets.clone()
+        }
+        "appearance.dueColors" => target.appearance.due_colors = Map::new(),
         "appearance.navItems" => {
             target.appearance.nav_items = defaults.appearance.nav_items.clone()
         }
@@ -1335,10 +1444,11 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "features.sync" => target.features.sync = defaults.features.sync,
         "features.editorToolbar" => target.features.editor_toolbar = defaults.features.editor_toolbar,
         "features.mobileBack" => target.features.mobile_back = defaults.features.mobile_back,
-        "features.autoLinkTitle" => {
-            target.features.auto_link_title = defaults.features.auto_link_title
+        "features.linkRender" => target.features.link_render = defaults.features.link_render.clone(),
+        "features.weekStart" => target.features.week_start = defaults.features.week_start.clone(),
+        "features.dueHighlight" => {
+            target.features.due_highlight = defaults.features.due_highlight.clone()
         }
-        "features.linkCards" => target.features.link_cards = defaults.features.link_cards,
         "diary.view" => target.diary.view = defaults.diary.view,
         "diary.accent" => target.diary.accent = defaults.diary.accent.clone(),
         "diary.backgroundColor" => {

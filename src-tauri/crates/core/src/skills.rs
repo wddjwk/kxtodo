@@ -10,7 +10,7 @@ use crate::error::{CoreError, CoreResult};
 pub const SKILL_NAME: &str = "kxtodo";
 /// SKILL 文档格式版本：frontmatter 的 `version` 不许高于它（`cmd_validate` 会拒）。
 /// v2 = 按「怎么用 / 有哪些功能 / 什么注意事项」重排，补上 `--jq` 与分页语义。
-pub const SKILL_VERSION: u32 = 2;
+pub const SKILL_VERSION: u32 = 3;
 
 /// SKILL 内容在编译期嵌入二进制（与帮助信息一样），不依赖任何外部文件。
 const SKILL_CONTENT: &str = include_str!("../../../../skills/kxtodo/SKILL.md");
@@ -231,14 +231,37 @@ pub fn cmd_validate(commands: &[String], flags: &[String]) -> CoreResult<Value> 
     // Commands referenced anywhere in prose/code spans must exist in the
     // current CLI catalog. Only command domains are recognized, avoiding
     // accidental matches on ordinary prose words.
-    let command_regex = regex::Regex::new(
-        r"(?:kxtodo\s+)?(task|diary|schedule|config|skills|doctor|notify|schema|version)(?:\s+([a-z][a-z-]*))?",
-    )
-    .expect("static command regex");
+    //
+    // **域名单是从 clap 命令树现推的，不是手写白名单**：早先这里硬编码了
+    // `task|diary|schedule|config|skills|doctor|notify|schema|version`，后来加的三个域
+    //（ledger / storage / sync）压根不在里面——金融数据的命令名写错也不会有任何校验报错，
+    // 校验等于漏了一半。凡是顶层子命令都自动进来。
+    let domains: Vec<&str> = commands
+        .iter()
+        .filter(|name| !name.contains('.'))
+        .map(String::as_str)
+        .collect();
+    let with_subcommands: Vec<&str> = domains
+        .iter()
+        .copied()
+        .filter(|domain| {
+            let prefix = format!("{domain}.");
+            commands.iter().any(|name| name.starts_with(&prefix))
+        })
+        .collect();
+    let alternation = domains
+        .iter()
+        .map(|domain| regex::escape(domain))
+        .collect::<Vec<_>>()
+        .join("|");
+    let command_regex = regex::Regex::new(&format!(
+        r"(?:kxtodo-cli\s+|kxtodo\s+)?({alternation})(?:\s+([a-z][a-z-]*))?"
+    ))
+    .expect("command regex from clap names");
     let mut referenced = Vec::new();
     for capture in command_regex.captures_iter(SKILL_CONTENT) {
         let domain = &capture[1];
-        let command = if matches!(domain, "task" | "diary" | "schedule" | "config" | "skills") {
+        let command = if with_subcommands.contains(&domain) {
             capture
                 .get(2)
                 .map(|action| format!("{domain}.{}", action.as_str()))

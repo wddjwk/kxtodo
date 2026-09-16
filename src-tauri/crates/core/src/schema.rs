@@ -221,12 +221,29 @@ pub fn command_schema(root: &clap::Command, path: &str) -> CoreResult<Value> {
         "command": path,
         "usage": usage.join(" "),
         "risk": risk_for(path),
+        "riskCondition": risk_condition(path),
         "description": current
             .get_about()
             .map(|text| text.to_string())
             .unwrap_or_default(),
         "params": params,
     }))
+}
+
+/// 条件式风险：`risk` 报的是**最坏情况**，这里补一句「什么条件下才真的需要 --yes」。
+///
+/// `schedule.enable` / `schedule.run` 早先是三方矛盾：schema 说 high-risk-write、
+/// help 写 write、实际只有代码执行类才要 --yes。客户端（Agent）按 schema 走就每次都要
+/// 用户确认（纯通知任务也确认，白折腾），按 help 走又可能漏掉该确认的。现在两边都说
+/// 最坏情况，差别由这一条结构化说明补上。
+pub fn risk_condition(command: &str) -> Value {
+    match command {
+        "schedule.enable" | "schedule.run" => json!({
+            "requiresYes": "action.type 为 script 或 executable（会执行代码）",
+            "skippedWhen": "action.type 为 notify（纯桌面通知）",
+        }),
+        _ => Value::Null,
+    }
 }
 
 /// Risk levels per command (§3.2). Kept next to help text via long_about too.

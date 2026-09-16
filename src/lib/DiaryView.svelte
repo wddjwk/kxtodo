@@ -5,7 +5,8 @@
     List as ListIcon, MoreHorizontal, NotebookPen, Plus, Search,
     Settings as SettingsIcon, X
   } from "@lucide/svelte";
-  import { appSettings, diaryEditor, diaryEntries } from "./stores";
+  import { appSettings, diaryEditor, diaryEntries, weekStart } from "./stores";
+  import { createBackGuard } from "./platform";
   import { setConfig, setDiaryUi } from "./actions";
   import { buildMainStyle, diaryAccent, diaryBackground } from "./styles";
   import { imageCache, resolveImageSrc } from "./images";
@@ -63,7 +64,7 @@
   $: stats = diaryStats($diaryEntries, today);
   $: byDate = diaryByDate(entries);
   $: years = yearGroups(entries);
-  $: cells = calendarCells(cursor, byDate);
+  $: cells = calendarCells(cursor, byDate, $weekStart);
   $: monthLabel = `${cursor.year}年${cursor.month + 1}月`;
   /** 添加按钮落在哪一天：日历视图跟着选中的日期，其余视图永远是今天 */
   $: focusDate = view === "calendar" ? selectedDate : today;
@@ -100,6 +101,13 @@
       )
     )
   ]);
+
+  // 齿轮面板与月份浮层是这一页的浮层：返回键先收它们
+  const backGuard = createBackGuard();
+  $: backGuard(showGear || monthPopOpen, () => {
+    showGear = false;
+    monthPopOpen = false;
+  });
 
   export function closeOverlays(): void {
     entryMenu = null;
@@ -306,7 +314,7 @@
           onClose={() => (monthPopOpen = false)}
         />
         <div class="diary-calendar-grid">
-          {#each calendarWeekdayHeaders as label (label)}
+          {#each calendarWeekdayHeaders($weekStart) as label (label)}
             <span class="diary-calendar-head">{label}</span>
           {/each}
           {#each cells as cell (cell.date)}

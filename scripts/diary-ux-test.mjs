@@ -108,7 +108,7 @@ await page.waitForTimeout(200);
 // 标签
 await page.locator(".editor-tag-add").click();
 await page.waitForTimeout(250);
-await page.locator(".editor-tag-pop input").fill("工作");
+await page.locator(".editor-tag-pop .tag-editor-input-row input").fill("工作");
 await page.locator(".editor-tag-pop .tag-add-btn").click();
 await page.waitForTimeout(250);
 check("标签加进元数据行", (await page.locator(".editor-meta-tags .task-tag").count()) === 1);
@@ -242,7 +242,7 @@ await page.waitForTimeout(900);
 check("编辑已有任务时也有元数据行", (await page.locator(".editor-meta .editor-meta-trigger").count()) >= 2);
 await page.locator(".editor-tag-add").click();
 await page.waitForTimeout(250);
-await page.locator(".editor-tag-pop input").fill("编辑器加的标签");
+await page.locator(".editor-tag-pop .tag-editor-input-row input").fill("编辑器加的标签");
 await page.locator(".editor-tag-pop .tag-add-btn").click();
 await page.waitForTimeout(200);
 check("标签浮层留着不关（可以连着加几个）", (await page.locator(".editor-tag-pop").count()) === 1);

@@ -77,6 +77,9 @@ v0.8.0 起的几条补充（来龙去脉在 `history/v0.8.md` 批次 1）：
 
 ## 八、浮层与安全区铁律
 
+- **`createBackGuard()` 自带「组件销毁即摘掉拦截器」**（内部在初始化期注册 `onDestroy`），所以正常写法就够了：`{#if}` 挂载式的浮层用 `$: backGuard(true, close)`，`open` 是 prop 的用 `$: backGuard(open, onClose)`。**别绕过它直接用 `addBackInterceptor`**——那个得手动配对注销，漏一次就是返回键永久失灵的后果。为什么这条这么要紧：菜单 / 图标选择器 / 日期选择器这类由调用方 `{#if}` 挂载的浮层，`createBackGuard` 从头到尾只会用 `true` 调一次，卸载时不走 `active=false` 那条分支——不 dispose 的话拦截器永久留在栈里，返回键被一个已经不可见的浮层吃掉，**用户眼里就是「返回键失灵」**（v0.8.1 踩过，靠 `v081-fixes-test` 的移动端用例抓住）。组件在 `{#if}` 里被整块拆掉（开着浮层时切走页面）同样会被 `onDestroy` 覆盖。
+- **`{#await import(...)}` 一律配 `{:catch}`**：懒加载的 chunk 拉不到时，只有 `then` 的写法就是「点开什么都没有，也退不出去」。5 处懒加载（三个编辑器 + 两个图标选择器）统一用 `.lazy-fallback` 兜底块并收掉浮层状态。
+
 1. **任何 JS 命令式建的全屏/浮层都要先问一句：移动端顶部避让了吗？** 原文：「**全屏浮层要吃状态栏安全区**（mobile.css 的 `.app-shell.mobile .md-fullscreen-bar`）：浮层是 JS 建出来挂进 `.app-shell` 的（`markdownControls` 的 `ensureOverlay` 刻意不挂 body，否则拿不到 `--safe-inv`）。**这条安全区坑是第三次踩**（v0.6.8 编辑器全屏、v0.6.8 链接预览标题栏、v0.6.9 图全屏工具栏）」。
 2. **不占历史栈的覆盖层要注册返回键拦截器**（`platform.ts` 的 `addBackInterceptor`），否则「返回把历史栈上的编辑器弹掉了，罩子却还留在原地——界面「卡住」」。分类/账户管理器也注册了（两段式：表单→列表→关）。
 3. **菜单限高绝不能把菜单顶到视口顶部**：「正确做法：按**锚点向下的空间**限高并保持 `top=锚点`（菜单永远从按钮/触点下方展开、内部滚动），只有向上空间明显更大时才向上翻转」；「重新收敛时别量自己的 rect 高度……内容高度取 `max(rect.height, scrollHeight)`（两者都要除以 uiScale）」。
@@ -119,6 +122,9 @@ v0.8.0 起的几条补充（来龙去脉在 `history/v0.8.md` 批次 1）：
 - 「**入口绝不能用 `coreMode` 门控**——onMount 时水合还没完成、coreMode 恒为 false，v0.4.1 就是这样把整条自动同步写成了死代码」——`frontend.md`「syncRunner.ts」+ `sync.md`
 - 「`startMobileRouter()` 只能由 App onMount 调用——模块顶层挂载会因 platform ↔ stores/backend/capabilities 循环依赖 TDZ 白屏」；「订阅类初始化必须封装成函数由 App onMount 调用」——`frontend.md`「platform.ts」+ `pitfalls-android.md` 第 7 条
 - 「密钥丢失=数据不可恢复」；「升级密钥/盐算法前想清楚——改了派生参数所有设备全部失配」——`sync.md`「安全模型」+ SKILL.md 路由表「部署/运维 kxtodo-server」
+- 「**配对时绝不替本机盖设置时间戳**」：早先的「本机已有 settings.json 就把此刻记成设置最新时间」判据是假的（用户为了配对必然先填过用户名密码，那一下 `config.set` 就把 settings.json 建出来了），于是任何设备配对都会带着默认资料赢得 LWW 并推给服务端——清空数据重装之后**资料永远回不来，还会把别的设备改成默认值**。正确判据是「本地有没有用户改过的共享设置」，而 `settings.syncUpdatedAt` 自己就是答案（只有 `is_shared_settings_path` 里的路径会 `bump_sync_updated_at`）——`history/v0.8.1.md` 一.7
+- 「同步过来的设置载荷**逐字段覆盖，缺哪个键就动哪个键**」：整块反序列化会让结构体的 serde 默认值（"Example User" / "example@example.com"）顶掉本机值——「缺字段」只该理解为「这条记录没提它」——同上 一.8
+- 「`merge.rs::settings_payload` 里出现的键要在 `ops_config::is_shared_settings_path` 里也有，否则值跟着走但 LWW 时间戳不刷新——改了等于白改」（v0.8.1 补上 `features.linkRender` / `features.dueHighlight` / `appearance.dueColors` / `appearance.tagPresets`）——同上 二
 - 「**不写兼容代码**：旧账户就是登不上了，这是用户确认过的取舍。」——`sync.md`「账户模型简化（v0.5.1）」
 - 图片：「删除**不**传播（孤儿图片留给后续的「清理无引用图片」功能）」；「**两侧都做穿越校验**（`..`/分隔符/控制字符/前导点/超长一律拒）」；「落盘一律 `.part` + rename 原子写」；「签名一变两条水位归零全量重拉」（`runtime/sync.json` 记 `scopeSignature`）——`sync.md`「图片同步（v0.5.0）」
 - 「实际端口一律从 handle / 描述符取，别假定等于配置端口」；「**活着的别的 kxtodo 进程占端口不去杀**（那可能是用户真在用的独立 server），只上移 + 日志说明」——`sync.md`「端口生命周期」
@@ -133,6 +139,11 @@ v0.8.0 起的几条补充（来龙去脉在 `history/v0.8.md` 批次 1）：
 - 「广播本身失败（容器禁 UDP 之类）按「没发现」处理并报错 `SYNC_LAN_HOST_NOT_FOUND`（Io 类，走静默重连），别把 socket 错误抛给用户」；「广播本身跑不起来则跳过查重，别为环境怪癖挡用户」——`sync.md`「局域网自动发现」「主机身份是名字」
 
 ### 前端 / Svelte / 渲染
+
+- 「**首帧可见的东西必须进外观/资料缓存**」：外观缓存收**整个 `appearance`**（早先只白名单了 7 个数字字段，`navLayout`（双列）这类字符串字段从来没缓存过 → 每次冷启动先按单列画一帧再跳）；读回来要过一遍 `normalizeSettings`。资料缓存（名字 / 邮箱 / 头像）**写入失败要退一步只写名字邮箱**——头像在移动端是几 MB 的 dataURL，`setItem` 抛配额错时早先整条放弃，把名字邮箱一起拖去闪默认值。头像上传前先压到 256px（`images.ts::compressAvatarImage`）——`history/v0.8.1.md` 一.1
+- 「**页面响应优先于资源节省**」：`setConfig` **先本地生效、再落盘**（等 IPC + settings.json 原子写回来才翻 UI，表现成「点一下顿一下」；失败按原值回滚）；展开态的重活**双 rAF 之后再算**（`lib/deferredMarkdown.ts`，单 rAF 仍在当帧绘制前触发）；懒加载要有预取与失败路径。任何「为了省资源而让点击变慢」的改动都不成立——`history/v0.8.1.md` 一.3/一.4/一.5
+- 「**受控输入框不要每键写盘**」：名字/邮箱这类直连 `config.set` 的输入框改成**本地草稿 + 失焦/回车提交**——逐键写盘会让 `value` 回写打断 IME 组合输入（表现成「越打越多、字符乱跳」）——同上 一.2
+- 「`lib/markdownTasks.ts` 是「渲染出的第 N 个任务框 ↔ 源码第几行」的唯一实现」，判据照抄 marked 的 `listIsTask`（必须 `- [ ]` + **一个空格**，围栏代码块整段跳过）；渲染器的 `checkbox` 必须**去掉 `disabled`**（disabled 的表单控件不派发 click）——同上 二
 
 - 「无参 Svelte action 的 `update()` 不会被调用，`{@html}` 重渲换掉 canvas 后只有 MutationObserver 能接住」；「`use:fitAmount={value}` 必须传值，无参 action 的 update 不会被调用」——`ui-patterns.md`「markdown 扩展渲染」+ `ledger.md`
 - 「DOMPurify 会剥掉值里含 `-->` 的属性（mermaid 箭头必中）→ 源码必须 base64 进属性」——`ui-patterns.md`「markdown 扩展渲染」
@@ -193,6 +204,10 @@ v0.8.0 起的几条补充（来龙去脉在 `history/v0.8.md` 批次 1）：
 - 「**同一天已有日记不算冲突**：直接追加成另一篇，不合并正文也不去重（所以同一个包导两遍会得到两份——导入因此走确认门）」——`ui-patterns.md`「日记」
 - `storage.clean` 的「**边界写死在模块文档里**：五个域 JSON、`runtime/*`（同步水位/设备密钥/配对历史）、服务器 `settings.json`/`data.db`（账户与 token 哈希住在库里）一概不碰」；「单个 IO 失败进 `warnings` 不硬失败」——`ui-patterns.md`「设置抽屉」
 - 「Android 的 dialog save() 只给 content:// URI，所以导出不传 path、让 Rust 落进缓存目录再由 Kotlin `shareFile` 桥拉起分享面板，导入走隐藏 file input + **base64**（不用 Vec<u8>：JSON IPC 会把 1MB 摊成一百万个数字）」——`ui-patterns.md`「日记」
+- 「**图片入库三道闸门**（`ImageGate`）：插图（Markdown）只在超 5MB 时动手；**背景**超过 2MB 就压、压完仍超 **10MB 直接拒收**（那种图留着只会每次都卡，不如当场说清楚）；**头像一律收到 256px**（不分来源大小）。三道都只处理 JPEG/PNG，GIF/WebP 可能是动图一律原样，解码失败/重编码失败/没变小也原样返回」——`history/v0.8.1.md` 一.1 与二
+- 「**背景图长边上限 `BACKGROUND_MAX_EDGE = 2560` 前后端各有一份**（`src/lib/images.ts` 与 `lib.rs::ImageGate::Background`），改要一起改；上传前前端先压一道，为的是别把几十 MB 的 dataURL 推过 IPC」——同上
+- 「**服务器 WAL 要定期 `wal_checkpoint(TRUNCATE)`**：SQLite 的自动检查点只把页挪回主库、**不缩小 WAL 文件**，内置主机在手机上常年只增不减。那个后台任务**必须能被停机叫醒**（watch 通道），否则它握着 SQLite 连接不放，Windows 上主机库目录删不掉」——`history/v0.8.1.md` 二
+- 「服务器日志**单文件上限 8MB**（保留策略只管文件数、不管单文件多大，一个卡在错误重试里的客户端一天能堆出几百 MB）；到顶只停写文件、stdout 照旧」——同上
 - 「插图复用现成的按条目分目录通道，伪条目 id = `diary`（`diary.ts` 的 `DIARY_IMAGE_NODE`），图片存储与同步一行都不用改」；记账是 `ledger`（`LEDGER_IMAGE_NODE`，「core 的 inventory 是动态 read_dir 所以自动进同步与盘点」）——`ui-patterns.md`「日记」+ `history/v0.7.0-v0.7.4.md` v0.7.4 ⑦
 
 ### 构建 / 发布 / CI
@@ -229,6 +244,7 @@ v0.8.0 起的几条补充（来龙去脉在 `history/v0.8.md` 批次 1）：
 - 「嵌套容器（行 + 外层 nav）会各武装一个长按定时器，外层 handler 必须检查抑制标志/内层菜单已开，否则行菜单被空白区菜单顶替」；「长按抬手补发的 click 也要吞掉」——`pitfalls-android.md` 第 5 条
 - 「能力门控优先于 isMobile 散落判断」；「新增平台只扩这两处 + CSS 命名空间，不改业务组件」——`pitfalls-android.md` 第 13 条 + `frontend.md`「capabilities.ts」
 - 「必须在 `MainActivity.onCreate` 自己注册 `OnBackPressedCallback`（canGoBack→goBack 否则 finish），否则硬件返回直接退应用」——`pitfalls-android.md` 第 2 条
+- 「**每一个浮层都要接管系统返回键，而且接管了必须能还回去**」：拦截器是**后进先出的栈**，所以「先注册的在下、后注册的先被问」天然对应「后开的先关」。收放都靠 `platform.ts::createBackGuard`——`{#if}` 挂载式的浮层（菜单 / 选择器 / 日期选择器）在 `onDestroy` 里 `dispose()`，`open` 是 prop 的在 `$: backGuard(open, onClose)` 里自动收放。漏 dispose 的症状是**返回键失灵**；漏注册的症状是**返回键跳过当前浮层去弹下面的页面**——`history/v0.8.1.md` 一.6
 - 「tauri-plugin-window-state 默认管所有窗口」；「`reveal_main_window` 在 show 之前跑 `sanitize_main_window_geometry`」——`pitfalls-windows.md` 第 5 条
 - 「全局快捷键受插件平台能力限制（X11 可用，纯 Wayland 抓不到），不做会话嗅探特判」；「Linux 首跑默认退出……用户设置后以用户值为准」——`ui-patterns.md`「Linux 桌面」
 - 「改成 `is_focused`：已在前台就收起，隐藏/最小化/被挡住一律 show + unminimize + set_focus」——`history/v0.7.5-v0.7.8.md` v0.7.8 ⑪

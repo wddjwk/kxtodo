@@ -1,12 +1,13 @@
 /**
- * 超链接增强（v0.7.7），两个特性开关控制：
- * ① **自动解析标题**（features.autoLinkTitle，默认开）：只认「裸链接」——
- *    用户敲的是地址本身（GFM 自动链接），抓来网页标题按 [标题](链接) 的样子渲染，
- *    标题最长 30 字、超出补省略号；抓不到就原样留着。**用户手写的 [文字](链接)
- *    一律不动**——他写什么就是什么。
- * ② **渲染为卡片**（features.linkCards，默认关）：所有 http(s) 超链接都换成一张
- *    预览卡（[链接图标] 站点 + 复制链接按钮 / 标题 / 正文预览）。抓不到元数据就
- *    退回原样链接。
+ * 超链接增强（v0.7.7）：由**一个三档单选**（features.linkRender）控制，默认「卡片」。
+ * 早先「自动解析标题」与「渲染为卡片」是两个独立勾选框，四种组合里有两组意思一样
+ * （都勾 = 只有卡片生效），语义不可预期；现在合成一档，不存在「都选」这种状态：
+ * - `off`：原样链接；
+ * - `title`：只认「裸链接」——用户敲的是地址本身（GFM 自动链接），抓来网页标题按
+ *   [标题](链接) 的样子渲染，最长 60 字、超出补省略号。**用户手写的 [文字](链接)
+ *   一律不动**——他写什么就是什么；
+ * - `card`：所有 http(s) 超链接都换成一张预览卡（[链接图标] 站点 + 复制链接按钮 /
+ *   标题 / 正文预览）。抓不到元数据就退回原样链接。
  *
  * 元数据在核心侧抓（`gui.link-meta`，Rust 抓 + 解析 + 落盘缓存）；浏览器 dev 预览
  * 没有 Tauri，直接在页面里 fetch（测试可用 Playwright 的 route 打桩）。
@@ -17,6 +18,7 @@ import { get } from "svelte/store";
 import { isTauriRuntime, coreDispatch, type CoreEnvelope } from "./backend";
 import { appSettings, coreMode } from "./stores";
 import { copyText } from "./clipboard";
+import type { Settings } from "./types";
 
 export type LinkMeta = {
   url: string;
@@ -161,14 +163,14 @@ function truncateTitle(text: string): string {
 
 type LinkMode = "card" | "title" | "none";
 
-function modeFor(anchor: HTMLAnchorElement, features: { autoLinkTitle: boolean; linkCards: boolean }): LinkMode {
+function modeFor(anchor: HTMLAnchorElement, render: Settings["features"]["linkRender"]): LinkMode {
   const href = anchor.getAttribute("href") ?? "";
   if (!/^https?:\/\//i.test(href)) return "none";
   if (anchor.closest(".kx-link-card")) return "none";
   // 图片链接（[![](img)](url)）跳过：换成卡片等于把图丢了
   if (anchor.querySelector("img")) return "none";
-  if (features.linkCards) return "card";
-  if (features.autoLinkTitle && isBareLink(anchor)) return "title";
+  if (render === "card") return "card";
+  if (render === "title" && isBareLink(anchor)) return "title";
   return "none";
 }
 
@@ -196,10 +198,12 @@ function linkIcon(): SVGSVGElement {
   ]);
 }
 
+/// 复制图标：两个错开叠放的空心方框（业界通行画法，Lucide 的 `copy` 同款）。
+/// 早先那版是一块方框加一段无头无尾的弧，看着像画坏了。
 function copyIcon(): SVGSVGElement {
   return iconSvg([
-    "M10 8h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2z",
-    "M4 16a2 2 0 0 1-1.7-3.05l.7-1.2A2 2 0 0 1 4.7 11H6"
+    "M9 9h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2z",
+    "M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
   ]);
 }
 
@@ -281,7 +285,7 @@ export async function enhanceLinks(root: HTMLElement): Promise<void> {
   if (!features) return;
   const anchors = [...root.querySelectorAll<HTMLAnchorElement>("a[href]")];
   for (const anchor of anchors) {
-    const mode = modeFor(anchor, features);
+    const mode = modeFor(anchor, features.linkRender);
     if (mode === "none" || anchor.dataset.kxLink === mode) continue;
     if (anchor.dataset.kxPending) continue;
     anchor.dataset.kxPending = "1";

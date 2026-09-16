@@ -160,7 +160,7 @@ await m.locator(".composer-plus").click();
 await m.waitForSelector(".editor-cm-host .cm-content", { timeout: 30000 });
 await m.locator(".editor-meta-trigger.editor-tag-add").click();
 await m.waitForTimeout(300);
-await m.locator(".editor-tag-pop input").fill("点按标签");
+await m.locator(".editor-tag-pop .tag-editor-input-row input").fill("点按标签");
 await m.locator(".tag-add-btn").click();
 await m.waitForTimeout(300);
 await m.locator(".editor-cm-host .cm-content").click();

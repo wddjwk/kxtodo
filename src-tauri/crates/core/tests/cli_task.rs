@@ -1041,12 +1041,10 @@ fn due_time_round_trips_normalizes_and_clears() {
         "23:59"
     );
 
-    // 空串 = 清除：视图与磁盘都不再带 dueTime
+    // 空串 = 清除：视图里 dueTime 是空串（v0.8.1 起三个日期字段永远在场，没有就给空/null），
+    // 磁盘上整个字段不落
     let cleared = env.ok(&["task", "modify", "--type", "item", "--id", &id, "--due-time", ""]);
-    assert!(
-        cleared.get("dueTime").is_none(),
-        "清除后视图不给 dueTime：{cleared}"
-    );
+    assert_eq!(cleared["dueTime"], "", "清除后视图的 dueTime 应为空串：{cleared}");
     let raw = env.read_file("data.json");
     let stored = raw["tasks"]
         .as_array()
@@ -1056,10 +1054,17 @@ fn due_time_round_trips_normalizes_and_clears() {
         .unwrap();
     assert!(stored.get("dueTime").is_none(), "空串不落盘（skip_serializing_if）");
 
-    // 不给 --due-time 的任务：字段整个不出现
+    // 不给 --due-time 的任务：字段在（形状稳定），值为空串
     let plain = env.ok(&[
         "task", "add", "--type", "item", "--entry-id", &entry_id,
         "--markdown", "只精确到天的任务", "--due-date", "2026-08-01",
     ]);
-    assert!(plain.get("dueTime").is_none());
+    assert_eq!(plain["dueTime"], "");
+    // 没排期的条目：三个日期字段都在，值为 null
+    let unscheduled = env.ok(&[
+        "task", "add", "--type", "item", "--entry-id", &entry_id, "--markdown", "还没排期",
+    ]);
+    assert!(unscheduled["plannedDate"].is_null());
+    assert!(unscheduled["dueDate"].is_null());
+    assert_eq!(unscheduled["dueTime"], "");
 }

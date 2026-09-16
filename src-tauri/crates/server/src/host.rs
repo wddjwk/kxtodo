@@ -115,6 +115,8 @@ pub struct ServerHandle {
     pub generated_admin_password: Option<String>,
     state: SharedState,
     discovery_running: Arc<AtomicBool>,
+    /// 后台维护任务（WAL 检查点）的停止信号，见 `start` 里的说明
+    ticker_stop: Arc<tokio::sync::watch::Sender<bool>>,
     shutdown: Mutex<Option<oneshot::Sender<()>>>,
     serve_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -150,6 +152,8 @@ impl ServerHandle {
     /// 请求优雅停机：同步、任意线程可调、不等待退出。幂等。
     pub fn request_shutdown(&self) {
         self.discovery_running.store(false, Ordering::SeqCst);
+        // 后台维护任务立刻收工，别攥着 SQLite 连接不放（见 `start` 里的说明）
+        let _ = self.ticker_stop.send(true);
         if let Some(sender) = self.shutdown.lock().unwrap().take() {
             let _ = sender.send(());
         }
@@ -249,6 +253,35 @@ pub async fn start(config: ServerConfig) -> Result<ServerHandle, StartError> {
     let flag = discovery_running.clone();
     // with_connect_info：handler 用 ConnectInfo 取真实对端地址（管理台要展示来源 IP，
     // 局域网直连场景没有 X-Forwarded-For）
+    // 定期把 WAL 收回主库（见 `Db::checkpoint`）。挂在这里而不是每次请求里：
+    // 检查点要拿写锁，跟着请求走会在高频同步时平白制造争用。
+    //
+    // **必须能被停机叫醒**：这个任务握着 `state`（里面有 SQLite 连接），
+    // 停机之后还活着就等于主机库文件一直被打开着——Windows 上删不掉目录，
+    // 重建主机的回归用例直接红。所以拿一个 watch 通道当停止信号，
+    // `request_shutdown`（同步、任意线程可调）负责 `send`。
+    let (ticker_stop, mut ticker_stopped) = tokio::sync::watch::channel(false);
+    let ticker_stop = Arc::new(ticker_stop);
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(600));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // interval 的第一次 tick 立刻就到：刚起来还没写过什么，白跑一趟
+            ticker.tick().await;
+            loop {
+                tokio::select! {
+                    _ = ticker.tick() => {
+                        if let Err(error) = state.db.checkpoint() {
+                            state.console("warn", &format!("WAL 检查点失败：{error}"));
+                        }
+                    }
+                    _ = ticker_stopped.changed() => break,
+                }
+            }
+        });
+    }
+
     let serve_task = tokio::spawn(async move {
         let result = axum::serve(
             listener,
@@ -271,6 +304,7 @@ pub async fn start(config: ServerConfig) -> Result<ServerHandle, StartError> {
         generated_admin_password: generated_password,
         state,
         discovery_running,
+        ticker_stop,
         shutdown: Mutex::new(Some(sender)),
         serve_task: Mutex::new(Some(serve_task)),
     })

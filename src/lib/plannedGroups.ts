@@ -25,11 +25,11 @@ function addDays(iso: string, days: number): string {
   return fmtIso(date);
 }
 
-/** 本周起点：周一（周日归上一周末尾）。 */
-function weekStartIso(todayIso: string): string {
+/** 本周起点，跟着设置 `features.weekStart`（0 = 周日，1 = 周一，默认周一）。 */
+function weekStartIso(todayIso: string, weekStart: 0 | 1 = 1): string {
   const date = parseIso(todayIso);
   const dow = date.getDay();
-  date.setDate(date.getDate() + (dow === 0 ? -6 : 1 - dow));
+  date.setDate(date.getDate() - ((dow - weekStart + 7) % 7));
   return fmtIso(date);
 }
 
@@ -47,8 +47,11 @@ function rangeLabel(startIsoValue: string, endIsoValue: string): string {
   return `${start.getMonth() + 1}月${start.getDate()}日-${end.getMonth() + 1}月${end.getDate()}日`;
 }
 
-export function plannedGroupOptions(todayIsoValue: string): Array<{ key: PlannedGroupKey; label: string }> {
-  const weekStart = weekStartIso(todayIsoValue);
+export function plannedGroupOptions(
+  todayIsoValue: string,
+  weekStartDay: 0 | 1 = 1
+): Array<{ key: PlannedGroupKey; label: string }> {
+  const weekStart = weekStartIso(todayIsoValue, weekStartDay);
   const weekEnd = addDays(weekStart, 6);
   return [
     { key: "today", label: `今天（周${WEEKDAY_LABELS[parseIso(todayIsoValue).getDay()]}）` },

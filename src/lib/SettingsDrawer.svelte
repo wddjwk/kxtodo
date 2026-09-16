@@ -27,7 +27,7 @@
     type SyncPeers
   } from "./actions";
   import { checkForUpdate, startUpdate, updateProgress, type UpdateInfo } from "./updater";
-  import { isMobile } from "./platform";
+  import { createBackGuard, isMobile } from "./platform";
   import { caps } from "./capabilities";
   import { ArrowLeft, Eraser, Eye, EyeOff, History, Image as ImageIcon, RotateCcw, X } from "@lucide/svelte";
   import {
@@ -37,7 +37,7 @@
     isTauriRuntime, pickImageFile, saveAvatarImage, avatarImageUrl, openExternalUrl, trayAvailable,
     importBackgroundImage, backgroundImageUrl, saveBackgroundImageFromDataUrl
   } from "./backend";
-  import { avatarCache, resolveAvatarSrc, primeImageCache, localImageRef, isLocalImageRef } from "./images";
+  import { avatarCache, resolveAvatarSrc, primeImageCache, localImageRef, isLocalImageRef, compressAvatarImage, compressBackgroundImage } from "./images";
   import { themePresets } from "./defaults";
   import { NAV_ITEM_IDS, NAV_ITEM_LABELS, NAV_LAYOUTS, type NavItemId } from "./nav";
   import { cleanStorage, fetchStorageUsage, formatBytes, type StorageUsage } from "./actions";
@@ -57,14 +57,20 @@
     { value: "top-left", label: "左上角" }
   ];
 
+  // 抽屉里的二级浮层（配对历史 / 已配对设备 / 发现结果 / P2P 高级）：
+  // 返回键先把它们收掉，再按一次才轮到历史栈把整个设置抽屉弹掉。
+  const backGuard = createBackGuard();
+  $: backGuard(historyOpen || peersOpen || discoveryOpen || p2pAdvancedOpen, () => {
+    historyOpen = false;
+    peersOpen = false;
+    discoveryOpen = false;
+    p2pAdvancedOpen = false;
+  });
+
   $: drawerStyle = buildSettingsDrawerStyle($appSettings.appearance);
   $: resolvedAvatar = resolveAvatarSrc($appSettings.profile.avatar, $avatarCache);
   $: avStyle = avatarStyle(resolvedAvatar);
   $: avInitial = avatarInitial($appSettings.profile.displayName);
-
-  function updateProfile(field: keyof Settings["profile"], value: string): void {
-    void setConfigAction(`profile.${field}`, value);
-  }
 
   function updateAppearance<K extends keyof Settings["appearance"]>(field: K, value: Settings["appearance"][K]): void {
     void setConfigAction(`appearance.${field}`, value);
@@ -108,7 +114,11 @@
       storageUsage.tempFiles.bytes +
       storageUsage.cleanableLogs.bytes
     : 0;
-  /** 占用组成的「其余」桶：域 JSON、同步 runtime、服务器库这些不单独盘点的部分 */
+  /**
+   * 占用组成的「其他」桶。**由总数减去上面逐项盘点的结果得出**，不另算一份——
+   * 两边各算各的就会对不上（也就会「跳变」）。正常应该是 0（每类文件都有归属），
+   * 非零说明有盘点清单没覆盖到的东西，正好当一条线索。
+   */
   $: storageOtherBytes = storageUsage
     ? Math.max(
         0,
@@ -116,9 +126,26 @@
           storageUsage.images.bytes -
           storageUsage.backgrounds.bytes -
           storageUsage.avatars.bytes -
+          storageUsage.domainFiles.bytes -
+          storageUsage.historyDir.bytes -
+          storageUsage.runtimeDir.bytes -
+          storageUsage.serverDir.bytes -
           storageUsage.serverLogs.bytes -
           storageUsage.backups.bytes
       )
+    : 0;
+  /** 分项加起来必须等于总数；不等就说明有东西没归到类里（显示成「其他」） */
+  $: storageCountedBytes = storageUsage
+    ? storageUsage.images.bytes +
+      storageUsage.backgrounds.bytes +
+      storageUsage.avatars.bytes +
+      storageUsage.domainFiles.bytes +
+      storageUsage.historyDir.bytes +
+      storageUsage.runtimeDir.bytes +
+      storageUsage.serverDir.bytes +
+      storageUsage.serverLogs.bytes +
+      storageUsage.backups.bytes +
+      storageOtherBytes
     : 0;
 
   async function loadStorageUsage(): Promise<void> {
@@ -200,7 +227,7 @@
     const target = event.currentTarget;
     if (!(target instanceof HTMLInputElement) || !target.files?.[0]) return;
     try {
-      const dataUrl = await fileToDataUrl(target.files[0]);
+      const dataUrl = await compressBackgroundImage(target.files[0]);
       if (isTauriRuntime) {
         const filename = await saveBackgroundImageFromDataUrl(dataUrl);
         primeImageCache(filename, await backgroundImageUrl(filename));
@@ -820,13 +847,37 @@
     const target = event.currentTarget;
     if (!(target instanceof HTMLInputElement) || !target.files?.[0]) return;
     try {
-      const avatar = await fileToDataUrl(target.files[0]);
+      // 头像显示出来只有几十像素：压到 256px 再存。原图直接进 settings.json 会
+      // 撑爆 localStorage 的资料缓存（→ 名字邮箱一起闪回默认值）并让每轮同步白带几 MB
+      const avatar = await compressAvatarImage(target.files[0]);
       void setConfigAction("profile.avatar", avatar);
     } catch (error) {
       showToast(`头像读取失败：${String(error)}`);
     } finally {
       target.value = "";
     }
+  }
+
+  // 名字/邮箱用本地草稿，**失焦或回车才提交**。原来每敲一个字符就 config.set 一次：
+  // settings.json 全量写盘 + 快照往返 + `value` 回写输入框，回写会打断 IME 组合输入，
+  // 表现就是「越打越多、字符乱跳」。
+  let displayNameDraft = $appSettings.profile.displayName;
+  let emailDraft = $appSettings.profile.email;
+  let editingProfileField: "displayName" | "email" | "" = "";
+  $: if (editingProfileField !== "displayName") displayNameDraft = $appSettings.profile.displayName;
+  $: if (editingProfileField !== "email") emailDraft = $appSettings.profile.email;
+
+  function commitProfile(field: "displayName" | "email", value: string): void {
+    editingProfileField = "";
+    if (value === $appSettings.profile[field]) return;
+    void setConfigAction(`profile.${field}`, value);
+  }
+
+  function handleProfileKey(event: KeyboardEvent, field: "displayName" | "email", value: string): void {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    (event.currentTarget as HTMLInputElement).blur();
+    commitProfile(field, value);
   }
 </script>
 
@@ -851,11 +902,21 @@
     </div>
     <label class="settings-row">
       名字
-      <input value={$appSettings.profile.displayName} on:input={(event) => updateProfile("displayName", event.currentTarget.value)} />
+      <input
+        bind:value={displayNameDraft}
+        on:focus={() => (editingProfileField = "displayName")}
+        on:blur={() => commitProfile("displayName", displayNameDraft)}
+        on:keydown={(event) => handleProfileKey(event, "displayName", displayNameDraft)}
+      />
     </label>
     <label class="settings-row">
       邮箱
-      <input value={$appSettings.profile.email} on:input={(event) => updateProfile("email", event.currentTarget.value)} />
+      <input
+        bind:value={emailDraft}
+        on:focus={() => (editingProfileField = "email")}
+        on:blur={() => commitProfile("email", emailDraft)}
+        on:keydown={(event) => handleProfileKey(event, "email", emailDraft)}
+      />
     </label>
   </SettingsSection>
 
@@ -1135,26 +1196,84 @@
           on:change={(event) => updateFeature("mobileBack", event.currentTarget.checked)}
         />
       </label>
-      <!-- 超链接渲染样式：两个档位合成一组（卡片优先，见 linkPreview.ts::modeFor） -->
+      <!-- 超链接渲染样式：**三档单选**（都选没有额外含义，所以不做成两个勾选框） -->
       <div
         class="toggle-row link-style-row"
-        title="超链接的渲染样式。「标题」：裸链接（文字就是地址本身）自动抓网页标题，按 [标题](链接) 渲染，最长 60 字；用户手写的 [文字](链接) 一律不动。「卡片」：所有超链接渲染成一张预览卡（网页图标 + 站点 / 标题 / 正文预览，最多两行 + 悬浮复制按钮）。两个都勾时按卡片渲染；抓不到网页信息就退回原样链接。"
+        title="超链接的渲染样式，三档单选。「不渲染」保持原样；「标题」：裸链接（文字就是地址本身）自动抓网页标题，按 [标题](链接) 渲染，最长 60 字，用户手写的 [文字](链接) 一律不动；「卡片」：所有超链接渲染成一张预览卡（网页图标 + 站点 / 标题 / 正文预览，最多两行 + 悬浮复制按钮）。抓不到网页信息就退回原样链接。"
       >
         <span>超链接渲染样式</span>
         <span class="link-style-choices">
+          <label title="超链接保持原样">
+            <input
+              type="radio"
+              name="link-render"
+              checked={$appSettings.features.linkRender === "off"}
+              on:change={() => updateFeature("linkRender", "off")}
+            />不渲染
+          </label>
           <label title="裸链接自动解析网页标题（最长 60 字）">
             <input
-              type="checkbox"
-              checked={$appSettings.features.autoLinkTitle}
-              on:change={(event) => updateFeature("autoLinkTitle", event.currentTarget.checked)}
+              type="radio"
+              name="link-render"
+              checked={$appSettings.features.linkRender === "title"}
+              on:change={() => updateFeature("linkRender", "title")}
             />标题
           </label>
           <label title="所有超链接渲染成预览卡片">
             <input
-              type="checkbox"
-              checked={$appSettings.features.linkCards}
-              on:change={(event) => updateFeature("linkCards", event.currentTarget.checked)}
+              type="radio"
+              name="link-render"
+              checked={$appSettings.features.linkRender === "card"}
+              on:change={() => updateFeature("linkRender", "card")}
             />卡片
+          </label>
+        </span>
+      </div>
+      <!-- 临期高亮：两个档位互斥（都勾没有额外含义），都不勾 = 关 -->
+      <div
+        class="toggle-row link-style-row"
+        title="快到期的事项在卡片上加一层高亮。「高亮色」按今天 / 明天 / 后天各取一种颜色；「渐变」按实际剩余时间在这三种颜色之间过渡（今天到期的接近红色，明天到期的接近黄色，中间的时刻按远近插值）。设了具体时刻且不足 5 小时的会更重。两个都不勾 = 不高亮。配色在列表右上角菜单的「临期高亮色」里改，每个页面各配一套。"
+      >
+        <span>快到期事项添加高亮</span>
+        <span class="link-style-choices">
+          <label title="今天/明天/后天各用一种颜色">
+            <input
+              type="checkbox"
+              checked={$appSettings.features.dueHighlight === "solid"}
+              on:change={(event) => updateFeature("dueHighlight", event.currentTarget.checked ? "solid" : "off")}
+            />高亮色
+          </label>
+          <label title="按剩余时间在三种颜色之间过渡">
+            <input
+              type="checkbox"
+              checked={$appSettings.features.dueHighlight === "gradient"}
+              on:change={(event) => updateFeature("dueHighlight", event.currentTarget.checked ? "gradient" : "off")}
+            />渐变
+          </label>
+        </span>
+      </div>
+      <!-- 一周的第一天：日历视图 / 日期选择器 / 周统计 /「本周」分组共用（features.weekStart） -->
+      <div
+        class="toggle-row link-style-row"
+        title="一周从周几开始。影响日记与记账的日历视图、所有日期选择器（含添加时间的日历），以及统计里的「本周」。"
+      >
+        <span>一周开始</span>
+        <span class="link-style-choices">
+          <label title="周一作为每周第一天（国内习惯）">
+            <input
+              type="radio"
+              name="week-start"
+              checked={$appSettings.features.weekStart === "monday"}
+              on:change={() => updateFeature("weekStart", "monday")}
+            />周一
+          </label>
+          <label title="周日作为每周第一天">
+            <input
+              type="radio"
+              name="week-start"
+              checked={$appSettings.features.weekStart === "sunday"}
+              on:change={() => updateFeature("weekStart", "sunday")}
+            />周日
           </label>
         </span>
       </div>
@@ -1690,6 +1809,26 @@
           <b>{formatBytes(storageUsage.backgrounds.bytes + storageUsage.avatars.bytes)}</b>
         </li>
         <li>
+          <strong>领域数据</strong>
+          <em>data / settings / tasks / diary / ledger 五个 JSON</em>
+          <b>{formatBytes(storageUsage.domainFiles.bytes)}</b>
+        </li>
+        <li>
+          <strong>历史记录</strong>
+          <em>写操作审计与定时任务执行历史</em>
+          <b>{formatBytes(storageUsage.historyDir.bytes)}</b>
+        </li>
+        <li>
+          <strong>运行时</strong>
+          <em>同步水位、配对凭据留档、网页标题缓存</em>
+          <b>{formatBytes(storageUsage.runtimeDir.bytes)}</b>
+        </li>
+        <li>
+          <strong>同步服务器</strong>
+          <em>本机作为服务器时的库（实体与图片中转缓存）{#if storageUsage.serverWalBytes > 0}，其中 WAL {formatBytes(storageUsage.serverWalBytes)}{/if}</em>
+          <b>{formatBytes(storageUsage.serverDir.bytes)}</b>
+        </li>
+        <li>
           <strong>服务器日志</strong>
           <em>本机作为同步服务器时的操作日志（按日轮转）</em>
           <b>{formatBytes(storageUsage.serverLogs.bytes)}</b>
@@ -1699,12 +1838,17 @@
           <em>域数据写盘前的历史备份，自动保留最近几份</em>
           <b>{formatBytes(storageUsage.backups.bytes)}</b>
         </li>
-        <li>
-          <strong>数据与运行时</strong>
-          <em>记事 / 日记 / 账本等领域数据、同步水位与服务器库</em>
-          <b>{formatBytes(storageOtherBytes)}</b>
-        </li>
+        {#if storageOtherBytes > 0}
+          <li>
+            <strong>其他</strong>
+            <em>未被上面几类盘点到的文件</em>
+            <b>{formatBytes(storageOtherBytes)}</b>
+          </li>
+        {/if}
       </ul>
+      <p class="muted storage-detail">
+        分项合计 {formatBytes(storageCountedBytes)}（应等于上面的数据占用；不等只会出现在磁盘正在被写入的瞬间）
+      </p>
       <div class="settings-row">
         <span>可释放</span>
         <span class="muted">{formatBytes(cleanableBytes)}</span>

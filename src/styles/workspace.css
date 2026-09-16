@@ -349,6 +349,39 @@ h1 {
   box-shadow: 0 8px 24px rgb(110 61 42 / 9%);
 }
 
+/* 临期高亮：颜色由 TaskCard 内联的 --due-* 给（每个页面的配色可以不一样）。
+   左侧一条色带 + 一层极浅的底色，整页扫一眼就能挑出快到期的。
+
+   **必须写在上面那条 `:hover / .selected` 之后，并且把它们一起覆盖**：那一条同时改
+   background 与 box-shadow，而它的特异性与 `.task-card.due-soon` 相等、位置在后——
+   不覆盖的话「鼠标一碰高亮就没了」，而 `.selected`（当前打开的那张卡）会**一直**没有高亮。
+   悬停/选中时保留同样的底色与色带，只换外阴影，既有反馈又不丢标记。 */
+.task-card.due-soon,
+.task-card.due-soon:hover,
+.task-card.due-soon.selected {
+  border-color: var(--due-edge, transparent);
+  background:
+    linear-gradient(var(--due-tint, transparent), var(--due-tint, transparent)),
+    rgb(255 255 255 / 84%);
+  box-shadow: inset 3px 0 0 var(--due-color, transparent), 0 1px 1px rgb(0 0 0 / 2%);
+}
+
+.task-card.due-soon:hover,
+.task-card.due-soon.selected {
+  background:
+    linear-gradient(var(--due-tint, transparent), var(--due-tint, transparent)),
+    #ffffff;
+  box-shadow: inset 3px 0 0 var(--due-color, transparent), 0 8px 24px rgb(110 61 42 / 9%);
+}
+
+/* 加重档（不足 5 小时）：底色与色带都更实 */
+.task-card.due-soon.due-strong,
+.task-card.due-soon.due-strong:hover,
+.task-card.due-soon.due-strong.selected {
+  border-width: 1.5px;
+  box-shadow: inset 4px 0 0 var(--due-color, transparent), 0 1px 3px rgb(0 0 0 / 8%);
+}
+
 .task-check {
   display: grid;
   grid-column: 1;
@@ -1770,9 +1803,37 @@ h1 {
 /* ---------- 时刻滚轮（DatePicker 的 withTime 那一行） ---------- */
 
 .date-picker-time {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin-top: 8px;
   border-top: 1px solid #f1f2f4;
   padding-top: 5px;
+}
+
+/* 「要不要精确到分钟」的勾选框：不勾时右边的时刻按钮整行置灰不可点 */
+.dp-time-switch {
+  display: flex;
+  align-items: center;
+  padding-left: 6px;
+  cursor: pointer;
+}
+
+.dp-time-switch input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent, #2564cf);
+  cursor: pointer;
+}
+
+.dp-time-trigger.disabled {
+  color: #b6bac1;
+  cursor: default;
+}
+
+.dp-time-trigger.disabled:hover {
+  background: transparent;
+  color: #b6bac1;
 }
 
 .dp-time-trigger {
@@ -2089,10 +2150,35 @@ h1 {
   color: #137333;
 }
 
+.task-tag.tag-orange {
+  background: #fdf0e3;
+  border-color: #f6d3b0;
+  color: #c2640a;
+}
+
+.task-tag.tag-cyan {
+  background: #e0f3f6;
+  border-color: #b3e0e8;
+  color: #0b7285;
+}
+
+.task-tag.tag-purple {
+  background: #f3e8fd;
+  border-color: #ddc2f5;
+  color: #8430ce;
+}
+
 .task-tag.tag-gray {
   background: #f1f3f4;
   border-color: #dadce0;
   color: #5f6368;
+}
+
+/* 自定义配色：颜色是用户选的，走内联 CSS 变量（见 lib/tagColors.ts::tagChipStyle） */
+.task-tag.tag-custom {
+  background: var(--tag-bg, #f1f3f4);
+  border-color: var(--tag-fg, #dadce0);
+  color: var(--tag-fg, #5f6368);
 }
 
 /* Tag editor in context menu */
@@ -2101,55 +2187,6 @@ h1 {
   gap: 4px;
   padding: 4px 10px 8px;
 }
-
-.tag-list-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 28px;
-  padding: 0 8px;
-  border-radius: 6px;
-  font-size: calc(var(--font-control) - 5px);
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-}
-
-.tag-list-item .tag-list-text {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.tag-list-item .tag-list-delete {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  margin-left: 6px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  opacity: 0.5;
-  line-height: 0;
-}
-
-.tag-list-item .tag-list-delete:hover {
-  background: rgb(0 0 0 / 10%);
-  opacity: 1;
-}
-
-.tag-list-item.bg-red { background: #fce8e8; color: #d93025; }
-.tag-list-item.bg-yellow { background: #fef7e0; color: #b07000; }
-.tag-list-item.bg-blue { background: #e8f0fe; color: #1a73e8; }
-.tag-list-item.bg-green { background: #e6f4ea; color: #137333; }
-.tag-list-item.bg-gray { background: #f1f3f4; color: #5f6368; }
 
 .tag-editor-input-row {
   display: flex;
@@ -2199,39 +2236,222 @@ h1 {
   filter: none;
 }
 
-.tag-editor-colors {
-  display: flex;
-  gap: 8px;
-  padding-top: 2px;
+/* ---------- 标签配色：胶囊、两排各自左右填满 ---------- */
+
+.tag-color-grid {
+  display: grid;
+  gap: 6px;
+  width: 100%;
 }
 
-.tag-editor-colors .color-circle {
+.tag-color-row {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+}
+
+/* flex:1 让每排的胶囊均分整行宽度——第一排 5 个、第二排 4 个，两排都刚好左右填满 */
+.tag-color-pill {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 20px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--pill, #5f6368);
+  cursor: pointer;
+  outline: none;
+  transition: transform 0.1s ease-out, box-shadow 0.1s ease-out;
+}
+
+.tag-color-pill:hover {
+  transform: scale(1.04);
+}
+
+.tag-color-pill.selected {
+  border-color: #1f2933;
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 90%) inset;
+}
+
+/* 色盘：<input type=color> 铺满整颗胶囊，点哪儿都出系统调色板 */
+.tag-color-custom input[type="color"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0;
+}
+
+/* ---------- 右键菜单的标签面板 ---------- */
+
+.tag-panel {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+}
+
+.tag-panel.compact {
+  gap: 8px;
+}
+
+.tag-panel-block {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+}
+
+.tag-panel-label {
+  color: #8b929e;
+  font-size: calc(var(--font-control) - 6px);
+  font-weight: 600;
+}
+
+/* 预置标签：按内容宽度自动排版（长短不一也排得整齐），放不下就换行 */
+.tag-preset-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag-preset {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  height: 26px;
+  padding: 0 2px 0 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: calc(var(--font-control) - 5px);
+  font-weight: 500;
+  overflow: hidden;
+}
+
+.tag-preset.tag-red { background: #fce8e8; border-color: #f4c3c3; color: #d93025; }
+.tag-preset.tag-orange { background: #fdf0e3; border-color: #f6d3b0; color: #c2640a; }
+.tag-preset.tag-yellow { background: #fef7e0; border-color: #f5e3a3; color: #b07000; }
+.tag-preset.tag-green { background: #e6f4ea; border-color: #bce0c6; color: #137333; }
+.tag-preset.tag-cyan { background: #e0f3f6; border-color: #b3e0e8; color: #0b7285; }
+.tag-preset.tag-blue { background: #e8f0fe; border-color: #c4dafc; color: #1a73e8; }
+.tag-preset.tag-purple { background: #f3e8fd; border-color: #ddc2f5; color: #8430ce; }
+.tag-preset.tag-gray { background: #f1f3f4; border-color: #dadce0; color: #5f6368; }
+.tag-preset.tag-custom { background: var(--tag-bg, #f1f3f4); border-color: var(--tag-fg, #dadce0); color: var(--tag-fg, #5f6368); }
+
+.tag-preset-main {
+  min-width: 0;
+  max-width: 12em;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tag-preset-delete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
   width: 20px;
   height: 20px;
-  border: 2px solid transparent;
-  border-radius: 50%;
-  cursor: pointer;
   padding: 0;
-  transition: transform 0.1s, border-color 0.1s;
+  margin-left: 2px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.42;
+  line-height: 0;
 }
 
-.tag-editor-colors .color-circle:hover {
-  transform: scale(1.15);
+.tag-preset-delete:hover {
+  background: rgb(0 0 0 / 10%);
+  opacity: 1;
 }
 
-.tag-editor-colors .color-circle.selected {
-  border-color: #1f2933;
+.tag-preset-empty {
+  margin: 0;
+  color: #9aa1ac;
+  font-size: calc(var(--font-control) - 6px);
+  line-height: 1.5;
 }
 
-.tag-editor-colors .color-circle.red { background: #d93025; }
-.tag-editor-colors .color-circle.yellow { background: #f9ab00; }
-.tag-editor-colors .color-circle.blue { background: #1a73e8; }
-.tag-editor-colors .color-circle.green { background: #137333; }
-.tag-editor-colors .color-circle.gray { background: #5f6368; }
+/* 末尾右下的加号：把输入框里的标签存成预置 */
+.tag-preset-actions {
+  display: flex;
+  justify-content: flex-end;
+}
 
-.tag-clear-all {
-  padding: 6px 10px;
-  font-size: calc(var(--font-control) - 5px);
+.tag-preset-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px dashed #c8ccd2;
+  border-radius: 50%;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.tag-preset-add:hover:not(:disabled) {
+  border-color: #2564cf;
+  color: #2564cf;
+}
+
+.tag-preset-add:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.tag-submit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  /* 必须有回退色：任务编辑器浮层没有 --accent（日记编辑器才内联），裸 var 会失效成
+     透明底，白图标落在白浮层上就是「加号按钮渲染丢了但功能还在」 */
+  background: var(--accent, #2564cf);
+  color: white;
+  cursor: pointer;
+  line-height: 0;
+  outline: none;
+}
+
+.tag-submit:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.tag-keep-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #6b7280;
+  font-size: calc(var(--font-control) - 6px);
+  cursor: pointer;
+}
+
+.tag-keep-row input[type="checkbox"] {
+  accent-color: var(--accent, #2564cf);
 }
 
 /* ---------- Task emoji badge ----------

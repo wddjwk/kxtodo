@@ -10,7 +10,7 @@ import type {
   LedgerSide
 } from "./types";
 import type { MonthCursor } from "./diary";
-import { isoOf, shiftDays, todayDate } from "./diary";
+import { isoOf, leadingBlanks, shiftDays, todayDate, type WeekStart } from "./diary";
 
 /** 记账条目的插图走 markdown 插图同一条通道，伪条目 id = ledger（与日记的 diary 同款）。 */
 export const LEDGER_IMAGE_NODE = "ledger";
@@ -242,10 +242,12 @@ export type LedgerCalendarCell = {
  * 月历格：每格带上当天的收/支数额（不做热力着色，数额本身就是最直白的信息）。
  * 格子只有 62px 高，金额用 compactCents 省掉无意义的 .00。
  */
-export function ledgerCalendarCells(cursor: MonthCursor, entries: LedgerEntry[]): LedgerCalendarCell[] {
-  const first = new Date(cursor.year, cursor.month, 1);
-  const startWeekday = first.getDay();
-  const start = shiftDays(isoOf(cursor.year, cursor.month, 1), -startWeekday);
+export function ledgerCalendarCells(
+  cursor: MonthCursor,
+  entries: LedgerEntry[],
+  weekStart: WeekStart = 1
+): LedgerCalendarCell[] {
+  const start = shiftDays(isoOf(cursor.year, cursor.month, 1), -leadingBlanks(cursor.year, cursor.month, weekStart));
   const totals = new Map<string, LedgerCalendarCell>();
   for (const entry of entries) {
     const slot = totals.get(entry.date);
@@ -290,14 +292,17 @@ export type StatsMode = "week" | "month" | "year" | "total" | "custom";
 
 export type StatsBounds = { from: string; to: string };
 
-/** 周一是一周的开始（国内习惯）。 */
-export function weekStartOf(date: string): string {
+/**
+ * 本周起点。默认周一起（国内习惯），跟着设置 `features.weekStart` 走——
+ * 日历的第一列换了，统计里的「本周」也必须跟着换，否则同一个界面里有两个周一。
+ */
+export function weekStartOf(date: string, weekStart: WeekStart = 1): string {
   const weekday = new Date(`${date}T00:00:00`).getDay();
-  return shiftDays(date, -((weekday + 6) % 7));
+  return shiftDays(date, -((weekday - weekStart + 7) % 7));
 }
 
-export function weekRangeOf(date: string): StatsBounds {
-  const from = weekStartOf(date);
+export function weekRangeOf(date: string, weekStart: WeekStart = 1): StatsBounds {
+  const from = weekStartOf(date, weekStart);
   return { from, to: shiftDays(from, 6) };
 }
 
@@ -318,10 +323,11 @@ export function statsBounds(
   cursor: MonthCursor,
   anchor = "",
   from = "",
-  to = ""
+  to = "",
+  weekStart: WeekStart = 1
 ): StatsBounds {
   if (mode === "week") {
-    return weekRangeOf(anchor || todayIsoLike(cursor));
+    return weekRangeOf(anchor || todayIsoLike(cursor), weekStart);
   }
   if (mode === "month") return monthBounds(cursor);
   if (mode === "year") return { from: `${cursor.year}-01-01`, to: `${cursor.year}-12-31` };

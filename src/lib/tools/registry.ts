@@ -12,7 +12,7 @@
  *
  * 子视图是纯组件内部状态，不占历史栈层级（移动端返回键由壳所在的整页层承担）。
  */
-import { Dice5 } from "@lucide/svelte";
+import { Banknote, Dice5 } from "@lucide/svelte";
 import type { Component } from "svelte";
 
 export type ToolDefinition = {
@@ -33,6 +33,13 @@ export const TOOLS: ToolDefinition[] = [
     desc: "在指定范围内生成随机整数",
     icon: Dice5,
     load: () => import("./RandomTool.svelte")
+  },
+  {
+    id: "rmb",
+    name: "人民币大写",
+    desc: "金额转财务大写（壹仟贰佰叁拾肆元伍角陆分）",
+    icon: Banknote,
+    load: () => import("./RmbTool.svelte")
   }
 ];
 
