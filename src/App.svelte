@@ -6,10 +6,10 @@
   import {
     appSettings, appState, showSettings, searchQuery, isSearching,
     taskEmojiPicker, editorTaskId, appVersion, showToast,
-    isHydrated, diaryOpen, diaryEditor, editorDraftNode, ledgerOpen, ledgerEditor, ledgerData, toolboxOpen,
+    diaryOpen, diaryEditor, editorDraftNode, ledgerOpen, ledgerEditor, ledgerData, toolboxOpen,
     hydrate as hydrateStores
   } from "./lib/stores";
-  import { replaceTaskEmojis, selectNode as selectNodeAction, setConfig, syncNow as syncNowAction } from "./lib/actions";
+  import { replaceTaskEmojis, setConfig, syncNow as syncNowAction } from "./lib/actions";
   import { isMobile, mobileView, startMobileRouter } from "./lib/platform";
   import { imeViewport, startImeViewport } from "./lib/imeViewport";
   import { startAutoSync } from "./lib/syncRunner";
@@ -44,12 +44,6 @@
   $: emojiPickerTask = $taskEmojiPicker
     ? $appState.tasks.find((t) => t.id === $taskEmojiPicker?.taskId) ?? null
     : null;
-
-  // 移动端没有调度引擎：若选中节点是"定时任务"，水合后一次性重定向到我的一天
-  //（my-day 是合法系统节点，条件随即自清，不会成环）
-  $: if ($isMobile && $isHydrated && $appState.selectedNodeId === "scheduled") {
-    void selectNodeAction("my-day");
-  }
 
   onMount(() => {
     // 移动端历史栈路由：必须在模块全部初始化后挂载（platform 与 stores 循环依赖）

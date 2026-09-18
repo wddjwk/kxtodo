@@ -4,7 +4,7 @@
 mod common;
 
 use common::TestEnv;
-use serde_json::Value;
+use serde_json::{json, Value};
 use kxtodo_core::jq;
 
 #[test]
@@ -657,4 +657,56 @@ fn hyphen_leading_text_values_are_accepted() {
     ]);
     assert_eq!(bad.code, 2, "{}", bad.stderr);
     assert_eq!(bad.stderr_envelope()["error"]["code"], "LEDGER_AMOUNT_INVALID");
+}
+
+/// v0.8.3 参数命名口径的钉子：**CLI 长选项一律 kebab-case，core 的 params 键一律 camelCase**。
+///
+/// 两条口径靠 `#[serde(rename_all = "camelCase")]`（每个 `*Args` 结构都有，`GlobalArgs` 例外——
+/// 它不进 params）与 clap 从 snake_case 字段派生 kebab 长名各管一头。任何一头写歪都是静默失效：
+/// 长选项写成 `--parentId` 会破坏 CLI 表面的一致性，`Args` 结构漏写 rename_all 则让 core
+/// 读不到那个参数（flag 收下了、值丢在半路）。这里把 CLI 那一头钉住。
+#[test]
+fn cli_long_options_are_all_kebab_case() {
+    use clap::CommandFactory;
+    use kxtodo_core::cli::Cli;
+
+    fn walk(cmd: &clap::Command, out: &mut Vec<(String, String)>) {
+        let path = cmd.get_name().to_string();
+        for arg in cmd.get_arguments() {
+            for long in arg.get_long_and_visible_aliases().unwrap_or_default() {
+                out.push((path.clone(), long.to_string()));
+            }
+        }
+        for sub in cmd.get_subcommands() {
+            walk(sub, out);
+        }
+    }
+
+    let mut all = Vec::new();
+    walk(&Cli::command(), &mut all);
+    assert!(all.len() >= 100, "长选项总数应上百（实际 {}），遍历逻辑可能失效了", all.len());
+    for (path, long) in &all {
+        assert!(
+            !long.chars().any(|ch| ch.is_ascii_uppercase() || ch == '_'),
+            "`{path}` 的 `--{long}` 不是 kebab-case：CLI 长选项一律小写加连字符（camelCase 只属于 params 键与 JSON 输出）"
+        );
+    }
+}
+
+/// v0.8.3 review #11：`risk_for` 里曾一个 `sync.*` 分支都没有，`schema sync.pair` 报 risk "read"，
+/// 与 help 的「Risk: write」顶牛——Agent 照 schema 判断要不要先跟用户确认，就会静默跳过确认。
+#[test]
+fn sync_commands_report_their_real_risk() {
+    for command in ["sync.pair", "sync.configure", "sync.unpair", "sync.now", "sync.historyRemove"] {
+        assert_eq!(
+            kxtodo_core::schema::risk_for(command),
+            "write",
+            "`{command}` 是写动作，schema 不能报 read"
+        );
+        let schema = TestEnv::fresh().ok(&["schema", command]);
+        assert_eq!(schema["risk"], json!("write"), "`schema {command}` 的输出");
+    }
+    for command in ["sync.status", "sync.probe", "sync.discover", "sync.peers", "sync.history"] {
+        assert_eq!(kxtodo_core::schema::risk_for(command), "read", "`{command}` 是只读");
+    }
 }

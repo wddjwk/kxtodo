@@ -285,6 +285,15 @@
   box-shadow: 0 16px 50px rgb(0 0 0 / 16%);
 }
 
+/* 「日期与提醒」面板嵌在元数据浮层里：外框已经画过一遍边框与阴影，里层不再画 */
+.editor-meta-pop .date-reminder-panel {
+  width: 100%;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 .editor-emoji-grid-pop {
   display: grid;
   grid-template-columns: repeat(6, 34px);

@@ -12,7 +12,9 @@
 - [树](#树)
 - [⋯ 列表菜单](#-列表菜单)
 - [定时任务](#定时任务)
-- [工具箱（v0.7.5 起两端都有，注册表架构）](#工具箱v075-起两端都有注册表架构)
+- [工具箱（v0.7.5 起两端都有，注册表架构；v0.8.3 拆目录 + 可固定）](#工具箱v075-起两端都有注册表架构v083-拆目录--可固定)
+- [日期与提醒面板（v0.8.3，`TaskDateReminderPanel.svelte`）](#日期与提醒面板v083taskdatereminderpanelsvelte)
+- [色盘与取色器的统一纪律（v0.8.3）](#色盘与取色器的统一纪律v083)
 - [我的一天](#我的一天)
 - [日记（v0.6.5 引入，v0.6.6 拆文件 + 导入导出，`DiaryView.svelte` + `diary/`）](#日记v065-引入v066-拆文件--导入导出diaryviewsvelte--diary)
   - [头部是齿轮（v0.6.6）](#头部是齿轮v066)
@@ -59,9 +61,31 @@
 
 独立视图，卡片三态（compact/expanded/editing），新建后停在编辑态（ui.editing 持久化）。触发器 once/interval/calendar/condition；动作 脚本/可执行文件/通知；执行历史 `schedule logs`。
 
-### 工具箱（v0.7.5 起两端都有，注册表架构）
+**v0.8.3 起移动端也有这一页**（`caps.scheduler` 在移动端翻真，侧栏「定时任务」行随之出现）：移动端只允许 `Action::Notification`、不允许 `Trigger::Condition`（`ops_schedule.rs::ensure_action_supported`），因为脚本/可执行文件在 Android 上没有可执行的落点。**任务提醒不是定时任务**：它不建 `ScheduleEntry`、不进 `tasks.json`，只是借调度线程那 500ms 的节拍跑 `reminders::Engine::poll`（详见 `history/v0.8.3.md` 一）。
 
-`src/lib/tools/registry.ts` 是唯一注册点——每个工具一条 `ToolDefinition{id,name,desc,icon,available?(),load()}`：**平台可用性**用 `available`（吃 caps，缺省全平台；桌面独有/移动独有的工具各自把关）、**实现**用 `load` 动态 import（同一功能两端实现不同就注册各自的组件，壳不感知差异；纯前端小工具共用一份，随机数 = `tools/RandomTool.svelte`）。`ToolboxView.svelte` 只是壳：列表画 `availableTools()`、点开懒加载子视图挂进 `.toolbox-sub-host`、返回按钮收回——**新增工具 = 注册表加一项 + 写一个组件，壳与样式零改动**。路由与记账同口径：桌面 `stores.toolboxOpen` + `.app-shell.toolbox-open` 藏工作区（搜索态让回）、移动端历史栈 `toolbox` 层；侧栏行与设置「固定分组」勾选由 `caps.toolbox`（恒真）过滤。共享样式在 `toolbox.css`（桌面容器限宽 720px），移动端整页容器覆盖仍在 mobile.css。
+### 工具箱（v0.7.5 起两端都有，注册表架构；v0.8.3 拆目录 + 可固定）
+
+**目录与注册表分开（v0.8.3）**：`tools/catalog.ts` 只有 `id/name/desc`（`TOOL_CATALOG` + `isToolId` + `toolCatalogEntry`），`tools/registry.ts` 才是「图标 + `available()` + `load()` 动态 import」的注册点。拆开的理由很具体：侧栏的固定行也要认得工具 id，让 `nav.ts` 直接 import registry 会把 lucide 图标与所有工具的 chunk 拉进首屏链。`tools/navigation.ts` 管 `tool:<id>` ↔ 固定行。
+
+`ToolboxView.svelte` 只是壳：列表画 `availableTools()`、点开懒加载子视图挂进 `.toolbox-sub-host`、返回按钮收回——**新增工具 = 目录加一项 + 注册表加一项 + 写一个组件，壳与样式零改动**。v0.8.3 起卡片可**右键「固定此工具」**钉进侧栏固定区（`appearance.navItems` 里追加 `tool:<id>`，core 侧 `NAV_TOOL_IDS` 白名单校验），固定区支持**指针拖动排序**（`drop-before`/`drop-after` 落点线）与右键「取消固定」（`Pin` / `UnPin` 图标）；从固定行进来时子视图的返回按钮**整页收**（`fromPin`），从工具箱进来只收回列表。现有工具：随机数（`RandomTool`）、人民币大小写（`RmbTool`，双向、宽输入框 `.toolbox-text-input-wide`、支持汉字常显 `.toolbox-han-hint`）、草稿纸（`ScratchpadTool`，纯 textarea + 防抖自动保存到 `kxtodo-scratchpad-v1`，**不做任何渲染**；图标是手绘的 `ScratchpadIcon.svelte`）、文件传输助手（`TransferTool`，收发两栏 + 口令 + 逐文件进度 + 右上角 relay 自选）。
+
+路由与记账同口径：桌面 `stores.toolboxOpen` + `.app-shell.toolbox-open` 藏工作区（搜索态让回）、移动端历史栈 `toolbox` 层；侧栏行与设置「固定分组」勾选由 `caps.toolbox`（恒真）过滤。共享样式在 `toolbox.css`（桌面容器限宽 720px），移动端整页容器覆盖仍在 mobile.css。
+
+### 日期与提醒面板（v0.8.3，`TaskDateReminderPanel.svelte`）
+
+**一个组件、三个入口**：右键菜单「日期与提醒」（原「添加日期」）、卡片上点日期或时刻（`.task-date-popover`）、编辑器工具栏的日期按钮（`.editor-meta-pop`）。入口只挂组件并给 `onSave`/`onClear`/`onClose`；`embedded` prop 决定退到顶时是关自己还是交还宿主。
+
+自上而下：日历（`CalendarGrid.svelte`，与 `DatePicker` 共用一份实现）→ 时刻行（`Clock` 图标；无值时灰色占位「添加时间」，有值时显示时刻 + 清除叉）→ 提醒行（`Bell` 图标；占位「添加提醒」，已有一串胶囊、悬浮出叉，末尾加号 → 五项菜单）→ 底部「清除 / 保存」。
+
+几条**刻意**的交互口径：① **点日期不关面板**——它是多项配置的表单，不是一次性选择器，只有清除/保存或点外面才关；② 时刻的双轨滚轮默认停在当前时刻，底部「清除 / 确认」**都回上一级**（一个抹值一个写值）；③ 添加提醒菜单里「截止前一小时 / 截止前五分钟」**只在设了分钟时刻时可用**；④「自定义」是二级视图，顶上「日期 / 时间」两个标签页；⑤ 返回键/左上角返回**逐级退**：加提醒小菜单 → 自定义（回日历）→ 双轨（回主视图）→ 关面板。
+
+**日记不是这一套**（需求 10.6）：日记右键叫「修改日期」，只有日历、没有时刻行与提醒行（日记的时刻在 `createdAt` 里，不是提醒的依附对象），选完即把日记挪到那天。
+
+### 色盘与取色器的统一纪律（v0.8.3）
+
+**活值住在组件 state，只有 `change` 才写盘**：`<input type="color">` 的 `input` 事件在拖动过程里连发，逐次 `config.set` 会把 settings.json 的原子写打爆——用户看到的就是「自定义颜色保存失败：原子替换失败」。四处同一套写法（临期高亮四块、节点 UI 色、列表背景色、日记/记账外观）：`on:input` 只更新本地草稿（色块**实时**跟着变），`on:change`（松手）才提交一次。
+
+**临期高亮是四档**（已过期 / 今天 / 明天 / 后天，默认灰红黄蓝），色盘在 ⋯ 列表菜单里是一行四个色块 + 「默认」按钮（`.due-color-row`，flex nowrap）。档数是跨语言常量，改它要同步四处——见 `frontend.md` 与 `tests/frontend_contract.rs`。
 
 ### 我的一天
 

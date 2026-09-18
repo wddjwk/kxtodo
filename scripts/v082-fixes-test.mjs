@@ -2,13 +2,15 @@
 // 1  长 markdown 卡片点开**立刻**出完整可读正文（快速版同步上屏，代码高亮与公式随后异步补），
 //    短卡片仍走同步完整渲染，不为长文档付代价；
 // 2  折行卡片以展开态挂载也认得出「可折叠」（勾选圈画加号、双击能收起）；
-// 3  「添加日期」的精确到分钟勾选框：勾得上、不掉、时刻按钮跟着可用；已有时刻的任务
-//    打开浮层显示原时刻（不被 now 覆盖）；重载后时刻仍在（normalizeTask 不再丢 dueTime）；
+// 3  日期与时刻（v0.8.3 起这一套在「日期与提醒」面板里，勾选框换成了时刻行 + 双轨）：
+//    时刻能设进去、卡片上显示、重载后仍在（normalizeTask 不再丢 dueTime）、
+//    再开面板显示原时刻（不被 now 覆盖）；
 // 4  markdown 任务项：删除线只划当前行、子项缩进对齐父项文字、勾选框与文字同高居中、
 //    列表行距不超正文、点击勾选框写回源码；
 // 5  编辑器 Tab/Enter：整行缩进（含松散列表续行）、光标落在行尾、空项回车退一级、
 //    顶级空项回车清标识、有序列表按缩进层级重排编号；
-// 6  临期高亮设置：三档圆单选点得中、色盘三个色块 + 默认按钮同一行排完、默认配色红黄蓝；
+// 6  临期高亮设置：三档圆单选点得中、色盘四个色块（v0.8.3 加了「已过期」）+ 默认按钮
+//    同一行排完、默认配色灰红黄蓝；
 // 7  首帧缓存：状态缓存写入并被模块初始化读回（首帧种子），特性开关同样进首帧缓存；
 // 8  记账：换视图一律把滚动位置归零，日历 ↔ 统计 来回切时切换段控不跳位；
 // 9  超链接档位可逆：卡片 → 不渲染 → 标题 → 卡片，拨完就地生效（不必等 markdown 重渲）；
@@ -262,31 +264,42 @@ const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 
 }
 
 // ------------------------------------------------------------ 3 日期与时刻
+// v0.8.3 起这一套搬进了「日期与提醒」面板：没有「精确到分钟」勾选框了，时刻是面板里的
+// 一行（占位「添加时间」→ 点开双轨 → 确认）。这一节守住的是**当年那个 bug 的后果**：
+// 时刻必须真的落盘、卡片上要显示、重载后不能被 normalizeTask 抹掉、再开面板显示原时刻。
 {
   const { page, errors } = await freshPage(desktop);
   await seedTask(page, { markdown: "带时刻任务" });
   await page.locator(".task-card").click({ button: "right" });
   await page.waitForSelector(".context-menu", { timeout: 8000 });
-  await page.locator(".context-menu .menu-item-button", { hasText: "添加日期" }).first().click();
-  await page.waitForSelector(".task-menu-date .date-picker", { timeout: 8000 });
-  const tick = page.locator(".task-menu-date .dp-time-switch input");
-  check("精确到分钟初始未勾", !(await tick.isChecked()));
-  check("没勾时时刻按钮禁用", await page.locator(".task-menu-date .dp-time-trigger").isDisabled());
-  await tick.click();
-  await page.waitForTimeout(500);
-  check("勾上之后保持勾上（不被刷新抹掉）", await tick.isChecked().catch(() => false));
-  const clock = ((await page.textContent(".task-menu-date .dp-time-trigger strong").catch(() => "")) ?? "").trim();
-  check("时刻按钮跟着可用并显示当前时刻", /^\d{1,2}:\d{2}$/.test(clock), clock);
-  check("日历还在（没缩小/闪掉）", (await page.locator(".task-menu-date .dp-cell").count()) >= 28);
+  await page.locator(".context-menu .menu-item-button", { hasText: "日期与提醒" }).first().click();
+  await page.waitForSelector(".task-menu-date .date-reminder-panel", { timeout: 8000 });
+  check(
+    "没设时刻时是灰色占位「添加时间」",
+    ((await page.locator(".task-menu-date .dr-placeholder").first().textContent().catch(() => "")) ?? "").includes(
+      "添加时间"
+    )
+  );
   await page.locator(".task-menu-date .dp-cell.today").click();
-  await page.waitForTimeout(500);
-  await page.keyboard.press("Escape");
+  await page.waitForTimeout(400);
+  check("日历还在（没缩小/闪掉）", (await page.locator(".task-menu-date .dp-cell").count()) >= 28);
+  // 时刻：进双轨挑 09:30 再确认（`.dp-today` 是这一档的主按钮 = 确认 / 保存）
+  await page.locator(".task-menu-date .dr-row .dp-time-trigger").first().click();
+  await page.waitForSelector(".task-menu-date .dp-time-wheel", { timeout: 8000 });
+  await page.locator(".task-menu-date .time-col").first().locator(".time-cell", { hasText: /^09$/ }).click();
+  await page.locator(".task-menu-date .time-col").nth(1).locator(".time-cell", { hasText: /^30$/ }).click();
+  await page.locator(".task-menu-date .date-picker-actions .dp-today").click();
+  await page.waitForSelector(".task-menu-date .dr-row", { timeout: 8000 });
+  const clock = ((await page.locator(".task-menu-date .dr-row strong").first().textContent().catch(() => "")) ?? "").trim();
+  check("时刻行显示选定的时刻", clock === "09:30", clock);
+  await page.locator(".task-menu-date .date-picker-actions .dp-today").click();
   await page.waitForSelector(".context-menu", { state: "detached", timeout: 8000 });
+  await page.waitForTimeout(500);
   const stored = await readTask(page);
   const dueTime = String(stored?.dueTime ?? "");
   check(
     "选到分钟写进任务（dueDate + dueTime）",
-    Boolean(stored?.dueDate) && /^\d{1,2}:\d{2}$/.test(dueTime),
+    Boolean(stored?.dueDate) && dueTime === "09:30",
     `dueDate=${stored?.dueDate} dueTime=${stored?.dueTime}`
   );
   const label = (await page.locator(".task-due-date").textContent().catch(() => "")) ?? "";
@@ -299,14 +312,14 @@ const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 
   check("重载后时刻不被抹掉", reloaded.includes(dueTime), `label=${reloaded.trim()} dueTime=${dueTime}`);
   check("存下来的时刻没被 now 覆盖", String((await readTask(page))?.dueTime ?? "") === dueTime);
 
-  // 指定过时刻的任务：打开浮层显示原时刻，不是「现在」
+  // 指定过时刻的任务：打开面板显示原时刻，不是「现在」
   await page.locator(".task-card").click({ button: "right" });
   await page.waitForSelector(".context-menu", { timeout: 8000 });
-  await page.locator(".context-menu .menu-item-button", { hasText: "添加日期" }).first().click();
-  await page.waitForSelector(".task-menu-date .date-picker", { timeout: 8000 });
-  check("已存时刻：勾选框是勾上的", await page.locator(".task-menu-date .dp-time-switch input").isChecked());
-  const shown = ((await page.textContent(".task-menu-date .dp-time-trigger strong").catch(() => "")) ?? "").trim();
-  check("已存时刻：浮层显示原时刻", shown === dueTime, `shown=${shown} stored=${dueTime}`);
+  await page.locator(".context-menu .menu-item-button", { hasText: "日期与提醒" }).first().click();
+  await page.waitForSelector(".task-menu-date .date-reminder-panel", { timeout: 8000 });
+  const shown = ((await page.locator(".task-menu-date .dr-row strong").first().textContent().catch(() => "")) ?? "").trim();
+  check("已存时刻：面板显示原时刻", shown === dueTime, `shown=${shown} stored=${dueTime}`);
+  check("已存时刻：时刻行有清除叉", (await page.locator(".task-menu-date .dr-row-clear").count()) === 1);
   check("日期与时刻无脚本报错", errors.length === 0, errors[0] ?? "");
   await page.close();
 }
@@ -560,11 +573,11 @@ const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 
       inRow: kids.length > 0 && kids[kids.length - 1].right <= r.getBoundingClientRect().right + 1
     };
   });
-  check("色盘是三个色块 + 一个默认按钮", row?.count === 4, `count=${row?.count}`);
+  check("色盘是四个色块 + 一个默认按钮（v0.8.3 加了「已过期」档）", row?.count === 5, `count=${row?.count}`);
   check("色盘一行排完（不换行、不超出）", Boolean(row?.centered && row?.ordered && row?.inRow), J(row));
   check(
-    "默认配色是红黄蓝（今天红 / 明天黄 / 后天蓝）",
-    J(row?.colors) === J(["#d93025", "#eab308", "#3b82f6"]),
+    "默认配色是灰红黄蓝（已过期灰 / 今天红 / 明天黄 / 后天蓝）",
+    J(row?.colors) === J(["#808080", "#d93025", "#eab308", "#3b82f6"]),
     J(row?.colors)
   );
   check("临期高亮无脚本报错", errors.length === 0, errors[0] ?? "");

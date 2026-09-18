@@ -38,6 +38,17 @@
 
 > CLI 子命令是 kebab（`ledger account-add` 等；core 命令名仍 camel，`build_ledger_invocation` 做映射）。
 
+**参数名同一套口径（v0.8.3 全量核对过，125 个长选项无一例外）**：
+
+- **CLI 长选项一律 kebab-case**（`--entry-id` / `--due-date` / `--map-key`），由 clap 从 snake_case 字段自动派生；
+- **core 的 params 键与 JSON 输出一律 camelCase**（`entryId` / `dueDate`），靠每个 `*Args` 结构上的
+  `#[serde(rename_all = "camelCase")]` 转换——**新加 `Args` 结构漏写这一行 = 参数静默失效**
+  （flag 收下了，core 按 camel 键读不到值，既不报错也不生效）。唯一例外是 `GlobalArgs`，它不进 params。
+- 钉子：`tests/cli_misc.rs::cli_long_options_are_all_kebab_case` 遍历整棵 clap 树，任何长选项里出现
+  大写字母或下划线就红。camel 那一头没有测试能便宜地钉（要逐命令比对序列化结果），靠 code review。
+- `--parent`（ledger 分类，收**名字或 ID**）与 `--parent-id`（task 节点，只收 ID）刻意不同名：
+  语义不同就别共用一个名字，Agent 照着 help 写不会混。
+
 ## 确认门（high-risk-write）与退出码
 
 - **一个动作只有一道门**：记账的分发层 `ledger_dispatch` 对 add/transfer/modify/accountAdd/accountModify/categoryAdd/categoryModify 统一 `require_confirmation`，而 remove/accountRemove/categoryRemove/import 保留各自信息量更大的内部门。未带 `--yes` 返回**退出码 10**，文案明确告诉 Agent「金融数据敏感，先向用户说明这次增删改并得到同意」；只读动作不设门。全文见 `ledger.md` 的「CLI 改账本必须先过确认门（v0.7.2）」。

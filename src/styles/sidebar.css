@@ -181,6 +181,36 @@
   background: #ededed;
 }
 
+/* 固定区拖动排序（v0.8.3）：拖起来的行半透明，落点画一条主色横线。
+   横线用 ::after 而不是改布局，拖的时候行高不跳。 */
+.system-nav.nav-dragging .nav-row {
+  cursor: grabbing;
+}
+
+.nav-row.nav-drag-source {
+  opacity: 0.45;
+}
+
+.nav-row.drop-before::after,
+.nav-row.drop-after::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--accent, #2564cf);
+  pointer-events: none;
+}
+
+.nav-row.drop-before::after {
+  top: -2px;
+}
+
+.nav-row.drop-after::after {
+  bottom: -2px;
+}
+
 .active-rail {
   position: absolute;
   left: 4px;

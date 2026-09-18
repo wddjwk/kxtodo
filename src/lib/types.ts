@@ -15,6 +15,9 @@ export type AppNode = {
   collapsed?: boolean;
   cardStyle?: CardStyle;
   createdAt: string;
+  /** core 的 Node 有这一字段（同步 LWW 与「最近改过」排序都读它）；
+   *  normalize 漏掉就等于每次快照刷新都把它抹掉（`dueTime` 的同类，v0.8.3 补）。 */
+  updatedAt?: string;
 };
 
 /// 七彩虹 + 粉 + 灰 + 自定义（`custom` 必须配 `hex`，否则按 gray 渲染）
@@ -38,6 +41,18 @@ export type Tag = {
   hex?: string;
 };
 
+/**
+ * 任务提醒规则（与 core `model::Reminder` 同构，`kind` 是判别式）。
+ *
+ * - `absolute`：绝对时刻，`at` 是 RFC3339（core 落盘时规范化成 UTC 毫秒）
+ * - `beforeDue`：截止前 N 分钟（0 = 到点时），跟着 dueDate/dueTime 走
+ *
+ * 「哪一条已经响过」不进这个类型——那是本机 runtime 的台账，不参与同步。
+ */
+export type ReminderRule =
+  | { kind: "absolute"; at: string }
+  | { kind: "beforeDue"; minutes: number };
+
 export type Task = {
   id: string;
   nodeId: string;
@@ -50,6 +65,8 @@ export type Task = {
   dueDate?: string;
   /** 到期时刻 HH:MM；空/缺省 = 只精确到天 */
   dueTime?: string;
+  /** 提醒规则；空/缺省 = 没有提醒 */
+  reminders?: ReminderRule[];
   completedAt?: string;
   tags: Tag[];
   emojis: string[];
@@ -214,6 +231,8 @@ export type Settings = {
     themePresets: ThemePreset[];
     /** 预置标签：右键菜单「标签」面板里可一键添加的常用标签（跟着设置同步） */
     tagPresets: Tag[];
+    /** 日记专用预置标签（v0.8.3）：与 tagPresets 分开两套、分开展示 */
+    diaryTagPresets: Tag[];
     uiColors: Record<string, string>;
     /** 固定导航里显示哪些行、按什么顺序（id 见 nav.ts） */
     navItems: NavItemId[];
@@ -276,6 +295,11 @@ export type Settings = {
     syncLedger: boolean;
     intervalSeconds: number;
     reconnectSeconds: number;
+  };
+  /** 文件传输助手（v0.8.3）：本机设置，不参与同步 */
+  transfer: {
+    /** 自选 iroh relay（空 = 跟 p2p 同步同一个；disabled = 不用 relay） */
+    relay: string;
   };
   syncUpdatedAt?: string;
   updates: {

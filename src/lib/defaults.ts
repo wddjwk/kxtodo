@@ -32,6 +32,8 @@ import type {
   ThemePreset
 } from "./types";
 import { NAV_ITEM_IDS, normalizeNavItems, normalizeNavLayout } from "./nav";
+import { normalizeReminders } from "./reminders";
+import { DEFAULT_DUE_COLORS } from "./dueHighlight";
 
 const now = () => new Date().toISOString();
 
@@ -100,6 +102,7 @@ export const defaultSettings: Settings = {
     tagFontSize: 14,
     themePresets: themePresets.map((preset) => ({ ...preset })),
     tagPresets: [],
+    diaryTagPresets: [],
     dueColors: {},
     uiColors: {},
     navItems: [...NAV_ITEM_IDS],
@@ -149,6 +152,9 @@ export const defaultSettings: Settings = {
     syncLedger: true,
     intervalSeconds: 30,
     reconnectSeconds: 300
+  },
+  transfer: {
+    relay: ""
   },
   updates: {
     autoCheck: true
@@ -354,22 +360,27 @@ function normalizeNode(raw: unknown): AppNode | null {
     order: typeof source.order === "number" && Number.isFinite(source.order) ? source.order : undefined,
     collapsed: Boolean(source.collapsed),
     cardStyle: source.cardStyle === "card" ? "card" : undefined,
-    createdAt: typeof source.createdAt === "string" ? source.createdAt : now()
+    createdAt: typeof source.createdAt === "string" ? source.createdAt : now(),
+    updatedAt: typeof source.updatedAt === "string" ? source.updatedAt : undefined
   };
 }
 
 /**
- * 临期高亮配色：`{ 节点id: ["#rrggbb", "#rrggbb", "#rrggbb"] }`。
- * 只收合法三色（长度不足或非法一律丢弃整条）——配色是「用户点出来的」，
- * 缺一项就退回默认，比留一半自定义一半默认更好预期。
+ * 临期高亮配色：`{ 节点id: ["#rrggbb" × 4] }`（已过期/今天/明天/后天，
+ * 顺序与 `dueHighlight.ts::DEFAULT_DUE_COLORS` 一致，core 的 `expect_due_colors` 同口径）。
+ * 只收合法四色（长度不足或非法一律丢弃整条）——配色是「用户点出来的」，
+ * 缺一项就整条退回默认，比留一半自定义一半默认更好预期。
  */
 function normalizeDueColors(raw: unknown): Record<string, string[]> {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  // 档位数量以默认配色为准（v0.8.3 从三档变四档：加了「已过期」）——写死一个 3 的话，
+  // 用户挑的第四色每次快照刷新都被截掉，症状与当年 normalizeTask 漏 dueTime 一模一样
+  const slots = DEFAULT_DUE_COLORS.length;
   const out: Record<string, string[]> = {};
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
     if (!Array.isArray(value)) continue;
-    const colors = value.slice(0, 3).map((item) => normalizeTagHex(item));
-    if (colors.length !== 3 || colors.some((item) => item === null)) continue;
+    const colors = value.slice(0, slots).map((item) => normalizeTagHex(item));
+    if (colors.length !== slots || colors.some((item) => item === null)) continue;
     out[key] = colors as string[];
   }
   return out;
@@ -392,9 +403,12 @@ const TAG_COLORS: TagColor[] = [
  * `#rrggbb` 归一（带不带 `#`、大小写都行）；非法回 null。
  * 与 Rust 的 `model::tag_hex` 同一口径——两端渲染同一个标签必须得到同一种颜色。
  */
+/** `#rrggbb` 归一（与 core 的 `model::tag_hex` 同口径：前导 `#` 全都剥、大小写不敏感、
+ *  只认六位十六进制）。两边不一致的症状是「一端收一端拒」——`##ff0000` 在 core 那边
+ *  是合法颜色、在前端会被退成灰色，同步过来就掉色。 */
 export function normalizeTagHex(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
-  const lower = raw.trim().replace(/^#/, "").toLowerCase();
+  const lower = raw.trim().replace(/^#+/, "").toLowerCase();
   return /^[0-9a-f]{6}$/.test(lower) ? `#${lower}` : null;
 }
 
@@ -455,6 +469,9 @@ function normalizeTask(raw: unknown, fallbackNodeId: string): Task | null {
     // 刷新（normalizeState）都会把它从前端状态里抹掉——卡片上的时刻显示不出来、
     // 「精确到分钟」勾选框勾上又弹回。normalize 的字段清单必须与 Task 类型对齐。
     dueTime: typeof source.dueTime === "string" && source.dueTime ? source.dueTime : undefined,
+    // 提醒规则与 dueTime 是同一类陷阱：core 有、这里漏，任何一次快照刷新就把用户设的
+    // 提醒静默抹掉（界面胶囊消失，下一次写回还顺手把 core 里的也清空）。
+    reminders: normalizeReminders(source.reminders),
     completedAt: typeof source.completedAt === "string" ? source.completedAt : source.completed ? (typeof source.updatedAt === "string" ? source.updatedAt : now()) : undefined,
     tags: normalizeTags(source.tags),
     emojis: normalizeEmojis(source.emojis, source.emoji),
@@ -1121,6 +1138,7 @@ export function normalizeSettings(raw: unknown): Settings {
       themePresets: normalizeThemePresets(source?.appearance?.themePresets),
       // 预置标签最多 64 条（与 core 的 expect_tag_presets 同一个上限）
       tagPresets: normalizeTags(source?.appearance?.tagPresets).slice(0, 64),
+      diaryTagPresets: normalizeTags(source?.appearance?.diaryTagPresets).slice(0, 64),
       dueColors: normalizeDueColors(source?.appearance?.dueColors),
       uiColors: normalizeUiColors(source?.appearance?.uiColors),
       navItems: normalizeNavItems(source?.appearance?.navItems),
@@ -1195,6 +1213,9 @@ export function normalizeSettings(raw: unknown): Settings {
         typeof source?.sync?.reconnectSeconds === "number" && Number.isFinite(source.sync.reconnectSeconds)
           ? Math.min(86400, Math.max(5, Math.round(source.sync.reconnectSeconds)))
           : 300
+    },
+    transfer: {
+      relay: typeof source?.transfer?.relay === "string" ? source.transfer.relay : ""
     },
     updates: {
       autoCheck: typeof source?.updates?.autoCheck === "boolean" ? source.updates.autoCheck : true

@@ -59,10 +59,18 @@
 
   onMount(() => {
     window.addEventListener("keydown", handleKeydown, true);
-    return addBackInterceptor(() => {
+    const release = addBackInterceptor(() => {
       close();
       return true;
     });
+    // **两个都要注销**：写成 `return addBackInterceptor(...)` 只释放了返回键拦截器，
+    // capture 阶段的 keydown 永远留在 window 上——开过一次图片预览之后，全应用的
+    // Escape 都被这个已卸载的组件吃掉（编辑器、菜单一个都关不掉），方向键还在拨
+    // 一个不存在的轮播。同目录 CategoryDrilldown 是正确写法。
+    return () => {
+      window.removeEventListener("keydown", handleKeydown, true);
+      release();
+    };
   });
 </script>
 

@@ -91,6 +91,11 @@ X / 遮罩 / Esc / 移动端返回 / 组件卸载一律丢弃草稿——卡片�
 
 CLI 子命令是 kebab（`ledger account-add` 等；core 命令名仍 camel，`build_ledger_invocation` 做映射）。
 
+`ledger categories` 的输出是**平铺数组但按树序**（v0.8.3）：大类后面紧跟它自己的子分类，每项带
+`depth`（0/1）与 `parentId`；在此之前只按 `order` 排，子分类会插到别的大类前面（「公交地铁」排在
+「交通」之前），Agent 得自己按 parentId 聚合。改这段排序要连 `tests/cli_ledger.rs::categories_list_is_tree_ordered_with_depth` 一起看。
+`ledger stats` 不带 `--side` 时 `categories` 两侧混排（先收入后支出），`percent` 是**该侧内部**占比——help 与 Agent skill 都写明了，别把两侧相加。
+
 ### ledger.css 的盒子 / 字号 / 按钮约定
 
 `ledger.css` 照抄 diary.css 的盒子与字号算法（全部 `calc(var(--font-control) ± N)`，**不许写死像素**——v0.7.0 就是字号各写各的被用户点名；引文是 v0.7.0 原文，**v0.7.3 起 ledger.css 的基变量是 `--font-ledger`**，v0.8.0 起全仓 CSS 除 `base.css` 的变量定义外不再有任何 `font-size: Npx`，见 `invariants.md` 第七节）且**绝不写 `.ledger-view > *`**（只显式列举 `.ledger-month-bar`/`.ledger-scroll` 抬层）；按钮只许 `settings-button`（危险动作加 `.danger` 变体）与 `menu-action-button` 两类。

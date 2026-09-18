@@ -340,16 +340,16 @@ fn due_colors_whole_map_write() {
         "config",
         "set",
         "appearance.dueColors",
-        "{\"entry-abc\":[\"#d93025\",\"#eab308\",\"#3b82f6\"]}",
+        "{\"entry-abc\":[\"#808080\",\"#d93025\",\"#eab308\",\"#3b82f6\"]}",
     ]);
     let got = env.ok(&["config", "get", "appearance.dueColors"]);
     assert_eq!(
         got["value"]["entry-abc"],
-        json!(["#d93025", "#eab308", "#3b82f6"])
+        json!(["#808080", "#d93025", "#eab308", "#3b82f6"])
     );
     // 共享子集：写 dueColors 要刷新设置的 LWW 时间戳（多端同步靠它）
     assert!(kxtodo_core::ops_config::is_shared_settings_path("appearance.dueColors"));
-    // 校验：三色不齐 / 非法色值都拒绝
+    // 校验：四色不齐（含 v0.8.3 之前的三色写法）/ 非法色值都拒绝
     env.err(
         &["config", "set", "appearance.dueColors", "{\"e\":[\"#d93025\"]}"],
         2,
@@ -359,7 +359,17 @@ fn due_colors_whole_map_write() {
             "config",
             "set",
             "appearance.dueColors",
-            "{\"e\":[\"red\",\"#eab308\",\"#3b82f6\"]}",
+            // 三色的老写法：加了「已过期」这一档之后必须写四个，少一个就拒
+            "{\"e\":[\"#d93025\",\"#eab308\",\"#3b82f6\"]}",
+        ],
+        2,
+    );
+    env.err(
+        &[
+            "config",
+            "set",
+            "appearance.dueColors",
+            "{\"e\":[\"red\",\"#d93025\",\"#eab308\",\"#3b82f6\"]}",
         ],
         2,
     );

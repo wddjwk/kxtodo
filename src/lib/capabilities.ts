@@ -6,7 +6,10 @@ const mobile = get(isMobile);
 export const isMobilePlatform = mobile;
 
 export const caps = {
-  scheduler: !mobile,
+  // 调度引擎在移动端同样进程内跑（v0.8.3：任务提醒与定时通知都要它）。
+  // 跑不了的动作类型（脚本 / 外部程序 / 条件探针）由 core 的
+  // ops_schedule::ensure_platform_supported 明确拒绝，界面侧也只给「通知」这一种。
+  scheduler: true,
   trayLifecycle: !mobile,
   globalShortcuts: !mobile,
   windowZoom: !mobile,

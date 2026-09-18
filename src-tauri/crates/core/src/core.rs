@@ -402,6 +402,7 @@ fn task_import_markdown(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) ->
                     planned_date: None,
                     due_date: None,
                     due_time: String::new(),
+                    reminders: Vec::new(),
                     tags: Vec::new(),
                     emojis: Vec::new(),
                 };
@@ -500,13 +501,16 @@ fn task_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<
                 planned_date: None,
                 due_date: None,
                 due_time: String::new(),
+                reminders: crate::reminders::parse_rules_opt(params.get("reminders"))?
+                    .unwrap_or_default(),
                 tags: Vec::new(),
                 emojis: Vec::new(),
             };
             if let Some(raw) = param_str(params, "plannedDate") {
                 add.planned_date = Some(crate::time::parse_date(&raw)?);
             }
-            if let Some(raw) = param_str(params, "dueDate") {
+            // 空串 = 没有日期（与 dueTime 同一口径）：前端「清除日期」就是发空串
+            if let Some(raw) = param_str(params, "dueDate").filter(|raw| !raw.trim().is_empty()) {
                 add.due_date = Some(crate::time::parse_date(&raw)?);
             }
             // 到期时刻：HH:MM 或 HH:MM:SS（秒舍掉），空串 = 只精确到天
@@ -869,6 +873,7 @@ fn task_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResu
                 planned_date: None,
                 due_date: None,
                 due_time: None,
+                reminders: crate::reminders::parse_rules_opt(params.get("reminders"))?,
                 add_tags: Vec::new(),
                 remove_tag_ids: Vec::new(),
                 replace_tags: None,
@@ -881,7 +886,13 @@ fn task_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResu
             } else if let Some(raw) = param_str(params, "plannedDate") {
                 changes.planned_date = Some(Some(crate::time::parse_date(&raw)?));
             }
-            if param_bool(params, "clearDueDate").unwrap_or(false) {
+            // 空串 / null 与 clearDueDate 同义：前端「清除日期」发的是空串，
+            // 与 dueTime 的「空串 = 清除」保持同一口径，免得调用方记两套约定
+            if param_bool(params, "clearDueDate").unwrap_or(false)
+                || params
+                    .get("dueDate")
+                    .is_some_and(|value| value.is_null() || value.as_str() == Some(""))
+            {
                 changes.due_date = Some(None);
             } else if let Some(raw) = param_str(params, "dueDate") {
                 changes.due_date = Some(Some(crate::time::parse_date(&raw)?));
@@ -993,6 +1004,15 @@ fn task_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResu
                 outcome.revision,
                 vec![required_str(params, "id")?],
             );
+            // 跨条目移动后把插图一起搬过去（sweep_entries = 移动前/后的 node_id）：
+            // 插图目录与节点绑定，不搬的话移走任务的插图会立刻被下面这把扫帚判成孤儿真删。
+            if let [old_node, new_node] = sweep_entries.as_slice() {
+                if old_node != new_node {
+                    if let Ok(item) = task_ops::get_item_typed(&file, &sweep_id) {
+                        task_ops::migrate_item_images(ctx.repo, &item.markdown, old_node, new_node);
+                    }
+                }
+            }
             sweep_entry_images(ctx, &file, sweep_entries);
             if outcome.replayed {
                 return Ok(outcome.replay_summary.unwrap_or(updated));

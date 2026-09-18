@@ -24,6 +24,11 @@
 
   /** 把标签加到当前条目上（各宿主的写路径不同，由它们自己实现） */
   export let onAdd: (tag: { color: TagColor; hex?: string; text?: string }) => void;
+  /**
+   * 预置标签用哪一套（v0.8.3）：工作事项与日记的常用标签根本不是一批，
+   * 混在一套里两边都变难用——日记编辑器/日记菜单传 "diary"，其余传 "task"。
+   */
+  export let domain: "task" | "diary" = "task";
   /** 预置标签面板要窄一些（编辑器里的浮窗比菜单小） */
   export let compact = false;
 
@@ -35,10 +40,13 @@
   let color: TagColor = "yellow";
   let hex = "";
 
-  $: presets = $appSettings.appearance.tagPresets;
+  $: presets = domain === "diary"
+    ? $appSettings.appearance.diaryTagPresets
+    : $appSettings.appearance.tagPresets;
+  $: presetsPath = domain === "diary" ? "appearance.diaryTagPresets" : "appearance.tagPresets";
 
   async function writePresets(next: typeof presets): Promise<void> {
-    const ok = await setConfig("appearance.tagPresets", next);
+    const ok = await setConfig(presetsPath, next);
     if (!ok) showToast("预置标签保存失败");
   }
 
@@ -119,7 +127,7 @@
   <div class="tag-editor-input-row">
     <input
       bind:value={draft}
-      placeholder="勾选将新标签自动添加到预置"
+      placeholder="勾选后自动添加到预置"
       maxlength={20}
       on:keydown={handleKeydown}
     />

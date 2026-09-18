@@ -9,7 +9,6 @@
   import MenuSeparator from "../menu/MenuSeparator.svelte";
   import { MOOD_PRESETS, WEATHER_PRESETS } from "../diary";
   import TagMenuPanel from "../TagMenuPanel.svelte";
-  import { clockOf } from "../clock";
   import type { DiaryEntry, Tag, TagColor } from "../types";
 
   /**
@@ -33,14 +32,11 @@
     dispatch("edit", entry.id);
   }
 
+  /** 日记的右键菜单只改归属日期（需求 10.6：与任务条目区分开，只展示日历）。
+   *  写作时刻住在 createdAt 里，要改去日记编辑器——那里仍是「日历 + 时刻」的完整浮层。 */
   function setDate(date: string): void {
     close();
     void updateDiaryEntry(entry.id, { date });
-  }
-
-  /** 只拨时刻：菜单留着（滚轮可能还要再动一下）。日记的时刻住在 createdAt 里。 */
-  function setTime(time: string): void {
-    void updateDiaryEntry(entry.id, { time });
   }
 
   function setMood(emoji: string): void {
@@ -80,10 +76,7 @@
     <div slot="submenu" class="task-menu-date">
       <DatePicker
         value={entry.date}
-        time={clockOf(entry.createdAt)}
-        withTime
         on:select={(event) => setDate(event.detail)}
-        on:selectTime={(event) => setTime(event.detail)}
         on:clear={() => setDate(today)}
         on:close={requestSubmenuClose}
       />
@@ -92,7 +85,7 @@
   <MenuItem icon={TagIcon} label="标签">
     <!-- svelte-ignore a11y_click_events_has_key_events a11y_no_static_element_interactions -->
     <div slot="submenu" class="tag-editor-panel" on:click|stopPropagation>
-      <TagMenuPanel onAdd={(tag) => withTags([...entry.tags, newTag(tag)])} />
+      <TagMenuPanel domain="diary" onAdd={(tag) => withTags([...entry.tags, newTag(tag)])} />
     </div>
   </MenuItem>
   <MenuItem icon={Smile} label="心情">

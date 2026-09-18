@@ -5,7 +5,9 @@ use serde_json::{json, Map, Value};
 
 use crate::error::{CoreError, CoreResult};
 use crate::ids::{gen_id, is_reserved_id};
-use crate::model::{DataFile, Item, Node, NodeKind, Tag, TagColor, SYSTEM_NODE_IDS};
+use crate::model::{
+    DataFile, Item, Node, NodeKind, Reminder, Tag, TagColor, SYSTEM_NODE_IDS,
+};
 use crate::time::{now_iso, parse_date};
 
 // ---------------------------------------------------------------------------
@@ -341,11 +343,22 @@ pub struct AddItemParams {
     pub due_date: Option<String>,
     /// 到期时刻 HH:MM（已规范化；空 = 只精确到天）
     pub due_time: String,
+    /// 提醒规则（未规范化，`add_item` 里连同日期时刻一起验证）
+    pub reminders: Vec<Reminder>,
     pub tags: Vec<TagInput>,
     pub emojis: Vec<String>,
 }
 
-pub fn add_item(data: &mut DataFile, params: AddItemParams) -> CoreResult<Item> {
+pub fn add_item(data: &mut DataFile, mut params: AddItemParams) -> CoreResult<Item> {
+    // 日期、时刻、提醒是一个事务：任何一样不合法都不许建出半条任务
+    crate::reminders::normalize_metadata(
+        &mut params.due_date,
+        &mut params.due_time,
+        &mut params.reminders,
+        None,
+        false,
+        chrono::Utc::now(),
+    )?;
     if params.entry_id.trim().is_empty() {
         return Err(CoreError::validation("ENTRY_REQUIRED", "--entry-id 必填"));
     }
@@ -370,6 +383,7 @@ pub fn add_item(data: &mut DataFile, params: AddItemParams) -> CoreResult<Item> 
         planned_date: params.planned_date,
         due_date: params.due_date,
         due_time: params.due_time,
+        reminders: params.reminders,
         completed_at: if completed { Some(now.clone()) } else { None },
         tags: params.tags.iter().map(build_tag).collect(),
         emojis: params.emojis,
@@ -485,6 +499,8 @@ pub fn item_view(data: &DataFile, item: &Item) -> Value {
         "plannedDate": item.planned_date,
         "dueDate": item.due_date,
         "dueTime": item.due_time,
+        // 同上：形状固定，没有提醒就是空数组，客户端不必写两套分支
+        "reminders": item.reminders,
     });
     if let Some(value) = &item.completed_at {
         view["completedAt"] = json!(value);
@@ -990,12 +1006,54 @@ pub struct ItemChanges {
     pub due_date: Option<Option<String>>,
     /// 到期时刻（已规范化的 HH:MM；空串 = 清除，回到只精确到天）
     pub due_time: Option<String>,
+    /// 提醒规则整体替换（None = 这次不动提醒）
+    pub reminders: Option<Vec<Reminder>>,
     pub add_tags: Vec<TagInput>,
     pub remove_tag_ids: Vec<String>,
     pub replace_tags: Option<Vec<TagInput>>,
     pub add_emojis: Vec<String>,
     pub remove_emojis: Vec<String>,
     pub replace_emojis: Option<Vec<String>>,
+}
+
+/// 任务跨条目移动时，把它 markdown 引用到的插图从旧条目目录搬到新条目目录。
+///
+/// 为什么必须搬：`image_gc` 的孤儿判定是「按当前 node_id 收集引用集」——插图文件位置
+/// 与节点绑定是这套清理的前提。任务移走而图留在原地，旧目录的引用集里就没有它了，
+/// 紧跟在写盘后面的 `sweep_entry_images` 会把它当孤儿**真删**（不可逆的数据丢失）。
+/// 在扫描侧开洞（比如「跨节点也算引用」）会让孤儿永远清不掉，所以修在搬迁这一侧。
+///
+/// 同名插图是内容寻址的不可变 blob：目标已存在就跳过，绝不覆盖。
+/// 返回搬动张数；一切 IO 失败都吞掉（搬迁失败不该让已经成功的保存报错）。
+pub fn migrate_item_images(
+    repo: &crate::repo::Repository,
+    markdown: &str,
+    from_node: &str,
+    to_node: &str,
+) -> usize {
+    if from_node == to_node {
+        return 0;
+    }
+    let source = repo.layout.entry_img_dir(from_node);
+    let target = repo.layout.entry_img_dir(to_node);
+    let mut moved = 0;
+    for name in crate::image_gc::referenced_basenames([markdown]) {
+        let from = source.join(&name);
+        if !from.is_file() {
+            continue;
+        }
+        let to = target.join(&name);
+        if to.exists() {
+            continue;
+        }
+        if std::fs::create_dir_all(&target).is_err() {
+            continue;
+        }
+        if std::fs::rename(&from, &to).is_ok() {
+            moved += 1;
+        }
+    }
+    moved
 }
 
 pub fn modify_item(data: &mut DataFile, id: &str, changes: ItemChanges) -> CoreResult<Item> {
@@ -1007,6 +1065,36 @@ pub fn modify_item(data: &mut DataFile, id: &str, changes: ItemChanges) -> CoreR
     }
     if let Some(entry_id) = &changes.entry_id {
         ensure_entry_target(data, entry_id)?;
+    }
+    // 日期 / 时刻 / 提醒是一个事务，**在碰到任务之前**整体验证：验证失败时任务必须
+    // 一点没动，否则会出现「日期改成了、提醒被拒了」的半条数据。
+    let previous = find_item(data, id).expect("item checked above");
+    let metadata_touched =
+        changes.due_date.is_some() || changes.due_time.is_some() || changes.reminders.is_some();
+    let mut due_date = changes
+        .due_date
+        .clone()
+        .unwrap_or_else(|| previous.due_date.clone());
+    let mut due_time = changes
+        .due_time
+        .clone()
+        .unwrap_or_else(|| previous.due_time.clone());
+    let mut reminders = changes
+        .reminders
+        .clone()
+        .unwrap_or_else(|| previous.reminders.clone());
+    if metadata_touched {
+        // 清掉日期或时刻时，「截止前」提醒失去依附对象，一并清掉
+        let clear_dependent = matches!(changes.due_date, Some(None))
+            || changes.due_time.as_ref().is_some_and(|time| time.trim().is_empty());
+        crate::reminders::normalize_metadata(
+            &mut due_date,
+            &mut due_time,
+            &mut reminders,
+            Some(previous),
+            clear_dependent,
+            chrono::Utc::now(),
+        )?;
     }
     // Compute move info before the mutable borrow of the item.
     let moved = changes
@@ -1069,12 +1157,11 @@ pub fn modify_item(data: &mut DataFile, id: &str, changes: ItemChanges) -> CoreR
         item.planned_date = planned;
         touched = true;
     }
-    if let Some(due) = changes.due_date {
-        item.due_date = due;
-        touched = true;
-    }
-    if let Some(due_time) = changes.due_time {
+    if metadata_touched {
+        // 三样一起落：上面已经按事务验证并规范化过（含「清日期顺带清时刻与截止前提醒」）
+        item.due_date = due_date;
         item.due_time = due_time;
+        item.reminders = reminders;
         touched = true;
     }
     if let Some(tags) = changes.replace_tags {

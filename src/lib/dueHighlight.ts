@@ -4,9 +4,10 @@
  * 纯逻辑单独成模块（不 import 任何 stores / DOM），为的是能跑单元测试——
  * 分档、渐变插值、自定义配色三件事都是「算错了也看不出来，但用户会觉得颜色乱」的类型。
  *
- * 档位：
- * - `today`（今天到期）→ 用户配的第一个色（默认红）；
- * - `tomorrow`／`after`（明天／后天）→ 第二、三个色（默认黄、蓝）；
+ * 档位（v0.8.3 起四档，配色数组顺序即菜单色块顺序）：
+ * - `overdue`（已过期）→ 第一个色（默认灰）；
+ * - `today`（今天到期）→ 第二个色（默认红）；
+ * - `tomorrow`／`after`（明天／后天）→ 第三、四个色（默认黄、蓝）；
  * - `none` → 不画高亮。
  *
  * 两种模式（特性开关里三选一：不高亮 / 配色 / 渐变色）：
@@ -22,10 +23,11 @@
  */
 import type { Settings, Task } from "./types";
 
-export type DueBucket = "today" | "tomorrow" | "after" | "none";
+export type DueBucket = "overdue" | "today" | "tomorrow" | "after" | "none";
 
-/** 默认配色：红 / 黄 / 蓝，与「今天/明天/后天」对应 */
-export const DEFAULT_DUE_COLORS = ["#d93025", "#eab308", "#3b82f6"];
+/** 默认配色：灰（已过期）/ 红（今天）/ 黄（明天）/ 蓝（后天）。
+ *  顺序与三点菜单里的色块顺序一致：已过期在「今天」左侧。 */
+export const DEFAULT_DUE_COLORS = ["#808080", "#d93025", "#eab308", "#3b82f6"];
 
 /** 不足这个时长（毫秒）且设了时刻 → 加重档 */
 const STRONG_WINDOW_MS = 5 * 60 * 60 * 1000;
@@ -81,17 +83,6 @@ export function darkenHex(hex: string, amount = 0.18): string {
   return toHexColor([rgb[0] * (1 - amount), rgb[1] * (1 - amount), rgb[2] * (1 - amount)]);
 }
 
-/** 提亮：往白色靠一档 */
-export function lightenHex(hex: string, amount = 0.5): string {
-  const rgb = parseHexColor(hex);
-  if (!rgb) return hex;
-  return toHexColor([
-    rgb[0] + (255 - rgb[0]) * amount,
-    rgb[1] + (255 - rgb[1]) * amount,
-    rgb[2] + (255 - rgb[2]) * amount
-  ]);
-}
-
 // ---------------------------------------------------------------------------
 // 分档与配色
 // ---------------------------------------------------------------------------
@@ -118,12 +109,14 @@ export function dueMoment(task: Pick<Task, "dueDate" | "dueTime">): number | nul
   return new Date(year, month - 1, day, 23, 59, 59, 0).getTime();
 }
 
-/** 档位：按到期日与今天的差算（0/1/2 天）；更远的、已过期的、没有日期的都不高亮。 */
+/** 档位：先分「已过期」，再按到期日与今天的差算（0/1/2 天）；更远的、没有日期的不高亮。 */
 export function dueBucketOf(task: Pick<Task, "dueDate" | "dueTime">, now = new Date()): DueBucket {
   const moment = dueMoment(task);
   if (moment === null) return "none";
   const start = dayStart(now);
-  if (moment < start) return "none"; // 已逾期：那是另一套语义（计划内分组的「已逾期」），不掺和
+  // 已过期（v0.8.3 第四档）：默认灰色。只精确到天的任务按当天 23:59:59 算，
+  // 所以「今天到期」要跨过午夜才变灰，不会一早就灰掉。
+  if (moment < now.getTime()) return "overdue";
   const days = Math.floor((moment - start) / 86_400_000);
   if (days <= 0) return "today";
   if (days === 1) return "tomorrow";
@@ -131,12 +124,12 @@ export function dueBucketOf(task: Pick<Task, "dueDate" | "dueTime">, now = new D
   return "none";
 }
 
-/** 用户没配过就用默认三色；配过但长度不足/非法也逐项回退。 */
-export function dueColorsOf(colors: string[] | undefined): [string, string, string] {
-  return [0, 1, 2].map((index) => {
+/** 用户没配过就用默认四色；配过但长度不足/非法也逐项回退。 */
+export function dueColorsOf(colors: string[] | undefined): [string, string, string, string] {
+  return [0, 1, 2, 3].map((index) => {
     const candidate = colors?.[index];
     return candidate && parseHexColor(candidate) ? candidate : DEFAULT_DUE_COLORS[index];
-  }) as [string, string, string];
+  }) as [string, string, string, string];
 }
 
 /**
@@ -155,13 +148,17 @@ export function dueHighlightOf(
   if (bucket === "none") return null;
   const moment = dueMoment(task)!;
   const palette = dueColorsOf(colors);
-  const index = bucket === "today" ? 0 : bucket === "tomorrow" ? 1 : 2;
+  const index = bucket === "overdue" ? 0 : bucket === "today" ? 1 : bucket === "tomorrow" ? 2 : 3;
+  // 已过期不参与「5 小时内加重」与渐变插值：它已经过去了，灰就是它的全部语义
+  if (bucket === "overdue") {
+    return { bucket, strong: false, color: palette[0] };
+  }
   // 「不足 5 小时」：只认设了具体时刻的（只有日期的按当天 23:59:59 算，谈不上几小时）
   const hasClock = /^\d{1,2}:\d{2}/.test((task.dueTime ?? "").trim());
   const strong = hasClock && moment - now.getTime() <= STRONG_WINDOW_MS;
 
   if (mode === "solid") {
-    return { bucket, strong, color: strong ? darkenHex(palette[0], 0.16) : palette[index] };
+    return { bucket, strong, color: strong ? darkenHex(palette[1], 0.16) : palette[index] };
   }
 
   // 渐变：**按实际剩余时间在三个锚点之间线性插值**。锚点是「今天 0 点 / 明天 0 点 /
@@ -182,8 +179,8 @@ export function dueHighlightOf(
   const at = Math.min(anchor2, Math.max(anchor0, moment));
   const color =
     at <= anchor1
-      ? mixHex(palette[0], palette[1], (at - anchor0) / (anchor1 - anchor0))
-      : mixHex(palette[1], palette[2], (at - anchor1) / (anchor2 - anchor1));
+      ? mixHex(palette[1], palette[2], (at - anchor0) / (anchor1 - anchor0))
+      : mixHex(palette[2], palette[3], (at - anchor1) / (anchor2 - anchor1));
   return { bucket, strong, color };
 }
 

@@ -155,3 +155,46 @@ fn ledger_write_sweeps_ledger_images() {
     env.dispatch("ledger.remove", json!({ "id": entry_id }));
     assert!(!img_dir.join("keep.png").exists(), "删掉账目后它的附图也被清掉");
 }
+
+#[test]
+fn moving_a_task_between_entries_takes_its_images() {
+    // v0.8.3 review #5：插图目录与节点绑定，而孤儿判定是「按**当前** node_id 收集引用集」。
+    // 任务移走而图留在原地 → 旧目录里它没人引用了 → 紧跟保存的那把扫帚把它当孤儿真删
+    // （不可逆的数据丢失）。搬迁在 core 一侧做（task_ops::migrate_item_images）。
+    let env = Env::new();
+    let from = env.dispatch("task.add", json!({ "type": "entry", "name": "原条目" }));
+    let to = env.dispatch("task.add", json!({ "type": "entry", "name": "新条目" }));
+    let from_id = from["id"].as_str().unwrap().to_string();
+    let to_id = to["id"].as_str().unwrap().to_string();
+    let item = env.dispatch(
+        "task.add",
+        json!({ "type": "item", "entryId": from_id, "markdown": "带图的卡片 ![](pic.png)" }),
+    );
+    let item_id = item["id"].as_str().unwrap().to_string();
+
+    let root = env.dir.path().join("img").join("data");
+    let from_dir = root.join(&from_id);
+    let to_dir = root.join(&to_id);
+    std::fs::create_dir_all(&from_dir).expect("mkdir from");
+    std::fs::write(from_dir.join("pic.png"), b"pic").expect("write pic");
+    std::fs::write(from_dir.join("other.png"), b"other").expect("write other");
+
+    env.dispatch(
+        "task.modify",
+        json!({ "type": "item", "id": item_id, "entryId": to_id }),
+    );
+
+    assert!(to_dir.join("pic.png").exists(), "搬走的任务把它引用的图一起带走");
+    assert!(!from_dir.join("pic.png").exists(), "旧目录里不再留一份（留着就成孤儿）");
+    assert!(!from_dir.join("other.png").exists(), "没人引用的图照旧被扫掉");
+
+    // 「释放空间」的扫描结果里一个孤儿都不该有——搬完再跑 clean 也不会删用户的图
+    let usage = env.dispatch("storage.usage", json!({}));
+    assert_eq!(
+        usage["orphanImages"]["count"], json!(0),
+        "移动过的任务插图不算孤儿：{}",
+        usage
+    );
+    env.dispatch("storage.clean", json!({}));
+    assert!(to_dir.join("pic.png").exists(), "clean 之后图还在");
+}

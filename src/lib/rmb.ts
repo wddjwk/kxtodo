@@ -122,6 +122,23 @@ const REVERSE_UNITS: Record<string, number> = {
 const REVERSE_MAX_WHOLE = 1_000_000_000_000;
 
 /**
+ * 反向识别认得的汉字，给界面**常显**用（需求 1：「下面用小字直接列出支持的所有汉字，
+ * 繁体用括号，不要等失败才列出」）。括号里是同一读音的其它写法（繁简变体）。
+ *
+ * 与 `REVERSE_DIGITS` / `REVERSE_UNITS` 是同源的两份表达（一份给解析、一份给人看），
+ * 有 `supported_han_hint_matches_reverse_tables` 单测逐字钉住两边不漂。
+ */
+export const SUPPORTED_HAN: readonly { group: string; items: readonly string[] }[] = [
+  {
+    group: "数字",
+    items: ["零(〇)", "一(壹)", "二(贰/貳/两/兩)", "三(叁/参/參)", "四(肆)", "五(伍)", "六(陆/陸)", "七(柒)", "八(捌)", "九(玖)"]
+  },
+  { group: "单位", items: ["十(拾)", "百(佰)", "千(仟)", "万", "亿"] },
+  { group: "结尾", items: ["元(圆/圓)", "角", "分", "整(正)"] },
+  { group: "符号", items: ["负(負)"] }
+];
+
+/**
  * 整数部分：亿 → 万 → 节内（仟佰拾）逐层累加。
  * 「拾伍」这种省掉「一」的口语写法（十位上没数字按 1 算）也认。
  */

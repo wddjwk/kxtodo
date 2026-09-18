@@ -166,10 +166,13 @@ impl HostCore {
         }
     }
 
+    /// 启动调度 + 提醒引擎。**幂等**：桌面在 boot 时调、移动端在 init_mobile_core 里调，
+    /// 重复调用不该起第二条线程（两条线程会抢同一份提醒台账，同一条提醒响两次）。
     pub fn start_scheduler(self: &Arc<Self>) {
-        let handle = crate::scheduler::start(self.clone());
         if let Ok(mut slot) = self.scheduler.write() {
-            *slot = Some(handle);
+            if slot.is_none() {
+                *slot = Some(crate::scheduler::start(self.clone()));
+            }
         }
     }
 
@@ -395,7 +398,7 @@ impl HostCore {
     }
 
     /// Idle check for hidden hosts (§4.4): no notifications, no GUI, no enabled
-    /// schedules, no running children → exit.
+    /// schedules, no pending reminders, no running children → exit.
     pub fn hidden_host_should_exit(&self) -> bool {
         if self.notifications.active_count() > 0 {
             return false;
@@ -408,8 +411,9 @@ impl HostCore {
             .read()
             .ok()
             .and_then(|slot| {
-                slot.as_ref()
-                    .map(|scheduler| !scheduler.running_ids().is_empty())
+                slot.as_ref().map(|scheduler| {
+                    !scheduler.running_ids().is_empty() || scheduler.has_reminder_work()
+                })
             })
             .unwrap_or(false)
         {

@@ -158,7 +158,7 @@ pub enum Commands {
     },
     /// 记账：收支流水、资金账户、两级分类、统计与 Excel 导入导出
     #[command(
-        long_about = "记账与 diary 平行但自成一域：账本住在自己的 ledger.json 里（第五个领域文件）。\n金额一律按「元」输入（CLI 与 Excel 都是两位小数的元），core 内部存整数分。\n转账（transfer）不计入收支统计，只改两个账户的余额。\n\n**金融数据敏感**：所有写动作（add/transfer/modify/remove/account-add/account-modify/account-remove/\ncategory-add/category-modify/category-remove/import）一律 high-risk-write——必须先向用户说明这次改动\n并得到明确同意，再带 --yes 执行；未带 --yes 返回退出码 10。\n读动作（get/list/accounts/categories/stats/balance/export）永远不需要确认。\n\n动作：\n  add            记一笔（--kind expense|income，--amount 元，--account 账户名或 ID）\n  transfer       账户间转账（--from --to --amount）\n  get / list     读取 / 列出（--date 某天、--from --to 区间、--kind、--account、--category；list 另有 --limit/--cursor/--all，不传 --limit 返回全部）\n  modify         修改一笔\n  remove         删除一笔\n  accounts       列出账户与各自余额、净资产\n  account-add / account-modify / account-remove   账户管理（名下有账的账户不让删）\n  categories     列出两级分类（--side expense|income）\n  category-add / category-modify / category-remove 分类管理（删大类连带子分类）\n  stats          统计：--month 2026-09 或 --year 2026 或 --from --to；输出合计、逐日/逐月序列（区间 ≤62 天按天且 series 严格跟着 --from/--to，更长按月）、大类占比\n  balance        资产：各账户余额 + 净资产/总资产/总负债\n  export         导出 zip（内含 kxtodo-ledger.xlsx：说明/账户/分类/账目 四张表）\n  import         从导出的 zip 或裸 xlsx 导入（账户/分类按名字合并，缺的自动建）\n\n示例：\n  kxtodo-cli ledger add --amount 30 --account 微信 --category 午餐 --note 小面 --yes\n  kxtodo-cli ledger add --kind income --amount 18155 --account 储蓄卡 --category 工资薪金 --yes\n  kxtodo-cli ledger transfer --from 储蓄卡 --to 微信 --amount 2000 --yes\n  kxtodo-cli ledger list --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli ledger stats --month 2026-09\n  kxtodo-cli ledger balance\n  kxtodo-cli ledger export --out kxtodo-ledger.zip\n  kxtodo-cli ledger export --out 2026-09.zip --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli ledger import --file kxtodo-ledger.zip --yes"
+        long_about = "记账与 diary 平行但自成一域：账本住在自己的 ledger.json 里（第五个领域文件）。\n金额一律按「元」输入（CLI 与 Excel 都是两位小数的元），core 内部存整数分。\n转账（transfer）不计入收支统计，只改两个账户的余额。\n\n**金融数据敏感**：所有写动作（add/transfer/modify/remove/account-add/account-modify/account-remove/\ncategory-add/category-modify/category-remove/import）一律 high-risk-write——必须先向用户说明这次改动\n并得到明确同意，再带 --yes 执行；未带 --yes 返回退出码 10。\n读动作（get/list/accounts/categories/stats/balance/export）永远不需要确认。\n\n动作：\n  add            记一笔（--kind expense|income，--amount 元，--account 账户名或 ID）\n  transfer       账户间转账（--from --to --amount）\n  get / list     读取 / 列出（--date 某天、--from --to 区间、--kind、--account、--category；list 另有 --limit/--cursor/--all，不传 --limit 返回全部）\n  modify         修改一笔\n  remove         删除一笔\n  accounts       列出账户与各自余额、净资产\n  account-add / account-modify / account-remove   账户管理（名下有账的账户不让删）\n  categories     列出分类（--side expense|income）：平铺数组按树序排列——大类后面紧跟它自己的子分类，\n                 每项带 depth（0 大类 / 1 子分类）与 parentId，不必自己聚合\n  category-add / category-modify / category-remove 分类管理（删大类连带子分类）\n  stats          统计：--month 2026-09 或 --year 2026 或 --from --to；输出合计、逐日/逐月序列（区间 ≤62 天按天且 series 严格跟着 --from/--to，更长按月）、大类占比\n                 （不带 --side 时收入与支出混在同一个 categories 数组里，percent 按侧各自合计 100%，别相加）\n  balance        资产：各账户余额 + 净资产/总资产/总负债\n  export         导出 zip（内含 kxtodo-ledger.xlsx：说明/账户/分类/账目 四张表）\n  import         从导出的 zip 或裸 xlsx 导入（账户/分类按名字合并，缺的自动建）\n\n示例：\n  kxtodo-cli ledger add --amount 30 --account 微信 --category 午餐 --note 小面 --yes\n  kxtodo-cli ledger add --kind income --amount 18155 --account 储蓄卡 --category 工资薪金 --yes\n  kxtodo-cli ledger transfer --from 储蓄卡 --to 微信 --amount 2000 --yes\n  kxtodo-cli ledger list --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli ledger stats --month 2026-09\n  kxtodo-cli ledger balance\n  kxtodo-cli ledger export --out kxtodo-ledger.zip\n  kxtodo-cli ledger export --out 2026-09.zip --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli ledger import --file kxtodo-ledger.zip --yes"
     )]
     Ledger {
         #[command(subcommand)]
@@ -249,7 +249,7 @@ pub enum TaskAction {
     /// 新增 category、entry 或 item（Risk: write）
     #[command(
         visible_alias = "create",
-        long_about = "Risk: write\n\n新增对象。--type category/entry 需要 --name；--type item 需要 --entry-id 与 --markdown/--markdown-file。\n\n互斥：--markdown 与 --markdown-file 二选一。\n输出：创建后的完整资源（含系统生成的 ID）。\n\n示例：\n  kxtodo-cli task add --type category --name \"2026\"\n  kxtodo-cli task add --type entry --name \"0727-0731\" --parent-id category-xxxx\n  kxtodo-cli task add --type item --entry-id entry-xxxx --markdown \"完成 XXX 需求\" --due-date 2026-07-31 --tag \"blue:需求\"\n\n建议：Agent 调用使用 --idempotency-key 防重试重复创建。"
+        long_about = "Risk: write\n\n新增对象。--type category/entry 需要 --name；--type item 需要 --entry-id 与 --markdown/--markdown-file。\n\n互斥：--markdown 与 --markdown-file 二选一。\n输出：创建后的完整资源（含系统生成的 ID）。\n\n提醒（item，可重复）：--reminder due-60 = 截止前 60 分钟（due-0 = 到点时；需同时给 --due-date 与 --due-time）；\n--reminder +1h / --reminder 2026-09-20T09:00:00+08:00 = 绝对时刻（相对写法从现在起算）。\n提醒只在本机进程活着时才可能触发，已经错过的不补发。\n\n示例：\n  kxtodo-cli task add --type category --name \"2026\"\n  kxtodo-cli task add --type entry --name \"0727-0731\" --parent-id category-xxxx\n  kxtodo-cli task add --type item --entry-id entry-xxxx --markdown \"完成 XXX 需求\" --due-date 2026-07-31 --tag \"blue:需求\"\n  kxtodo-cli task add --type item --entry-id entry-xxxx --markdown \"提交周报\" --due-date 2026-09-20 --due-time 18:00 --reminder due-60\n\n建议：Agent 调用使用 --idempotency-key 防重试重复创建。"
     )]
     Add(TaskAddArgs),
     /// 按稳定 ID 获取完整对象（Risk: read）
@@ -271,7 +271,7 @@ pub enum TaskAction {
     /// 修改或移动对象（Risk: write）
     #[command(
         visible_alias = "update",
-        long_about = "Risk: write\n\n按稳定 ID 修改。category/entry 支持 --name/--icon/--parent-id（移动）/--collapsed；\nitem 支持 --entry-id（移动）、--markdown、布尔状态、日期（--clear-* 清空）、标签与 emoji 管理。\n\n标签：--add-tag \"blue:需求\"（可重复）；--remove-tag <tag-id>；--replace-tags \"red:a\" \"blue:b\"（整体替换）。\nEmoji：--add-emoji / --remove-emoji / --replace-emojis。\n完成语义：勾选完成时记录 completedAt，取消时清除；有效修改更新 updatedAt。"
+        long_about = "Risk: write\n\n按稳定 ID 修改。category/entry 支持 --name/--icon/--parent-id（移动）/--collapsed；\nitem 支持 --entry-id（移动）、--markdown、布尔状态、日期（--clear-* 清空）、标签与 emoji 管理。\n\n标签：--add-tag \"blue:需求\"（可重复）；--remove-tag <tag-id>；--replace-tags \"red:a\" \"blue:b\"（整体替换）。\nEmoji：--add-emoji / --remove-emoji / --replace-emojis。\n提醒（item）：--reminder **整体替换**（不给 = 不动；只写 --reminder 不带值 = 清空全部），规格同 task add。\n完成语义：勾选完成时记录 completedAt，取消时清除；有效修改更新 updatedAt。\n\n示例：\n  kxtodo-cli task modify --type item --id task-xxxx --reminder due-60 --reminder +1h"
     )]
     Modify(TaskModifyArgs),
     /// 删除对象（Risk: high-risk-write）
@@ -332,6 +332,10 @@ pub struct TaskAddArgs {
     /// 到期时刻 HH:MM[:SS]（规范化为 HH:MM；与 --due-date 搭配，不给 = 只精确到天）
     #[arg(long, value_name = "time")]
     pub due_time: Option<String>,
+    /// 提醒（可重复）。due-<分钟> = 截止前 N 分钟（due-0 = 到点时，需 --due-date 与 --due-time）；
+    /// 其余按绝对时刻解析：RFC3339（2026-09-20T09:00:00+08:00）或相对写法（+30m/+1h/+2d）
+    #[arg(long = "reminder", value_name = "spec")]
+    pub reminders: Vec<String>,
     /// 标签 <color>:<text>（可重复；颜色 red/yellow/blue/green/gray）
     #[arg(long = "tag", value_name = "color:text")]
     pub tags: Vec<String>,
@@ -553,6 +557,10 @@ pub struct TaskModifyArgs {
     /// 到期时刻 HH:MM[:SS]（规范化为 HH:MM；传空串清除，回到只精确到天）
     #[arg(long, value_name = "time")]
     pub due_time: Option<String>,
+    /// 整体替换提醒列表（不给 = 不动；只写 --reminder 不带值 = 清空）。
+    /// 规格同 task add：due-<分钟> 或绝对时刻（RFC3339 / +30m/+1h/+2d）
+    #[arg(long = "reminder", value_name = "spec", num_args = 0..)]
+    pub reminders: Option<Vec<String>>,
     /// 清空计划日期
     #[arg(long)]
     pub clear_planned_date: bool,
@@ -801,7 +809,7 @@ pub enum LedgerAction {
     Accounts,
     /// 新增资金账户（Risk: high-risk-write）
     #[command(
-        long_about = "Risk: high-risk-write\n\n--kind 是自由字符串（v0.7.4 起不再限枚举；预置清单见界面或 ledger icon-list 的 accountGroups），\n类型为 credit（信用卡）的账户负余额计入总负债。\n--initial 是期初余额（元，可为负）。\n未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger account-add --name 招商储蓄卡 --kind debit --initial 1234.56 --yes"
+        long_about = "Risk: high-risk-write\n\n--kind 是自由字符串（v0.7.4 起不再限枚举；预置清单见界面或 ledger icon-list 的 accountGroups），\n类型为 credit（信用卡）的账户负余额计入总负债。\n--initial 是期初余额（元，可为负；负数写 --initial -1500.00 或 --initial=-1500.00 都认）。\n未带 --yes 返回退出码 10（金融数据敏感，需先与用户确认）。\n\n示例：kxtodo-cli ledger account-add --name 招商储蓄卡 --kind debit --initial 1234.56 --yes"
     )]
     #[command(name = "account-add")]
     AccountAdd(LedgerAccountAddArgs),
@@ -843,7 +851,7 @@ pub enum LedgerAction {
     AccountTypeRemove(LedgerIdArgs),
     /// 列出两级分类（Risk: read）
     #[command(
-        long_about = "Risk: read\n\n--side expense|income 只看一侧；输出含 parentId（空 = 大类）。\n\n示例：kxtodo-cli ledger categories --side expense"
+        long_about = "Risk: read\n\n--side expense|income 只看一侧（不给 = 两侧都列，先支出后收入）。\n输出是**平铺数组**，但顺序就是层级：每个大类后面紧跟它自己的子分类，同层按 order。\n每项带 depth（0 = 大类，1 = 子分类）与 parentId（null = 大类），不必自己按 parentId 聚合。\n\n示例：kxtodo-cli ledger categories --side expense"
     )]
     Categories(LedgerCategoriesArgs),
     /// 新增分类（Risk: high-risk-write）
@@ -872,7 +880,7 @@ pub enum LedgerAction {
     IconList,
     /// 收支统计（Risk: read）
     #[command(
-        long_about = "Risk: read\n\n--month 2026-09 / --year 2026 / --from --to 三选一（都不给 = 全量）。\n输出：range（from/to/grain/label）、合计（收入/支出/结余/转账）、逐日或逐月序列、大类占比（含笔数与百分比）。\ngrain 与 series 的横轴：区间不超过 62 天（约两个月）按 day，series 严格逐日枚举 --from..--to（含两端、空档补零）；\n更长的区间按 month 逐月枚举。门槛与 GUI 的统计视图同一个数（core 有测试钉住），两边不会给出不同粒度。\n不给 --from/--to 的开区间按账目里出现过的日期/月份收表，不枚举空档。\n--side 只统计一侧的占比。\n\n示例：\n  kxtodo-cli ledger stats --month 2026-09\n  kxtodo-cli ledger stats --year 2026 --side expense\n  kxtodo-cli ledger stats --from 2026-09-14 --to 2026-09-21   # series 就是这 8 天，不是整月\n  kxtodo-cli ledger stats --from 2026-09-01 --to 2026-10-31 --jq \".data.series\"   # 跨月也逐日（61 天）"
+        long_about = "Risk: read\n\n--month 2026-09 / --year 2026 / --from --to 三选一（都不给 = 全量）。\n输出：range（from/to/grain/label）、合计（收入/支出/结余/转账）、逐日或逐月序列、大类占比（含笔数与百分比）。\ngrain 与 series 的横轴：区间不超过 62 天（约两个月）按 day，series 严格逐日枚举 --from..--to（含两端、空档补零）；\n更长的区间按 month 逐月枚举。门槛与 GUI 的统计视图同一个数（core 有测试钉住），两边不会给出不同粒度。\n不给 --from/--to 的开区间按账目里出现过的日期/月份收表，不枚举空档。\ncategories 是大类占比（子分类金额并进大类）。**不带 --side 时两侧混在同一个数组里**（先收入后支出），\n每项带 side 字段，percent 是**该侧内部**的占比——两侧各自合计 100%，别把收入占比和支出占比相加（会得出 200%）。\n要单侧就带 --side expense|income。\n\n示例：\n  kxtodo-cli ledger stats --month 2026-09\n  kxtodo-cli ledger stats --year 2026 --side expense\n  kxtodo-cli ledger stats --from 2026-09-14 --to 2026-09-21   # series 就是这 8 天，不是整月\n  kxtodo-cli ledger stats --from 2026-09-01 --to 2026-10-31 --jq \".data.series\"   # 跨月也逐日（61 天）"
     )]
     Stats(LedgerStatsArgs),
     /// 资产总览（Risk: read）
@@ -1476,7 +1484,10 @@ pub enum SyncAction {
         long_about = "Risk: read\n\n在固定 UDP 端口 52177 上广播/组播一次查询，收集局域网内主机（内置服务器或独立 kxtodo-server）\n的单播应答，再用 /healthz 复核。发现端口与主机 TCP 端口无关（应答里带真实 TCP 端口），\n但主机必须监听在非回环地址上、且 UDP 52177 可用；否则只能手填 ip:port 走自建服务方式。\n\n输出 name / host / port / url / instanceId：局域网方式用 name 选定主机\n（sync configure --lan-peer <name> 或 sync pair --lan-peer <name>），\n自建服务方式用 url 作为 --server 的值。"
     )]
     Discover(SyncDiscoverArgs),
-    /// 立即执行一次（Risk: high-risk-write；仅代码执行类需要 --yes）
+    /// 立即执行一次（Risk: write）
+    #[command(
+        long_about = "Risk: write\n\n立刻跑一轮同步（推拉 + 图片），不需要 --yes：它只跟已配对的账户说话，不改配对本身。\n同步范围与节奏沿用当前配置（要改先 sync configure）。暂停状态下报 SYNC_PAUSED（退出码 4）。\n改了盘上的数据就会叫醒常驻的 GUI 回刷（五个域都发事件）。"
+    )]
     Now,
     /// 调整通信方式/主机角色/同步范围/开关/间隔（Risk: write）
     #[command(

@@ -7,7 +7,7 @@
    * 子视图不含返回按钮——那是壳（ToolboxView）的事。
    */
   import { Banknote, Copy } from "@lucide/svelte";
-  import { formatYuanNumber, fromChineseYuan, toChineseYuan } from "../rmb";
+  import { formatYuanNumber, fromChineseYuan, toChineseYuan, SUPPORTED_HAN } from "../rmb";
   import { copyText } from "../clipboard";
 
   let amount = "";
@@ -41,12 +41,18 @@
   <div class="toolbox-field-row">
     <span>{reverse ? "中文金额" : "金额（元）"}</span>
     <input
-      class="toolbox-text-input"
+      class="toolbox-text-input toolbox-text-input-wide"
       type="text"
       inputmode="text"
       placeholder="1234.56 或 壹仟贰佰叁拾肆元伍角陆分"
       bind:value={amount}
     />
+  </div>
+  <!-- 支持的汉字常显（需求 1）：不要等输错了才告诉用户认得哪些字 -->
+  <div class="toolbox-han-hint">
+    {#each SUPPORTED_HAN as group (group.group)}
+      <span><strong>{group.group}</strong>：{group.items.join("　")}</span>
+    {/each}
   </div>
   {#if invalid}
     <p class="toolbox-empty">

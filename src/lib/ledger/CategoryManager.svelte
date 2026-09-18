@@ -60,19 +60,29 @@
       ? LEDGER_ICON_CHOICES
       : LEDGER_ICON_GROUPS.find((group) => group.name === activeGroup)?.icons ?? LEDGER_ICON_CHOICES;
 
+  /** 打开时直接落在表单上（资产/统计页的「新建分类」入口）：用户没见过列表面板，
+   *  返回就该直接关掉浮层回到他来时的页面。与 AccountManager 同一套语义（v0.8.3 统一）。 */
+  const startedOutsideList = startWithAdd;
+
+  /** 退一级：表单 → 列表 → 关浮层。**返回键与 Escape 共用这一条**，别各写一份。 */
+  function stepBack(): void {
+    if (formOpen) {
+      if (startedOutsideList) onClose();
+      else closeForm();
+      return;
+    }
+    onClose();
+  }
+
   onMount(() => {
     if (startWithAdd) {
       if (startSide) side = startSide;
       beginAdd(startParentId);
     }
-    // 安卓返回键：这个浮层在最上面时先收自己（表单 → 列表 → 关），
+    // 安卓返回键：这个浮层在最上面时先收自己（层级见 stepBack），
     // 否则返回会把底下的页面/记账面板弹掉，浮层却留在原地
     return addBackInterceptor(() => {
-      if (formOpen) {
-        closeForm();
-        return true;
-      }
-      onClose();
+      stepBack();
       return true;
     });
   });
@@ -149,8 +159,7 @@
     if (event.key === "Escape" && !event.isComposing && event.keyCode !== 229) {
       event.preventDefault();
       event.stopPropagation();
-      if (formOpen) closeForm();
-      else onClose();
+      stepBack();
     } else if (event.key === "Enter" && formOpen && !event.isComposing && event.keyCode !== 229) {
       const element = event.target as HTMLElement | null;
       if (element?.tagName === "INPUT") {
@@ -165,7 +174,15 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="editor-overlay ledger-overlay" use:imeInset on:pointerdown={handleBackdrop} on:contextmenu|preventDefault|stopPropagation>
+<!-- click 不再往上冒：LedgerView.closeOverlays 现在也收这个浮层，而 App 的
+     on:click={closeOverlays} 会让「在浮层里点一下」把自己关掉（同 LedgerImagePreview 的写法） -->
+<div
+  class="editor-overlay ledger-overlay"
+  use:imeInset
+  on:pointerdown={handleBackdrop}
+  on:click|stopPropagation
+  on:contextmenu|preventDefault|stopPropagation
+>
   <div
     class="editor-dialog ledger-sheet ledger-manager"
     style={`--accent: ${accent}`}

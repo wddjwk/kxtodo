@@ -103,6 +103,16 @@ pub enum Domain {
 }
 
 impl Domain {
+    /// 全部五个领域。发「说不清具体是哪个域」的事件时用（同步一轮可能改了任何一域）：
+    /// 前端按域拉快照，多报一个域只是多带一份载荷，漏报一个域就是界面停在旧数据上。
+    pub const ALL: [Domain; 5] = [
+        Domain::Data,
+        Domain::Settings,
+        Domain::Schedule,
+        Domain::Diary,
+        Domain::Ledger,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Domain::Data => "data",

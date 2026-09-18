@@ -4,9 +4,12 @@
 // mobile/浏览器：legacy commit 路径（本地全量保存），行为与 v8 一致。
 // ---------------------------------------------------------------------------
 
-import { get } from "svelte/store";
-import type { AppNode, AppState, CardStyle, DiaryEntry, LedgerAccount, LedgerAccountKind, LedgerAccountType, LedgerBook, LedgerCategory, LedgerEntry, LedgerKind, LedgerSide, ListBackground, ScheduledTask, SchedulerState, Settings, SyncMode, Tag, TagColor, Task } from "./types";
+import { get, type Writable } from "svelte/store";
+import type { AppNode, AppState, CardStyle, DiaryEntry, LedgerAccount, LedgerAccountKind, LedgerAccountType, LedgerBook, LedgerCategory, LedgerEntry, LedgerKind, LedgerSide, ListBackground, ReminderRule, ScheduledTask, SchedulerState, Settings, SyncMode, Tag, TagColor, Task } from "./types";
+import { navToolId, type NavItemId } from "./nav";
+import type { ToolId } from "./tools/catalog";
 import { accountBalance } from "./ledger";
+import { remindersParam } from "./reminders";
 import {
   appState, appSettings, commit, commitDiary, commitLedger, commitScheduler, commitSettings,
   coreMode, createDiaryId, createTaskId, diaryEntries, editBaseUpdatedAt, ledgerData, markEditStart, clearEditBase, rebaseEditBase,
@@ -45,6 +48,37 @@ async function report(error: unknown, fallback: string): Promise<null> {
     showToast(`${fallback}：${String(error)}`);
   }
   return null;
+}
+
+/**
+ * 乐观更新 + 失败回滚（「先本地生效再落盘」那批包装器共用）。
+ *
+ * 为什么必须回滚：`gui.*` 命令**不发域事件**（纯 UI / 结构写），失败之后不会有任何快照来
+ * 纠正界面——不回滚就是界面停在乐观值、与盘上的状态**永久分叉**，直到重启（v0.8.3 review #10）。
+ * `gui.apply-tree-order` 的 TREE_ORDER_MISMATCH 是设计内失败（并发拖动 / 外部改过树），最容易撞上；
+ * `task.modify` 那几条虽然发域事件，但失败时什么都没写，也就没有事件来纠正。
+ *
+ * 回滚前先判「这期间是不是又被改过」：store 是不可变更新，比对**对象身份**就够——
+ * 身份还是我们乐观写进去的那一份才回滚，否则说明用户已经又动过了，别把后一次改动也抹掉
+ * （与 `setConfig` 的回滚同一套语义）。
+ */
+async function withRollback<S>(
+  store: Writable<S>,
+  label: string,
+  mutate: () => void,
+  run: () => Promise<unknown>
+): Promise<boolean> {
+  const before = get(store);
+  mutate();
+  const ours = get(store);
+  try {
+    await run();
+    return true;
+  } catch (error) {
+    store.update((current) => (current === ours ? before : current));
+    await report(error, label);
+    return false;
+  }
 }
 
 function findTask(id: string): Task | undefined {
@@ -93,15 +127,17 @@ export async function toggleCategory(nodeId: string, collapsed: boolean): Promis
 
 export async function setNodeIcon(nodeId: string, icon: string): Promise<void> {
   if (coreMode) {
-    appState.update((s) => ({
-      ...s,
-      nodes: s.nodes.map((node) => (node.id === nodeId ? { ...node, icon } : node))
-    }));
-    try {
-      await coreDispatch("task.modify", { type: findNode(nodeId)?.kind ?? "entry", id: nodeId, icon });
-    } catch (error) {
-      await report(error, "图标保存失败");
-    }
+    const kind = findNode(nodeId)?.kind ?? "entry";
+    await withRollback(
+      appState,
+      "图标保存失败",
+      () =>
+        appState.update((s) => ({
+          ...s,
+          nodes: s.nodes.map((node) => (node.id === nodeId ? { ...node, icon } : node))
+        })),
+      () => coreDispatch("task.modify", { type: kind, id: nodeId, icon })
+    );
     return;
   }
   commit({
@@ -116,17 +152,18 @@ export async function setNodeCardStyle(nodeId: string, cardStyle: CardStyle): Pr
   if (!node || node.kind !== "entry") return;
   const next = cardStyle === "card" ? "card" : "todo";
   if (coreMode) {
-    appState.update((s) => ({
-      ...s,
-      nodes: s.nodes.map((item) =>
-        item.id === nodeId ? { ...item, cardStyle: next === "card" ? "card" : undefined } : item
-      )
-    }));
-    try {
-      await coreDispatch("task.modify", { type: node.kind, id: nodeId, cardStyle: next });
-    } catch (error) {
-      await report(error, "分组类型保存失败");
-    }
+    await withRollback(
+      appState,
+      "分组类型保存失败",
+      () =>
+        appState.update((s) => ({
+          ...s,
+          nodes: s.nodes.map((item) =>
+            item.id === nodeId ? { ...item, cardStyle: next === "card" ? "card" : undefined } : item
+          )
+        })),
+      () => coreDispatch("task.modify", { type: node.kind, id: nodeId, cardStyle: next })
+    );
     return;
   }
   commit({
@@ -229,15 +266,16 @@ export async function renameNode(nodeId: string, name: string): Promise<void> {
   const node = findNode(nodeId);
   if (!node || node.kind === "system") return;
   if (coreMode) {
-    appState.update((s) => ({
-      ...s,
-      nodes: s.nodes.map((item) => (item.id === nodeId ? { ...item, name: trimmed } : item))
-    }));
-    try {
-      await coreDispatch("task.modify", { type: node.kind, id: nodeId, name: trimmed });
-    } catch (error) {
-      await report(error, "重命名失败");
-    }
+    await withRollback(
+      appState,
+      "重命名失败",
+      () =>
+        appState.update((s) => ({
+          ...s,
+          nodes: s.nodes.map((item) => (item.id === nodeId ? { ...item, name: trimmed } : item))
+        })),
+      () => coreDispatch("task.modify", { type: node.kind, id: nodeId, name: trimmed })
+    );
     return;
   }
   commit({
@@ -293,15 +331,18 @@ export async function deleteNodeCascade(nodeId: string): Promise<void> {
 /** 拖拽/移动分组：nodes 已是目标顺序，parentChanges 记录 parentId 变化。 */
 export async function applyTreeOrder(orderedNodes: AppNode[], parentChanges: Record<string, string | null>): Promise<void> {
   if (coreMode) {
-    appState.update((s) => ({ ...s, nodes: orderedNodes }));
-    try {
-      await coreDispatch("gui.apply-tree-order", {
-        orderedIds: orderedNodes.map((node) => node.id),
-        parentChanges
-      });
-    } catch (error) {
-      await report(error, "移动失败");
-    }
+    // 这一条最容易失败（TREE_ORDER_MISMATCH 是设计内的并发保护），失败必须把树退回去：
+    // 界面留在乐观顺序、盘上是另一个顺序，用户下一次拖动就是在错的基础上再叠一层
+    await withRollback(
+      appState,
+      "移动失败",
+      () => appState.update((s) => ({ ...s, nodes: orderedNodes })),
+      () =>
+        coreDispatch("gui.apply-tree-order", {
+          orderedIds: orderedNodes.map((node) => node.id),
+          parentChanges
+        })
+    );
     return;
   }
   commit({ ...state(), nodes: orderedNodes });
@@ -320,6 +361,8 @@ export type TaskDraft = {
   dueDate?: string;
   /** 到期时刻 HH:MM；空 = 只精确到天 */
   dueTime?: string;
+  /** 提醒规则；空 = 没有提醒 */
+  reminders?: ReminderRule[];
   tags?: Tag[];
   emojis?: string[];
 };
@@ -337,6 +380,7 @@ export async function addTask(entryId: string, draft: TaskDraft): Promise<Task |
         plannedDate: draft.plannedDate,
         dueDate: draft.dueDate,
         dueTime: draft.dueTime,
+        reminders: remindersParam(draft.reminders ?? []),
         tags: (draft.tags ?? []).map(tagParam),
         emojis: draft.emojis ?? []
       });
@@ -350,6 +394,7 @@ export async function addTask(entryId: string, draft: TaskDraft): Promise<Task |
         plannedDate: draft.plannedDate,
         dueDate: draft.dueDate,
         dueTime: draft.dueTime,
+        reminders: draft.reminders ?? [],
         completedAt: draft.completed ? new Date().toISOString() : undefined,
         tags: draft.tags ?? [],
         emojis: draft.emojis ?? [],
@@ -373,6 +418,7 @@ export async function addTask(entryId: string, draft: TaskDraft): Promise<Task |
     plannedDate: draft.plannedDate,
     dueDate: draft.dueDate,
     dueTime: draft.dueTime,
+    reminders: draft.reminders ?? [],
     completedAt: draft.completed ? new Date().toISOString() : undefined,
     tags: draft.tags ?? [],
     emojis: draft.emojis ?? [],
@@ -393,6 +439,11 @@ export type TaskChanges = {
   plannedDate?: string | null;
   dueDate?: string | null;
   dueTime?: string | null;
+  /**
+   * 提醒规则，**整体替换**语义（给什么就是什么）；空数组 = 清空全部提醒。
+   * `undefined` = 这次不动提醒——与 core `reminders::parse_rules_opt` 的 Option 分界一致。
+   */
+  reminders?: ReminderRule[];
 };
 
 function legacyUpdateTask(id: string, updater: (task: Task) => Task): void {
@@ -421,6 +472,7 @@ export async function updateTask(id: string, changes: TaskChanges): Promise<void
       else params.dueDate = changes.dueDate;
     }
     if (changes.dueTime !== undefined) params.dueTime = changes.dueTime ?? "";
+    if (changes.reminders !== undefined) params.reminders = remindersParam(changes.reminders);
     try {
       await coreDispatch("task.modify", params);
     } catch (error) {
@@ -443,6 +495,7 @@ export async function updateTask(id: string, changes: TaskChanges): Promise<void
     if (changes.plannedDate !== undefined) next.plannedDate = changes.plannedDate ?? undefined;
     if (changes.dueDate !== undefined) next.dueDate = changes.dueDate ?? undefined;
     if (changes.dueTime !== undefined) next.dueTime = changes.dueTime ?? undefined;
+    if (changes.reminders !== undefined) next.reminders = changes.reminders;
     return next;
   });
 }
@@ -465,9 +518,55 @@ function legacyLocalTaskPatch(id: string, changes: TaskChanges): void {
       if (changes.plannedDate !== undefined) next.plannedDate = changes.plannedDate ?? undefined;
       if (changes.dueDate !== undefined) next.dueDate = changes.dueDate ?? undefined;
       if (changes.dueTime !== undefined) next.dueTime = changes.dueTime ?? undefined;
+      if (changes.reminders !== undefined) next.reminders = changes.reminders;
       return next;
     })
   }));
+}
+
+/**
+ * 「日期与提醒」面板的落地写：日期、时刻、提醒**一次写完**（core 侧
+ * `reminders::normalize_metadata` 把三样当一个事务验证，分次写会撞上中间态）。
+ *
+ * 三个入口（右键菜单、卡片上的日期浮层、编辑器工具栏）都调它。早先卡片与菜单
+ * 各写一份，于是「设成今天就顺带进我的一天」「dueDate 与 plannedDate 同进同出」
+ * 这两条语义只在其中一份里成立——同一份写操作出现在两个入口就该住在 actions 里。
+ */
+export async function setTaskSchedule(
+  id: string,
+  patch: { dueDate: string; dueTime: string; reminders: ReminderRule[] }
+): Promise<void> {
+  const date = patch.dueDate ? patch.dueDate.slice(0, 10) : null;
+  const previous = findTask(id);
+  await updateTask(id, {
+    dueDate: date,
+    // 只写 dueDate 的话任务会从「计划内」视图里消失：这两个字段历来同进同出
+    plannedDate: date,
+    myDay: date === todayIso() ? true : previous?.myDay,
+    dueTime: patch.dueTime,
+    reminders: patch.reminders
+  });
+}
+
+/**
+ * 把工具钉进 / 摘出侧栏固定区（`appearance.navItems` 里的 `tool:<id>` 行，v0.8.3）。
+ * 已经是目标状态时不发命令：右键菜单的「固定/取消固定」可能被连点。
+ */
+export async function setToolPinned(toolId: ToolId, pinned: boolean): Promise<void> {
+  const id = navToolId(toolId);
+  const current = get(appSettings).appearance.navItems;
+  if (current.includes(id) === pinned) return;
+  const next = pinned ? [...current, id] : current.filter((item) => item !== id);
+  await setConfig("appearance.navItems", next);
+}
+
+/** 固定区拖动排序落地：拖出来的顺序就是用户要的顺序，整份写回。 */
+export async function reorderNavItems(items: NavItemId[]): Promise<void> {
+  const current = get(appSettings).appearance.navItems;
+  if (current.length === items.length && current.every((item, index) => item === items[index])) {
+    return;
+  }
+  await setConfig("appearance.navItems", items);
 }
 
 export async function deleteTask(id: string): Promise<void> {
@@ -613,25 +712,26 @@ export async function setBackground(
   nodeId: string,
   background: { color?: string; image?: string | null; imageOpacity?: number }
 ): Promise<void> {
-  appState.update((s) => ({
-    ...s,
-    backgrounds: {
-      ...s.backgrounds,
-      [nodeId]: {
-        color: background.color ?? s.backgrounds[nodeId]?.color ?? defaultBackground.color,
-        image: background.image === null ? undefined : background.image ?? s.backgrounds[nodeId]?.image,
-        imageOpacity: background.imageOpacity ?? s.backgrounds[nodeId]?.imageOpacity ?? defaultBackground.imageOpacity
+  const mutate = (): void => {
+    appState.update((s) => ({
+      ...s,
+      backgrounds: {
+        ...s.backgrounds,
+        [nodeId]: {
+          color: background.color ?? s.backgrounds[nodeId]?.color ?? defaultBackground.color,
+          image: background.image === null ? undefined : background.image ?? s.backgrounds[nodeId]?.image,
+          imageOpacity: background.imageOpacity ?? s.backgrounds[nodeId]?.imageOpacity ?? defaultBackground.imageOpacity
+        }
       }
-    }
-  }));
+    }));
+  };
   if (coreMode) {
-    try {
-      await coreDispatch("gui.set-background", { nodeId, ...background });
-    } catch (error) {
-      await report(error, "背景保存失败");
-    }
+    await withRollback(appState, "背景保存失败", mutate, () =>
+      coreDispatch("gui.set-background", { nodeId, ...background })
+    );
     return;
   }
+  mutate();
   commit(state());
 }
 
@@ -702,7 +802,10 @@ function readSettingsPath(target: Settings, path: string): unknown {
 export async function unsetUiColor(nodeId: string): Promise<boolean> {
   if (coreMode) {
     try {
-      await coreDispatch("config.unset", { path: "appearance.uiColors", mapKey: nodeId });
+      const envelope = await coreDispatch("config.unset", { path: "appearance.uiColors", mapKey: nodeId });
+      // 与 setConfig 同一条纪律：记下这一版 revision，把紧随其后的域事件挡在快照往返之外
+      // （本地值与盘上一致，抑制是安全的；不记就是每改一次颜色多付一轮全量刷新）
+      noteEnvelopeRevision(envelope.meta);
     } catch (error) {
       await report(error, "恢复默认色失败");
       return false;
@@ -746,19 +849,15 @@ function applySettingsPath(target: Settings, path: string, value: unknown): void
     }
     cursor = next as Record<string, unknown>;
   }
-  const leaf = segments[segments.length - 1];
-  if (leaf === "uiColors" && typeof value === "object" && value !== null && "__key" in (value as Record<string, unknown>)) {
-    const payload = value as { __key: string; __value: unknown };
-    (cursor[leaf] as Record<string, unknown>)[payload.__key] = payload.__value;
-    return;
-  }
-  cursor[leaf] = value;
+  cursor[segments[segments.length - 1]] = value;
 }
 
 export async function setUiColor(nodeId: string, color: string): Promise<boolean> {
   if (coreMode) {
     try {
-      await coreDispatch("config.set", { path: "appearance.uiColors", value: color, mapKey: nodeId });
+      const envelope = await coreDispatch("config.set", { path: "appearance.uiColors", value: color, mapKey: nodeId });
+      // 同 unsetUiColor：config.set 的 mapKey 分支，记水位免得每次改颜色多跑一轮快照
+      noteEnvelopeRevision(envelope.meta);
     } catch (error) {
       await report(error, "自定义颜色保存失败");
       return false;
@@ -1539,6 +1638,9 @@ function legacyCommitSchedulerTasks(tasks: ScheduledTask[]): void {
 
 export async function addSchedule(): Promise<ScheduledTask | null> {
   const ui = createScheduledTask(`定时任务 ${scheduleState().tasks.length + 1}`);
+  // 移动端只支持「发送通知」这一种动作（脚本 / 外部程序 core 会拒），新建时就直接
+  // 落在通知上——别让用户从一份注定保存不了的脚本模板改起。
+  if (isMobilePlatform) ui.action = { ...ui.action, type: "notification" };
   if (coreMode) {
     try {
       const response = await coreDispatch<ScheduleEntryV9>("schedule.add", {
@@ -1755,10 +1857,7 @@ export async function importState(
         }
       }
       if (importedSettings) {
-        const flat = flattenSettings(importedSettings);
-        for (const [path, value] of flat) {
-          await coreDispatch("config.set", { path, value });
-        }
+        await applyImportedSettings(importedSettings);
       }
     } catch (error) {
       await report(error, "导入失败");
@@ -2346,17 +2445,66 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
-function flattenSettings(source: Settings): Array<[string, unknown]> {
-  const out: Array<[string, unknown]> = [];
-  const walk = (prefix: string, value: unknown) => {
-    if (Array.isArray(value) || typeof value !== "object" || value === null) {
-      out.push([prefix, value]);
+/** 一次 `config.set` 的写入意图（map 型字段按 mapKey 逐键写） */
+type SettingsWrite = { path: string; value: unknown; mapKey?: string };
+
+/**
+ * 把导入的设置树摊成 core 认得的写入清单。
+ *
+ * 判据是 **core 的字段目录**（`config.list`）而不是前端硬编码的黑名单：命中已知路径就整份写下
+ * 并停止下钻（`appearance.dueColors` / `themePresets` 这类整份对象因此不会被摊成
+ * `dueColors.<节点id>` 这种 core 不认的叶子），map 型（`appearance.uiColors`）按 mapKey 逐键写，
+ * 目录里没有的键跳过——那是本机专属或已废弃的设置，导入不该因为它整轮失败。
+ * core 加字段前端自动跟上，不用再维护一份名单。
+ *
+ * 旧实现无脑摊到每个叶子、只过滤 `appearance.uiColors.*`，于是「全部数据」导入只要带 settings
+ * 就**必然失败**：TS 侧的 Settings 恒含 `sync.syncDiary` / `sync.syncLedger`（当时 core 不认
+ * 这两个路径），第一条就 UNKNOWN_CONFIG_KEY；而导入循环没有逐条容错，data 域已经写进去了、
+ * settings 只写了一半，界面停在半完成状态（v0.8.3 review #4）。
+ */
+async function settingsWritePlan(source: Settings): Promise<SettingsWrite[]> {
+  const catalog = await coreDispatch<{ items?: Array<{ path: string; kind?: string }> }>("config.list");
+  const kinds = new Map<string, string>();
+  for (const field of catalog.data?.items ?? []) kinds.set(field.path, field.kind ?? "");
+  const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+    typeof value === "object" && value !== null && !Array.isArray(value);
+  const writes: SettingsWrite[] = [];
+  const walk = (prefix: string, value: unknown): void => {
+    const kind = kinds.get(prefix);
+    if (kind !== undefined) {
+      if (kind.startsWith("map<") && isPlainObject(value)) {
+        for (const [key, child] of Object.entries(value)) {
+          writes.push({ path: prefix, value: child, mapKey: key });
+        }
+      } else {
+        writes.push({ path: prefix, value });
+      }
       return;
     }
-    for (const [key, child] of Object.entries(value)) {
-      walk(prefix ? `${prefix}.${key}` : key, child);
+    if (isPlainObject(value)) {
+      for (const [key, child] of Object.entries(value)) {
+        walk(prefix ? `${prefix}.${key}` : key, child);
+      }
+      return;
     }
+    // 目录里没有的叶子：本机专属（如 scheduler 的运行时状态）或已废弃，跳过
   };
   walk("", source);
-  return out.filter(([path]) => !path.startsWith("appearance.uiColors."));
+  return writes;
+}
+
+/** 逐条写导入的设置：单条失败只记一笔继续——数据域已经落盘了，半途而废留下的状态更难解释。 */
+async function applyImportedSettings(source: Settings): Promise<void> {
+  const writes = await settingsWritePlan(source);
+  const failed: string[] = [];
+  for (const write of writes) {
+    try {
+      await coreDispatch("config.set", write);
+    } catch {
+      failed.push(write.mapKey ? `${write.path}.${write.mapKey}` : write.path);
+    }
+  }
+  if (failed.length > 0) {
+    showToast(`${failed.length} 项设置没能导入：${failed.slice(0, 3).join("、")}${failed.length > 3 ? "…" : ""}`);
+  }
 }

@@ -256,3 +256,26 @@ v0.8.0 起的几条补充（来龙去脉在 `history/v0.8.md` 批次 1）：
 - 「tauri-plugin-window-state 默认管所有窗口」；「`reveal_main_window` 在 show 之前跑 `sanitize_main_window_geometry`」——`pitfalls-windows.md` 第 5 条
 - 「全局快捷键受插件平台能力限制（X11 可用，纯 Wayland 抓不到），不做会话嗅探特判」；「Linux 首跑默认退出……用户设置后以用户值为准」——`ui-patterns.md`「Linux 桌面」
 - 「改成 `is_focused`：已在前台就收起，隐藏/最小化/被挡住一律 show + unminimize + set_focus」——`history/v0.7.5-v0.7.8.md` v0.7.8 ⑪
+
+### v0.8.3 新增
+
+- 「**乐观更新一律过 `actions.ts::withRollback`**：先本地生效再落盘，失败按原值回滚；回滚前用**对象身份**判「这期间是否又被改过」。`gui.*` 不发域事件 = 失败后没有快照来纠正，不回滚就是界面与盘永久分叉」——`frontend.md`「actions.ts」+ `history/v0.8.3.md` 六（#10）
+- 「**跨语言的孪生常量必须有 `include_str!` 钉子**（`crates/core/tests/frontend_contract.rs`）：TagColor 十色的三处名单、`BACKGROUND_MAX_EDGE` ↔ 壳的背景闸、临期配色档数 ↔ `expect_due_colors`。**注释说「两边要一致」一定会漂**——四档配色漏改 core 的症状是「界面能选四个、保存必失败」」——同上（#11）
+- 「**core 加字段，前端 `normalize*` 必须同步加**，且现在有自动化守着：`defaults.spec.ts` 的 normalizeState 往返用例拿 core 的字段全集比对键集合与值（`dueTime` 漏了两个大版本、`node.updatedAt` 是第二个）」——`frontend.md`「前端单测」
+- 「**提醒的发送台账（`runtime/reminders.json`）绝不进同步载荷**：一台设备响过，另一台就永远不响了。规则本身（`Item.reminders`）跟着任务同步」——`architecture.md`「runtime/」+ `history/v0.8.3.md` 一
+- 「**首轮与每次时钟跳变都要 reset**（`clock_discontinuous`：墙上与单调时钟都看，5 秒容差）——「设备不在线时错过的提醒不补发」就是靠这条落的，桌面与移动端同一份代码」——同上
+- 「**文件传输的 ALPN 必须与同步不同**（`kxtodo-transfer/1` vs `kxtodo-p2p/1`）：同一个 iroh 端点上 ALPN 是唯一的路由依据，重了会被同步的 accept 循环抢走连接；房间密钥与握手令牌的派生串各带自己的域前缀」——`sync.md`「文件传输助手复用 P2P 那套」
+- 「**接收路径逐段过 `safe_join`**：清单里的 `rel` 任何一段跑出保存目录就拒（`../` 与绝对路径都不行）」——同上
+- 「**色盘的活值住在组件 state，只有 `change` 才写盘**：`<input type=color>` 的 `input` 事件在拖动中连发，逐次 `config.set` 会把 settings.json 的原子写打爆（用户看到的「自定义颜色保存失败：原子替换失败」）」——`ui-patterns.md`「色盘与取色器的统一纪律」
+- 「**`position: fixed` 的整屏浮层要进宿主的 `closeOverlays`，同时在自己根上 `on:click|stopPropagation`**：前者保证公共入口关得掉（否则切页后浮层残留盖在新页面上），后者保证 App 的「点空白关所有浮层」不会让「在浮层里点一下」把自己关掉」——`frontend.md`「组件」v0.8.3 ④
+- 「**同一个浮层的返回键与 Esc 必须共用一个 `stepBack()`**：各写一份迟早分叉（`AccountManager` 的 Esc 曾跳过「账户类型小表单」那一档）」——同上 ⑤
+- 「**`onMount` 里注册的东西要在 cleanup 里全释放**：只 `return addBackInterceptor(...)` 看着像配对好了，其实同一处的 `addEventListener` 一个都没摘——泄漏的 capture 阶段 keydown 会吃掉全应用的 Escape」——`history/v0.8.3.md` 六（#7）
+- 「**任务跨条目移动必须把引用的插图一起搬**（`ops_task.rs::migrate_item_images`）：孤儿判定是「按当前 node_id 收集引用集」，图留在旧目录就会被紧跟保存的那把扫帚真删。修在搬迁侧，**不在扫描侧开洞**（跨节点也算引用会让孤儿永远清不掉）」——同上（#5）
+- 「`deferredMarkdown` 的短路键是**文本 + nodeId**：同一份正文搬到别的条目下，本地图的解析结果完全不同」——`frontend.md`「组件」v0.8.3 ②
+- 「**markdown 任务项的行匹配要认有序标记**（`\d{1,9}[.)]`），且 ≥4 空格缩进要带 `listOpen` 判断：列表外是代码块（不算）、列表内是子列表（算）。单测钉的必须是 marked 的**实际**输出——旧 spec 把「有序不算」钉成契约，161 项全绿照样有 bug」——`frontend.md`「纯逻辑」+ `history/v0.8.3.md` 六（#8）
+- 「**行首空白靠「缩进换不间断空格 + 给上一行行尾补硬换行」保住**；硬换行插在本行行首会让 marked 提前收口列表。缩进属于结构的行（列表标记/引用/标题/分隔线/setext）一律不动」——同上 四
+- 「**设置共享子集三处清单必须一致**（`settings_payload` 发 / `apply_settings_record` 收 / `is_shared_settings_path` 刷 LWW 戳）；apply 侧一律**逐字段覆盖**——「缺键 = 这条记录没提它」，整块替换会把接收端的本机偏好拨回默认」——`sync.md`「设置共享子集的三处清单必须一致」
+- 「**导入设置按 core 的字段目录（`config.list`）摊**，命中已知路径整份写下并停止下钻、map 型按 mapKey 逐键写、命不中的跳过；逐条 try/catch，单条失败不中断整轮」——`frontend.md`「actions.ts」
+- 「CLI 长选项一律 kebab-case、core 的 params 与 JSON 输出一律 camelCase，转换靠每个 `*Args` 上的 `rename_all = "camelCase"`（漏写 = 参数静默失效）；钉子 `cli_long_options_are_all_kebab_case`」——`cli.md`「命令名口径」
+- 「`ledger categories` 是**平铺数组但按树的先序**（大类后面紧跟它的子分类），每项带 `depth`；`ledger stats` 不带 `--side` 时两侧混排、`percent` 是**该侧内部**占比（别相加）」——`ledger.md`「CLI 子命令名与 core 命令名的映射」
+- 「**本地安卓交叉检查必须覆盖壳 crate**（`cargo check --target aarch64-linux-android -p kxtodo --lib --features tauri/custom-protocol`）：只查 `-p kxtodo-core -p kxtodo-server` 时 `src-tauri/src/lib.rs` 里 `#[cfg(not(desktop))]` 的分支一行都没编译过，而 `ci.yml` 也只编桌面目标——错会一路绿到 `release.yml` 的安卓栏（那是**打了 tag 之后**才跑的，红的代价是一版发不出去）。**写平台专有 API 之前先去读那一份实现**：Tauri v2 的 Android `PathResolver` 没有 `external_app_data_dir()`，而它的 `download_dir()` 本来就是 `getExternalFilesDir(DIRECTORY_DOWNLOADS)`——所以「桌面一份、移动端一份」的 cfg 分支根本不必存在」——`pitfalls-android.md`「构建环境与入口」+ `history/v0.8.3.md` 七（7）

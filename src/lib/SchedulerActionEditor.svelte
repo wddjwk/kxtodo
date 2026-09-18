@@ -3,7 +3,7 @@
   import NumberField from "./NumberField.svelte";
   import { FolderOpen, Search } from "@lucide/svelte";
   import { pickExecutableFile, resolveExecutablePath } from "./backend";
-  import { executablePathPlaceholder } from "./capabilities";
+  import { caps, executablePathPlaceholder } from "./capabilities";
   import type { AppNotification, ScheduledTaskAction, SchedulerCondition } from "./types";
 
   export let title = "执行动作";
@@ -25,11 +25,16 @@
 
   let actionTypeOptions: Array<{ value: ScheduledTaskAction["type"]; label: string }> = [];
 
-  $: actionTypeOptions = [
-    { value: "script", label: "脚本" },
-    { value: "executable", label: "可执行文件" },
-    ...(allowNotification ? [{ value: "notification" as const, label: "发送通知" }] : [])
-  ];
+  // 移动端只有「发送通知」一种动作：设备上没有 shell、没有可执行文件的路径语义，
+  // core 的 ops_schedule::ensure_platform_supported 也会拒。界面给了选项，
+  // 用户填完一整套脚本才发现保存不了，那是白填。
+  $: actionTypeOptions = caps.desktop
+    ? [
+        { value: "script" as const, label: "脚本" },
+        { value: "executable" as const, label: "可执行文件" },
+        ...(allowNotification ? [{ value: "notification" as const, label: "发送通知" }] : [])
+      ]
+    : [{ value: "notification" as const, label: "发送通知" }];
 
   const languageOptions: Array<{ value: ScheduledTaskAction["language"]; label: string }> = Object.entries(languageLabels).map(([value, label]) => ({
     value: value as ScheduledTaskAction["language"],

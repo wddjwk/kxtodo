@@ -32,13 +32,6 @@ export const TAG_COLOR_SPECS: TagColorSpec[] = [
   { color: "gray", label: "灰", swatch: "#5f6368", background: "#f1f3f4", border: "#dadce0", text: "#5f6368" }
 ];
 
-const SPEC_BY_COLOR = new Map(TAG_COLOR_SPECS.map((spec) => [spec.color, spec]));
-
-/** 取某个具名色的配色（`custom` 与未知值回灰色）。 */
-export function tagSpec(color: TagColor): TagColorSpec {
-  return SPEC_BY_COLOR.get(color as TagColorSpec["color"]) ?? SPEC_BY_COLOR.get("gray")!;
-}
-
 /** `#rrggbb` 的浅色底：拼一个低透明度的十六进制 alpha（8 位色值，WebView 都认）。 */
 export function tagTint(hex: string, alpha = "1f"): string {
   return `${hex}${alpha}`;

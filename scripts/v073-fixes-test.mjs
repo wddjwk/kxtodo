@@ -177,19 +177,18 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.click(".ledger-icon-group >> nth=1");
   const filtered = (await page.$$(".ledger-icon-cell")).length;
   check("分组筛选生效", filtered > 0 && filtered < 100, String(filtered));
-  await page.keyboard.press("Escape");
-  await page.waitForTimeout(250);
-  check("第一段 Esc 只收表单回到列表", (await page.$$(".ledger-manager")).length === 1);
+  // v0.8.3 review #6：直达表单的浮层，返回/Esc 一律**整层关掉**——用户是从记账面板的
+  // 加号直接落到「添加分类」上的，他从没见过分类列表，退到那里只是多按一次。
+  // （AccountManager 在 v0.8.2 就是这么定的，这一版把 CategoryManager 统一到同一套。）
   await page.keyboard.press("Escape");
   await page.waitForSelector(".ledger-manager", { state: "detached", timeout: 8000 });
+  check("直达表单时 Esc 整层关掉分类管理", (await page.$$(".ledger-manager")).length === 0);
   check("分类管理关掉后记账面板还在", (await page.$$(".ledger-sheet")).length === 1);
   await page.click(".ledger-cat-grid > .ledger-cat-cell:not(.add) >> nth=0");
   await page.waitForSelector(".ledger-cat-sub .ledger-cat-cell.add", { timeout: 5000 });
   await page.click(".ledger-cat-sub .ledger-cat-cell.add");
   await page.waitForSelector(".ledger-manager", { timeout: 8000 });
   check("二级加号也打开新增表单", (await page.textContent(".ledger-sheet-title"))?.trim() === "添加分类");
-  await page.keyboard.press("Escape");
-  await page.waitForTimeout(250);
   await page.keyboard.press("Escape");
   await page.waitForSelector(".ledger-manager", { state: "detached", timeout: 8000 });
   await page.keyboard.press("Escape");

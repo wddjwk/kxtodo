@@ -32,13 +32,19 @@ export function createDeferredMarkdown(apply: (html: string) => void): {
   /** 最后一次被要求渲染的文本（等帧期间内容可能又被改，升级时以它为准） */
   let wanted = "";
   let wantedNode = "";
-  /** 已经应用出去的那份（快速版或完整版） */
+  /** 已经应用出去的那份（快速版或完整版）。
+   *  键是**文本 + 节点**而不是只有文本：同一份正文被搬到别的条目下时，本地图的解析
+   *  结果完全不同（`renderMarkdown` 的 `transformLocalImages` 按 nodeId 找文件），
+   *  只比文本会让搬走的卡片一直挂着指向旧节点的 `data-md-img` 占位与图片地址
+   *  （v0.8.3 review #5：随后跑「释放空间」，那些图会被当孤儿真删掉）。 */
   let applied = "";
   /** 已经应用出去、且是完整版的那份 */
   let appliedFull = "";
   /** 当前挂在 DOM 上的 HTML 原文（升级时用来跳过「完整版与快速版逐字节相同」的重写） */
   let appliedHtml = "";
   let frame = 0;
+
+  const keyOf = (markdown: string, nodeId: string): string => `${nodeId}\u0000${markdown}`;
 
   function cancelFrame(): void {
     if (frame) {
@@ -47,9 +53,9 @@ export function createDeferredMarkdown(apply: (html: string) => void): {
     }
   }
 
-  function applyOnce(markdown: string, html: string, full: boolean): void {
-    applied = markdown;
-    if (full) appliedFull = markdown;
+  function applyOnce(markdown: string, nodeId: string, html: string, full: boolean): void {
+    applied = keyOf(markdown, nodeId);
+    if (full) appliedFull = applied;
     if (html !== appliedHtml) {
       appliedHtml = html;
       apply(html);
@@ -64,9 +70,9 @@ export function createDeferredMarkdown(apply: (html: string) => void): {
         frame = 0;
         const markdown = wanted;
         const nodeId = wantedNode;
-        if (appliedFull === markdown) return;
+        if (appliedFull === keyOf(markdown, nodeId)) return;
         // 没有代码块与公式的文档，快速版与完整版逐字节相同——applyOnce 会跳过重写
-        applyOnce(markdown, renderMarkdown(markdown, nodeId), true);
+        applyOnce(markdown, nodeId, renderMarkdown(markdown, nodeId), true);
       });
     });
   }
@@ -75,23 +81,24 @@ export function createDeferredMarkdown(apply: (html: string) => void): {
     schedule(markdown: string, nodeId = ""): void {
       wanted = markdown;
       wantedNode = nodeId;
-      if (appliedFull === markdown) {
+      const key = keyOf(markdown, nodeId);
+      if (appliedFull === key) {
         cancelFrame();
         return;
       }
       const cached = peekMarkdown(markdown, nodeId);
       if (cached !== null) {
         cancelFrame();
-        applyOnce(markdown, cached, true);
+        applyOnce(markdown, nodeId, cached, true);
         return;
       }
       if (markdown.length <= TWO_PHASE_MIN_CHARS) {
         cancelFrame();
-        applyOnce(markdown, renderMarkdown(markdown, nodeId), true);
+        applyOnce(markdown, nodeId, renderMarkdown(markdown, nodeId), true);
         return;
       }
-      if (applied !== markdown) {
-        applyOnce(markdown, renderMarkdownFast(markdown, nodeId), false);
+      if (applied !== key) {
+        applyOnce(markdown, nodeId, renderMarkdownFast(markdown, nodeId), false);
       }
       scheduleUpgrade();
     },

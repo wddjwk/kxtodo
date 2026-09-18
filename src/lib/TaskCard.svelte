@@ -5,6 +5,7 @@
   import { taskToggleIndex, toggleMarkdownTask } from "./markdownTasks";
   import { tagChipStyle } from "./tagColors";
   import { dueHighlightOf, dueHighlightStyle } from "./dueHighlight";
+  import { currentMinute } from "./currentTime";
   import { fullDayLabel } from "./diary";
   import { createDeferredMarkdown } from "./deferredMarkdown";
   import { preloadMarkdownImages } from "./images";
@@ -15,8 +16,8 @@
   import { longpress, isLongPressSuppressed } from "./longpress";
   import { markdownWire } from "./markdownControls";
   import { observeResize } from "./measureBus";
-  import DatePicker from "./DatePicker.svelte";
-  import type { Task } from "./types";
+  import TaskDateReminderPanel from "./TaskDateReminderPanel.svelte";
+  import type { ReminderRule, Task } from "./types";
 
   export let task: Task;
   export let nodeId = "";
@@ -33,7 +34,8 @@
     edit: string;
     context: { id: string; x: number; y: number };
     openLink: { href: string; title: string };
-    setDate: { id: string; date: string; time?: string };
+    /** 「日期与提醒」面板保存/清除：日期、时刻、提醒一次交上去（core 侧是一个事务） */
+    setSchedule: { id: string; dueDate: string; dueTime: string; reminders: ReminderRule[] };
     removeTag: { id: string; tagId: string };
     editTag: { id: string; tagId: string; text: string };
     removeEmoji: { id: string; index: number };
@@ -95,12 +97,14 @@
   $: formattedDate = task.dueDate
     ? `${fullDayLabel(task.dueDate.slice(0, 10))}${task.dueTime ? ` ${task.dueTime}` : ""}`
     : "";
-  // 临期高亮：配色按**本页**（这个节点）自己的三色走，没配过就用默认红 / 黄 / 蓝。
+  // 临期高亮：配色按**本页**（这个节点）自己的四色走，没配过就用默认灰/红/黄/蓝。
   // 已完成的卡片不画——它有自己的一整套完成态样式。
+  // `now` 用一分钟一跳的 store：「已过期」档要在跨过时刻的那一分钟自己翻色，
+  // 只依赖任务与设置的话得等下一次无关重渲才换。
   $: dueHighlight =
     task.completed || !task.dueDate
       ? null
-      : dueHighlightOf(task, $appSettings.features.dueHighlight, $appSettings.appearance.dueColors[nodeId]);
+      : dueHighlightOf(task, $appSettings.features.dueHighlight, $appSettings.appearance.dueColors[nodeId], $currentMinute);
   // 可展开 = 多行 ∪ 折叠态量出来显示不全 ∪ **当前就是展开的**。
   // 第三项治的是「折行卡片以展开态挂载」（编辑器保存后、展开全部后重挂载）：
   // 那时 measureTitle 根本不在树上（它只挂在折叠分支），titleOverflow 永远是 false，
@@ -167,15 +171,16 @@
     };
   }
 
-  /** 日期弹窗用 fixed 浮层：absolute 会被卡片/任务列表的 overflow 裁剪。
+  /** 「日期与提醒」浮层用 fixed 定位：absolute 会被卡片/任务列表的 overflow 裁剪。
    * fixed 在 transform 缩放的 app-shell 内相对其左上角定位，按钮的屏幕坐标
    * 除以 scale 换算回逻辑坐标；贴近视口底部时向上翻转。 */
-  function toggleDatePicker(): void {
+  function toggleSchedulePanel(): void {
     showPicker = !showPicker;
     if (!showPicker || !dueButtonEl) return;
     const scale = uiScaleValue($appSettings.appearance.uiScale);
     const rect = dueButtonEl.getBoundingClientRect();
-    const estVisualHeight = 400;
+    // 面板 = 日历 + 时刻行 + 提醒行 + 页脚，比纯日历高一截；估高了只是提前向上翻转
+    const estVisualHeight = 470;
     const openBelow = rect.bottom + estVisualHeight <= window.innerHeight;
     const anchorEdge = openBelow ? rect.bottom + 6 : rect.top - estVisualHeight - 6;
     const topLogical = anchorEdge / scale;
@@ -183,19 +188,14 @@
     datePopoverStyle = `top: ${topLogical}px; right: ${rightLogical}px;`;
   }
 
-  function handlePick(date: string): void {
+  function handleSchedule(patch: { dueDate: string; dueTime: string; reminders: ReminderRule[] }): void {
     showPicker = false;
-    dispatch("setDate", { id: task.id, date });
+    dispatch("setSchedule", { id: task.id, ...patch });
   }
 
-  /** 只改时刻：浮层留着（滚轮可能还要再拨一下），日期沿用卡片上的原值。 */
-  function handlePickTime(time: string): void {
-    dispatch("setDate", { id: task.id, date: task.dueDate?.slice(0, 10) ?? "", time });
-  }
-
-  function handleClearDate(): void {
+  function handleScheduleClear(): void {
     showPicker = false;
-    dispatch("setDate", { id: task.id, date: "" });
+    dispatch("setSchedule", { id: task.id, dueDate: "", dueTime: "", reminders: [] });
   }
 
   function toggleExpand(): void {
@@ -446,17 +446,16 @@
 
       {#if !isExpanded && task.dueDate}
         <div class="task-due-wrap">
-          <button bind:this={dueButtonEl} class="task-due-date" type="button" on:click|stopPropagation={toggleDatePicker}>{formattedDate}</button>
+          <button bind:this={dueButtonEl} class="task-due-date" type="button" title="日期与提醒" on:click|stopPropagation={toggleSchedulePanel}>{formattedDate}</button>
           {#if showPicker}
             <div class="task-date-popover" style={datePopoverStyle}>
-              <DatePicker
-                value={task.dueDate?.slice(0, 10) ?? ""}
-                time={task.dueTime ?? ""}
-                withTime
-                on:select={(e) => handlePick(e.detail)}
-                on:selectTime={(e) => handlePickTime(e.detail)}
-                on:clear={handleClearDate}
-                on:close={() => (showPicker = false)}
+              <TaskDateReminderPanel
+                dueDate={task.dueDate?.slice(0, 10) ?? ""}
+                dueTime={task.dueTime ?? ""}
+                reminders={task.reminders ?? []}
+                onSave={handleSchedule}
+                onClear={handleScheduleClear}
+                onClose={() => (showPicker = false)}
               />
             </div>
           {/if}

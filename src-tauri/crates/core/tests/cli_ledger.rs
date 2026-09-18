@@ -232,6 +232,81 @@ fn accounts_and_categories_management_rules() {
 }
 
 #[test]
+fn categories_list_is_tree_ordered_with_depth() {
+    // v0.8.3：`ledger categories` 是平铺数组，但**顺序必须是树的先序**——每个大类后面
+    // 紧跟它自己的子分类。之前只按 order 排，子分类（order 也从 1 起）会跑到别的大类前面
+    // （「公交地铁」排在「交通」之前），Agent 只能自己按 parentId 重新聚合。
+    let env = TestEnv::fresh();
+    env.ok(&[
+        "ledger", "category-add", "--name", "咖啡", "--parent", "餐饮", "--icon", "Coffee", "--yes",
+    ]);
+
+    let items = env.ok(&["ledger", "categories", "--side", "expense"])["items"]
+        .as_array()
+        .cloned()
+        .unwrap();
+    let index_of = |name: &str| {
+        items
+            .iter()
+            .position(|item| item["name"].as_str() == Some(name))
+            .unwrap_or_else(|| panic!("`{name}` 不在输出里"))
+    };
+
+    assert!(
+        index_of("公交地铁") > index_of("交通"),
+        "子分类排在自己的大类后面（旧排序里它跑到了前面）"
+    );
+    assert!(
+        index_of("咖啡") > index_of("餐饮") && index_of("咖啡") < index_of("交通"),
+        "新建的子分类落在它父亲那一块里，而不是按 order 插到队首"
+    );
+    // depth 与 parentId 自洽，且每个 depth=1 的项其父亲就是最近一个 depth=0 的项
+    let mut last_parent: Option<&str> = None;
+    for item in &items {
+        let depth = item["depth"].as_u64().expect("每项都要有 depth");
+        let parent_id = item["parentId"].as_str();
+        assert_eq!(depth, u64::from(parent_id.is_some()), "depth 与 parentId 必须一致");
+        match depth {
+            0 => last_parent = Some(item["id"].as_str().unwrap()),
+            1 => assert_eq!(
+                parent_id, last_parent,
+                "`{}` 的父亲不是它前面最近的那个大类",
+                item["name"].as_str().unwrap_or("?")
+            ),
+            other => panic!("分类只有两级，出现了 depth={other}"),
+        }
+    }
+
+    let all = env.ok(&["ledger", "categories"]);
+    assert_eq!(
+        all["total"].as_u64().unwrap(),
+        all["items"].as_array().unwrap().len() as u64,
+        "total 就是数组长度"
+    );
+    let expense_total = items.len() as u64;
+    assert_eq!(
+        all["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["side"] == "expense")
+            .count() as u64,
+        expense_total,
+        "--side 只是过滤，条目一条都不能少"
+    );
+    assert_eq!(
+        all["items"].as_array().unwrap().iter().take_while(|item| item["side"] == "expense").count(),
+        all["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["side"] == "expense")
+            .count(),
+        "不带 --side 时先支出后收入（两侧各自成块，不交错）"
+    );
+}
+
+#[test]
 fn excel_export_import_round_trip() {
     let env = TestEnv::fresh();
 

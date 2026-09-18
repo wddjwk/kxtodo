@@ -35,7 +35,8 @@ check("workspace hidden on list", !(await page.locator(".workspace").isVisible()
 
 const navText = await page.locator(".system-nav").innerText();
 check("system nav has my-day/planned/important", navText.includes("我的一天") && navText.includes("计划内") && navText.includes("收藏"));
-check("system nav hides scheduled on mobile", !navText.includes("定时任务"));
+// v0.8.3：移动端也开定时任务与提醒了（此前 caps.scheduler 在移动端恒 false，整行都不显示）
+check("system nav shows scheduled on mobile", navText.includes("定时任务"));
 check("system nav shows toolbox row on mobile", navText.includes("工具箱"));
 
 // list -> content

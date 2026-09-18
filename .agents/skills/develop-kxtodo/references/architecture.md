@@ -41,6 +41,8 @@ kxtodo.exe (GUI)                    kxtodo-cli (CLI)
 上面拓扑图最后一行的 `data.json + settings.json + tasks.json + diary.json + ledger.json` 就是**五个领域文件**（data 节点与任务 / settings 设置 / tasks 定时任务 / diary 日记 / ledger 记账）。它们各自的 `Domain` 变体、layout 路径、`load_*` / `write_*` 与 `ensure_initialized` 里的那一条都在 `crates/core/src/repo.rs`；**加一类要同步的实体要动哪几处**见 SKILL.md 的路由表「加一类**要同步的**实体」行（那一行是权威清单）。
 
 - **数据地基（同步前置，schema v6）**：ID 128-bit 随机 hex（32-bit 会跨设备碰撞）；Node/Item 显式 `order: f64` 字段（同级排序唯一来源，数组顺序仅是渲染缓存，`gui.apply-tree-order` 写 order 不再裸排数组）；`collapsed`/`expanded` 是本机 UI 状态不参与同步。同步状态在 `runtime/sync.json`（deviceId/token/拉取水位/逐实体对账戳，0600），不属于五个 domain 文件。
+- **`runtime/` 里住的都是「本机状态」，一律不参与同步**：`sync.json`（水位与设备身份）、`sync-host.json`（内置主机）、`sync-credentials.json`（明文凭据留档，0600）、`linkmeta.json`（超链接元数据缓存，带 `CACHE_VERSION`）、**`reminders.json`（v0.8.3：任务提醒的发送台账，至多一次的凭据）**、**`transfer-outbox/`（v0.8.3：移动端发送文件时的 base64 分片暂存，scoped storage 下 core 只能这样拿到 webview 选中的字节）**。台账进同步载荷的后果很具体：一台设备响过的提醒，另一台就永远不响了。
+- **`crates/core/src/` 的两个 v0.8.3 新模块**：`reminders.rs`（任务提醒：规则解析/校验/折算、时钟跳变判定、`Engine::poll` 与台账）与 `transfer.rs`（文件传输：口令派生房间密钥与握手令牌、帧协议、`send`/`receive`/`cancel`、`safe_join`）。两者都**不是**领域文件的所有者：提醒规则住在 `Item.reminders`（跟任务一起同步），传输完全不落领域数据。
 
 ## 数据目录解析
 

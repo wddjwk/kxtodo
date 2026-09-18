@@ -39,7 +39,7 @@
   } from "./backend";
   import { avatarCache, resolveAvatarSrc, primeImageCache, primeAvatarCache, localImageRef, isLocalImageRef, compressAvatarImage, compressBackgroundImage } from "./images";
   import { themePresets } from "./defaults";
-  import { NAV_ITEM_IDS, NAV_ITEM_LABELS, NAV_LAYOUTS, type NavItemId } from "./nav";
+  import { NAV_ITEM_IDS, NAV_ITEM_LABELS, NAV_LAYOUTS, type NavBaseId, type NavItemId } from "./nav";
   import { cleanStorage, fetchStorageUsage, formatBytes, type StorageUsage } from "./actions";
   import Dropdown from "./Dropdown.svelte";
   import NumberField from "./NumberField.svelte";
@@ -87,11 +87,22 @@
     return $appSettings.appearance.navItems.includes(id);
   }
 
-  /** 勾选按规范顺序插回、取消就摘掉：侧栏顺序因此恒定，不会因为点了两下就乱 */
+  /** 勾选按规范顺序插回、取消就摘掉。**只动基础行**：钉住的工具行（tool:*）不在这个
+   *  面板里管，且它们在侧栏里可能被拖到任意位置——这里原样保留它们的相对顺序，
+   *  否则勾一下日记就把用户拖好的顺序冲掉。 */
   function toggleNavItem(id: NavItemId): void {
     const current = $appSettings.appearance.navItems;
-    const next = current.includes(id) ? current.filter((item) => item !== id) : [...current, id];
-    updateAppearance("navItems", NAV_ITEM_IDS.filter((item) => next.includes(item)));
+    if (current.includes(id)) {
+      updateAppearance("navItems", current.filter((item) => item !== id));
+      return;
+    }
+    // 插回时落在「规范顺序里排在它后面、且当前还在的第一行」之前，尽量贴近现有顺序
+    const after = NAV_ITEM_IDS.slice(NAV_ITEM_IDS.indexOf(id as NavBaseId) + 1);
+    const anchor = current.find((item) => after.includes(item as NavBaseId));
+    const at = anchor === undefined ? current.length : current.indexOf(anchor);
+    const next = [...current];
+    next.splice(at, 0, id);
+    updateAppearance("navItems", next);
   }
 
   // ---- 存储空间（storage.usage / storage.clean）----

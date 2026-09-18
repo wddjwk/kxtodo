@@ -28,9 +28,28 @@ describe("markdownTaskLines（任务行定位）", () => {
     expect(markdownTaskLines("> - [ ] 引用里的")).toEqual([0]);
   });
 
-  it("星号与加号标记也算，有序列表不算（GFM 只有无序列表支持任务项）", () => {
-    const md = ["* [ ] 星号", "+ [x] 加号", "1. [ ] 有序"].join("\n");
-    expect(markdownTaskLines(md)).toEqual([0, 1]);
+  it("星号、加号与**有序**标记都算（marked 对有序列表同样产出任务框）", () => {
+    const md = ["* [ ] 星号", "+ [x] 加号", "1. [ ] 有序", "2) [x] 括号有序", "10. [ ] 两位数"].join("\n");
+    expect(markdownTaskLines(md)).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it("列表外的 ≥4 空格缩进是代码块，不算；列表里的深缩进是子列表，算", () => {
+    // 与 marked 逐条对过：前者渲染成 <pre><code>（没有勾选框），后者是嵌套 <ul>（有）
+    expect(markdownTaskLines("正文\n\n    - [ ] 代码块里的")).toEqual([]);
+    expect(markdownTaskLines("\t- [ ] 一个 tab 也是代码块")).toEqual([]);
+    expect(markdownTaskLines("   - [ ] 三空格还是列表")).toEqual([0]);
+    expect(markdownTaskLines("- [ ] 甲\n    - [ ] 乙")).toEqual([0, 1]);
+    expect(markdownTaskLines("1. [ ] 甲\n   1. [ ] 乙\n    - [ ] 丙")).toEqual([0, 1, 2]);
+    // 松散列表：空一行再缩进的子项仍然算嵌套（返回的是**行号**，空行占 1）
+    expect(markdownTaskLines("- [ ] 甲\n\n    - [ ] 乙")).toEqual([0, 2]);
+    // 列表被顶格普通行收掉之后，深缩进又变回代码块
+    expect(markdownTaskLines("- [ ] 甲\n\n收尾\n\n    - [ ] 乙")).toEqual([0]);
+  });
+
+  it("有序与无序混排时索引仍然对齐（点第 2 个框翻的就是第 2 行）", () => {
+    const md = ["- [ ] 无序甲", "1. [ ] 有序乙", "- [x] 无序丙"].join("\n");
+    expect(markdownTaskLines(md)).toEqual([0, 1, 2]);
+    expect(toggleMarkdownTask(md, 1)).toBe(["- [ ] 无序甲", "1. [x] 有序乙", "- [x] 无序丙"].join("\n"));
   });
 });
 

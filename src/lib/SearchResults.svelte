@@ -9,7 +9,7 @@
     deleteDiaryEntry, deleteTask as deleteTaskAction, replaceTaskEmojis as replaceTaskEmojisAction,
     replaceTaskTags as replaceTaskTagsAction, selectNode as selectNodeAction,
     setDiaryUi as setDiaryUiAction, setItemUi as setItemUiAction,
-    updateTask as updateTaskAction
+    updateTask as updateTaskAction, setTaskSchedule as setTaskScheduleAction
   } from "./actions";
   import { openExternalUrl } from "./backend";
   import { showMobileContent, showMobileDiary } from "./platform";
@@ -21,7 +21,7 @@
   import ContextMenu from "./menu/ContextMenu.svelte";
   import MenuItem from "./menu/MenuItem.svelte";
   import MenuSeparator from "./menu/MenuSeparator.svelte";
-  import type { Tag, TagColor } from "./types";
+  import type { ReminderRule, Tag, TagColor } from "./types";
 
   /**
    * 移动端全局搜索的结果面板：挂在侧栏搜索框下面，占大半屏。
@@ -77,9 +77,12 @@
     taskMenu = { id: event.detail.id, nodeId, x: event.detail.x, y: event.detail.y };
   }
 
-  function setTaskDate(event: CustomEvent<{ id: string; date: string }>): void {
-    const date = event.detail.date ? event.detail.date.slice(0, 10) : null;
-    void updateTaskAction(event.detail.id, { dueDate: date, plannedDate: date });
+  /** 卡片上的「日期与提醒」浮层：写操作与列表页共用 actions.setTaskSchedule */
+  function setTaskSchedule(
+    event: CustomEvent<{ id: string; dueDate: string; dueTime: string; reminders: ReminderRule[] }>
+  ): void {
+    const { id, ...patch } = event.detail;
+    void setTaskScheduleAction(id, patch);
   }
 
   function withTaskTags(id: string, next: Tag[]): void {
@@ -187,7 +190,7 @@
           on:edit={(event) => openTaskEditor(event.detail)}
           on:context={(event) => openTaskMenu(event, hit.task.nodeId)}
           on:openLink={(event) => openLink(event.detail.href)}
-          on:setDate={setTaskDate}
+          on:setSchedule={setTaskSchedule}
           on:removeTag={removeTaskTag}
           on:editTag={editTaskTag}
           on:removeEmoji={removeTaskEmoji}

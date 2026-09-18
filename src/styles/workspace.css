@@ -270,12 +270,8 @@ h1 {
 
 .menu-inline {
   display: grid;
-  grid-template-columns: 1fr 1fr 0.75fr;
-  gap: 6px;
-}
-
-.menu-inline.two {
   grid-template-columns: 1fr 1fr;
+  gap: 6px;
 }
 
 .opacity-row {
@@ -1896,6 +1892,197 @@ h1 {
 
 .dp-time-wheel {
   padding: 2px 6px 4px;
+}
+
+/* ---------- 「日期与提醒」面板（TaskDateReminderPanel，v0.8.3） ----------
+   与 .date-picker 同一套视觉语言（同宽、同圆角、同页脚按钮），只是多了
+   「时刻行 / 提醒行」两组配置与面板内部换页。挂在右键菜单子面板里时
+   去掉边框与阴影——外层 .context-menu 已经画过了。 */
+
+.date-reminder-panel {
+  position: relative;
+  width: 248px;
+  padding: 10px;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 1px solid #ececec;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.16);
+}
+
+.task-menu-date .date-reminder-panel {
+  box-shadow: none;
+  border: none;
+  padding: 4px 0 0;
+  width: 100%;
+}
+
+/* 时刻行 / 提醒行：与日历之间用一条浅分隔线断开（沿用 .date-picker-time 的做法） */
+.dr-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 6px;
+  border-top: 1px solid #f1f2f4;
+  padding-top: 5px;
+}
+
+/* 复用 .dp-time-trigger 的外观，但在行里它只占剩余宽度（右边可能还有清除叉/加号） */
+.dr-row .dp-time-trigger {
+  width: auto;
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+}
+
+.dr-placeholder {
+  color: #a8adb6;
+  font-size: calc(var(--font-control) - 3px);
+}
+
+.dr-row-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 31px;
+  flex: none;
+  color: #6b7280;
+}
+
+.dr-row-clear,
+.dr-reminder-plus {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #9aa1ac;
+  cursor: pointer;
+}
+
+.dr-row-clear:hover,
+.dr-reminder-plus:hover {
+  background: #f2f4f7;
+  color: #d0493b;
+}
+
+.dr-reminder-plus:hover {
+  color: var(--accent);
+}
+
+/* 提醒胶囊：与 .task-tag 同一套「悬浮露出右上角删除叉」的手势，配色走中性灰
+   （提醒不是标签，不该抢标签的彩虹色语义） */
+.dr-reminder-chips {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 0;
+}
+
+.dr-reminder-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid #dfe2e7;
+  border-radius: 5px;
+  background: #f7f8fa;
+  color: #4b5563;
+  font-size: calc(var(--font-control) - 5px);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.dr-reminder-chip .tag-delete {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: #e74c3c;
+  color: white;
+  cursor: pointer;
+  opacity: 0;
+  /* 隐藏态不接点击：它缩在胶囊右上角，触屏第一下往往就落在它上面 */
+  pointer-events: none;
+  z-index: 10;
+  transition: opacity 0.12s;
+  line-height: 0;
+}
+
+.dr-reminder-chip:hover .tag-delete,
+.dr-reminder-chip.reveal-delete .tag-delete {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.dr-reminder-chip .tag-delete:hover {
+  background: #c0392b;
+}
+
+/* 「添加提醒」的选项列表：面板内的小浮层（不是第三级子菜单，桌面移动端同一份） */
+.dr-add-menu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  min-width: 168px;
+  padding: 5px;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid #ececec;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.18);
+}
+
+/* 自定义提醒的「日期 / 时间」两页 */
+.dr-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+  padding: 3px;
+  border-radius: 9px;
+  background: #f2f4f7;
+}
+
+.dr-tab {
+  flex: 1;
+  padding: 5px 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #6b7280;
+  font-size: calc(var(--font-control) - 4.5px);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dr-tab.active {
+  background: #ffffff;
+  color: var(--accent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.dr-error {
+  margin-top: 6px;
+  color: #b3261e;
+  font-size: calc(var(--font-control) - 5px);
+  text-align: center;
 }
 
 .time-picker {

@@ -161,6 +161,10 @@ pub struct SchedulerHandle {
     core: Arc<crate::host::HostCore>,
     active: Arc<ActiveRuns>,
     control: Arc<Mutex<Option<JoinHandle<()>>>>,
+    /// 还有等着触发的任务提醒吗（看门狗据此决定能不能自动退出）。
+    /// 用标志位而不是让看门狗自己 `plan()`：看门狗每 2 秒跑一次，
+    /// 为它每 2 秒解析一遍 data.json 不值当。
+    reminder_work: Arc<AtomicBool>,
 }
 
 impl SchedulerHandle {
@@ -211,6 +215,11 @@ impl SchedulerHandle {
         self.active.ids()
     }
 
+    /// 是否还有未触发的任务提醒（`reminders::Engine::has_pending` 的快照）。
+    pub fn has_reminder_work(&self) -> bool {
+        self.reminder_work.load(Ordering::SeqCst)
+    }
+
     pub fn shutdown(&self) {
         let ids = self.active.cancel_all();
         let _ = self.core.processes.stop_all();
@@ -231,6 +240,7 @@ pub struct Scheduler {
     core: Arc<crate::host::HostCore>,
     rx: Receiver<SchedulerMsg>,
     active: Arc<ActiveRuns>,
+    reminder_work: Arc<AtomicBool>,
 }
 
 pub fn start(core: Arc<crate::host::HostCore>) -> SchedulerHandle {
@@ -238,16 +248,23 @@ pub fn start(core: Arc<crate::host::HostCore>) -> SchedulerHandle {
     let active = Arc::new(ActiveRuns::default());
     active.start_accepting();
     let control = Arc::new(Mutex::new(None));
+    let reminder_work = Arc::new(AtomicBool::new(false));
     let handle = SchedulerHandle {
         tx: tx.clone(),
         core: core.clone(),
         active: active.clone(),
         control: control.clone(),
+        reminder_work: reminder_work.clone(),
     };
     let thread_handle = thread::Builder::new()
         .name("kxtodo-scheduler".to_string())
         .spawn(move || {
-            let mut scheduler = Scheduler { core, rx, active };
+            let mut scheduler = Scheduler {
+                core,
+                rx,
+                active,
+                reminder_work,
+            };
             scheduler.run();
         })
         .expect("spawn scheduler thread");
@@ -263,7 +280,38 @@ impl Scheduler {
             self.handle_missed_on_start();
             self.recompute_all_next();
         }
+        // 任务提醒跟着调度线程跑：它不是定时任务（不建 ScheduleEntry、不进 tasks.json），
+        // 但「每 500ms 醒一次看看到点了没」这套节拍是现成的，没理由再开一条线程。
+        let mut reminders = crate::reminders::Engine::default();
+        let mut previous_wall = Utc::now();
+        let mut previous_instant = Instant::now();
+        // 首轮一律当作时钟跳变：刚启动时看见的「已到点」全是停机期间错过的，不补发。
+        let mut first = true;
+        let mut last_error: Option<String> = None;
         loop {
+            let now = Utc::now();
+            let reset = first
+                || crate::reminders::clock_discontinuous(
+                    previous_wall,
+                    now,
+                    previous_instant.elapsed(),
+                );
+            first = false;
+            // 轮询期间不许看门狗判定「没活可干」（它 2 秒问一次）
+            self.reminder_work.store(true, Ordering::SeqCst);
+            match reminders.poll(&self.core, now, reset) {
+                Ok(()) => last_error = None,
+                Err(error) => {
+                    // 同一条错误只报一次：台账损坏这类问题会每 500ms 复现一次，
+                    // 逐轮上报等于把前端的事件通道刷爆。
+                    if last_error.as_deref() != Some(error.message.as_str()) {
+                        self.emit_reminder_error(&error);
+                        last_error = Some(error.message);
+                    }
+                }
+            }
+            self.reminder_work
+                .store(reminders.has_pending(), Ordering::SeqCst);
             match self.rx.recv_timeout(Duration::from_millis(500)) {
                 Ok(SchedulerMsg::Reload) => {}
                 Ok(SchedulerMsg::RunNow { id, wait, respond }) => {
@@ -274,6 +322,23 @@ impl Scheduler {
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
             self.tick();
+            previous_wall = Utc::now();
+            previous_instant = Instant::now();
+        }
+        self.reminder_work.store(false, Ordering::SeqCst);
+    }
+
+    /// 提醒引擎的故障报给前端（台账损坏、通知发不出去）。走事件而不是日志：
+    /// 这类问题只有用户能修（比如去系统设置里开通知权限），写进日志没人看得见。
+    fn emit_reminder_error(&self, error: &CoreError) {
+        let Ok(backend) = self.core.backend.read() else {
+            return;
+        };
+        if let Some(backend) = backend.as_ref() {
+            backend.emit(
+                "kxtodo://reminder-error",
+                json!({ "code": error.code, "message": error.message }),
+            );
         }
     }
 
@@ -914,6 +979,16 @@ fn execute_action_flow(
     runtimes: &crate::model::Runtimes,
     cancelled: &Arc<AtomicBool>,
 ) -> FlowResult {
+    // 移动端跑不了脚本 / 外部程序 / 条件探针。同步会把桌面建的这类任务原样推过来，
+    // 与其让 spawn 抛一个看不懂的 OS 错误，不如明确说清是平台不支持。
+    if let Err(error) = crate::ops_schedule::ensure_platform_supported(&entry.spec) {
+        return FlowResult {
+            result: Err(error),
+            probe: None,
+            probe_no_match: false,
+            main_action_started: false,
+        };
+    }
     let mut probe_state = None;
     if let Trigger::Condition { probe, when, .. } = &entry.spec.trigger {
         if cancelled.load(Ordering::SeqCst) {

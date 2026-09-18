@@ -28,6 +28,7 @@ pub mod ops_storage;
 pub mod ops_sync;
 pub mod ops_task;
 pub mod plan;
+pub mod reminders;
 pub mod render;
 pub mod repo;
 pub mod scheduler;
@@ -35,6 +36,7 @@ pub mod schema;
 pub mod skills;
 pub mod sync;
 pub mod time;
+pub mod transfer;
 pub mod update_fetch;
 
 pub use error::CoreError;

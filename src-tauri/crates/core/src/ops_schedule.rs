@@ -294,6 +294,36 @@ pub fn validate_spec_value(
     Ok(validation)
 }
 
+/// 移动端只能跑「通知」动作：设备上没有 shell、没有可执行文件的路径语义，
+/// 条件触发还要起子进程做探针。
+///
+/// **执行前查而不是（只）在创建时查**：同步会把桌面上建的脚本任务原样推到手机上，
+/// 那份 spec 从没经过本机校验；只在创建时拦等于给同步数据开了后门。
+/// 反过来，校验期不拦是为了不让手机上的用户连「关掉一条同步来的脚本任务」都做不到。
+pub fn ensure_platform_supported(spec: &ScheduleSpec) -> CoreResult<()> {
+    ensure_action_supported(spec, cfg!(any(target_os = "android", target_os = "ios")))
+}
+
+/// `ensure_platform_supported` 的可测版本（平台是编译期常量，测试要两边都覆盖到）。
+pub fn ensure_action_supported(spec: &ScheduleSpec, mobile: bool) -> CoreResult<()> {
+    if !mobile {
+        return Ok(());
+    }
+    if !matches!(spec.action, Action::Notification { .. }) {
+        return Err(CoreError::validation(
+            "SCHEDULE_ACTION_UNSUPPORTED",
+            "移动端只支持「通知」动作：设备上没有运行脚本与外部程序的环境",
+        ));
+    }
+    if matches!(spec.trigger, Trigger::Condition { .. }) {
+        return Err(CoreError::validation(
+            "SCHEDULE_TRIGGER_UNSUPPORTED",
+            "移动端不支持条件触发：探针需要起子进程",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_spec_semantics(
     spec: &ScheduleSpec,
     runtimes: &crate::model::Runtimes,

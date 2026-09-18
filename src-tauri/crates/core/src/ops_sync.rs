@@ -118,24 +118,27 @@ fn scopes_from_params(params: &Value) -> Option<Scopes> {
     })
 }
 
-fn emit_sync_domains(ctx: &ExecContext, meta: &mut Meta, changed: &[Domain], ids: Vec<String>) {
+/// 发域事件叫醒常驻的 GUI（同步与配置类动作没有别的路能让前端知道「盘上变了」）。
+///
+/// **revision 一律发 0**，那是前后端约定的「没有版本号，强制刷新」哨兵：这里的调用点
+/// （`sync register/login/unpair/configure/now`）要么改的是同步运行时状态而不是领域文件，
+/// 要么刚由 engine 写完拿不到 outcome，都没有现成的 revision 可用。前端的水位判断
+/// （`stores.ts::listenCoreEvents`）对 0 有专门的放行分支（`revision > 0 &&`），
+/// 所以事件不会被当成「这一版我已经有过了」丢掉。**两边是一套契约，改一边先读另一边。**
+fn emit_sync_domains(ctx: &ExecContext, changed: &[Domain]) {
     let Some(host) = ctx.host else {
         return;
     };
     for domain in changed {
-        host.emit_domain_event(*domain, 0, ids.clone());
+        host.emit_domain_event(*domain, 0, Vec::new());
     }
-    let _ = meta;
 }
 
 /// sync 域写 settings.json 的动作（register/login/unpair/configure）都要通知前端回刷：
 /// 自动同步循环订阅 appSettings 来重排定时器，不发事件的话「用 CLI 改间隔」
 /// 对正在运行的 GUI 永远不生效（GUI 自己面板的路径靠显式 refreshFromCore 兜着）。
 fn notify_settings_changed(ctx: &ExecContext) {
-    let Some(host) = ctx.host else {
-        return;
-    };
-    host.emit_domain_event(Domain::Settings, 0, Vec::new());
+    emit_sync_domains(ctx, &[Domain::Settings]);
 }
 
 pub fn sync_dispatch(
@@ -307,11 +310,11 @@ fn sync_discover(inv: &Invocation) -> CoreResult<Value> {
 
 fn sync_now(_inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
     let report = engine::run_sync(ctx.repo)?;
-    // 拉到新图片也要回刷：前端图片缓存里解析失败的引用需要重渲染才会重新解析
+    // 拉到东西就回刷**五个域**：一轮同步可能改的是日记或账本（v0.8.3 之前只发
+    // data/settings/schedule，同步下来的日记与账目要等下一次无关事件才出现在界面上）。
+    // 图片也算一次：前端图片缓存里解析失败的引用要重渲染才会重新解析。
     if report.applied > 0 || report.images_pulled > 0 {
-        let mut domains = vec![Domain::Data, Domain::Settings, Domain::Schedule];
-        domains.dedup();
-        emit_sync_domains(ctx, meta, &domains, Vec::new());
+        emit_sync_domains(ctx, &Domain::ALL);
     }
     let _ = meta;
     Ok(serde_json::to_value(&report)?)

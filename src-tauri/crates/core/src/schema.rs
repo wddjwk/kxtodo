@@ -153,10 +153,23 @@ pub fn jq_schema() -> Value {
 }
 
 /// Command schema from the live clap tree (single source = CLI definitions).
+/// core 命令名 → clap 树上的节点路径。
+///
+/// 绝大多数命令名与子命令路径一一对应（`sync.pair` → `sync pair`），只有一个例外：
+/// `sync.historyRemove` 在 CLI 上是 `sync history --remove <下标>`——**一个子命令对应两个
+/// core 动作**。不映射的话 `schema sync.historyRemove` 报 SCHEMA_NOT_FOUND，
+/// Agent 就查不到这个动作的风险等级（也就不会知道它要不要 --yes）。
+fn schema_node_path(path: &str) -> &str {
+    match path {
+        "sync.historyRemove" => "sync.history",
+        other => other,
+    }
+}
+
 pub fn command_schema(root: &clap::Command, path: &str) -> CoreResult<Value> {
     let mut current = root;
     let mut usage = vec!["kxtodo".to_string()];
-    for segment in path.split('.') {
+    for segment in schema_node_path(path).split('.') {
         let next = current
             .get_subcommands()
             .find(|sub| sub.get_name() == segment)
@@ -284,6 +297,14 @@ pub fn risk_for(command: &str) -> &'static str {
         | "config.set"
         | "config.unset"
         | "notify" => "write",
+        // 同步（v0.8.3 补）：此前这里一个 sync.* 分支都没有，`schema sync.pair` 一律报 read，
+        // 与 help 的 Risk: write 顶牛——Agent 是照 schema 判断要不要先向用户确认的。
+        // pair/configure/unpair 改的是本机配对与凭据，now 会推拉并改写五个领域文件，
+        // historyRemove 删一条配对历史；status/probe/discover/peers/history 是只读
+        // （probe 只刷 runtime/sync.json 的在线结论缓存，与 help 口径一致算 read）。
+        "sync.pair" | "sync.configure" | "sync.unpair" | "sync.now" | "sync.historyRemove" => {
+            "write"
+        }
         _ => "read",
     }
 }

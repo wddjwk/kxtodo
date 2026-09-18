@@ -137,22 +137,30 @@
     panel = "list";
   }
 
+  /** 退一级：类型小表单 → 账户表单/转账 → 列表 → 关浮层。
+   *  **返回键与 Escape 共用这一条**：早先 Esc 自己写了一份（跳过类型表单那一档、也不认
+   *  「直达表单」语义），同一个浮层两条退路行为不一致——按 Esc 会退到用户没见过的列表，
+   *  按返回键直接关。 */
+  function stepBack(): void {
+    if (typeFormOpen) {
+      typeFormOpen = false;
+      return;
+    }
+    if (panel !== "list") {
+      if (startedOutsideList) onClose();
+      else backToList();
+      return;
+    }
+    onClose();
+  }
+
   onMount(() =>
-    // 安卓返回键逐级退：类型小表单 → 账户表单/转账 → 列表 → 关浮层。
+    // 安卓返回键逐级退（层级见 stepBack）。
     // 早先漏了 typeFormOpen 这一级（从类型表单返回会连账户表单一起跳过），
     // 也没有「直达表单」的语义（从资产页点添加进来的，返回却退到一个用户
     // 从没见过的列表面板——「返回到奇怪的位置」正是这个）。
     addBackInterceptor(() => {
-      if (typeFormOpen) {
-        typeFormOpen = false;
-        return true;
-      }
-      if (panel !== "list") {
-        if (startedOutsideList) onClose();
-        else backToList();
-        return true;
-      }
-      onClose();
+      stepBack();
       return true;
     })
   );
@@ -283,8 +291,7 @@
     if (event.key === "Escape" && !event.isComposing && event.keyCode !== 229) {
       event.preventDefault();
       event.stopPropagation();
-      if (panel !== "list") backToList();
-      else onClose();
+      stepBack();
       return;
     }
     if (event.key === "Enter" && panel === "form" && !event.isComposing && event.keyCode !== 229) {
@@ -301,7 +308,15 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="editor-overlay ledger-overlay" use:imeInset on:pointerdown={handleBackdrop} on:contextmenu|preventDefault|stopPropagation>
+<!-- click 不再往上冒：LedgerView.closeOverlays 现在也收这个浮层，而 App 的
+     on:click={closeOverlays} 会让「在浮层里点一下」把自己关掉（同 LedgerImagePreview 的写法） -->
+<div
+  class="editor-overlay ledger-overlay"
+  use:imeInset
+  on:pointerdown={handleBackdrop}
+  on:click|stopPropagation
+  on:contextmenu|preventDefault|stopPropagation
+>
   <div
     class="editor-dialog ledger-sheet ledger-manager"
     style={`--accent: ${accent}`}

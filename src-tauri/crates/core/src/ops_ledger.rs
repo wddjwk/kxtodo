@@ -350,6 +350,9 @@ fn category_view(category: &LedgerCategory) -> Value {
         "id": category.id,
         "name": category.name,
         "side": category.side.as_str(),
+        // 层级写在输出里（0 = 大类，1 = 子分类）：列表是**平铺**的，
+        // Agent 不必自己按 parentId 聚合才知道谁是父谁是子
+        "depth": u8::from(category.parent_id.is_some()),
         "parentId": category.parent_id,
         "icon": category.icon,
         "color": category.color,
@@ -1281,22 +1284,49 @@ fn ledger_icon_list(_inv: &Invocation, _ctx: &ExecContext, _meta: &mut Meta) -> 
     }))
 }
 
+/// 分类列表：**平铺数组，但顺序是树的先序**（大类 → 紧跟它自己的子分类），
+/// 同层按 `order`，先支出后收入。
+///
+/// v0.8.3 之前只按 `order` 排：子分类的 order 也从 1 起，于是「公交地铁」会插到它父亲
+/// 「交通」前面，Agent 只能自己按 parentId 重新聚合——而 help 写的是「列出两级分类」。
+/// 现在顺序本身就是层级，配合每项的 `depth` / `parentId` 不用再聚合。
 fn ledger_categories(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult<Value> {
     let file = ctx.repo.load_ledger()?;
     set_read_revision(meta, Domain::Ledger, file.meta.revision);
     let side = param_str(&inv.params, "side").and_then(|raw| LedgerSide::parse(&raw));
-    let mut categories = file.categories.clone();
+    let mut categories: Vec<&LedgerCategory> = file
+        .categories
+        .iter()
+        .filter(|item| side.map(|want| item.side == want).unwrap_or(true))
+        .collect();
     categories.sort_by(|a, b| {
         a.side
             .as_str()
             .cmp(b.side.as_str())
             .then(a.order.partial_cmp(&b.order).unwrap_or(std::cmp::Ordering::Equal))
     });
-    let items: Vec<Value> = categories
-        .iter()
-        .filter(|item| side.map(|want| item.side == want).unwrap_or(true))
-        .map(category_view)
-        .collect();
+    let mut items: Vec<Value> = Vec::with_capacity(categories.len());
+    let mut listed = vec![false; categories.len()];
+    for (index, parent) in categories.iter().enumerate() {
+        if listed[index] || parent.parent_id.is_some() {
+            continue;
+        }
+        listed[index] = true;
+        items.push(category_view(parent));
+        for (kid_index, kid) in categories.iter().enumerate() {
+            if listed[kid_index] || kid.parent_id.as_deref() != Some(parent.id.as_str()) {
+                continue;
+            }
+            listed[kid_index] = true;
+            items.push(category_view(kid));
+        }
+    }
+    // 父亲不在本次输出里的子分类（父被删 / 跨侧的异常数据）：照样列出来，条目一条都不能少
+    for (index, item) in categories.iter().enumerate() {
+        if !listed[index] {
+            items.push(category_view(item));
+        }
+    }
     Ok(json!({ "total": items.len(), "items": items }))
 }
 

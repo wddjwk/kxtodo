@@ -280,6 +280,7 @@ pub fn settings_payload(settings: &SettingsFile) -> Value {
             "uiColors": settings.appearance.ui_colors,
             "newNodeDefaults": settings.appearance.new_node_defaults,
             "tagPresets": settings.appearance.tag_presets,
+            "diaryTagPresets": settings.appearance.diary_tag_presets,
             "dueColors": settings.appearance.due_colors,
         },
         "features": {
@@ -730,11 +731,49 @@ fn apply_settings_record(record: &EntityRecord, settings: &mut SettingsFile) -> 
                     settings.appearance.new_node_defaults = parsed;
                 }
             }
+            // 预置标签 / 临期配色（v0.8.3 修）：payload 里一直在发这两组键，
+            // 这里却从不读——A 设备改了预置标签 B 设备永远收不到。校验口径复用
+            // ops_config 的 expect_*（与 config.set 同一条路，不各写一份）。
+            if let Some(presets) = map.get("tagPresets") {
+                if let Ok(parsed) = crate::ops_config::expect_tag_presets("appearance.tagPresets", presets)
+                {
+                    settings.appearance.tag_presets = parsed;
+                }
+            }
+            if let Some(presets) = map.get("diaryTagPresets") {
+                if let Ok(parsed) =
+                    crate::ops_config::expect_tag_presets("appearance.diaryTagPresets", presets)
+                {
+                    settings.appearance.diary_tag_presets = parsed;
+                }
+            }
+            if let Some(colors) = map.get("dueColors") {
+                if let Ok(parsed) = crate::ops_config::expect_due_colors("appearance.dueColors", colors)
+                {
+                    settings.appearance.due_colors = parsed;
+                }
+            }
         }
     }
     if let Some(features) = payload.features {
-        if let Ok(parsed) = serde_json::from_value::<crate::model::FeatureSettings>(features) {
-            settings.features = parsed;
+        // **逐字段覆盖**（v0.8.3 修）：原先整块反序列化成 FeatureSettings，载荷里只带
+        // 三个共享键，缺的键全按 serde 默认值回填——于是远端赢一次 LWW，接收端的
+        // mobileBack / weekStart / editorToolbar / features.sync 这些**本机偏好**就被
+        // 静默拨回默认。与 profile 分支当年修的是同一个坑：「缺键」=「这条记录没提它」。
+        if let Some(map) = features.as_object() {
+            if let Some(value) = map.get("showCategoryBadges").and_then(Value::as_bool) {
+                settings.features.show_category_badges = value;
+            }
+            if let Some(value) = map.get("dueHighlight").and_then(Value::as_str) {
+                if matches!(value, "off" | "solid" | "gradient") {
+                    settings.features.due_highlight = value.to_string();
+                }
+            }
+            if let Some(value) = map.get("linkRender").and_then(Value::as_str) {
+                if matches!(value, "off" | "title" | "card") {
+                    settings.features.link_render = value.to_string();
+                }
+            }
         }
     }
     if let Some(updates) = payload.updates {
@@ -927,6 +966,7 @@ mod tests {
             planned_date: None,
             due_date: None,
             due_time: String::new(),
+            reminders: Vec::new(),
             completed_at: None,
             tags: Vec::new(),
             emojis: Vec::new(),
@@ -1128,6 +1168,100 @@ mod tests {
         };
         apply_settings_record(&legacy_record, &mut legacy).unwrap();
         assert_eq!(legacy.sync.interval_seconds, 77);
+    }
+
+    fn settings_record(data: Value, seq: u64) -> EntityRecord {
+        EntityRecord {
+            kind: "settings".to_string(),
+            id: SETTINGS_ENTITY_ID.to_string(),
+            updated_at: "2026-01-04T00:00:00.000Z".to_string(),
+            updated_by: "dev-b".to_string(),
+            deleted: false,
+            data,
+            seq,
+        }
+    }
+
+    fn preset(id: &str, color: crate::model::TagColor, text: &str) -> crate::model::Tag {
+        crate::model::Tag {
+            id: id.to_string(),
+            color,
+            text: Some(text.to_string()),
+            hex: None,
+            extra: Map::new(),
+        }
+    }
+
+    /// v0.8.3 review 的两个同根问题：**#1 预置标签与临期配色只发不收**（payload 里有这三组键，
+    /// apply 侧从不读——A 设备改了 B 设备永远收不到），**#2 features 整块替换**（载荷只带三个
+    /// 共享键，缺的键按 serde 默认回填，远端赢一次 LWW 就把接收端的本机偏好拨回默认）。
+    #[test]
+    fn presets_and_due_colors_round_trip_and_features_merge_per_field() {
+        let mut source = SettingsFile::default();
+        source
+            .appearance
+            .tag_presets
+            .push(preset("tagpreset-a", crate::model::TagColor::Blue, "工作预置"));
+        source
+            .appearance
+            .diary_tag_presets
+            .push(preset("tagpreset-d", crate::model::TagColor::Green, "日记预置"));
+        source.appearance.due_colors.insert(
+            "entry-a".to_string(),
+            json!(["#808080", "#d93025", "#eab308", "#3b82f6"]),
+        );
+        source.features.due_highlight = "gradient".to_string();
+        source.features.link_render = "title".to_string();
+        let payload = settings_payload(&source);
+        assert_eq!(payload["appearance"]["tagPresets"][0]["text"], json!("工作预置"));
+        assert_eq!(
+            payload["appearance"]["diaryTagPresets"][0]["text"],
+            json!("日记预置"),
+            "日记预置是独立的一套（v0.8.3），也要跟着同步"
+        );
+        assert_eq!(
+            payload["appearance"]["dueColors"]["entry-a"],
+            json!(["#808080", "#d93025", "#eab308", "#3b82f6"])
+        );
+
+        // 接收端：先把本机偏好设成非默认值，它们**不在**共享载荷里，应用后必须原样保留
+        let mut target = SettingsFile::default();
+        target.features.mobile_back = true;
+        target.features.week_start = "sunday".to_string();
+        target.features.editor_toolbar = false;
+        target.features.sync = false;
+        apply_settings_record(&settings_record(payload, 1), &mut target).unwrap();
+
+        assert_eq!(target.appearance.tag_presets.len(), 1, "#1：预置标签收得到了");
+        assert_eq!(
+            target.appearance.tag_presets[0].text.as_deref(),
+            Some("工作预置")
+        );
+        assert_eq!(
+            target.appearance.diary_tag_presets[0].text.as_deref(),
+            Some("日记预置")
+        );
+        assert_eq!(target.appearance.due_colors.len(), 1, "#1：临期配色收得到了");
+        assert_eq!(target.features.due_highlight, "gradient", "共享键跟着改");
+        assert_eq!(target.features.link_render, "title");
+        assert!(target.features.mobile_back, "#2：本机偏好不被拨回默认");
+        assert_eq!(target.features.week_start, "sunday");
+        assert!(!target.features.editor_toolbar);
+        assert!(!target.features.sync);
+
+        // 非法载荷整组丢弃，不把本机的值写坏（校验口径与 config.set 同一条路）
+        let mut guarded = SettingsFile::default();
+        guarded.appearance.tag_presets = source.appearance.tag_presets.clone();
+        apply_settings_record(
+            &settings_record(
+                json!({ "appearance": { "tagPresets": "not-an-array", "dueColors": { "e": ["#fff"] } } }),
+                2,
+            ),
+            &mut guarded,
+        )
+        .unwrap();
+        assert_eq!(guarded.appearance.tag_presets.len(), 1, "非法预置不改本机");
+        assert!(guarded.appearance.due_colors.is_empty(), "非法配色不写进来");
     }
 
     fn diary(id: &str, date: &str, ts: &str) -> crate::model::DiaryEntry {

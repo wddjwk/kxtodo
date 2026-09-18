@@ -251,8 +251,8 @@ const context = await browser.newContext({ viewport: { width: 1440, height: 900 
     await page.isChecked(".tag-panel .tag-keep-box input")
   );
 
-  await page.fill(".tag-panel .tag-editor-input-row input", "工作");
-  await page.press(".tag-panel .tag-editor-input-row input", "Enter");
+  await page.fill(".tag-panel .tag-editor-input-row input:not([type=checkbox])", "工作");
+  await page.press(".tag-panel .tag-editor-input-row input:not([type=checkbox])", "Enter");
   await page.waitForTimeout(400);
   const presetCount = await page.evaluate(
     (key) => (JSON.parse(localStorage.getItem(key) ?? "{}")?.appearance?.tagPresets ?? []).length,
@@ -275,7 +275,8 @@ const context = await browser.newContext({ viewport: { width: 1440, height: 900 
   );
   check("桌面工具箱卡片两列", columns === 2, `${columns} 列`);
   const cards = await page.$$eval(".toolbox-card strong", (nodes) => nodes.map((n) => n.textContent.trim()));
-  check("注册表里有两件工具", cards.length === 2, cards.join(" / "));
+  // v0.8.3 又加了「草稿纸」与「文件传输助手」，目录从两件变四件
+  check("目录里有四件工具", cards.length === 4, cards.join(" / "));
 
   await page.click(".toolbox-card:has-text('人民币')");
   await page.waitForSelector(".toolbox-text-input", { timeout: 8000 });

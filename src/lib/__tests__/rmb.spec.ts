@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatYuanNumber, fromChineseYuan, toChineseYuan } from "../rmb";
+import { formatYuanNumber, fromChineseYuan, toChineseYuan, SUPPORTED_HAN } from "../rmb";
 
 describe("toChineseYuan（人民币大写）", () => {
   it("基本档位", () => {
@@ -109,5 +109,33 @@ describe("fromChineseYuan（反向：中文金额 → 数字）", () => {
     expect(formatYuanNumber(1234.56)).toBe("1234.56");
     expect(formatYuanNumber(-1)).toBe("-1");
     expect(formatYuanNumber(0)).toBe("0");
+  });
+});
+
+describe("SUPPORTED_HAN 常显清单（需求 1：列出来的字必须真认得）", () => {
+  /** "二(贰/貳/两/兩)" → [二,贰,貳,两,兩]；"万" → [万] */
+  function charsOf(item: string): string[] {
+    const paren = /^([^(]+)\(([^)]+)\)$/.exec(item);
+    const raw = paren ? `${paren[1]}/${paren[2]}` : item;
+    return raw.split("/").flatMap((part) => [...part]);
+  }
+
+  const allChars = SUPPORTED_HAN.flatMap((group) => group.items.flatMap(charsOf));
+
+  it("清单非空且覆盖十个数字位", () => {
+    expect(allChars.length).toBeGreaterThan(20);
+    for (const ch of ["零", "壹", "貳", "參", "陸", "兩"]) {
+      expect(allChars).toContain(ch);
+    }
+  });
+
+  it("列出来的每个字都至少有一种写法能解析", () => {
+    for (const ch of allChars) {
+      const templates = [`${ch}元整`, `一${ch}元整`, `一${ch}`, `伍${ch}`, `一元${ch}`, `${ch}一元整`];
+      expect(
+        templates.some((template) => fromChineseYuan(template) !== null),
+        `字「${ch}」在常显清单里但解析不认`
+      ).toBe(true);
+    }
   });
 });

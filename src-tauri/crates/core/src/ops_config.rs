@@ -22,6 +22,7 @@ pub fn is_shared_settings_path(path: &str) -> bool {
             // 新建分组/条目的默认外观同 uiColors 一个待遇：换台设备建出来的条目不该变脸
             // 预置标签是内容（用户攒的一份常用标签库），换台设备也该能用
             | "appearance.tagPresets"
+            | "appearance.diaryTagPresets"
             | "appearance.dueColors"
             | "appearance.newNodeDefaults.accent"
             | "appearance.newNodeDefaults.backgroundColor"
@@ -141,9 +142,9 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
     FieldMeta {
         path: "appearance.dueColors",
         kind: "object",
-        description: "临期高亮配色：{ 节点id: [今天色, 明天色, 后天色] }",
+        description: "临期高亮配色：{ 节点id: [已过期色, 今天色, 明天色, 后天色] }",
         // **不是 is_map**：map 分支是给 uiColors 那种「--map-key + 单个颜色」的形态写的，
-        // dueColors 的值是每节点一个三色数组，整份对象一次写入（expect_due_colors 校验）。
+        // dueColors 的值是每节点一个四色数组，整份对象一次写入（expect_due_colors 校验）。
         // 早先误标成 is_map，GUI 写配色永远撞 MAP_KEY_REQUIRED——那条校验的 --map-key
         // 提示还是给 CLI 用户看的，GUI 用户无从下手。
         is_map: false,
@@ -152,6 +153,12 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         path: "appearance.tagPresets",
         kind: "array",
         description: "预置标签列表（右键菜单「标签」里可一键添加的常用标签）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "appearance.diaryTagPresets",
+        kind: "array",
+        description: "日记专用预置标签列表（与 tagPresets 分开两套，日记编辑器/日记菜单用这一套）",
         is_map: false,
     },
     FieldMeta {
@@ -329,6 +336,12 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         is_map: false,
     },
     FieldMeta {
+        path: "transfer.relay",
+        kind: "string",
+        description: "文件传输助手：自选 iroh relay（空 = 跟 p2p 同步同一个；disabled = 不用 relay）",
+        is_map: false,
+    },
+    FieldMeta {
         path: "sync.serverUrl",
         kind: "string",
         description: "自建服务方式的服务器地址（http(s)://host:port）",
@@ -362,6 +375,20 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         path: "sync.syncSchedules",
         kind: "boolean",
         description: "同步定时任务 spec（跨平台路径通常不可执行）",
+        is_map: false,
+    },
+    // 日记与账本的范围开关（v0.8.3 补）：模型里五个 scope 一直都有，config 却只认前三个，
+    // 于是「全部数据」导入摊到 sync.syncDiary 就撞 UNKNOWN_CONFIG_KEY 整轮失败
+    FieldMeta {
+        path: "sync.syncDiary",
+        kind: "boolean",
+        description: "同步日记",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "sync.syncLedger",
+        kind: "boolean",
+        description: "同步账本",
         is_map: false,
     },
     FieldMeta {
@@ -538,6 +565,7 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "appearance.diaryFontSize" => json!(settings.appearance.diary_font_size),
         "appearance.navItems" => json!(settings.appearance.nav_items),
         "appearance.tagPresets" => json!(settings.appearance.tag_presets),
+        "appearance.diaryTagPresets" => json!(settings.appearance.diary_tag_presets),
         "appearance.dueColors" => json!(settings.appearance.due_colors),
         "appearance.navLayout" => json!(settings.appearance.nav_layout),
         "appearance.themePresets" => json!(settings.appearance.theme_presets),
@@ -574,12 +602,15 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "sync.lanPeer" => json!(settings.sync.lan_peer),
         "sync.p2pRelay" => json!(settings.sync.p2p_relay),
         "sync.p2pDirectory" => json!(settings.sync.p2p_directory),
+        "transfer.relay" => json!(settings.transfer.relay),
         "sync.serverUrl" => json!(settings.sync.server_url),
         "sync.username" => json!(settings.sync.username),
         "sync.secret" => json!(settings.sync.secret),
         "sync.syncData" => json!(settings.sync.sync_data),
         "sync.syncSettings" => json!(settings.sync.sync_settings),
         "sync.syncSchedules" => json!(settings.sync.sync_schedules),
+        "sync.syncDiary" => json!(settings.sync.sync_diary),
+        "sync.syncLedger" => json!(settings.sync.sync_ledger),
         "sync.intervalSeconds" => json!(settings.sync.interval_seconds),
         "sync.reconnectSeconds" => json!(settings.sync.reconnect_seconds),
         "updates.autoCheck" => json!(settings.updates.auto_check),
@@ -777,17 +808,24 @@ fn expect_color(path: &str, value: &Value) -> CoreResult<String> {
 /// 上限 64 条——预置标签是「一眼扫到、点一下就用」的快捷方式，不是标签库；
 /// 允许无限加只会让那两列列表变成长长的滚动区，反而不好用。
 /// 临期高亮配色：每个值必须是三个合法 `#rrggbb`。
-fn expect_due_colors(path: &str, value: &Value) -> CoreResult<Map<String, Value>> {
+/// `pub(crate)`：同步合并（merge.rs）要用同一套校验口径，避免两边各写一份漂移。
+pub(crate) fn expect_due_colors(path: &str, value: &Value) -> CoreResult<Map<String, Value>> {
+    /// 四档配色，顺序与前端 `dueHighlight.ts::DEFAULT_DUE_COLORS` 一致：
+    /// 已过期 / 今天 / 明天 / 后天（v0.8.3 加了「已过期」这一档，此前是三个）。
+    const DUE_COLOR_SLOTS: usize = 4;
     let map = value
         .as_object()
-        .ok_or_else(|| invalid_value(path, "应为 { 节点id: [三色] } 对象"))?;
+        .ok_or_else(|| invalid_value(path, "应为 { 节点id: [四色] } 对象"))?;
     let mut out = Map::new();
     for (key, entry) in map {
         let list = entry
             .as_array()
             .ok_or_else(|| invalid_value(path, "每项应为颜色数组"))?;
-        if list.len() != 3 {
-            return Err(invalid_value(path, "每项应为三个颜色（今天/明天/后天）"));
+        if list.len() != DUE_COLOR_SLOTS {
+            return Err(invalid_value(
+                path,
+                "每项应为四个颜色（已过期/今天/明天/后天）",
+            ));
         }
         let colors: Vec<Value> = list
             .iter()
@@ -802,7 +840,8 @@ fn expect_due_colors(path: &str, value: &Value) -> CoreResult<Map<String, Value>
     Ok(out)
 }
 
-fn expect_tag_presets(path: &str, value: &Value) -> CoreResult<Vec<crate::model::Tag>> {
+/// `pub(crate)`：同步合并（merge.rs）要用同一套校验口径。
+pub(crate) fn expect_tag_presets(path: &str, value: &Value) -> CoreResult<Vec<crate::model::Tag>> {
     const MAX_PRESETS: usize = 64;
     let items = value
         .as_array()
@@ -839,13 +878,19 @@ fn expect_nav_items(path: &str, value: &Value) -> CoreResult<Vec<String>> {
             .ok_or_else(|| invalid_value(path, "每项应为字符串"))?
             .trim();
         if !crate::model::NAV_ITEM_IDS.contains(&raw) {
-            return Err(invalid_value(
-                path,
-                format!(
-                    "未知导航项 `{raw}`，可选 {}",
-                    crate::model::NAV_ITEM_IDS.join("/")
-                ),
-            ));
+            // 工具行（v0.8.3 的「固定此工具」）：`tool:<id>`，id 必须在工具目录里
+            let tool = raw.strip_prefix(crate::model::NAV_TOOL_PREFIX);
+            let known_tool = tool.is_some_and(|id| crate::model::NAV_TOOL_IDS.contains(&id));
+            if !known_tool {
+                return Err(invalid_value(
+                    path,
+                    format!(
+                        "未知导航项 `{raw}`，可选 {} 或 {}<工具id>",
+                        crate::model::NAV_ITEM_IDS.join("/"),
+                        crate::model::NAV_TOOL_PREFIX
+                    ),
+                ));
+            }
         }
         if !out.iter().any(|existing| existing == raw) {
             out.push(raw.to_string());
@@ -972,6 +1017,9 @@ pub fn set_value(
         }
         "appearance.tagPresets" => {
             settings.appearance.tag_presets = expect_tag_presets(path, &value)?;
+        }
+        "appearance.diaryTagPresets" => {
+            settings.appearance.diary_tag_presets = expect_tag_presets(path, &value)?;
         }
         "appearance.dueColors" => {
             settings.appearance.due_colors = expect_due_colors(path, &value)?;
@@ -1122,6 +1170,13 @@ pub fn set_value(
             }
             settings.sync.p2p_directory = raw;
         }
+        "transfer.relay" => {
+            let raw = expect_string(path, &value)?.trim().to_string();
+            if !raw.is_empty() && raw != "disabled" {
+                crate::sync::p2p::net::parse_relay_url(&raw)?;
+            }
+            settings.transfer.relay = raw;
+        }
         "sync.serverUrl" => {
             let raw = expect_string(path, &value)?;
             if !raw.is_empty() && !raw.starts_with("http://") && !raw.starts_with("https://") {
@@ -1152,6 +1207,12 @@ pub fn set_value(
         }
         "sync.syncSchedules" => {
             settings.sync.sync_schedules = expect_bool(path, &value)?;
+        }
+        "sync.syncDiary" => {
+            settings.sync.sync_diary = expect_bool(path, &value)?;
+        }
+        "sync.syncLedger" => {
+            settings.sync.sync_ledger = expect_bool(path, &value)?;
         }
         "sync.intervalSeconds" => {
             // 低于下限按下限生效（与 sync configure、前端 NumberField 一致）
@@ -1368,6 +1429,9 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "appearance.tagPresets" => {
             target.appearance.tag_presets = defaults.appearance.tag_presets.clone()
         }
+        "appearance.diaryTagPresets" => {
+            target.appearance.diary_tag_presets = defaults.appearance.diary_tag_presets.clone()
+        }
         "appearance.dueColors" => target.appearance.due_colors = Map::new(),
         "appearance.navItems" => {
             target.appearance.nav_items = defaults.appearance.nav_items.clone()
@@ -1429,12 +1493,15 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "sync.lanPeer" => target.sync.lan_peer = defaults.sync.lan_peer.clone(),
         "sync.p2pRelay" => target.sync.p2p_relay = defaults.sync.p2p_relay.clone(),
         "sync.p2pDirectory" => target.sync.p2p_directory = defaults.sync.p2p_directory.clone(),
+        "transfer.relay" => target.transfer.relay = defaults.transfer.relay.clone(),
         "sync.serverUrl" => target.sync.server_url = defaults.sync.server_url.clone(),
         "sync.username" => target.sync.username = defaults.sync.username.clone(),
         "sync.secret" => target.sync.secret = defaults.sync.secret.clone(),
         "sync.syncData" => target.sync.sync_data = defaults.sync.sync_data,
         "sync.syncSettings" => target.sync.sync_settings = defaults.sync.sync_settings,
         "sync.syncSchedules" => target.sync.sync_schedules = defaults.sync.sync_schedules,
+        "sync.syncDiary" => target.sync.sync_diary = defaults.sync.sync_diary,
+        "sync.syncLedger" => target.sync.sync_ledger = defaults.sync.sync_ledger,
         "sync.intervalSeconds" => {
             target.sync.interval_seconds = defaults.sync.interval_seconds
         }

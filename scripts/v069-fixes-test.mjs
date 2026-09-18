@@ -50,12 +50,26 @@ check("桌面编辑器高度≈86% 窗口高", Math.abs(sizeRatio.h - 0.86) < 0.
 // 标签加号按钮可见（任务编辑器浮层没有 --accent，曾白底白图）
 await page.locator(".editor-meta-trigger.editor-tag-add").click();
 await page.waitForTimeout(300);
+// v0.8.3：编辑器标签浮层换成右键菜单那一套（TagMenuPanel），「加号」成了预置流末尾的
+// 虚线胶囊（.tag-preset-new）。当年那条 bug 是「浮层没有 --accent，加号白底白图看不见」，
+// 现在图标色是写死的灰、不吃 --accent，这里守住「有尺寸 + 颜色不是白的」。
 const addBtn = await page.evaluate(() => {
-  const btn = document.querySelector(".editor-dialog .tag-add-btn");
+  const btn = document.querySelector(".editor-tag-pop .tag-preset-new");
+  if (!btn) return null;
   const cs = getComputedStyle(btn);
-  return { bg: cs.backgroundColor, w: btn.offsetWidth, h: btn.offsetHeight };
+  const icon = btn.querySelector("svg");
+  return {
+    color: icon ? getComputedStyle(icon).color : cs.color,
+    border: cs.borderTopColor,
+    w: btn.offsetWidth,
+    h: btn.offsetHeight
+  };
 });
-check("任务编辑器标签加号按钮有底色可见", addBtn.bg !== "rgba(0, 0, 0, 0)" && addBtn.w >= 20, JSON.stringify(addBtn));
+check(
+  "任务编辑器标签加号胶囊可见（不是白底白图）",
+  Boolean(addBtn) && addBtn.w >= 20 && addBtn.color !== "rgb(255, 255, 255)" && addBtn.border !== "rgb(255, 255, 255)",
+  JSON.stringify(addBtn)
+);
 await closeOverlays(page);
 
 // 日记长单行：桌面双击展开
@@ -160,8 +174,8 @@ await m.locator(".composer-plus").click();
 await m.waitForSelector(".editor-cm-host .cm-content", { timeout: 30000 });
 await m.locator(".editor-meta-trigger.editor-tag-add").click();
 await m.waitForTimeout(300);
-await m.locator(".editor-tag-pop .tag-editor-input-row input").fill("点按标签");
-await m.locator(".tag-add-btn").click();
+await m.locator(".editor-tag-pop .tag-editor-input-row input:not([type=checkbox])").fill("点按标签");
+await m.locator(".tag-editor-input-row input:not([type=checkbox])").press("Enter");
 await m.waitForTimeout(300);
 await m.locator(".editor-cm-host .cm-content").click();
 await m.waitForTimeout(300);

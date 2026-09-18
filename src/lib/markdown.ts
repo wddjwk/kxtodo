@@ -42,6 +42,7 @@ import katex from "katex";
 import { marked, type Tokens, type TokenizerAndRendererExtension } from "marked";
 import { nameToEmoji } from "gemoji";
 import { ADMONITION_ICONS, ADMONITION_ICON_BY_TYPE } from "./admonitionIcons";
+import { preserveLeadingIndent } from "./markdownIndent";
 
 marked.use({
   gfm: true,
@@ -624,7 +625,10 @@ function renderMarkdownNow(markdown: string, nodeId: string, decorate: boolean):
   const { fields, rest } = splitFrontMatter(normalized);
   const protectedCode = protectCode(rest);
   const math = extractMath(protectedCode.text);
-  const withEmoji = replaceEmojiShortcodes(math.text);
+  // 行首空白（需求 14）：在进 marked 之前换成渲染得出来的缩进，
+  // 否则「1. xx / ⇥1.1 xx」会被折叠成一行顶格
+  const withIndent = preserveLeadingIndent(math.text);
+  const withEmoji = replaceEmojiShortcodes(withIndent);
   const withCodeBack = restoreCode(withEmoji, protectedCode.pieces);
   const raw = marked.parse(applyHighlights(withCodeBack), { async: false }) as string;
   const diagrammed = transformDiagrams(raw);

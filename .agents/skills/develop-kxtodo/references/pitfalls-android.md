@@ -8,6 +8,20 @@
 
 本机环境：`ANDROID_HOME=D:\software\Android\sdk`、`NDK_HOME=...\ndk\30.0.14904198`、JDK 23（keytool 在 PATH）。构建唯一入口 `.\release.ps1 android|all`（内部 gradle + cargo-ndk 自配工具链）；**不要手工跑 gradlew**。
 
+**本地交叉检查必须带上壳 crate**（v0.8.3 教训）：`cargo check --target aarch64-linux-android -p kxtodo-core -p kxtodo-server` 只覆盖两个纯 Rust crate，**`src-tauri/src/lib.rs` 里 `#[cfg(not(desktop))]` 的分支一行都没编译过**。那一版正是这样漏掉了一个凭空写的 `app.path().external_app_data_dir()`——Tauri v2 的 Android `PathResolver` 根本没有这个方法（只有 audio/cache/config/data/local_data/document/download/picture/public/video/resource/`app_*`/temp/home），本地 check 与 `ci.yml` 双平台编译检查全绿，**只有 `release.yml` 的安卓那一栏红**（而它是打 tag 之后才跑的，红的代价是一版发不出去）。完整命令（NDK 的 clang 环境见 `pitfalls-windows.md`）：
+
+```bash
+cd src-tauri
+PATH="$NDK_HOME/toolchains/llvm/prebuilt/windows-x86_64/bin:$PATH" \
+CC_aarch64_linux_android=aarch64-linux-android24-clang.cmd \
+CXX_aarch64_linux_android=aarch64-linux-android24-clang++.cmd \
+AR_aarch64_linux_android=llvm-ar.exe \
+bash ../scripts/cargo-msvc.sh check --target aarch64-linux-android \
+  -p kxtodo --lib --features tauri/custom-protocol
+```
+
+`--features tauri/custom-protocol` 就是 `tauri android build` 自己传的那一个；依赖有缓存时壳 crate 这一趟约 25 秒，没有理由省。
+
 ## 目录
 
 - [1. gen/android 的所有权](#1-genandroid-的所有权)

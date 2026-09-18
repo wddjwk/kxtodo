@@ -14,6 +14,7 @@
   } from "./stores";
   import {
     updateTask as updateTaskAction, deleteTask as deleteTaskAction,
+    setTaskSchedule as setTaskScheduleAction,
     addTask as addTaskAction, setItemUi as setItemUiAction,
     setItemsUi as setItemsUiAction, replaceTaskTags as replaceTaskTagsAction,
     replaceTaskEmojis as replaceTaskEmojisAction,
@@ -33,7 +34,7 @@
   import DiaryEntryMenu from "./diary/DiaryEntryMenu.svelte";
   import LedgerEntryCard from "./ledger/LedgerEntryCard.svelte";
   import ScheduledTasksView from "./ScheduledTasksView.svelte";
-  import DatePicker from "./DatePicker.svelte";
+  import TaskDateReminderPanel from "./TaskDateReminderPanel.svelte";
   import ContextMenu from "./menu/ContextMenu.svelte";
   import MenuItem from "./menu/MenuItem.svelte";
   import MonthPopover from "./MonthPopover.svelte";
@@ -46,7 +47,7 @@
   import { calendarWeekdayHeaders } from "./diary";
   import { createBackGuard, isMobile, mobileView } from "./platform";
   import { caps } from "./capabilities";
-  import type { AppNode, CardStyle, TagColor, Task } from "./types";
+  import type { AppNode, CardStyle, ReminderRule, TagColor, Task } from "./types";
 
   // 「已完成」区显隐偏好：默认折叠，用户配置过就按视图记住（本机 UI 状态，不进同步）
   const COMPLETED_OPEN_KEY = "kxtodo-completed-open";
@@ -410,6 +411,10 @@
   export function closeOverlays(): void {
     showSuggestions = false;
     showCalendar = false;
+    // 日历的年月浮层也要收：v0.8.2 给 DiaryView / LedgerView 都补了这一句，
+    // 漏了 Workspace 这第三处——开着年月浮层时经别的路径关掉日历（点页面外、切视图），
+    // 下次打开日历浮层会「不请自来」
+    calPopOpen = false;
     showHeaderMenu = false;
     showPlannedGroups = false;
     schedulerViewRef?.closeOverlays();
@@ -436,9 +441,23 @@
     void updateTaskAction(taskId, { myDay: true });
   }
 
-  function handleTaskSetDate(event: CustomEvent<{ id: string; date: string; time?: string }>): void {
-    // 只改时刻时（卡片浮层里的滚轮）保持浮层开着，用户可能还要再拨一下
-    setTaskDate(event.detail.id, event.detail.date, event.detail.time, event.detail.time !== undefined);
+  /**
+   * 「日期与提醒」面板保存/清除：写操作住在 `actions.setTaskSchedule`
+   * （卡片浮层与搜索结果两个入口共用同一份语义），这里只负责收菜单。
+   */
+  function applyTaskSchedule(
+    taskId: string,
+    patch: { dueDate: string; dueTime: string; reminders: ReminderRule[] }
+  ): void {
+    taskMenu = null;
+    void setTaskScheduleAction(taskId, patch);
+  }
+
+  function handleTaskSetSchedule(
+    event: CustomEvent<{ id: string; dueDate: string; dueTime: string; reminders: ReminderRule[] }>
+  ): void {
+    const { id, ...patch } = event.detail;
+    applyTaskSchedule(id, patch);
   }
 
   function toggleSuggestions(): void {
@@ -676,26 +695,6 @@
 
   function handleDiaryExpand(event: CustomEvent<{ id: string; expanded: boolean }>): void {
     void setDiaryUiAction(event.detail.id, { expanded: event.detail.expanded });
-  }
-
-  /** 日期与时刻一起写：dueDate 与 plannedDate 同进同出（「添加日期」的老语义），
-   *  dueTime 精确到分钟。清日期时时刻跟着清；只给日期时沿用任务已有的时刻。 */
-  function setTaskDate(taskId: string, date: string, time?: string, keepMenu = false): void {
-    const dateVal = date ? date.slice(0, 10) : null;
-    const task = $appState.tasks.find((item) => item.id === taskId);
-    void updateTaskAction(taskId, {
-      dueDate: dateVal,
-      plannedDate: dateVal,
-      myDay: dateVal === todayIso() ? true : task?.myDay,
-      dueTime: dateVal ? (time ?? task?.dueTime ?? "") : ""
-    });
-    if (!keepMenu) taskMenu = null;
-  }
-
-  /** 菜单里拨时刻：还没有日期就落在今天（与「添加日期」的语义一致），菜单不关。 */
-  function setTaskTime(taskId: string, time: string): void {
-    const task = $appState.tasks.find((item) => item.id === taskId);
-    setTaskDate(taskId, task?.dueDate?.slice(0, 10) || todayIso(), time, true);
   }
 
   /** 桌面三点按钮：**支持 toggle**——菜单已经开着（且是它开的）时再点一次就收起。
@@ -1094,7 +1093,7 @@
             on:edit={(event) => openTaskEditor(event.detail)}
             on:context={openTaskMenu}
             on:openLink={openTaskLink}
-            on:setDate={handleTaskSetDate}
+            on:setSchedule={handleTaskSetSchedule}
             on:removeTag={(e) => removeTagFromTask(e.detail.id, e.detail.tagId)}
             on:editTag={(e) => editTagAtTask(e.detail.id, e.detail.tagId, e.detail.text)}
             on:removeEmoji={(e) => removeEmojiFromTask(e.detail.id, e.detail.index)}
@@ -1140,7 +1139,7 @@
           on:edit={(event) => openTaskEditor(event.detail)}
           on:context={openTaskMenu}
           on:openLink={openTaskLink}
-          on:setDate={handleTaskSetDate}
+          on:setSchedule={handleTaskSetSchedule}
           on:removeTag={(e) => removeTagFromTask(e.detail.id, e.detail.tagId)}
           on:editTag={(e) => editTagAtTask(e.detail.id, e.detail.tagId, e.detail.text)}
           on:removeEmoji={(e) => removeEmojiFromTask(e.detail.id, e.detail.index)}
@@ -1168,7 +1167,7 @@
               on:edit={(event) => openTaskEditor(event.detail)}
               on:context={openTaskMenu}
               on:openLink={openTaskLink}
-              on:setDate={handleTaskSetDate}
+              on:setSchedule={handleTaskSetSchedule}
               on:removeTag={(e) => removeTagFromTask(e.detail.id, e.detail.tagId)}
               on:editTag={(e) => editTagAtTask(e.detail.id, e.detail.tagId, e.detail.text)}
               on:removeEmoji={(e) => removeEmojiFromTask(e.detail.id, e.detail.index)}
@@ -1214,16 +1213,16 @@
         label={taskMenuTask.myDay ? "从我的一天中移除" : "添加到我的一天"}
         onSelect={() => { void updateTaskAction(taskMenuTask.id, { myDay: !taskMenuTask.myDay }); taskMenu = null; }}
       />
-      <MenuItem icon={CalendarDays} label="添加日期">
+      <MenuItem icon={CalendarDays} label="日期与提醒">
         <div slot="submenu" class="task-menu-date">
-          <DatePicker
-            value={taskMenuTask.dueDate?.slice(0, 10) ?? ""}
-            time={taskMenuTask.dueTime ?? ""}
-            withTime
-            on:select={(event) => setTaskDate(taskMenuTask.id, event.detail)}
-            on:selectTime={(event) => setTaskTime(taskMenuTask.id, event.detail)}
-            on:clear={() => setTaskDate(taskMenuTask.id, "")}
-            on:close={() => (taskMenu = null)}
+          <TaskDateReminderPanel
+            embedded
+            dueDate={taskMenuTask.dueDate?.slice(0, 10) ?? ""}
+            dueTime={taskMenuTask.dueTime ?? ""}
+            reminders={taskMenuTask.reminders ?? []}
+            onSave={(patch) => applyTaskSchedule(taskMenuTask.id, patch)}
+            onClear={() => applyTaskSchedule(taskMenuTask.id, { dueDate: "", dueTime: "", reminders: [] })}
+            onClose={() => (taskMenu = null)}
           />
         </div>
       </MenuItem>

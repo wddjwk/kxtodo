@@ -1,7 +1,8 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
+  import type { Component } from "svelte";
   import {
-    ChevronsDownUp, ChevronsUpDown, FilePlus2, FolderInput, FolderPlus, NotebookPen, Pencil, Search, Shapes, Toolbox, Trash2, Upload, Wallet
+    ChevronsDownUp, ChevronsUpDown, FilePlus2, FolderInput, FolderPlus, NotebookPen, Pencil, PinOff, Search, Shapes, Toolbox, Trash2, Upload, Wallet
   } from "@lucide/svelte";
   import {
     appState, appSettings, showToast, showSettings,
@@ -12,7 +13,8 @@
     selectNode as selectNodeAction, toggleCategory as toggleCategoryAction,
     addNode as addNodeAction, renameNode as renameNodeAction,
     deleteNodeCascade as deleteNodeCascadeAction, applyTreeOrder as applyTreeOrderAction,
-    setNodeIcon as setNodeIconAction
+    setNodeIcon as setNodeIconAction,
+    setToolPinned as setToolPinnedAction, reorderNavItems as reorderNavItemsAction
   } from "./actions";
   import { nodeAndDescendantIds, moveTargetOptions, exportStateForNode } from "./nodes";
   import { uiScaleValue, avatarStyle, avatarInitial } from "./styles";
@@ -27,6 +29,10 @@
   import { isMobile, mobileView, showMobileContent, showMobileDiary, showMobileLedger, showMobileToolbox, createBackGuard } from "./platform";
   import { caps } from "./capabilities";
   import type { NavItemId } from "./nav";
+  import { navIdToolId } from "./nav";
+  import { toolRoute, openToolboxTool, resetToolRoute } from "./tools/navigation";
+  import { toolById } from "./tools/registry";
+  import type { ToolId } from "./tools/catalog";
   import { longpress, isLongPressSuppressed } from "./longpress";
 
   const dispatch = createEventDispatcher<{ suppressClose: void }>();
@@ -69,7 +75,8 @@
     id: NavItemId;
     label: string;
     glyph?: string;
-    component?: typeof NotebookPen;
+    // 与工具注册表同一个口径：图标组件（lucide 或自绘）都满足 svelte 的 Component
+    component?: Component;
     selected: boolean;
     count: number;
     onSelect: () => void;
@@ -87,6 +94,22 @@
       return caps.toolbox
         ? [{ id, label: "工具箱", component: Toolbox, selected: toolboxActive, count: 0, onSelect: openToolbox }]
         : [];
+    }
+    // 钉住的工具行（v0.8.3「固定此工具」）：直达该工具的子视图，图标用工具自己的
+    const toolId = navIdToolId(id);
+    if (toolId !== null) {
+      const tool = toolById(toolId);
+      if (!tool) return [];
+      return [
+        {
+          id,
+          label: tool.name,
+          component: tool.icon,
+          selected: toolboxActive && $toolRoute.id === toolId,
+          count: 0,
+          onSelect: () => openPinnedTool(toolId)
+        }
+      ];
     }
     // 移动端没有调度引擎：定时任务这一行不给
     if (id === "scheduled" && !caps.scheduler) return [];
@@ -113,6 +136,7 @@
     }
     treeMenu = null;
     emptyAreaMenu = null;
+    navMenu = null;
     iconPickerListId = null;
     searchResultsRef?.closeOverlays();
   }
@@ -174,10 +198,11 @@
   }
 
   /** 工具箱与日记/记账同一条互斥：谁占主区域，另外两个收起 */
-  function openToolbox(): void {
+  function showToolboxPage(): void {
     searchQuery.set("");
     treeMenu = null;
     emptyAreaMenu = null;
+    navMenu = null;
     iconPickerListId = null;
     diaryEditor.set(null);
     diaryOpen.set(false);
@@ -188,6 +213,96 @@
       return;
     }
     toolboxOpen.set(true);
+  }
+
+  /** 从工具箱这一行进的一定是看列表：清掉可能残留的直达路由 */
+  function openToolbox(): void {
+    resetToolRoute();
+    showToolboxPage();
+  }
+
+  /** 钉住的工具行：直达子视图，并记住「这一趟从钉住的行进来」（返回时整页收）。
+   *  路由必须在开页**之后**设：openToolbox 的 reset 会把它清掉。 */
+  function openPinnedTool(toolId: ToolId): void {
+    showToolboxPage();
+    openToolboxTool(toolId, true);
+  }
+
+  // ---- 固定区：钉住的工具的右键 / 长按菜单（取消固定） ----
+  let navMenu: { id: NavItemId; x: number; y: number } | null = null;
+
+  function openNavMenuAt(x: number, y: number, id: NavItemId): void {
+    navMenu = { id, x, y };
+  }
+
+  function handleNavContext(event: MouseEvent, id: NavItemId): void {
+    // 触摸长按后 Chromium 会补发一个 contextmenu：长按已经开过菜单，这里去重
+    if (isLongPressSuppressed()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    openNavMenuAt(event.clientX, event.clientY, id);
+  }
+
+  function unpinNavRow(): void {
+    const id = navMenu?.id;
+    navMenu = null;
+    const toolId = id ? navIdToolId(id) : null;
+    if (toolId) void setToolPinnedAction(toolId, false);
+  }
+
+  // ---- 固定区拖动排序（鼠标；触屏长按是菜单，与全应用手势一致） ----
+  let navEl: HTMLElement;
+  let navDrag: { id: NavItemId; over: number } | null = null;
+  /** 拖完松手会补一个 click：不压掉的话「排完序顺手把那一行打开了」 */
+  let navDragSuppressClick = false;
+
+  function navDropIndex(clientY: number): number {
+    const rows = [...(navEl?.querySelectorAll(".nav-row") ?? [])] as HTMLElement[];
+    for (let index = 0; index < rows.length; index++) {
+      const rect = rows[index].getBoundingClientRect();
+      if (clientY < rect.top + rect.height / 2) return index;
+    }
+    return rows.length;
+  }
+
+  function commitNavDrag(drag: { id: NavItemId; over: number }): void {
+    const ids = navRows.map((row) => row.id);
+    const from = ids.indexOf(drag.id);
+    if (from < 0) return;
+    let to = drag.over;
+    ids.splice(from, 1);
+    if (to > from) to -= 1;
+    if (to === from) return;
+    ids.splice(to, 0, drag.id);
+    void reorderNavItemsAction(ids);
+  }
+
+  function navPointerDown(event: PointerEvent, id: NavItemId): void {
+    if (event.pointerType !== "mouse" || event.button !== 0) return;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let armed = false;
+    const move = (ev: PointerEvent): void => {
+      if (!armed && Math.hypot(ev.clientX - startX, ev.clientY - startY) > 5) {
+        armed = true;
+        navDrag = { id, over: navRows.findIndex((row) => row.id === id) };
+      }
+      if (!armed || !navDrag) return;
+      ev.preventDefault();
+      navDrag = { id, over: navDropIndex(ev.clientY) };
+    };
+    const up = (): void => {
+      window.removeEventListener("pointermove", move, true);
+      window.removeEventListener("pointerup", up, true);
+      if (armed && navDrag) commitNavDrag(navDrag);
+      navDrag = null;
+      if (armed) {
+        navDragSuppressClick = true;
+        window.setTimeout(() => (navDragSuppressClick = false), 0);
+      }
+    };
+    window.addEventListener("pointermove", move, true);
+    window.addEventListener("pointerup", up, true);
   }
 
   function toggleCategory(id: string): void {
@@ -432,9 +547,29 @@
     <SearchResults bind:this={searchResultsRef} />
   {/if}
 
-  <nav class="system-nav" class:nav-grid={navLayout === "grid"} class:nav-icons={navLayout === "icons"}>
-    {#each navRows as row (row.id)}
-      <button class="nav-row" class:selected={row.selected} type="button" title={row.label} on:click={row.onSelect}>
+  <nav
+    bind:this={navEl}
+    class="system-nav"
+    class:nav-grid={navLayout === "grid"}
+    class:nav-icons={navLayout === "icons"}
+    class:nav-dragging={navDrag !== null}
+  >
+    {#each navRows as row, index (row.id)}
+      {@const toolRow = navIdToolId(row.id) !== null}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <button
+        class="nav-row"
+        class:selected={row.selected}
+        class:drop-before={navDrag !== null && navDrag.id !== row.id && navDrag.over === index}
+        class:drop-after={navDrag !== null && navDrag.id !== row.id && navDrag.over === navRows.length && index === navRows.length - 1}
+        class:nav-drag-source={navDrag?.id === row.id}
+        type="button"
+        title={row.label}
+        on:click={() => { if (!navDragSuppressClick) row.onSelect(); }}
+        on:pointerdown={(event) => navPointerDown(event, row.id)}
+        on:contextmenu={(event) => { if (toolRow) handleNavContext(event, row.id); }}
+        use:longpress={(pos) => { if (toolRow) openNavMenuAt(pos.x, pos.y, row.id); }}
+      >
         <span class="active-rail"></span>
         <span class="system-icon">
           {#if row.component}
@@ -477,6 +612,12 @@
       on:dragEnd={() => (draggingId = null)}
     />
   </nav>
+
+  {#if navMenu}
+    <ContextMenu x={navMenu.x} y={navMenu.y} minWidth={168} onClose={() => (navMenu = null)}>
+      <MenuItem icon={PinOff} label="取消固定" onSelect={unpinNavRow} />
+    </ContextMenu>
+  {/if}
 
   {#if treeMenu && treeMenuNode}
     <ContextMenu x={treeMenu.x} y={treeMenu.y} minWidth={208} onClose={() => (treeMenu = null)}>

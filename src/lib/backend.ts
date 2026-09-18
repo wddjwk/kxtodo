@@ -419,6 +419,63 @@ export async function pickExecutableFile(): Promise<string | null> {
   return typeof selected === "string" ? selected : null;
 }
 
+// ---------------------------------------------------------------------------
+// 文件传输助手（v0.8.3）：引擎与事件在 core / 壳层，这里只是 invoke 的薄封装。
+// ---------------------------------------------------------------------------
+
+export type TransferItemDto = { rel: string; size: number };
+
+export type TransferEvent = {
+  sessionId: string;
+  role: "send" | "receive";
+  kind: "waiting" | "connected" | "progress" | "fileDone" | "done" | "error" | "cancelled";
+  index?: number;
+  file?: string;
+  sent?: number;
+  total?: number;
+  files?: number;
+  totalBytes?: number;
+  code?: string;
+  message?: string;
+};
+
+/** 多选任意文件（传输用，不加扩展名过滤）；移动端无原生对话框，返回空数组。 */
+export async function pickAnyFiles(): Promise<string[]> {
+  if (!isTauriRuntime || !caps.nativeFileDialogs) return [];
+  const selected = await open({ multiple: true, directory: false });
+  if (typeof selected === "string") return [selected];
+  return Array.isArray(selected) ? selected.filter((item): item is string => typeof item === "string") : [];
+}
+
+/** 选一个文件夹（传输的发送侧 / 接收的保存位置）；移动端返回 null。 */
+export async function pickDirectory(): Promise<string | null> {
+  if (!isTauriRuntime || !caps.nativeFileDialogs) return null;
+  const selected = await open({ multiple: false, directory: true });
+  return typeof selected === "string" ? selected : null;
+}
+
+export const transferListFolder = (path: string): Promise<TransferItemDto[]> =>
+  invoke("transfer_list_folder", { path });
+export const transferStatFiles = (paths: string[]): Promise<TransferItemDto[]> =>
+  invoke("transfer_stat_files", { paths });
+export const transferOutboxPath = (): Promise<string> => invoke("transfer_outbox_path");
+export const transferSpoolWrite = (rel: string, data: string, append: boolean): Promise<void> =>
+  invoke("transfer_spool_write", { rel, data, append });
+export const transferSpoolClear = (): Promise<void> => invoke("transfer_spool_clear");
+export const transferDefaultSaveDir = (): Promise<string> => invoke("transfer_default_save_dir");
+export const transferReceive = (code: string, saveDir: string): Promise<string> =>
+  invoke("transfer_receive", { code, saveDir });
+export const transferSend = (code: string, root: string | null, items: TransferItemDto[]): Promise<string> =>
+  invoke("transfer_send", { code, root, items });
+export const transferCancel = (sessionId: string): Promise<unknown> =>
+  invoke("transfer_cancel", { sessionId });
+
+/** 传输进度事件（每个文件一条进度条）。返回取消订阅函数。 */
+export async function listenTransfer(handler: (payload: TransferEvent) => void): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<TransferEvent>("kxtodo://transfer", (event) => handler(event.payload));
+}
+
 export async function resolveExecutablePath(name: string): Promise<string | null> {
   if (!isTauriRuntime || !caps.desktop || !name.trim()) {
     return null;

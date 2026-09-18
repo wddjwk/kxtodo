@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { LedgerAccount, LedgerBook, LedgerCategory } from "../types";
-import { defaultSettings, normalizeLedger, normalizeSettings, seedLedgerBook } from "../defaults";
+import { defaultSettings, normalizeLedger, normalizeSettings, normalizeState, seedLedgerBook } from "../defaults";
 
 // ---------------------------------------------------------------------------
 // normalizeLedger → normalizeLedgerEntry
@@ -359,5 +359,88 @@ describe("seedLedgerBook 与归一化的接口契约", () => {
     const round = normalizeLedger(book);
     expect(round.accounts.map((account) => account.id)).toEqual(accounts.map((account) => account.id));
     expect(round.categories.map((category) => category.id)).toEqual(categories.map((category) => category.id));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// normalizeState：core 快照的字段奇偶（v0.8.3 review #11）
+// ---------------------------------------------------------------------------
+
+describe("normalizeState（core 快照往返）", () => {
+  /** core 的 `Node` / `Item` 序列化出来的**全部**字段（model.rs 是唯一来源，
+   *  改那边就要改这里——这正是这条测试的意义）。 */
+  const rawNode = {
+    id: "entry-a",
+    kind: "entry",
+    name: "条目",
+    icon: "list",
+    parentId: null,
+    order: 3.5,
+    collapsed: true,
+    cardStyle: "card",
+    createdAt: "2026-09-01T00:00:00.000Z",
+    updatedAt: "2026-09-02T03:04:05.000Z"
+  };
+  const rawTask = {
+    id: "task-a",
+    nodeId: "entry-a",
+    order: 2.5,
+    markdown: "正文",
+    completed: true,
+    important: true,
+    myDay: true,
+    plannedDate: "2026-09-03",
+    dueDate: "2026-09-03",
+    dueTime: "18:30",
+    reminders: [{ kind: "beforeDue", minutes: 60 }],
+    completedAt: "2026-09-03T10:00:00.000Z",
+    tags: [{ id: "tag-a", color: "blue", text: "标签" }],
+    emojis: ["🎉"],
+    expanded: true,
+    createdAt: "2026-09-01T00:00:00.000Z",
+    updatedAt: "2026-09-02T03:04:05.000Z"
+  };
+
+  const normalized = normalizeState({
+    schemaVersion: 6,
+    nodes: [rawNode],
+    tasks: [rawTask],
+    backgrounds: {},
+    selectedNodeId: "entry-a"
+  });
+
+  it("core 发来的字段一个都不许丢（漏一个 = 每次快照刷新都把用户的值抹掉）", () => {
+    // `dueTime` 曾经漏了两个大版本：只在「设过时刻 + 触发过一次快照刷新」时才现形。
+    // 与其把这条写成散文规则，不如直接比对键集合。
+    // 注意 normalizeState 会把四个 system 节点拼在最前面，按 id 找自己种的那一个。
+    const node = normalized.nodes.find((item) => item.id === rawNode.id);
+    expect(node, "种进去的条目得还在").toBeTruthy();
+    const nodeKeys = Object.keys(node ?? {});
+    for (const key of Object.keys(rawNode)) {
+      expect(nodeKeys, `节点字段 ${key} 被 normalizeNode 丢掉了`).toContain(key);
+    }
+    const taskKeys = Object.keys(normalized.tasks[0]);
+    for (const key of Object.keys(rawTask)) {
+      expect(taskKeys, `任务字段 ${key} 被 normalizeTask 丢掉了`).toContain(key);
+    }
+  });
+
+  it("值也原样保留（不只是键在）", () => {
+    const node = normalized.nodes.find((item) => item.id === rawNode.id) ?? normalized.nodes[0];
+    expect(node.updatedAt).toBe(rawNode.updatedAt);
+    expect(node.order).toBe(3.5);
+    expect(node.cardStyle).toBe("card");
+    const task = normalized.tasks[0];
+    expect(task.dueTime).toBe("18:30");
+    expect(task.dueDate).toBe("2026-09-03");
+    expect(task.reminders).toEqual([{ kind: "beforeDue", minutes: 60 }]);
+    expect(task.completedAt).toBe(rawTask.completedAt);
+    expect(task.tags).toEqual([{ id: "tag-a", color: "blue", text: "标签" }]);
+  });
+
+  it("归一化是幂等的：再喂一遍自己的输出，键与值都不变", () => {
+    const again = normalizeState(normalized);
+    expect(again.nodes).toEqual(normalized.nodes);
+    expect(again.tasks).toEqual(normalized.tasks);
   });
 });

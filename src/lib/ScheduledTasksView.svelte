@@ -17,6 +17,7 @@
     schedulerRuntimeKeys
   } from "./defaults";
   import { pickExecutableFile } from "./backend";
+  import { caps } from "./capabilities";
   import Dropdown from "./Dropdown.svelte";
   import NumberField from "./NumberField.svelte";
   import SchedulerActionEditor from "./SchedulerActionEditor.svelte";
@@ -45,18 +46,22 @@
     custom: "自定义"
   };
 
+  // 移动端跑不了条件探针（要起子进程）与脚本 / 外部程序，core 会明确拒绝；
+  // 界面就不给这些选项，省得用户填完一整套才发现保存不了。
   const triggerOptions: Array<{ value: ScheduledTaskTrigger["type"]; label: string }> = [
     { value: "once", label: "指定时间触发一次" },
     { value: "interval", label: "每隔一定时间触发" },
     { value: "calendar", label: "按日历 / Cron 触发" },
-    { value: "condition", label: "满足条件时触发" }
+    ...(caps.desktop ? [{ value: "condition" as const, label: "满足条件时触发" }] : [])
   ];
 
-  const actionTypeOptions: Array<{ value: ScheduledTaskAction["type"]; label: string }> = [
-    { value: "script", label: "执行脚本" },
-    { value: "executable", label: "执行可执行文件" },
-    { value: "notification", label: "发送通知" }
-  ];
+  const actionTypeOptions: Array<{ value: ScheduledTaskAction["type"]; label: string }> = caps.desktop
+    ? [
+        { value: "script", label: "执行脚本" },
+        { value: "executable", label: "执行可执行文件" },
+        { value: "notification", label: "发送通知" }
+      ]
+    : [{ value: "notification", label: "发送通知" }];
 
   const conditionModeOptions: Array<{ value: SchedulerCondition["mode"]; label: string }> = [
     { value: "contains", label: "包含文本" },
@@ -323,9 +328,6 @@
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
       <article
         class="scheduled-card"
-        class:compact={!task.expanded && !task.editing}
-        class:expanded={task.expanded && !task.editing}
-        class:editing={task.editing}
         class:disabled={!task.enabled}
         class:running={task.lastStatus === "running"}
         on:click={() => toggleExpanded(task)}

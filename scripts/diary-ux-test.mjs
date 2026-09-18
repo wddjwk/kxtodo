@@ -108,8 +108,8 @@ await page.waitForTimeout(200);
 // 标签
 await page.locator(".editor-tag-add").click();
 await page.waitForTimeout(250);
-await page.locator(".editor-tag-pop .tag-editor-input-row input").fill("工作");
-await page.locator(".editor-tag-pop .tag-add-btn").click();
+await page.locator(".editor-tag-pop .tag-editor-input-row input:not([type=checkbox])").fill("工作");
+await page.press(".editor-tag-pop .tag-editor-input-row input:not([type=checkbox])", "Enter");
 await page.waitForTimeout(250);
 check("标签加进元数据行", (await page.locator(".editor-meta-tags .task-tag").count()) === 1);
 // 点浮层外面 → 标签浮层也收起
@@ -209,13 +209,16 @@ await page.locator(".composer-plus").click();
 await page.waitForTimeout(900);
 check("加号唤起任务编辑器", await page.locator(".editor-dialog").first().isVisible());
 check("任务编辑器有元数据行", (await page.locator(".editor-meta .editor-meta-trigger").count()) >= 2);
-check("日期默认是空的（不设默认值）", (await page.locator(".editor-meta-trigger", { hasText: "添加日期" }).count()) === 1);
+// v0.8.3：编辑器工具栏那个按钮改叫「日期与提醒」，点开的是与右键菜单同一个面板
+check("日期默认是空的（不设默认值）", (await page.locator(".editor-meta-trigger", { hasText: "日期与提醒" }).count()) === 1);
 // 设个日期 + 表情 + 标签
-await page.locator(".editor-meta-trigger", { hasText: "添加日期" }).click();
+await page.locator(".editor-meta-trigger", { hasText: "日期与提醒" }).click();
 await page.waitForTimeout(300);
-await page.locator(".date-picker .dp-cell.today").click();
+await page.locator(".editor-meta-pop .dp-cell.today").click();
 await page.waitForTimeout(300);
-check("选完日期浮层收起", (await page.locator(".editor-meta .date-picker").count()) === 0);
+check("点了日期浮层不收起（面板要配多项，只有清除/保存才关）", (await page.locator(".editor-meta .date-reminder-panel").count()) === 1);
+await page.locator(".editor-meta-pop .date-picker-actions .dp-today").click();
+await page.waitForSelector(".editor-meta .date-reminder-panel", { state: "detached", timeout: 8000 });
 await page.locator(".editor-cm-host .cm-content").click();
 await page.keyboard.type("用编辑器新建的事项");
 await page.keyboard.press("Escape");
@@ -242,8 +245,8 @@ await page.waitForTimeout(900);
 check("编辑已有任务时也有元数据行", (await page.locator(".editor-meta .editor-meta-trigger").count()) >= 2);
 await page.locator(".editor-tag-add").click();
 await page.waitForTimeout(250);
-await page.locator(".editor-tag-pop .tag-editor-input-row input").fill("编辑器加的标签");
-await page.locator(".editor-tag-pop .tag-add-btn").click();
+await page.locator(".editor-tag-pop .tag-editor-input-row input:not([type=checkbox])").fill("编辑器加的标签");
+await page.press(".editor-tag-pop .tag-editor-input-row input:not([type=checkbox])", "Enter");
 await page.waitForTimeout(200);
 check("标签浮层留着不关（可以连着加几个）", (await page.locator(".editor-tag-pop").count()) === 1);
 // 第一次 Esc 只收浮层（两段式关闭），第二次才保存并关编辑器
@@ -271,11 +274,14 @@ await mpage.goto(URL, { waitUntil: "networkidle" });
 await mpage.waitForTimeout(800);
 
 const mNav = await mpage.locator(".system-nav .nav-row").allInnerTexts();
+const mIndexOf = (label) => mNav.findIndex((text) => text.includes(label));
 check(
-  "移动端导航顺序：收藏 < 日记 < 记账 < 工具箱",
-  mNav.findIndex((t) => t.includes("收藏")) < mNav.findIndex((t) => t.includes("日记")) &&
-    mNav.findIndex((t) => t.includes("日记")) === mNav.findIndex((t) => t.includes("记账")) - 1 &&
-    mNav.findIndex((t) => t.includes("记账")) === mNav.findIndex((t) => t.includes("工具箱")) - 1,
+  // v0.8.3：移动端也开定时任务与提醒了，这一行不再被藏起来（排在记账与工具箱之间）
+  "移动端导航顺序：收藏 < 日记 < 记账 < 定时任务 < 工具箱",
+  mIndexOf("收藏") < mIndexOf("日记") &&
+    mIndexOf("日记") === mIndexOf("记账") - 1 &&
+    mIndexOf("记账") === mIndexOf("定时任务") - 1 &&
+    mIndexOf("定时任务") === mIndexOf("工具箱") - 1,
   JSON.stringify(mNav)
 );
 

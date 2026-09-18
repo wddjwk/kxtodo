@@ -1,11 +1,11 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from "svelte";
-  import { CalendarDays, Check, CloudSun, Eye, ImagePlus, PenLine, Plus, Smile, Tag as TagIcon, X } from "@lucide/svelte";
+  import { CalendarDays, Check, CloudSun, Eye, ImagePlus, PenLine, Smile, Tag as TagIcon, X } from "@lucide/svelte";
   import type { EditorView } from "@codemirror/view";
   import { createMarkdownEditor, insertAtCursor, replaceDocument } from "../editor/codemirrorSetup";
   import { renderMarkdown } from "../markdown";
-  import TagColorPicker from "../TagColorPicker.svelte";
-  import { tagChipStyle } from "../tagColors";
+  import { tagChipStyle, tagKey } from "../tagColors";
+  import TagMenuPanel from "../TagMenuPanel.svelte";
   import { taskToggleIndex, toggleMarkdownTask } from "../markdownTasks";
   import { markdownWire } from "../markdownControls";
   import { mdImageCache, primeMdImageCache, resolveMarkdownImages } from "../images";
@@ -58,9 +58,6 @@
   const initial = { date, time, title, text, mood, weather, tags: JSON.stringify(tags) };
 
   let openPicker: "" | "date" | "mood" | "weather" | "tag" = "";
-  let tagDraft = "";
-  let tagColor: TagColor = "yellow";
-  let tagHex = "";
   /** 触屏上被点了一下、露出删除叉的标签（桌面靠 hover，不用它） */
   let revealedTagId = "";
   let editingTagId = "";
@@ -226,33 +223,21 @@
     openPicker = "";
   }
 
-  function addTag(): void {
-    const text = tagDraft.trim();
-    tags = [
-      ...tags,
-      {
-        id: `tag-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-        color: tagColor,
-        text: text || undefined,
-        hex: tagColor === "custom" ? tagHex || undefined : undefined
-      }
-    ];
-    tagDraft = "";
+  /** 标签面板交来的新标签（日记用 diary 那套预置，需求 6）：补 id 去重后进草稿 */
+  function addTagFromPanel(tag: { color: TagColor; hex?: string; text?: string }): void {
+    const text = (tag.text ?? "").trim();
+    const entry: Tag = {
+      id: `tag-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      color: tag.color,
+      text: text || undefined,
+      hex: tag.color === "custom" ? tag.hex : undefined
+    };
+    if (tags.some((existing) => tagKey(existing) === tagKey(entry))) return;
+    tags = [...tags, entry];
   }
 
   function removeTag(tagId: string): void {
     tags = tags.filter((tag) => tag.id !== tagId);
-  }
-
-  function handleTagKeydown(event: KeyboardEvent): void {
-    if (event.isComposing || event.keyCode === 229) return;
-    // fieldKeydown：吞全局快捷键但放行 Escape——无条件 stopPropagation 会把
-    // Escape 一起吃掉，「编辑器不支持 Esc」就是这么来的
-    fieldKeydown(event);
-    if (event.key === "Enter") {
-      event.preventDefault();
-      addTag();
-    }
   }
 
   /** 已有标签的内联编辑输入框，同上。 */
@@ -477,26 +462,8 @@
         </button>
         {#if openPicker === "tag"}
           <div class="editor-meta-pop editor-tag-pop" on:click|stopPropagation>
-            <div class="tag-editor-input-row">
-              <input
-                type="text"
-                placeholder="输入标签文字…"
-                maxlength="20"
-                bind:value={tagDraft}
-                on:keydown={handleTagKeydown}
-              />
-              <button class="tag-add-btn" type="button" title="添加标签" on:click|stopPropagation={addTag}>
-                <Plus size={15} />
-              </button>
-            </div>
-            <TagColorPicker
-              color={tagColor}
-              hex={tagHex}
-              on:change={(event) => {
-                tagColor = event.detail.color;
-                tagHex = event.detail.hex;
-              }}
-            />
+            <!-- 与日记右键菜单同一套面板，且用日记专属预置（需求 5/6） -->
+            <TagMenuPanel compact domain="diary" onAdd={addTagFromPanel} />
           </div>
         {/if}
       </div>

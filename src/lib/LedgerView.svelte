@@ -142,6 +142,11 @@
     monthPopOpen = false;
     preview = null;
     trendView = null;
+    // 两个管理器也要收（v0.8.3 review #6）：它们是 `position: fixed` 的整屏浮层，
+    // 不在这里收的话，开着管理器时经公共入口切走（侧栏点别的页、App 的点击收浮层），
+    // 浮层会盖在新页面上残留下来
+    showAccounts = false;
+    showCategories = false;
   }
 
   /** 记账面板里的加号：面板挂在 App 层，只能靠 store 把「要加分类」递到这一页来。 */

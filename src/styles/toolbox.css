@@ -69,6 +69,7 @@
 }
 
 .toolbox-card {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 14px;
@@ -79,6 +80,19 @@
   text-align: left;
   cursor: pointer;
   transition: background 0.12s ease-out, border-color 0.12s ease-out;
+}
+
+/* 已钉进侧栏固定区的工具：右上角一枚小图钉 + 描边换成主色，一眼看得出「钉着了」 */
+.toolbox-card-pinned {
+  border-color: color-mix(in srgb, var(--accent, #2564cf) 45%, #e5e7eb);
+}
+
+.toolbox-card-pin {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  display: flex;
+  color: var(--accent, #2564cf);
 }
 
 .toolbox-card:hover {
@@ -235,4 +249,199 @@
   margin: 8px 0;
   color: #8b929e;
   font-size: calc(var(--font-control) - 4px);
+}
+
+/* ---------- 人民币工具（v0.8.3）：输入框独占一行铺满 ----------
+   占位字「1234.56 或 壹仟贰佰叁拾肆元伍角陆分」比 260px 宽得多，
+   挤在半行里用户看不到自己在输什么；下面再常显支持的汉字（需求 1）。 */
+.toolbox-text-input-wide {
+  max-width: none;
+  text-align: left;
+}
+
+.toolbox-han-hint {
+  display: grid;
+  gap: 3px;
+  color: #8a919c;
+  font-size: calc(var(--font-control) - 6px);
+  line-height: 1.7;
+}
+
+.toolbox-han-hint strong {
+  color: #6b7280;
+  font-weight: 600;
+}
+
+/* ---------- 草稿纸（v0.8.3）：一块铺满的纯文本区 ---------- */
+.scratchpad {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.scratchpad-status {
+  display: flex;
+  justify-content: space-between;
+  color: #8a919c;
+  font-size: calc(var(--font-control) - 5px);
+}
+
+.scratchpad-area {
+  flex: 1;
+  width: 100%;
+  min-height: 240px;
+  padding: 12px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #1f2937;
+  font-size: var(--font-control);
+  line-height: 1.7;
+  resize: none;
+}
+
+.scratchpad-area:focus {
+  outline: none;
+  border-color: var(--accent, #2564cf);
+}
+
+/* ---------- 文件传输助手（v0.8.3）：LocalSend 式的发送 / 接收两栏 ---------- */
+.transfer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* 右上角的 relay 选择：默认跟 p2p 同步同一个，可单独换（需求 11） */
+.transfer-relay {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #6b7280;
+  font-size: calc(var(--font-control) - 5px);
+}
+
+.transfer-relay select {
+  padding: 4px 6px;
+  border: 1px solid #d7dbe0;
+  border-radius: 7px;
+  background: #fff;
+  font-size: calc(var(--font-control) - 5px);
+}
+
+.transfer-relay .toolbox-text-input {
+  max-width: 180px;
+  padding: 4px 8px;
+}
+
+.transfer-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.app-shell:not(.mobile) .transfer-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.transfer-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.transfer-pane header {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #1f2937;
+  font-size: calc(var(--font-control) - 2px);
+  font-weight: 600;
+}
+
+.transfer-pane-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.transfer-batch-note {
+  color: #6b7280;
+  font-size: calc(var(--font-control) - 5px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transfer-state {
+  min-height: 1.4em;
+  font-size: calc(var(--font-control) - 4px);
+  color: #6b7280;
+}
+
+.transfer-state-error {
+  color: #b3261e;
+}
+
+.transfer-state-done {
+  color: #2f9e6e;
+}
+
+.transfer-state-waiting,
+.transfer-state-connected {
+  color: var(--accent, #2564cf);
+}
+
+/* 每个文件一条进度条（文件夹 = 多条） */
+.transfer-bars {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.transfer-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  font-size: calc(var(--font-control) - 5px);
+  color: #4b5563;
+}
+
+.transfer-bar-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transfer-bar-num {
+  font-variant-numeric: tabular-nums;
+  color: #8a919c;
+}
+
+.transfer-bar-track {
+  grid-column: 1 / -1;
+  height: 5px;
+  border-radius: 999px;
+  background: #eef0f3;
+  overflow: hidden;
+}
+
+.transfer-bar-track span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent, #2564cf);
+  transition: width 0.15s linear;
+}
+
+.transfer-bar-track span.transfer-bar-done {
+  background: #2f9e6e;
 }

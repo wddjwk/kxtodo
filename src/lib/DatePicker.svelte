@@ -1,22 +1,21 @@
 <script lang="ts">
   /**
-   * 日历选择器：全应用唯一的一个（记账、日记、任务卡、两个编辑器的日期浮层都用它）。
+   * 日历选择器：全应用唯一的一个（记账、日记、两个编辑器的日期浮层都用它）。
    *
-   * `withTime` 打开时在日历与「清除 / 今天」之间插一行「时钟图标 + 18:19」，点它把
-   * 日网格换成双列滚轮选到分钟——记账的 `time`、日记 `createdAt` 的时钟部分、任务的
-   * `dueTime` 都靠这一行。**换面板而不是往下追加**：浮层高度因此恒定，锚在底部的
-   * 记账浮层不会因为展开滚轮而顶出屏幕。
+   * 三层拼装：`CalendarGrid`（日网格 + 年月翻页）+ `withTime` 时多出来的
+   * 「时钟图标 + 18:19」一行 + 「清除 / 今天」。
    *
-   * 头部的年月也可以点：就地换成月/年网格，选完回到日网格，不派发 select
-   * （翻月只是看，不是选）。
+   * `withTime` 那一行点下去是**换面板而不是往下追加**（日网格换成双列滚轮）：
+   * 浮层高度因此恒定，锚在底部的记账浮层不会因为展开滚轮而顶出屏幕。
+   *
+   * 任务卡片的「日期与提醒」不走这里——那是 `TaskDateReminderPanel`，
+   * 但它复用同一个 `CalendarGrid`，所以日历部分的手感与口径完全一致。
    */
   import { createEventDispatcher, onDestroy } from "svelte";
-  import { ChevronLeft, ChevronRight, Clock } from "@lucide/svelte";
+  import { ChevronLeft, Clock } from "@lucide/svelte";
+  import CalendarGrid from "./CalendarGrid.svelte";
   import TimePicker from "./TimePicker.svelte";
-  import MonthPicker from "./MonthPicker.svelte";
   import { formatClock, nowClock, parseClock } from "./clock";
-  import { calendarWeekdayHeaders } from "./diary";
-  import { weekStart } from "./stores";
   import { createBackGuard } from "./platform";
 
   export let value = "";
@@ -26,51 +25,20 @@
 
   const dispatch = createEventDispatcher<{ select: string; selectTime: string; clear: void; close: void }>();
 
-  // 一周从周几开始跟着设置走（默认周一），与日历视图同一个来源
-  $: weekDayLabels = calendarWeekdayHeaders($weekStart);
+  let grid: CalendarGrid;
+  let panel: "days" | "time" = "days";
 
   function todayIso(): string {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   }
 
-  function isoOf(y: number, m: number, d: number): string {
-    const dt = new Date(y, m, d);
-    return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
-  }
-
-  const initial = value ? new Date(value + "T00:00:00") : new Date();
-  let viewYear = initial.getFullYear();
-  let viewMonth = initial.getMonth();
-  let panel: "days" | "months" | "time" = "days";
-
-  $: cells = (() => {
-    const first = new Date(viewYear, viewMonth, 1);
-    const last = new Date(viewYear, viewMonth + 1, 0);
-    const startDow = (first.getDay() - $weekStart + 7) % 7;
-    const totalDays = last.getDate();
-    const out: Array<{ date: string; day: number; current: boolean }> = [];
-    const prevLast = new Date(viewYear, viewMonth, 0);
-    for (let i = startDow - 1; i >= 0; i--) {
-      const dd = prevLast.getDate() - i;
-      out.push({ date: isoOf(viewYear, viewMonth - 1, dd), day: dd, current: false });
-    }
-    for (let dd = 1; dd <= totalDays; dd++) {
-      out.push({ date: isoOf(viewYear, viewMonth, dd), day: dd, current: true });
-    }
-    const rem = (7 - (out.length % 7)) % 7;
-    for (let dd = 1; dd <= rem; dd++) {
-      out.push({ date: isoOf(viewYear, viewMonth + 1, dd), day: dd, current: false });
-    }
-    return out;
-  })();
-
-  // 返回键：**先退面板再退浮层**——月/年网格与时刻滚轮都是这一层里的子面板，
+  // 返回键：**先退面板再退浮层**——年月网格与时刻滚轮都是这一层里的子面板，
   // 一按就整个收掉会让人以为选错了地方。
   const backGuard = createBackGuard();
   $: backGuard(true, () => {
-    if (panel !== "days") panel = "days";
-    else dispatch("close");
+    if (panel === "time") panel = "days";
+    else if (!grid?.back()) dispatch("close");
   });
   onDestroy(() => backGuard.dispose());
 
@@ -84,27 +52,12 @@
     panel = "days";
   }
 
-  function prev(): void {
-    if (viewMonth === 0) { viewYear--; viewMonth = 11; } else viewMonth--;
-  }
-  function next(): void {
-    if (viewMonth === 11) { viewYear++; viewMonth = 0; } else viewMonth++;
-  }
-  function pick(date: string): void {
-    dispatch("select", date);
-  }
   function goToday(): void {
-    const t = todayIso();
-    const d = new Date(t + "T00:00:00");
-    viewYear = d.getFullYear();
-    viewMonth = d.getMonth();
-    dispatch("select", t);
+    const today = todayIso();
+    grid?.reveal(today);
+    dispatch("select", today);
   }
-  function pickMonth(event: CustomEvent<{ year: number; month: number }>): void {
-    viewYear = event.detail.year;
-    viewMonth = event.detail.month;
-    panel = "days";
-  }
+
   function handleTimeChange(event: CustomEvent<{ hour: number; minute: number }>): void {
     dispatch("selectTime", formatClock(event.detail.hour, event.detail.minute));
   }
@@ -142,38 +95,7 @@
       />
     </div>
   {:else}
-    <div class="date-picker-header">
-      <button type="button" on:click={prev} aria-label="上个月"><ChevronLeft size={16} /></button>
-      <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions a11y_no_noninteractive_element_to_interactive_role -->
-      <span
-        class="dp-title pickable"
-        role="button"
-        tabindex="0"
-        title="点击直接选年月"
-        on:click={() => { panel = panel === "days" ? "months" : "days"; }}
-      >{viewYear}年{viewMonth + 1}月</span>
-      <button type="button" on:click={next} aria-label="下个月"><ChevronRight size={16} /></button>
-    </div>
-
-    {#if panel === "months"}
-      <MonthPicker year={viewYear} month={viewMonth} on:select={pickMonth} />
-    {:else}
-      <div class="date-picker-grid">
-        {#each weekDayLabels as label}
-          <span class="dp-head">{label}</span>
-        {/each}
-        {#each cells as cell}
-          <button
-            type="button"
-            class="dp-cell"
-            class:other-month={!cell.current}
-            class:today={cell.date === todayIso()}
-            class:selected={value === cell.date}
-            on:click={() => pick(cell.date)}
-          >{cell.day}</button>
-        {/each}
-      </div>
-    {/if}
+    <CalendarGrid bind:this={grid} {value} on:select={(event) => dispatch("select", event.detail)} />
 
     {#if withTime}
       <div class="date-picker-time">

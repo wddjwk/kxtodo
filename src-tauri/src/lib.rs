@@ -2413,7 +2413,16 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
             ledger_import_zip,
             cards_export_zip,
             cards_import_zip,
-            cards_import_folder
+            cards_import_folder,
+            transfer_receive,
+            transfer_send,
+            transfer_cancel,
+            transfer_stat_files,
+            transfer_list_folder,
+            transfer_outbox_path,
+            transfer_spool_write,
+            transfer_spool_clear,
+            transfer_default_save_dir
         ])
         .setup(move |app| {
             let core =
@@ -2893,6 +2902,205 @@ async fn cards_import_folder(
     .map_err(|error| error.to_string())?
 }
 
+// ---------------------------------------------------------------------------
+// 文件传输助手（v0.8.3）：引擎在 `core::transfer`（有端到端集成测试），
+// 壳层只做两件接线的事——把进度事件推给前端、把设置里的 relay/目录地址喂给引擎。
+// ---------------------------------------------------------------------------
+
+/// 传输的网络配置。relay 空 = 跟 p2p 同步用同一个（再空 = n0 公共服务）；
+/// 目录地址与 p2p 同步共用——传输与同步**账户**无关，但 pkarr 是同一个公共设施。
+fn transfer_net(host: &Arc<domain::host::HostCore>) -> domain::transfer::TransferNet {
+    let settings = host.repo.load_settings().unwrap_or_default();
+    let own = settings.transfer.relay.trim().to_string();
+    let relay = if own.is_empty() {
+        let shared = settings.sync.p2p_relay.trim().to_string();
+        if shared.is_empty() { None } else { Some(shared) }
+    } else {
+        Some(own)
+    };
+    let custom = settings.sync.p2p_directory.trim().to_string();
+    let directory_url = if custom.is_empty() {
+        domain::sync::p2p::directory::DEFAULT_DIRECTORY_URL.to_string()
+    } else {
+        custom
+    };
+    domain::transfer::TransferNet {
+        relay,
+        directory_url,
+    }
+}
+
+fn transfer_sink(app: &AppHandle) -> domain::transfer::TransferSink {
+    use tauri::Emitter;
+    let app = app.clone();
+    Arc::new(move |payload: Value| {
+        let _ = app.emit("kxtodo://transfer", payload);
+    })
+}
+
+/// 开始接收：立刻返回会话 id，传输在后台跑、进度走 `kxtodo://transfer` 事件。
+#[tauri::command]
+async fn transfer_receive(
+    app: AppHandle,
+    core: State<'_, Arc<domain::host::HostCore>>,
+    code: String,
+    save_dir: String,
+) -> Result<String, String> {
+    let host = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        domain::transfer::receive(
+            transfer_sink(&app),
+            &code,
+            std::path::Path::new(&save_dir),
+            transfer_net(&host),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.message)
+}
+
+/// 开始发送：`root` 为 None 时 items 的 rel 是本机绝对路径（多选文件）；
+/// 为 Some 时是相对 root 的路径（文件夹，接收方按它还原目录结构）。
+#[tauri::command]
+async fn transfer_send(
+    app: AppHandle,
+    core: State<'_, Arc<domain::host::HostCore>>,
+    code: String,
+    root: Option<String>,
+    items: Vec<domain::transfer::TransferItem>,
+) -> Result<String, String> {
+    let host = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        domain::transfer::send(
+            transfer_sink(&app),
+            &code,
+            root.as_deref().map(std::path::Path::new),
+            items,
+            transfer_net(&host),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.message)
+}
+
+#[tauri::command]
+fn transfer_cancel(session_id: String) -> Result<Value, String> {
+    domain::transfer::cancel(&session_id).map_err(|error| error.message)
+}
+
+/// 列出一批绝对路径文件的字节数（发送清单的界面预显；真正发送时 core 会再 stat 一次）。
+#[tauri::command]
+fn transfer_stat_files(paths: Vec<String>) -> Result<Vec<Value>, String> {
+    let mut out = Vec::new();
+    for path in paths {
+        let size = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+        out.push(serde_json::json!({ "rel": path, "size": size }));
+    }
+    Ok(out)
+}
+
+/// 递归列出一个文件夹里要传的文件（相对路径 + 字节数）。
+/// 文件夹传输的清单在选目录时就算好：进度条按文件一条一条画，接收方按相对路径还原结构。
+#[tauri::command]
+fn transfer_list_folder(path: String) -> Result<Vec<Value>, String> {
+    let root = std::path::Path::new(&path);
+    if !root.is_dir() {
+        return Err("选择的路径不是文件夹".to_string());
+    }
+    let mut out: Vec<Value> = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = std::fs::read_dir(&dir).map_err(|error| error.to_string())?;
+        for entry in entries.flatten() {
+            let full = entry.path();
+            if full.is_dir() {
+                stack.push(full);
+                continue;
+            }
+            let size = full.metadata().map(|meta| meta.len()).unwrap_or(0);
+            let rel = full
+                .strip_prefix(root)
+                .map_err(|error| error.to_string())?
+                .to_string_lossy()
+                .replace('\\', "/");
+            out.push(serde_json::json!({ "rel": rel, "size": size }));
+        }
+    }
+    out.sort_by(|a, b| a["rel"].as_str().cmp(&b["rel"].as_str()));
+    Ok(out)
+}
+
+/// 移动端发送的暂存目录（webview 选中的文件没有文件系统路径，先分块写进来再走同一条发送引擎）。
+fn transfer_outbox_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("runtime")
+        .join("transfer-outbox");
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    Ok(dir)
+}
+
+#[tauri::command]
+fn transfer_outbox_path(app: AppHandle) -> Result<String, String> {
+    Ok(transfer_outbox_dir(&app)?.to_string_lossy().to_string())
+}
+
+/// 把 webview 里选中的文件分块写进暂存目录（`append` = 续写同一块文件）。
+#[tauri::command]
+fn transfer_spool_write(app: AppHandle, rel: String, data: String, append: bool) -> Result<(), String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.as_bytes())
+        .map_err(|error| error.to_string())?;
+    let outbox = transfer_outbox_dir(&app)?;
+    let mut target = outbox.clone();
+    for part in rel.replace('\\', "/").split('/') {
+        if part.is_empty() || part == "." || part == ".." || part.contains(':') {
+            return Err(format!("非法的暂存路径：{rel}"));
+        }
+        target.push(part);
+    }
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let mut file = if append {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&target)
+    } else {
+        std::fs::File::create(&target)
+    }
+    .map_err(|error| error.to_string())?;
+    use std::io::Write;
+    file.write_all(&bytes).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn transfer_spool_clear(app: AppHandle) -> Result<(), String> {
+    let outbox = transfer_outbox_dir(&app)?;
+    std::fs::remove_dir_all(&outbox).map_err(|error| error.to_string())
+}
+
+/// 接收的默认保存位置：下载目录下的 `kxtodo-transfer`，两端同一份实现。
+/// Android 的 `download_dir()` 就是 `getExternalFilesDir(DIRECTORY_DOWNLOADS)`
+/// （scoped storage 下不需要任何权限，USB 与文件管理器都看得到）；
+/// 而 `app_data_dir()` 在 Android 上是**内部**目录，用户根本找不到收到的文件。
+#[tauri::command]
+fn transfer_default_save_dir(app: AppHandle) -> Result<String, String> {
+    let dir = app
+        .path()
+        .download_dir()
+        .map_err(|error| error.to_string())?
+        .join("kxtodo-transfer");
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    Ok(dir.to_string_lossy().to_string())
+}
+
 /// 以 GUI 的身份跑一条 core 命令（与 core_dispatch 同一套上下文与确认语义）。
 fn run_core_command(
     host: &Arc<domain::host::HostCore>,
@@ -2938,8 +3146,9 @@ fn parse_host_mode_args(args: &[String]) -> Option<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
-// v0.2.0 mobile host wiring：进程内 HostCore（无 IPC 服务端、无调度器、
-// 无看门狗、无托盘）。前端与桌面走同一条 core_dispatch 业务命令层。
+// mobile host wiring：进程内 HostCore（无 IPC 服务端、无看门狗、无托盘）。
+// 前端与桌面走同一条 core_dispatch 业务命令层；调度 + 提醒引擎同样进程内跑
+// （v0.8.3 起，定时通知与任务提醒都要它），跑不了的动作由 core 侧明确拒绝。
 // ---------------------------------------------------------------------------
 
 #[cfg(not(desktop))]
@@ -2949,15 +3158,35 @@ struct MobileBackend {
 
 #[cfg(not(desktop))]
 impl domain::host::HostBackend for MobileBackend {
+    /// 移动端没有自绘通知窗（桌面那套 `notification.html` 是独立的 always-on-top 窗口），
+    /// 所以把载荷交回前端：`stores.ts::showNotification` 已经是移动端通知的唯一出口
+    /// （系统通知插件 + 权限申请 + 失败降级 Toast），Rust 侧再抄一遍就会有两套口径。
+    ///
+    /// 本期不做安卓保活，提醒只在应用进程活着时才可能触发——那时前端一定在，
+    /// 这条事件通路是可靠的。
     fn show_notification(
         &self,
-        _payload: &Value,
+        payload: &Value,
         _wait_rx: Option<std::sync::mpsc::Receiver<()>>,
     ) -> Result<String, domain::CoreError> {
-        Err(domain::CoreError::execution(
-            "NOTIFY_UNSUPPORTED",
-            "移动端暂不支持后台通知",
-        ))
+        use tauri::Emitter;
+        let id = format!(
+            "mobile-notification-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        );
+        let mut forwarded = payload.clone();
+        if let Some(map) = forwarded.as_object_mut() {
+            map.insert("id".to_string(), Value::String(id.clone()));
+        }
+        self.app
+            .emit("kxtodo://notification", forwarded)
+            .map_err(|error| {
+                domain::CoreError::execution("NOTIFY_FAILED", format!("通知事件发送失败：{error}"))
+            })?;
+        Ok(id)
     }
 
     fn emit(&self, event: &str, payload: Value) {
@@ -3036,7 +3265,12 @@ fn init_mobile_core(app: &AppHandle) -> Result<(), String> {
     // 「本机作为服务器」在 Android 上同样是 in-process 起（不能 exec 外部二进制）。
     // 只在应用前台可靠：Doze 会掐掉后台监听，本期不做前台服务保活（设置页有说明）。
     core.reconcile_sync_host();
-    app.manage(core);
+    // manage 先于调度启动（与桌面同一条口径：通知路径可能经 try_state 取 HostCore）
+    app.manage(core.clone());
+    // 调度 + 提醒引擎（v0.8.3 起移动端也跑）：定时通知与任务提醒都靠这条 500ms 节拍。
+    // 脚本 / 外部程序 / 条件探针在移动端由 ops_schedule::ensure_platform_supported 拒绝。
+    // 不做保活：进程被系统收掉就不提醒，这是本期的明确取舍。
+    core.start_scheduler();
     Ok(())
 }
 
@@ -3087,6 +3321,15 @@ pub fn run() {
                 cards_export_zip,
                 cards_import_zip,
                 cards_import_folder,
+                transfer_receive,
+                transfer_send,
+                transfer_cancel,
+                transfer_stat_files,
+                transfer_list_folder,
+                transfer_outbox_path,
+                transfer_spool_write,
+                transfer_spool_clear,
+                transfer_default_save_dir,
                 app_version,
                 open_url,
                 save_background_image,

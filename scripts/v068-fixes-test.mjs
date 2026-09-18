@@ -38,8 +38,10 @@ await mp.locator(".task-card").first().dblclick();
 await mp.waitForSelector(".editor-meta", { timeout: 20000 });
 await mp.locator(".editor-meta-trigger", { hasText: "标签" }).first().click();
 await mp.waitForTimeout(300);
-await mp.locator(".tag-editor-input-row input").fill("工作");
-await mp.locator(".tag-add-btn").click();
+// v0.8.3：编辑器的标签浮层换成右键菜单那一套（TagMenuPanel）——没有「加号」按钮了，
+// 输入框回车即添加（勾着「存入预置」时顺手存一份）
+await mp.locator(".tag-editor-input-row input:not([type=checkbox])").fill("工作");
+await mp.locator(".tag-editor-input-row input:not([type=checkbox])").press("Enter");
 await mp.waitForTimeout(400);
 const hiddenOpacity = await mp.locator(".editor-meta-tags .task-tag .tag-delete").first().evaluate((el) => getComputedStyle(el).opacity);
 check("移动端编辑器标签红叉默认隐藏", hiddenOpacity === "0", hiddenOpacity);

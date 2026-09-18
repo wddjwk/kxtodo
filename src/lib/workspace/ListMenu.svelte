@@ -176,7 +176,9 @@
     setBackground({ color });
   }
 
-  function handleColorPick(event: Event): void {
+  /** 背景取色器：松手（change）才写一次。逐 input 写盘与临期色盘是同一个病——
+   *  拖动一下几十次原子写，settings/data 的写队列被打满就报「原子替换失败」。 */
+  function commitColorPick(event: Event): void {
     const target = event.currentTarget;
     if (target instanceof HTMLInputElement) {
       applyTheme(target.value);
@@ -298,17 +300,21 @@
     void setUiColorAction(node.id, color);
   }
 
+  /** 拖动取色器：只改本地草稿（色盘实时跟着动），**不落盘** */
   function handleUiColorPick(event: Event): void {
     const target = event.currentTarget;
     if (target instanceof HTMLInputElement) {
       uiColorLive = true;
       uiColorValue = target.value;
-      setUiColor(target.value);
     }
   }
 
-  function endUiColorPick(): void {
+  /** 松手（change）才写一次：逐 input 落盘会把 settings.json 的原子写打满，
+   *  报「自定义颜色保存失败：原子替换失败」（需求 12） */
+  function endUiColorPick(event: Event): void {
     uiColorLive = false;
+    const target = event.currentTarget;
+    if (target instanceof HTMLInputElement) setUiColor(target.value);
   }
 
   function resetUiColor(): void {
@@ -322,13 +328,21 @@
   }
 
   // ---- 临期高亮色（每个页面一套，存在 appearance.dueColors[节点id]）----
-  const dueColorLabels = ["今天到期", "明天到期", "后天到期"];
+  // 四档（v0.8.3）：已过期 / 今天 / 明天 / 后天，顺序与 dueHighlight.DEFAULT_DUE_COLORS 一致
+  const dueColorLabels = ["已过期", "今天到期", "明天到期", "后天到期"];
+  /** 正在拖动的草稿（下标 → 颜色）；空 = 没有正在拖的，色块显示落盘值 */
+  let dueColorLive: Record<number, string> = {};
 
-  /** 这一页当前的三色：没配过就用默认（红 → 橙黄 → 浅黄） */
+  /** 这一页当前的四色：没配过就用默认（灰 → 红 → 黄 → 蓝） */
   function dueColorValue(index: number): string {
     const stored = $appSettings.appearance.dueColors[dueColorKey()];
     const candidate = stored?.[index];
     return candidate && /^#[0-9a-f]{6}$/i.test(candidate) ? candidate : DEFAULT_DUE_COLORS[index];
+  }
+
+  /** 色块显示值：拖动中看草稿，其余看落盘值（需求 12「色盘要实时展示变化」） */
+  function dueColorDisplay(index: number): string {
+    return dueColorLive[index] ?? dueColorValue(index);
   }
 
   /** 配色的归属键：普通列表用节点 id；日记/记账那种按域存（settingsPrefix） */
@@ -339,7 +353,7 @@
   function updateDueColor(index: number, color: string): void {
     const key = dueColorKey();
     if (!key) return;
-    const next = [...[0, 1, 2].map((slot) => dueColorValue(slot))];
+    const next = [...[0, 1, 2, 3].map((slot) => dueColorValue(slot))];
     next[index] = color;
     void setConfigAction("appearance.dueColors", {
       ...$appSettings.appearance.dueColors,
@@ -781,10 +795,10 @@
   <div class="menu-section-title">UI颜色</div>
   <div class="ui-color-row">
     <label class="ui-color-picker" title="修改当前界面的标题和控件颜色">
-      <span style={`--swatch: ${accentValue}`}></span>
+      <span style={`--swatch: ${uiColorValue}`}></span>
       <input type="color" value={uiColorValue} on:input={handleUiColorPick} on:change={endUiColorPick} />
     </label>
-    <span class="ui-color-value">{accentValue}</span>
+    <span class="ui-color-value">{uiColorValue}</span>
     <button class="menu-action-button" type="button" on:click={resetUiColor}>默认</button>
   </div>
 
@@ -795,15 +809,19 @@
     <div class="due-color-row">
       {#each dueColorLabels as label, index (label)}
         <label class="ui-color-picker" title={`${label}的高亮色`}>
-          <span style={`--swatch: ${dueColorValue(index)}`}></span>
+          <span style={`--swatch: ${dueColorDisplay(index)}`}></span>
           <input
             type="color"
-            value={dueColorValue(index)}
-            on:input={(event) => updateDueColor(index, event.currentTarget.value)}
+            value={dueColorDisplay(index)}
+            on:input={(event) => (dueColorLive = { ...dueColorLive, [index]: event.currentTarget.value })}
+            on:change={(event) => {
+              dueColorLive = {};
+              updateDueColor(index, event.currentTarget.value);
+            }}
           />
         </label>
       {/each}
-      <button class="menu-action-button" type="button" title="恢复默认配色（今天红 / 明天黄 / 后天蓝）" on:click={resetDueColors}>默认</button>
+      <button class="menu-action-button" type="button" title="恢复默认配色（过期灰 / 今天红 / 明天黄 / 后天蓝）" on:click={resetDueColors}>默认</button>
     </div>
   {/if}
 
@@ -838,7 +856,7 @@
       </div>
     </div>
   {/if}
-  <input bind:this={colorPickerInput} class="hidden-file" type="color" value={bg.color} on:input={handleColorPick} />
+  <input bind:this={colorPickerInput} class="hidden-file" type="color" value={bg.color} on:change={commitColorPick} />
   <label class="background-link">
     背景图片链接
     <input value={linkValue} placeholder="https://..." on:focus={() => (linkLive = true)} on:input={updateBackgroundLink} on:blur={endBackgroundLinkEdit} />
@@ -854,7 +872,7 @@
       on:change={endBackgroundOpacityEdit}
     />
   </label>
-  <div class="menu-inline two">
+  <div class="menu-inline">
     <button class="menu-action-button" type="button" on:click={pickBackgroundImage}><Image size={15} /> 上传图片</button>
     <button class="menu-action-button" type="button" on:click={clearBackground}><Eraser size={15} /> 清除背景</button>
   </div>

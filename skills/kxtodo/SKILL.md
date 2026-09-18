@@ -2,7 +2,17 @@
 name: kxtodo
 version: 4
 cliHelp: kxtodo-cli --help
-description: 用 KXToDo 的命令行管理本机的「待办任务 + 日记 + 记账」三类数据，外加定时任务、桌面通知、存储清理、导入导出备份与多端同步。能力：分类/条目/任务的增删改查与关键词搜索、标签与截止日期、按日期区间检索日记、记一笔与转账、资金账户与两级分类管理、收支统计与大类占比、净资产与余额、Excel 与 Markdown 压缩包导入导出、定时跑脚本或弹通知、设置项读写。**典型场景**：用户说「记一下 / 加个待办 / 提醒我 / 建个清单」「写今天的日记 / 补记某天」「记一笔账 / 转账 / 查余额 / 查净资产」「今天花了多少 / 这个月开销 / 钱都花在哪 / 资产总览」「这周·这个月·今年做了些什么 / 帮我写周报月报年度总结」「导出备份 / 换机搬家 / 导入回来」「占了多少空间 / 清理一下」「配一下多设备同步 / 同步不动了」——这些都应优先落到 KXToDo，而不是另建临时文件或散在对话里。
+description: >-
+  用 KXToDo 的命令行管理本机的待办任务、日记、记账三类数据，外加定时任务、桌面通知、
+  存储清理、导入导出备份与多端同步。能力包括分类/条目/任务的增删改查与关键词搜索、
+  标签与截止日期、按日期区间检索日记、记一笔与转账、资金账户与两级分类管理、
+  收支统计与大类占比、净资产与余额、Excel 与 Markdown 压缩包导入导出、
+  定时跑脚本或弹通知、设置项读写。典型场景：用户说记一下、加个待办、提醒我、
+  建个清单、写今天的日记、补记某天、记一笔账、转账、查余额、查净资产、
+  今天花了多少、这个月开销、钱都花在哪、资产总览、这周或这个月或今年做了些什么、
+  帮我写周报月报年度总结、导出备份、换机搬家、导入回来、占了多少空间、清理一下、
+  配一下多设备同步、同步不动了——这些都应优先落到 KXToDo，
+  而不是另建临时文件或散在对话里。
 ---
 
 # KXToDo CLI
@@ -89,6 +99,9 @@ kxtodo-cli diary list --from 2026-09-01 --to 2026-09-30 --jq '.data.total'
 - **分页**：`task list` / `task find` 默认每页 50（`--limit`），翻页用 `--cursor`（取上一页的 `meta.nextCursor`），`--all` 忽略分页一次拿全。**做汇总务必带 `--all`**，否则只统计到前 50 条。
 - **写**：`task add --type category|entry|item`；item 必须给 `--entry-id`，正文用 `--markdown`（长文用 `--markdown-file <path|->`），空正文会被拒。
 - **日期与时刻**：`--due-date` 配 `--due-time <HH:MM>`（可选，精确到分钟），`--due-time ""` 清除回到只精确到天。
+- **提醒**（v0.8.3）：`--reminder` 可重复，两种写法——`due-<分钟>` = 截止前 N 分钟（`due-0` = 到点那一刻；这一类**必须同时给 `--due-date` 与 `--due-time`**）；`+30m` / `+1h` / `+2d` 或 RFC3339（`2026-09-20T09:00:00+08:00`）= 绝对时刻（相对写法从此刻起算，**已经过去的时刻会被拒**）。
+  `task modify --reminder ...` 是**整体替换**（不给 = 不动；只写 `--reminder` 不带值 = 清空全部）；清掉日期或时刻会连带清掉「截止前」那一类。
+  提醒只在**这台设备上 KXToDo 进程活着**时才可能弹（桌面常驻托盘、移动端要开着应用），错过的不补发——要「设备关着也响」得用 `schedule`。
 - 条目视图里的 `plannedDate` / `dueDate` / `dueTime` **永远在场**（没有就是 `null` / 空串），可以按固定形状解析，不必先判键在不在。
 - **删**：`task remove --type ... --id ... --yes`；非空节点要 `--cascade`（会连带子节点与任务，先 `--dry-run` 看数量）。
 - **一般卡片的 Markdown 压缩包导出/导入只在 GUI 里**（条目的三点菜单），CLI 没有对应命令 —— 用户要这个就引导他到界面，别去找不存在的子命令。日记与记账的导入导出才有 CLI（见下两节）。
@@ -135,7 +148,7 @@ ledger transfer --from 储蓄卡 --to 微信 --amount 2000 --yes      # 转账�
 | 某段时间的明细 | `ledger list [--date \| --from --to] [--kind] [--account] [--category]` |
 | 各账户余额与净资产 | `ledger accounts` |
 | 净资产 / 总资产 / 总负债 | `ledger balance`（信用卡负余额计入负债） |
-| 两级分类有哪些 | `ledger categories [--side expense\|income]`（`parentId` 空 = 大类） |
+| 两级分类有哪些 | `ledger categories [--side expense\|income]`（平铺数组按树序：大类后面紧跟它的子分类；每项带 `depth` 0/1 与 `parentId`） |
 | 可用图标目录 | `ledger icon-list` |
 | **收支统计与钱花在哪** | `ledger stats` |
 
@@ -152,6 +165,7 @@ ledger stats --from 2026-09-14 --to 2026-09-21 --jq '.data.series'
 三选一（都不给 = 全量），返回 `range`（from/to/grain/label）、`totals`（收入/支出/结余/转账）、`series`（时间序列）、`categories`（大类占比）。
 
 - 回答「钱花在哪」**直接读 `categories`**（子分类金额已并进大类，带笔数与百分比），别自己逐笔加。
+- **不带 `--side` 时 `categories` 里收入与支出混排**（先收入后支出），每项带 `side`，`percent` 是**该侧内部**的占比（两侧各自合计 100%）。算「支出占比」先按 `side` 过滤，别把两侧百分比相加。
 - `series` 的横轴**严格跟着 `--from/--to`**：区间 ≤62 天按天逐日枚举（含两端、空档补零，周报就是这 7 天而不是整月），更长按月逐月枚举；不给边界的开区间按账目里出现过的日期/月份收表。门槛与 GUI 的统计视图同一个数。
 - 转账不进 `totals` 的收支，只单独给一个 `transfer` 合计。
 
@@ -159,6 +173,7 @@ ledger stats --from 2026-09-14 --to 2026-09-21 --jq '.data.series'
 
 - 账户：`ledger account-add --name <名> [--kind <类型>] [--initial <元>] [--icon <lucide 名>] --yes`、`account-modify`、`account-remove`。
   `--kind` 是**自由字符串**（现金/银行卡/公积金/医保…任意非空值），唯一有语义的是 `credit`（信用卡，负余额计入总负债）。
+  `--initial` 可为负（透支/欠款开户）：`--initial -1500.00` 与 `--initial=-1500.00` 都认。
   `account-modify` 还接受 `--balance <元>` **直设当前余额**（自动反推期初 = 目标余额 − 流水净额；与 `--initial` 互斥，同给报 `LEDGER_PARAM_CONFLICT`）。
   **余额永远只有「期初 + 流水」一个数据源**，改历史账目不用回头修余额。**名下还有账目的账户删不掉**（`LEDGER_ACCOUNT_IN_USE`）。
 - 自定义账户类型：`ledger account-type-add --name <名> [--icon] [--color <#rrggbb>] --yes`、`account-type-modify`、`account-type-remove`，只读 `account-types`。名字唯一；删掉仍被引用的类型是允许的（账户的 `kind` 存的是字符串，原样保留）。
@@ -261,3 +276,4 @@ kxtodo-cli schedule add --spec @schedule.json --yes --idempotency-key <唯一键
 - **不要把 `--dry-run` 的结果当成已执行**：它只校验并展示影响。
 - 汇总统计一律带 `--all`（task 默认每页 50）。
 - 界面显示相关的设置（视图选择、字号、导航布局）多是**本机偏好、不跨设备同步**，改它不会影响别的设备，也不影响任何命令的输出。
+- **这些能力只在 GUI 里，CLI 没有对应命令**（用户要就引导他到界面，别去找不存在的子命令）：工具箱里的「文件传输助手」（两台设备凭同一句 ≥8 位的口令互传文件与文件夹，打洞直连）与「草稿纸」、把工具固定进侧栏与拖动排序、临期高亮的四档配色、提醒的可视化编辑（CLI 这一侧只有 `task add/modify --reminder`）。

@@ -4,8 +4,8 @@
   import type { EditorView } from "@codemirror/view";
   import { createMarkdownEditor, insertAtCursor, replaceDocument } from "./codemirrorSetup";
   import { markdownTitle, renderMarkdown } from "../markdown";
-  import TagColorPicker from "../TagColorPicker.svelte";
-  import { tagChipStyle } from "../tagColors";
+  import { tagChipStyle, tagKey } from "../tagColors";
+  import TagMenuPanel from "../TagMenuPanel.svelte";
   import { taskToggleIndex, toggleMarkdownTask } from "../markdownTasks";
   import { markdownWire } from "../markdownControls";
   import { suppressGhostClick } from "../ghostClick";
@@ -16,10 +16,9 @@
   import { caps } from "../capabilities";
   import { appState, appSettings, clearEditBase, fileToDataUrl, markEditStart, showToast, todayIso } from "../stores";
   import {
-    addTask, replaceTaskEmojis, replaceTaskTags, saveTaskMarkdown, updateTask,
-    type TaskChanges
+    addTask, replaceTaskEmojis, replaceTaskTags, saveTaskMarkdown, setTaskSchedule
   } from "../actions";
-  import DatePicker from "../DatePicker.svelte";
+  import TaskDateReminderPanel from "../TaskDateReminderPanel.svelte";
   import IconPicker from "../IconPicker.svelte";
   import MarkdownToolbar from "./MarkdownToolbar.svelte";
   import { createBackGuard, isMobile, touchOnly } from "../platform";
@@ -27,7 +26,7 @@
   import { clampPopoverToViewport } from "../popover";
   import { fieldKeydown } from "../shortcuts";
   import { uiScaleValue } from "../styles";
-  import type { Tag, TagColor } from "../types";
+  import type { ReminderRule, Tag, TagColor } from "../types";
 
   /** 空串 = 新建模式（配合 draftNodeId），此时保存才创建任务，空正文关掉即消失。 */
   export let taskId: string;
@@ -59,17 +58,17 @@
   let dueDate = "";
   /** 到期时刻 HH:MM；没有日期时它没有意义，保存时会被忽略 */
   let dueTime = "";
+  /** 提醒规则（v0.8.3）：与日期时刻同属「日期与提醒」面板，一起落盘 */
+  let reminders: ReminderRule[] = [];
   let emojis: string[] = [];
   let tags: Tag[] = [];
   let initialDueDate = "";
   let initialDueTime = "";
+  let initialReminders = "";
   let initialEmojis = "";
   let initialTags = "";
   let metaOpen: "" | "date" | "tag" = "";
   let emojiPickerOpen = false;
-  let tagDraft = "";
-  let tagColor: TagColor = "yellow";
-  let tagHex = "";
   /** 触屏上点了一下、露出删除叉的标签/表情（桌面靠 hover，不用它） */
   let revealedTagId = "";
   let revealedEmojiIndex = -1;
@@ -143,6 +142,8 @@
     initialDueDate = dueDate;
     dueTime = task?.dueTime ?? "";
     initialDueTime = dueTime;
+    reminders = task?.reminders ? task.reminders.map((rule) => ({ ...rule })) : [];
+    initialReminders = JSON.stringify(reminders);
     emojis = task ? task.emojis.map((emoji) => emoji) : [];
     initialEmojis = emojis.join("");
     tags = task ? task.tags.map((tag) => ({ ...tag })) : [];
@@ -183,17 +184,13 @@
   /** 元数据变化落到已有任务上（新建模式随 addTask 一起提交，不走这里）。 */
   async function applyMetaChanges(): Promise<void> {
     if (draftMode || !task) return;
-    if (dueDate !== initialDueDate || (dueDate && dueTime !== initialDueTime)) {
-      const changes: TaskChanges = {
-        dueDate: dueDate || null,
-        plannedDate: dueDate || null,
-        dueTime: dueDate ? dueTime || null : null
-      };
-      // 与卡片菜单「添加日期」同一套语义：设成今天就顺带进我的一天
-      if (dueDate === todayIso()) changes.myDay = true;
-      await updateTask(taskId, changes);
+    const remindersKey = JSON.stringify(reminders);
+    // 日期 / 时刻 / 提醒三样一起比、一起写：它们在 core 侧本来就是一个事务
+    if (dueDate !== initialDueDate || dueTime !== initialDueTime || remindersKey !== initialReminders) {
+      await setTaskSchedule(taskId, { dueDate, dueTime, reminders });
       initialDueDate = dueDate;
       initialDueTime = dueTime;
+      initialReminders = remindersKey;
     }
     if (emojis.join("") !== initialEmojis) {
       await replaceTaskEmojis(taskId, emojis);
@@ -216,6 +213,7 @@
         dueDate: dueDate || undefined,
         plannedDate: dueDate || undefined,
         dueTime: dueDate && dueTime ? dueTime : undefined,
+        reminders,
         myDay: dueDate === todayIso(),
         tags,
         emojis
@@ -270,16 +268,16 @@
     }
   }
 
-  function pickDate(date: string): void {
-    dueDate = date;
+  /**
+   * 「日期与提醒」面板保存/清除。**只改本地草稿**：编辑器一律「改了先记在草稿上、
+   * 保存时才落盘」（`persist` → `applyMetaChanges`），不该在浮层里偷偷写一次盘——
+   * 否则用户点了取消也会留下半份改动。
+   */
+  function applySchedule(patch: { dueDate: string; dueTime: string; reminders: ReminderRule[] }): void {
+    dueDate = patch.dueDate;
+    dueTime = patch.dueTime;
+    reminders = patch.reminders;
     metaOpen = "";
-  }
-
-  /** 拨时刻不收浮层（滚轮常常要再动一下）。还没有日期就落在今天：
-   *  时刻没有日期就没有意义，而这一下是用户显式要的，不算"悄悄给今天"。 */
-  function pickTime(value: string): void {
-    dueTime = value;
-    if (!dueDate) dueDate = todayIso();
   }
 
   function addEmoji(emoji: string): void {
@@ -291,33 +289,21 @@
     emojis = emojis.filter((_, i) => i !== index);
   }
 
-  function addTag(): void {
-    const text = tagDraft.trim();
-    tags = [
-      ...tags,
-      {
-        id: `tag-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-        color: tagColor,
-        text: text || undefined,
-        hex: tagColor === "custom" ? tagHex || undefined : undefined
-      }
-    ];
-    tagDraft = "";
+  /** 标签面板（与右键菜单同一套，需求 5）交来的新标签：补 id 去重后进草稿 */
+  function addTagFromPanel(tag: { color: TagColor; hex?: string; text?: string }): void {
+    const text = (tag.text ?? "").trim();
+    const entry: Tag = {
+      id: `tag-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      color: tag.color,
+      text: text || undefined,
+      hex: tag.color === "custom" ? tag.hex : undefined
+    };
+    if (tags.some((existing) => tagKey(existing) === tagKey(entry))) return;
+    tags = [...tags, entry];
   }
 
   function removeTag(tagId: string): void {
     tags = tags.filter((tag) => tag.id !== tagId);
-  }
-
-  /** 标签输入框的 keydown：吞全局快捷键但**放行 Escape**（fieldKeydown）——
-   *  无条件 stopPropagation 会把 Escape 一起吃掉，编辑器就「不支持 Esc」了。 */
-  function handleTagKeydown(event: KeyboardEvent): void {
-    if (event.isComposing || event.keyCode === 229) return;
-    fieldKeydown(event);
-    if (event.key === "Enter") {
-      event.preventDefault();
-      addTag();
-    }
   }
 
   /** 已有标签的内联编辑输入框，同上。 */
@@ -479,19 +465,19 @@
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="editor-meta" bind:this={metaRowEl} on:click|stopPropagation>
       <div class="editor-meta-field" class:open={metaOpen === "date"}>
-        <button class="editor-meta-trigger" type="button" class:filled={Boolean(dueDate)} title="添加日期" on:click={() => toggleMeta("date")}>
-          <CalendarDays size={15} />{dateLabel || "添加日期"}
+        <button class="editor-meta-trigger" type="button" class:filled={Boolean(dueDate)} title="日期与提醒" on:click={() => toggleMeta("date")}>
+          <CalendarDays size={15} />{dateLabel || "日期与提醒"}
         </button>
         {#if metaOpen === "date"}
           <div class="editor-meta-pop">
-            <DatePicker
-              value={dueDate}
-              time={dueTime}
-              withTime
-              on:select={(event) => pickDate(event.detail)}
-              on:selectTime={(event) => pickTime(event.detail)}
-              on:clear={() => pickDate("")}
-              on:close={() => (metaOpen = "")}
+            <!-- 与右键菜单「日期与提醒」、卡片上的日期浮层是同一个组件（需求 10.8） -->
+            <TaskDateReminderPanel
+              dueDate={dueDate}
+              dueTime={dueTime}
+              {reminders}
+              onSave={applySchedule}
+              onClear={() => applySchedule({ dueDate: "", dueTime: "", reminders: [] })}
+              onClose={() => (metaOpen = "")}
             />
           </div>
         {/if}
@@ -545,26 +531,8 @@
           </button>
           {#if metaOpen === "tag"}
             <div class="editor-meta-pop editor-tag-pop" on:click|stopPropagation>
-              <div class="tag-editor-input-row">
-                <input
-                  type="text"
-                  placeholder="输入标签文字…"
-                  maxlength="20"
-                  bind:value={tagDraft}
-                  on:keydown={handleTagKeydown}
-                />
-                <button class="tag-add-btn" type="button" title="添加标签" on:click|stopPropagation={addTag}>
-                  <Plus size={15} />
-                </button>
-              </div>
-              <TagColorPicker
-                color={tagColor}
-                hex={tagHex}
-                on:change={(event) => {
-                  tagColor = event.detail.color;
-                  tagHex = event.detail.hex;
-                }}
-              />
+              <!-- 与右键菜单「标签」同一个组件（需求 5）：预置、输入框、配色一套口径 -->
+              <TagMenuPanel compact onAdd={addTagFromPanel} />
             </div>
           {/if}
         </div>

@@ -628,10 +628,44 @@ async function listenCoreEvents(): Promise<void> {
     // 这一版已经在手里了就别再拉一次：写操作的路径通常是「前端乐观更新 → dispatch →
     // 显式 refreshFromCore」，而 Host 的域事件在 dispatch 内部就已经发出来了，
     // 两边撞在一起就是同一次写入两轮完整快照。
-    if (domain && typeof revision === "number" && (appliedRevisions.get(domain) ?? 0) >= revision) {
+    //
+    // `revision > 0` 这个前提不能省：**revision 0 是「没有版本号，强制刷新」的哨兵**——
+    // CLI 改同步配置（`sync register/unpair/configure/now`）走的是
+    // `ops_sync::notify_settings_changed`，它没有写 settings 因而拿不到 revision，
+    // 只能发 0 来叫醒常驻的 GUI。而 `appliedRevisions.get(domain) ?? 0` 对 0 恒为真，
+    // 不加这道守卫那些事件会被无条件丢掉：GUI 常驻时 CLI 改了同步配置，
+    // 设置面板与自动同步循环要等到下一次无关事件才回刷。
+    if (domain && typeof revision === "number" && revision > 0 && (appliedRevisions.get(domain) ?? 0) >= revision) {
       return;
     }
     void refreshFromCore(domain ? [domain] : undefined);
+  });
+}
+
+/**
+ * 提醒 / 通知的两条事件通路（v0.8.3）。
+ *
+ * - `kxtodo://notification`：**移动端**的通知。core 的 `MobileBackend` 不自绘通知窗
+ *   （那是桌面的独立 always-on-top 窗口），而是把载荷交回前端，由 `showNotification`
+ *   走系统通知插件（含权限申请）并在失败时降级 Toast——移动端的通知呈现只留一处实现，
+ *   Rust 侧再抄一份权限逻辑就是两套口径。桌面不会收到这个事件。
+ * - `kxtodo://reminder-error`：提醒引擎的故障（台账损坏、通知发不出去）。这类问题
+ *   只有用户能修（比如去系统设置里开通知权限），写进日志没人看得见。
+ */
+async function listenReminderEvents(): Promise<void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  await listen<Partial<AppNotification>>("kxtodo://notification", (event) => {
+    const payload = event.payload;
+    if (!payload) return;
+    void showNotification(payload.message ?? "", {
+      title: payload.title,
+      durationMs: payload.durationMs,
+      tone: payload.tone,
+      position: payload.position
+    });
+  });
+  await listen<{ code?: string; message?: string }>("kxtodo://reminder-error", (event) => {
+    showToast(`提醒没能触发：${event.payload?.message ?? "未知错误"}`, 8000);
   });
 }
 
@@ -662,7 +696,9 @@ export async function hydrate(): Promise<void> {
   }
   await versionReady;
   if (coreMode) {
-    await listenCoreEvents();
+    // 两条监听都必须在拉快照之前注册完成（否则会漏掉这期间发生的事件）；
+    // 它们互不依赖，并行发出去。
+    await Promise.all([listenCoreEvents(), listenReminderEvents()]);
     let snapshotLoaded = false;
     try {
       const snapshot = await coreSnapshot();

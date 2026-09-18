@@ -253,6 +253,21 @@ pub fn tag_hex(raw: Option<&str>) -> Option<String> {
     (lower.len() == 6 && lower.chars().all(|ch| ch.is_ascii_hexdigit())).then(|| format!("#{lower}"))
 }
 
+/// 任务提醒规则（跟着任务一起同步）。
+///
+/// 两种写法：**绝对时刻**（`at` 是 RFC3339 的 UTC 瞬时，自定义提醒落这一档）与
+/// **相对截止**（`minutes` = 到期前多少分钟，0 = 到点时；跟着 dueDate/dueTime 漂移）。
+/// 只存规则不存「什么时候响过」——发送台账是本机 runtime 的事（`reminders.rs`），
+/// 绝不能进同步载荷，否则一台设备响过另一台就再也不响了。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum Reminder {
+    /// 绝对时刻：RFC3339（UTC）
+    Absolute { at: String },
+    /// 截止前 N 分钟（0 = 到点时）；需要 dueDate 与 dueTime 都有值
+    BeforeDue { minutes: u32 },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Item {
     pub id: String,
@@ -276,6 +291,9 @@ pub struct Item {
     /// 到期时刻 HH:MM，空 = 只精确到天（与 dueDate 搭配使用）
     #[serde(rename = "dueTime", default, skip_serializing_if = "String::is_empty")]
     pub due_time: String,
+    /// 提醒规则；空 = 没有提醒
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reminders: Vec<Reminder>,
     #[serde(rename = "completedAt", skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -885,6 +903,8 @@ pub struct SettingsFile {
     #[serde(default)]
     pub sync: SyncSettings,
     #[serde(default)]
+    pub transfer: TransferSettings,
+    #[serde(default)]
     pub updates: UpdateSettings,
     #[serde(default)]
     pub features: FeatureSettings,
@@ -999,14 +1019,19 @@ pub struct AppearanceSettings {
     pub nav_layout: String,
     #[serde(rename = "themePresets", default = "default_theme_presets")]
     pub theme_presets: Vec<ThemePreset>,
-    /// 临期高亮配色：`{ 节点id: ["#rrggbb", "#rrggbb", "#rrggbb"] }`（今天/明天/后天），
-    /// **每个页面一套**，所以按节点 id 存。
+    /// 临期高亮配色：`{ 节点id: ["#rrggbb"; 4] }`（已过期/今天/明天/后天，
+    /// 顺序与前端 `dueHighlight.ts::DEFAULT_DUE_COLORS` 一致），**每个页面一套**，所以按节点 id 存。
     #[serde(rename = "dueColors", default)]
     pub due_colors: Map<String, Value>,
     /// 预置标签（v0.8.1）：右键菜单「标签」面板里可一键添加的常用标签。
     /// 跨设备共享——同一份标签库在每台设备上都该能用。
     #[serde(rename = "tagPresets", default)]
     pub tag_presets: Vec<Tag>,
+    /// 日记专用的预置标签（v0.8.3）：日记与工作事项的常用标签根本不是一批
+    /// （「出差」「报销」对日记没意义，「今天心情」对工作事项没意义），混在一套里
+    /// 两边都变难用，所以分成两套、面板里各展示各的。
+    #[serde(rename = "diaryTagPresets", default)]
+    pub diary_tag_presets: Vec<Tag>,
     #[serde(rename = "uiColors", default)]
     pub ui_colors: Map<String, Value>,
     #[serde(rename = "newNodeDefaults", default)]
@@ -1093,6 +1118,15 @@ pub const NAV_ITEM_IDS: [&str; 7] = [
     "my-day", "planned", "important", "diary", "ledger", "scheduled", "toolbox",
 ];
 
+/// 可以钉进固定导航的工具 id（v0.8.3，navItems 里写作 `tool:<id>`）。
+/// 与前端 `src/lib/tools/catalog.ts` 的 `TOOL_CATALOG` 是同一份清单的两份拷贝
+/// （core 要在 config.set 时挡住拼错的 id，而它不 import 前端）——
+/// 有 `nav_tool_ids_match_frontend_catalog` 测试用 include_str! 钉住两边。
+pub const NAV_TOOL_IDS: [&str; 4] = ["random", "rmb", "scratchpad", "transfer"];
+
+/// navItems 里工具行的前缀
+pub const NAV_TOOL_PREFIX: &str = "tool:";
+
 /// `appearance.navLayout` 的合法取值。
 pub const NAV_LAYOUTS: [&str; 3] = ["list", "grid", "icons"];
 
@@ -1119,6 +1153,7 @@ impl Default for AppearanceSettings {
             diary_font_size: default_diary_font_size(),
             nav_items: default_nav_items(),
             tag_presets: Vec::new(),
+            diary_tag_presets: Vec::new(),
             due_colors: Map::new(),
             nav_layout: default_nav_layout(),
             theme_presets: default_theme_presets(),
@@ -1419,6 +1454,18 @@ pub struct SyncSettings {
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
+}
+
+/// 文件传输助手（v0.8.3）的本机设置。
+///
+/// **不参与设置同步**：传输与同步账户完全无关（口令配对），每台设备自己的 relay
+/// 偏好被别的设备改掉只会莫名其妙连不上。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct TransferSettings {
+    /// 自选 iroh relay 地址。空 = 跟 p2p 同步用同一个（`sync.p2pRelay`，再空 = n0 公共服务）；
+    /// `disabled` = 不用 relay（只直连/局域网）
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub relay: String,
 }
 
 fn default_lan_port() -> u16 {

@@ -240,6 +240,7 @@ fn add_task(repo: &Repository, markdown: &str) {
             planned_date: None,
             due_date: None,
             due_time: String::new(),
+            reminders: Vec::new(),
             completed_at: None,
             tags: Vec::new(),
             emojis: Vec::new(),

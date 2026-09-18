@@ -35,6 +35,8 @@
 - [端口生命周期（v0.6.0 上移，v0.6.2 清理）](#端口生命周期v060-上移v062-清理)
 - [P2P 同步（v0.6.1 落地，v0.6.2 补名字，v0.6.3 改逐台对账）](#p2p-同步v061-落地v062-补名字v063-改逐台对账)
 - [同步功能总开关（v0.6.10，`features.sync`，默认开）](#同步功能总开关v0610featuressync默认开)
+- [设置共享子集的三处清单必须一致（v0.8.3 修的两个洞）](#设置共享子集的三处清单必须一致v083-修的两个洞)
+- [文件传输助手复用 P2P 那套（v0.8.3，`transfer.rs`）](#文件传输助手复用-p2p-那套v083transferrs)
 - [相关但住在别处的同步内容](#相关但住在别处的同步内容)
 
 ## 同步总纲
@@ -154,6 +156,26 @@ iroh 1.1 承载（QUIC + 打洞 + n0 免费公共 relay；`sync.p2pRelay`/`sync.
 ## 同步功能总开关（v0.6.10，`features.sync`，默认开）
 
 关掉 = 同步的一切功能停——设置页同步整段隐藏（配对信息保留）、`syncRunner` 的 `shouldRun` 带 `featureOn`、Workspace/ListMenu 的「立即同步」入口与 F5 快捷键不给、core 的 `sync_dispatch` 除只读 status/history 外一律报 `SYNC_FEATURE_DISABLED`、`reconcile_sync_host` 的 wanted 恒 false（内置主机与 P2P 运行时一起停）。已有配对的用户不该升级后静默失去同步，所以默认 true。
+
+## 设置共享子集的三处清单必须一致（v0.8.3 修的两个洞）
+
+一个设置项要跨设备，得同时出现在三个地方：`merge.rs::settings_payload`（发）、`merge.rs::apply_settings_record`（收）、`ops_config.rs::is_shared_settings_path`（改了它才刷新 settings 实体的 LWW 时间戳）。**三处各说各话就是这两个洞的成因**：
+
+- **只发不收**：`appearance.tagPresets` / `appearance.dueColors` 一直在载荷里，`apply_settings_record` 却从不读——A 设备改了预置标签，B 设备永远收不到；更糟的是 A 这一改会让整条 settings 实体赢下 LWW，连带把 B 刚改的其它共享设置压掉。修法：apply 侧补读，**校验口径复用 `ops_config::expect_tag_presets` / `expect_due_colors`**（与 `config.set` 同一条路，不各写一份）。v0.8.3 新增的 `appearance.diaryTagPresets`（日记专用的另一套预置）三处一起加。
+- **整块替换把本机偏好拨回默认**：features 分支原先是 `settings.features = from_value::<FeatureSettings>(...)`，而载荷只带三个共享键（`showCategoryBadges` / `dueHighlight` / `linkRender`），缺的键全按 serde default 回填——远端赢一次 LWW，接收端的 `mobileBack` / `weekStart` / `editorToolbar` / `features.sync` 就被静默重置。修法：**逐字段覆盖，只动载荷里实际出现的键**（写法对齐 profile / diary / ledger 分支）。`profile` 分支当年修同一个坑时把原理写得很清楚（「缺键不该理解成清成默认」），却没做同类扫描——**「缺键 = 这条记录没提它」是共享子集的通用语义**。
+- 钉子：`merge.rs` 的 `presets_and_due_colors_round_trip_and_features_merge_per_field`（往返 + 本机偏好保留 + 非法载荷整组丢弃）。
+
+## 文件传输助手复用 P2P 那套（v0.8.3，`transfer.rs`）
+
+「两台设备凭一句口令互传文件」用的是与 P2P 同步**同一套 iroh + pkarr 打洞**，但**必须是独立的一条通道**：
+
+- **ALPN 不同**（`kxtodo-transfer/1` vs 同步的 `kxtodo-p2p/1`）。同一个 iroh 端点上 ALPN 是唯一的路由依据，重了就会被同步的 accept 循环抢走连接。
+- **房间密钥的派生串带自己的域前缀**（`kxtodo-transfer/v1/room/{code}`、握手令牌 `kxtodo-transfer/v1/token/{code}`）：口令 → sha256 → pkarr 的 `SecretKey`，zone 就是公钥，所以「同一句口令 = 同一个房间」。域前缀分开，传输的房间就不可能撞上同步的记录。
+- **relay 与 pkarr 目录沿用同步那一套**：`transfer.relay` 空 = 跟 `sync.p2pRelay` 同一个，再空 = n0 公共服务，`disabled` = 只直连/局域网；工具界面右上角可自选（与 P2P 同步的高级覆盖同一个交互）。这两个字段都是**本机配置、不进共享子集**。
+- **与账号体系完全无关**（需求明确要求）：不读同步凭据、不写审计、不进 settings 的同步子集。会话是内存里的 `Session`（`cancel(id)` 可中止），进度经 `TransferSink`（`Arc<dyn Fn(Value)>`）吐给前端。
+- 握手令牌对**排序后的两个 EndpointId** 做 HMAC：连上之后还要确认对面就是同一句口令的那台，而不是同房间里的第三者。
+- 移动端：发送侧走 webview 的 file input，字节按 base64 分片暂存 `runtime/transfer-outbox`（scoped storage 下 core 只能这样拿到内容）；**接收目录两端是同一份实现**——都用 `app.path().download_dir()` 下的 `kxtodo-transfer`。理由：Android 的 `download_dir()` 就是 `getExternalFilesDir(DIRECTORY_DOWNLOADS)`（外部目录，不需要任何权限、USB 与文件管理器都看得到），而 `app_data_dir()` 在 Android 上是**内部** `/data/data/<pkg>`，收到的文件用户根本找不到。**Tauri v2 的 `PathResolver` 没有 `external_app_data_dir()`**（Android 那份只有 audio/cache/config/data/local_data/document/download/picture/public/video/resource/`app_*`/temp/home 这些），凭空写一个平台专有 API 的后果是本地桌面编译与 `ci.yml` 全绿、只有 `release.yml` 的安卓那一栏红。
+- 测试用**假的 pkarr relay**（从 `p2p_e2e.rs` 抄的那一套）在本机跑通完整往返，不依赖公网：`crates/core/tests/transfer.rs`。
 
 ## 相关但住在别处的同步内容
 
