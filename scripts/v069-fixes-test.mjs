@@ -148,7 +148,7 @@ await closeOverlays(m);
 await m.waitForTimeout(400);
 
 // 一般卡片移动端正文占满（隐藏勾选框 + 隐藏编辑列后不留空列）
-await m.locator(".list-header button[title='更多操作']").click();
+await m.locator(".list-header button[title='列表菜单'], .list-header button[title='更多操作']").first().click();
 await m.waitForTimeout(400);
 await m.locator(".header-menu-panel button", { hasText: "列表菜单" }).first().click();
 await m.waitForTimeout(500);

@@ -117,11 +117,27 @@ pub fn data_entity_stamp(data: &DataFile, id: &str) -> Option<String> {
                 .unwrap_or_else(|| item.created_at.clone()),
         );
     }
+    if id == SCRATCHPAD_ENTITY_ID {
+        return scratchpad_entity_stamp(data);
+    }
     data.meta
         .tombstones
         .iter()
         .find(|tomb| tomb.id == id)
         .map(|tomb| tomb.updated_at.clone())
+}
+
+/// 草稿纸是**单例实体**（整篇一段文本，LWW 整段覆盖）：固定 id。
+pub const SCRATCHPAD_ENTITY_ID: &str = "scratchpad";
+
+/// 草稿纸的版本戳（没写过就是空串 = 还没有实体可推）。
+pub fn scratchpad_entity_stamp(data: &DataFile) -> Option<String> {
+    let stamp = data.scratchpad.updated_at.trim();
+    if stamp.is_empty() {
+        None
+    } else {
+        Some(stamp.to_string())
+    }
 }
 
 /// 本地实体的版本戳（diary 域：活实体或墓碑）。
@@ -313,6 +329,11 @@ pub fn settings_payload(settings: &SettingsFile) -> Value {
             "backgroundImage": settings.ledger.background_image,
             "backgroundOpacity": settings.ledger.background_opacity,
         },
+        // 工具箱同日记/记账（v0.8.4）：两件外观跟着走
+        "toolbox": {
+            "accent": settings.toolbox.accent,
+            "backgroundColor": settings.toolbox.background_color,
+        },
     })
 }
 
@@ -353,6 +374,18 @@ pub fn extract_entities(
                 updated_by: device_id.to_string(),
                 deleted: false,
                 data: task_payload(item),
+                seq: 0,
+            });
+        }
+        // 草稿纸（v0.8.4）：单例实体，写过才有（updatedAt 空 = 没有内容可推）
+        if let Some(stamp) = scratchpad_entity_stamp(data) {
+            out.push(EntityRecord {
+                kind: "scratchpad".to_string(),
+                id: SCRATCHPAD_ENTITY_ID.to_string(),
+                updated_at: stamp,
+                updated_by: device_id.to_string(),
+                deleted: false,
+                data: json!({ "text": data.scratchpad.text }),
                 seq: 0,
             });
         }
@@ -676,6 +709,8 @@ fn apply_settings_record(record: &EntityRecord, settings: &mut SettingsFile) -> 
         diary: Option<Value>,
         #[serde(default)]
         ledger: Option<Value>,
+        #[serde(default)]
+        toolbox: Option<Value>,
     }
     let payload: SharedSettings =
         serde_json::from_value(record.data.clone()).map_err(|e| e.to_string())?;
@@ -825,6 +860,17 @@ fn apply_settings_record(record: &EntityRecord, settings: &mut SettingsFile) -> 
             }
         }
     }
+    if let Some(toolbox) = payload.toolbox {
+        if let Some(map) = toolbox.as_object() {
+            // 逐字段覆盖（老设备的载荷没有 toolbox 键 = 这条记录没提它）
+            if let Some(value) = map.get("accent").and_then(Value::as_str) {
+                settings.toolbox.accent = value.to_string();
+            }
+            if let Some(value) = map.get("backgroundColor").and_then(Value::as_str) {
+                settings.toolbox.background_color = value.to_string();
+            }
+        }
+    }
     settings.sync_updated_at = Some(record.updated_at.clone());
     Ok(())
 }
@@ -855,6 +901,20 @@ pub fn apply_data_record(
     match record.kind.as_str() {
         "node" => apply_node_record(record, data),
         "task" => apply_task_record(record, data),
+        // 草稿纸：LWW 整段覆盖（载荷里就是整篇文本）
+        "scratchpad" => {
+            let text = record
+                .data
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            data.scratchpad = crate::model::Scratchpad {
+                text,
+                updated_at: record.updated_at.clone(),
+            };
+            Ok(())
+        }
         other => Err(format!("未知数据域实体类型 `{other}`")),
     }
 }
@@ -985,6 +1045,7 @@ mod tests {
             tasks: Vec::new(),
             selected_node_id: String::new(),
             backgrounds: Map::new(),
+            scratchpad: Default::default(),
             extra: Map::new(),
         }
     }
@@ -1091,6 +1152,61 @@ mod tests {
         );
         apply_data_record(&fresh_remote, &mut data).unwrap();
         assert_eq!(data.tasks.len(), 1);
+    }
+
+    #[test]
+    fn scratchpad_syncs_as_a_singleton_entity() {
+        // 写过草稿纸 → 提取出一个 kind=scratchpad 的单例实体
+        let mut data = empty_data();
+        data.scratchpad = crate::model::Scratchpad {
+            text: "甲".to_string(),
+            updated_at: "2026-09-19T00:00:00Z".to_string(),
+        };
+        let entities = extract_entities(
+            &data,
+            &crate::model::DiaryFile::default(),
+            &crate::model::LedgerFile::default(),
+            &crate::model::SettingsFile::default(),
+            &crate::model::ScheduleFile::default(),
+            &Scopes { data: true, ..Default::default() },
+            "dev-a",
+        );
+        let entity = entities
+            .iter()
+            .find(|item| item.kind == "scratchpad")
+            .expect("草稿纸实体应被提取");
+        assert_eq!(entity.id, SCRATCHPAD_ENTITY_ID);
+        assert_eq!(entity.data["text"], json!("甲"));
+
+        // 没写过（updatedAt 空）→ 不产生实体，免得把空草稿推给别的设备
+        let fresh = empty_data();
+        let none = extract_entities(
+            &fresh,
+            &crate::model::DiaryFile::default(),
+            &crate::model::LedgerFile::default(),
+            &crate::model::SettingsFile::default(),
+            &crate::model::ScheduleFile::default(),
+            &Scopes { data: true, ..Default::default() },
+            "dev-a",
+        );
+        assert!(none.iter().all(|item| item.kind != "scratchpad"));
+
+        // 远端记录应用回来：整段覆盖 + 记 stamp
+        let mut target = empty_data();
+        let round = record(
+            "scratchpad",
+            SCRATCHPAD_ENTITY_ID,
+            "2026-09-19T01:00:00Z",
+            "dev-b",
+            json!({ "text": "乙" }),
+        );
+        apply_data_record(&round, &mut target).expect("应用草稿纸记录");
+        assert_eq!(target.scratchpad.text, "乙");
+        assert_eq!(target.scratchpad.updated_at, "2026-09-19T01:00:00Z");
+        assert_eq!(
+            data_entity_stamp(&target, SCRATCHPAD_ENTITY_ID).as_deref(),
+            Some("2026-09-19T01:00:00Z")
+        );
     }
 
     #[test]

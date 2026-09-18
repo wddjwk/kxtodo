@@ -441,7 +441,7 @@ const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 
   await page.keyboard.press("Tab");
   await page.keyboard.type("X", { delay: 2 });
   await page.waitForTimeout(200);
-  check("Tab：todo 项整行缩进且光标落在行尾", J(await lines()) === J(["  * [ ] 待办项X"]), J(await lines()));
+  check("Tab：todo 项整行缩进且光标落在行尾", J(await lines()) === J(["   * [ ] 待办项X"]), J(await lines()));
 
   await setDoc("1. 甲");
   await page.keyboard.press("Enter");
@@ -450,7 +450,7 @@ const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 
   check("Enter：有序列表自动续编号", J(await lines()) === J(["1. 甲", "2. 乙"]), J(await lines()));
   await page.keyboard.press("Tab");
   await page.waitForTimeout(200);
-  check("Tab：第二项缩进（嵌套层编号从 1 起）", J(await lines()) === J(["1. 甲", "  1. 乙"]), J(await lines()));
+  check("Tab：第二项缩进（嵌套层编号从 1 起）", J(await lines()) === J(["1. 甲", "   1. 乙"]), J(await lines()));
   await page.keyboard.press("Shift+Tab");
   await page.waitForTimeout(200);
   check("Shift+Tab：退回外层并接续编号", J(await lines()) === J(["1. 甲", "2. 乙"]), J(await lines()));
@@ -458,23 +458,23 @@ const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 
   await setDoc("- 甲");
   await page.keyboard.press("Tab");
   await page.waitForTimeout(200);
-  check("Tab：无序标记按层级轮换（- → *）", J(await lines()) === J(["  * 甲"]), J(await lines()));
+  check("Tab：无序标记按层级轮换（- → *）", J(await lines()) === J(["   * 甲"]), J(await lines()));
 
   await setDoc("- 一级");
   await page.keyboard.press("Enter");
   await page.keyboard.type("二级");
   await page.keyboard.press("Tab");
   await page.waitForTimeout(150);
-  check("准备：二级项已缩进", J(await lines()) === J(["- 一级", "  * 二级"]), J(await lines()));
+  check("准备：二级项已缩进", J(await lines()) === J(["- 一级", "   * 二级"]), J(await lines()));
   await page.keyboard.press("Enter");
   await page.waitForTimeout(200);
-  check("Enter：空二级项生成（带标记）", J(await lines()) === J(["- 一级", "  * 二级", "  * "]), J(await lines()));
+  check("Enter：空二级项生成（带标记）", J(await lines()) === J(["- 一级", "   * 二级", "   * "]), J(await lines()));
   await page.keyboard.press("Enter");
   await page.waitForTimeout(200);
-  check("Enter：空项回车退一级（不新增行）", J(await lines()) === J(["- 一级", "  * 二级", "- "]), J(await lines()));
+  check("Enter：空项回车退一级（不新增行）", J(await lines()) === J(["- 一级", "   * 二级", "- "]), J(await lines()));
   await page.keyboard.press("Enter");
   await page.waitForTimeout(200);
-  check("Enter：顶级空项回车清掉标识", J(await lines()) === J(["- 一级", "  * 二级", ""]), J(await lines()));
+  check("Enter：顶级空项回车清掉标识", J(await lines()) === J(["- 一级", "   * 二级", ""]), J(await lines()));
 
   await setDoc("- [ ] 甲");
   await page.keyboard.press("Enter");
@@ -485,7 +485,7 @@ const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 
   await page.waitForTimeout(250);
   check(
     "Enter：缩进的空 todo 项退一级（勾选框保留）",
-    J(await lines()) === J(["- [ ] 甲", "  * [ ] 乙", "- [ ] "]),
+    J(await lines()) === J(["- [ ] 甲", "   * [ ] 乙", "- [ ] "]),
     J(await lines())
   );
 
@@ -498,7 +498,7 @@ const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 
   await page.waitForTimeout(300);
   check(
     "Enter：有序空项退级并接外层编号",
-    J(await lines()) === J(["1. 甲", "  1. 乙", "2. "]),
+    J(await lines()) === J(["1. 甲", "   1. 乙", "2. "]),
     J(await lines())
   );
 
@@ -519,7 +519,7 @@ const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 
   // 甲缩进成嵌套项后，乙 是块里唯一的顶层有序项，编号重排为 1 是正确语义
   check(
     "Tab：松散列表的续行一起缩进",
-    J(await lines()) === J(["  1. 甲", "     续行说明", "1. 乙"]),
+    J(await lines()) === J(["   1. 甲", "      续行说明", "1. 乙"]),
     J(await lines())
   );
   check("编辑器无脚本报错", errors.length === 0, errors[0] ?? "");
@@ -785,7 +785,7 @@ await desktop.close();
     const { page, errors } = await freshPage(mobile);
     await openLedger(page);
     check("移动端记账整页", (await shellView(page)).includes("view-ledger"), await shellView(page));
-    await page.click(".ledger-view .header-actions > button[title='更多操作']");
+    await page.click(".ledger-view .header-actions > button[title='记账菜单'], .ledger-view .header-actions > button[title='更多操作']");
     await page.waitForSelector(".ledger-gear-panel", { timeout: 8000 });
     await page.click(".ledger-gear-panel .menu-item-button:has-text('账户与转账')");
     await page.waitForSelector(".ledger-manager", { timeout: 8000 });

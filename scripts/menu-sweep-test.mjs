@@ -13,7 +13,7 @@ function check(name, ok, extra = "") {
   if (!ok) failures++;
 }
 
-const FLOATERS = ".context-menu, .header-menu-panel, .diary-gear-panel, .editor-meta-pop, .submenu-panel";
+const FLOATERS = ".context-menu, .header-menu-panel, .editor-meta-pop, .submenu-panel";
 
 async function assertFloatersInViewport(page, label) {
   const boxes = await page.evaluate((selector) => {
@@ -158,12 +158,10 @@ async function sweep(page, mobile, tag) {
   await page.locator(".editor-actions .editor-icon-button.primary").click();
   await page.waitForTimeout(600);
 
-  await page.locator(".diary-view .header-actions > button").first().click();
-  await page.waitForTimeout(300);
-  await assertFloatersInViewport(page, `${tag} 日记齿轮面板`);
-  await page.locator(".diary-gear-panel .menu-item-button", { hasText: "日记菜单" }).click();
+  // v0.8.4 需求 14：搜索是独立按钮（点开是输入框、不是浮层），齿轮直弹日记菜单
+  await page.locator(".diary-view .header-actions button[title='日记菜单']").click();
   await page.waitForTimeout(400);
-  await assertFloatersInViewport(page, `${tag} 日记三点菜单`);
+  await assertFloatersInViewport(page, `${tag} 日记菜单`);
   await closeAll(page);
 
   await openCardMenu(page, ".diary-card", mobile);

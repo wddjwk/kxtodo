@@ -257,6 +257,15 @@ v0.8.0 起的几条补充（来龙去脉在 `history/v0.8.md` 批次 1）：
 - 「全局快捷键受插件平台能力限制（X11 可用，纯 Wayland 抓不到），不做会话嗅探特判」；「Linux 首跑默认退出……用户设置后以用户值为准」——`ui-patterns.md`「Linux 桌面」
 - 「改成 `is_focused`：已在前台就收起，隐藏/最小化/被挡住一律 show + unminimize + set_focus」——`history/v0.7.5-v0.7.8.md` v0.7.8 ⑪
 
+### v0.8.4 新增
+
+- 「**Svelte 5 legacy 下，`$:` 里调用的函数写组件状态不会重新调度**：`legacy_pre_effect` 把 `active_effect` 指向父分支再 `untrack(fn)`，写入不会让同组 `$:` 或模板重跑。症状是「路由到了、界面不动」或「点什么都跳回同一个」——修法是**去掉影子状态**，让 store 成为唯一真源、渲染从它纯派生」——`frontend.md`「组件」+ `history/v0.8.4.md` 一（#16）
+- 「**收缩包裹的容器里，内容的加粗会改变容器尺寸**：日历年月面板按 max-content 定宽，选中日 `font-weight: 600` 一加粗，点哪天面板宽度都不一样。给内容（`.date-picker-grid` 228px）或容器定宽」——`history/v0.8.4.md` 四 + 六（#2）
+- 「**子组件订阅滚动容器要跟着 prop 挂/摘**：父组件 `bind:this` 的赋值可能晚于子组件 `onMount`，写在 `onMount` 里就是永远没挂上（能滚动、窗口不动）」——`frontend.md`「组件」
+- 「**`to_z32()` 的 id 不能 `FromStr` 回来**（iroh 只认 RFC4648 base32 与 hex）：跨层传 id 时要么带可拨号地址、要么在核心侧查表」——`sync.md`「文件传输助手」+ `history/v0.8.4.md` 三
+- 「**接收确认是协议的一部分**：收到文件清单先推 `request` 事件、等 `decide`（60 秒超时当拒绝），「自动接收」只是跳过等待；**文本消息走同一条握手**（`mode=text`）、不落盘不进保存位置」——同上
+- 「**预览型取色必须自带作废路径**：活值住在按 scope 索引的 `colorPreview` store，菜单关闭即作废；保存才 `setConfigAction`」——`frontend.md`「actions.ts」+ `history/v0.8.4.md` 四
+- 「**列表虚拟化只动渲染层**：store 里数据永远全量，`VirtualStack` 只决定挂谁；`perf-bench.mjs` 与 `window.__kxtodoRenderStats` 是量它的地方」——`frontend.md`「组件」+ `history/v0.8.4.md` 二
 ### v0.8.3 新增
 
 - 「**乐观更新一律过 `actions.ts::withRollback`**：先本地生效再落盘，失败按原值回滚；回滚前用**对象身份**判「这期间是否又被改过」。`gui.*` 不发域事件 = 失败后没有快照来纠正，不回滚就是界面与盘永久分叉」——`frontend.md`「actions.ts」+ `history/v0.8.3.md` 六（#10）

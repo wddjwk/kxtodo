@@ -290,7 +290,7 @@ const context = await browser.newContext({ viewport: { width: 1440, height: 900 
   const back = (await page.textContent(".toolbox-rmb-result"))?.trim();
   check("大写转回金额正确", back === "1234.56", back ?? "");
 
-  await page.click(".toolbox-sub-back");
+  await page.click(".toolbox-sub-bar button");
   await page.waitForSelector(".toolbox-list", { timeout: 8000 });
   await page.click(".toolbox-card:has-text('随机')");
   await page.waitForSelector(".toolbox-sub-actions", { timeout: 8000 });
@@ -370,7 +370,7 @@ const context = await browser.newContext({ viewport: { width: 1440, height: 900 
   let text = await lines();
   check(
     "Tab 缩进有序项并把同级重新编号",
-    JSON.stringify(text) === JSON.stringify(["  1. 甲", "1. 乙"]),
+    JSON.stringify(text) === JSON.stringify(["   1. 甲", "1. 乙"]),
     JSON.stringify(text)
   );
 
@@ -378,13 +378,13 @@ const context = await browser.newContext({ viewport: { width: 1440, height: 900 
   await page.keyboard.press("Tab");
   await page.waitForTimeout(200);
   text = await lines();
-  check("再缩进得到第二级", text[0] === "    1. 甲", JSON.stringify(text));
+  check("再缩进得到第二级", text[0] === "      1. 甲", JSON.stringify(text));
 
   await selectLine(0);
   await page.keyboard.press("Shift+Tab");
   await page.waitForTimeout(200);
   text = await lines();
-  check("Shift-Tab 反缩进", text[0] === "  1. 甲", JSON.stringify(text));
+  check("Shift-Tab 反缩进", text[0] === "   1. 甲", JSON.stringify(text));
 
   await page.keyboard.press("Control+A");
   await page.keyboard.type("- 甲");
@@ -392,13 +392,13 @@ const context = await browser.newContext({ viewport: { width: 1440, height: 900 
   await page.keyboard.press("Tab");
   await page.waitForTimeout(200);
   text = await lines();
-  check("无序项 Tab 后换成 * 标记", text[0] === "  * 甲", JSON.stringify(text));
+  check("无序项 Tab 后换成 * 标记", text[0] === "   * 甲", JSON.stringify(text));
 
   await selectLine(0);
   await page.keyboard.press("Tab");
   await page.waitForTimeout(200);
   text = await lines();
-  check("再缩进换成 + 标记", text[0] === "    + 甲", JSON.stringify(text));
+  check("再缩进换成 + 标记", text[0] === "      + 甲", JSON.stringify(text));
   await page.close();
 }
 

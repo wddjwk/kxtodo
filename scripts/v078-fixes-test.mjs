@@ -248,21 +248,28 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.waitForTimeout(400);
   check("点别处仍然关闭（2）", (await page.$$(".context-menu")).length === 0);
 
-  // 3 日记齿轮面板宽度自适应
+  // 3 日记齿轮直弹日记菜单（v0.8.4 需求 14：中间那层面板撤掉了）
   await page.click(".system-nav .nav-row:has-text('日记')");
   await page.waitForSelector(".diary-view", { timeout: 8000 });
   await page.waitForTimeout(400);
-  await page.click(".diary-view .header-actions > button:last-child");
-  await page.waitForSelector(".diary-gear-panel", { timeout: 5000 });
+  await page.click(".diary-view .header-actions button[title='日记菜单']");
+  await page.waitForSelector(".context-menu", { timeout: 5000 });
   await page.waitForTimeout(300);
-  const diaryPanel = await page.$eval(".diary-gear-panel", (el) => {
+  const diaryPanel = await page.$eval(".context-menu", (el) => {
     const rect = el.getBoundingClientRect();
     const labelWidths = [...el.querySelectorAll(".menu-item-label")].map((item) => item.getBoundingClientRect().width);
-    return { width: rect.width, maxLabel: Math.max(...labelWidths, 0), scale: 0.75 };
+    return {
+      width: rect.width,
+      maxLabel: Math.max(...labelWidths, 0),
+      hasEntries: el.querySelectorAll(".menu-item-button").length,
+      scale: 0.75
+    };
   });
+  // v0.8.4：齿轮直弹日记菜单（ListMenu，minWidth 300）；「宽度自适应/不固定 176」这条
+  // 旧断言随面板一起退休——菜单宽度由 ListMenu 统一给
   check(
-    "日记齿轮面板宽度自适应（比最长条目略宽、不再固定 176）（3）",
-    diaryPanel.width / 0.75 < 176 && diaryPanel.width > diaryPanel.maxLabel + 30,
+    "日记菜单直接弹出且有内容（3）",
+    diaryPanel.hasEntries > 0 && diaryPanel.width / 0.75 <= 320,
     JSON.stringify(diaryPanel)
   );
   await page.keyboard.press("Escape");

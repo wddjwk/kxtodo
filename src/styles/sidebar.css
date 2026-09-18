@@ -187,28 +187,12 @@
   cursor: grabbing;
 }
 
+/* 拖动中：被拖的那一行半透明 + 抬起一点（v0.8.4 需求 8）。
+   行本身跟着落点实时挪位（Svelte 的 animate:flip 负责平滑过渡），
+   不再只画一根落点线——「行让位」比「一根线」直观。 */
 .nav-row.nav-drag-source {
-  opacity: 0.45;
-}
-
-.nav-row.drop-before::after,
-.nav-row.drop-after::after {
-  content: "";
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  height: 2px;
-  border-radius: 999px;
-  background: var(--accent, #2564cf);
-  pointer-events: none;
-}
-
-.nav-row.drop-before::after {
-  top: -2px;
-}
-
-.nav-row.drop-after::after {
-  bottom: -2px;
+  opacity: 0.5;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 16%);
 }
 
 .active-rail {

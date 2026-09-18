@@ -67,7 +67,7 @@
 
 **目录与注册表分开（v0.8.3）**：`tools/catalog.ts` 只有 `id/name/desc`（`TOOL_CATALOG` + `isToolId` + `toolCatalogEntry`），`tools/registry.ts` 才是「图标 + `available()` + `load()` 动态 import」的注册点。拆开的理由很具体：侧栏的固定行也要认得工具 id，让 `nav.ts` 直接 import registry 会把 lucide 图标与所有工具的 chunk 拉进首屏链。`tools/navigation.ts` 管 `tool:<id>` ↔ 固定行。
 
-`ToolboxView.svelte` 只是壳：列表画 `availableTools()`、点开懒加载子视图挂进 `.toolbox-sub-host`、返回按钮收回——**新增工具 = 目录加一项 + 注册表加一项 + 写一个组件，壳与样式零改动**。v0.8.3 起卡片可**右键「固定此工具」**钉进侧栏固定区（`appearance.navItems` 里追加 `tool:<id>`，core 侧 `NAV_TOOL_IDS` 白名单校验），固定区支持**指针拖动排序**（`drop-before`/`drop-after` 落点线）与右键「取消固定」（`Pin` / `UnPin` 图标）；从固定行进来时子视图的返回按钮**整页收**（`fromPin`），从工具箱进来只收回列表。现有工具：随机数（`RandomTool`）、人民币大小写（`RmbTool`，双向、宽输入框 `.toolbox-text-input-wide`、支持汉字常显 `.toolbox-han-hint`）、草稿纸（`ScratchpadTool`，纯 textarea + 防抖自动保存到 `kxtodo-scratchpad-v1`，**不做任何渲染**；图标是手绘的 `ScratchpadIcon.svelte`）、文件传输助手（`TransferTool`，收发两栏 + 口令 + 逐文件进度 + 右上角 relay 自选）。
+`ToolboxView.svelte` 只是壳：列表画 `availableTools()`、点开懒加载子视图（`{#await loadToolModule(tool)}`，模块缓存失败不留）——**新增工具 = 目录加一项 + 注册表加一项 + 写一个组件，壳与样式零改动**。v0.8.3 起卡片可**右键「固定此工具」**钉进侧栏固定区（`appearance.navItems` 里追加 `tool:<id>`，core 侧 `NAV_TOOL_IDS` 白名单校验）。v0.8.4 的三处变化：① **打开哪一个工具只有一处真源**（`tools/navigation.ts` 的 `toolRoute`，子视图从它纯派生）——壳里不再有 `activeToolId` 这种影子状态；② 子页头部去掉「返回工具箱」整行，改成右上角两枚按钮（左 = 回工具箱、右 = ⋯ 外观菜单，工具页的背景色/主题色走同一套「草稿 → 保存」）；③ **返回一律回工具箱主界面**（`fromPin` 已删）。固定区拖动排序的落点按布局算（单列比 Y、双列/图标在同一竖带内比 X），拖动时行实时让位（`animate:flip`）。现有工具：随机数（`RandomTool`）、人民币大小写（`RmbTool`，双向、宽输入框 `.toolbox-text-input-wide`、支持汉字常显 `.toolbox-han-hint`）、草稿纸（`ScratchpadTool`，纯 textarea、**不做任何渲染**；正文字数据域 `data.json` 的 `scratchpad`（跟着「同步数据」走），localStorage 只做首帧缓存，防抖 5 秒 + 切后台/关页面前 flush；图标是手绘的 `ScratchpadIcon.svelte`）、文件传输助手（`TransferTool`，见下）。
 
 路由与记账同口径：桌面 `stores.toolboxOpen` + `.app-shell.toolbox-open` 藏工作区（搜索态让回）、移动端历史栈 `toolbox` 层；侧栏行与设置「固定分组」勾选由 `caps.toolbox`（恒真）过滤。共享样式在 `toolbox.css`（桌面容器限宽 720px），移动端整页容器覆盖仍在 mobile.css。
 
@@ -159,3 +159,9 @@
 
 - **记账**（原章节里排在「日记」之后、「全局搜索混排」之前）→ `ledger.md`（数据模型 + 命令面 + 界面约定 + Excel 归档 + 确认门）；它的 v0.7.3/v0.7.4 打磨 → `history/v0.7.0-v0.7.4.md`，v0.7.5–v0.7.8 打磨 → `history/v0.7.5-v0.7.8.md`。
 - **同步功能总开关（v0.6.10，`features.sync`）**（原章节里排在「编辑器 markdown 工具栏」之后、「一般卡片的 Markdown 压缩包」之前）→ `sync.md` 的「同步功能总开关」。
+
+## 文件传输助手（v0.8.4 重做，`TransferTool.svelte`）
+
+形态照 LocalSend：内容列 `max-width: 720px` 居中（移动端单列）。自上而下：**身份区**（设备名输入 + 配对口令输入（带眼睛）+ 在线绿点/上线按钮）→ **居中分段滑块**（发送 | 接收）→ 发送侧四个大图标（文件 / 文件夹 / 文本 / 剪贴板；移动端 2×2）→ 已选清单（胶囊，× 可删）→ **单选的设备卡片**（名字 + 选中描边）→ 右下角**胶囊发送按钮**（移动端底部 sticky 避让安全区）；接收侧「待命接收中 + 保存位置 + 更改/打开文件夹 + 自动接收开关」、接收确认卡（对方名字 + 文件清单 + 总大小 + 拒绝/接收）、收到的文本卡片（复制 / 保存为 .txt）、`传输历史` 折叠区（近 50 条 + 常连设备数）。传输中/完成/失败的会话卡：方向图标 + 文件名 + 进度条 + 速度（EMA 平滑）+ 剩余时间 + 取消；完成 5 秒后自动收起，完成时系统通知 + Toast + 「打开文件夹」。空状态文案「对方输完同一句口令，就会出现在这里」+ 端到端加密小盾牌。
+
+桌面拖文件/文件夹进窗口直接进清单（`getCurrentWebview().onDragDropEvent`）；移动端发送走 file input + base64 分片 spool；剪贴板是图片就按文件处理、是文本就进文本清单。

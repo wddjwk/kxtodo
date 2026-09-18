@@ -80,7 +80,12 @@ v9 ScheduleEntry（spec/state/ui 三段）↔ UI 编辑模型双向适配，patc
 - **`currentTime.ts`**：`currentMinute` 可读 store（60 秒对齐 + `visibilitychange`/`focus` 补刷），驱动「刚过期」的翻转与「几小时内」的加重档——不能靠每次渲染重算 `new Date()`（卡片不会自己重渲）。
 - **`reminders.ts`**：提醒规则的前端纯逻辑（`remindersParam` 编码成 CLI/core 认的 `due-<分钟>` / `+1h` / RFC3339，以及展示用的文案），与 core 的 `reminders.rs::parse_rules` 同口径，有单测。
 - **`sort.ts::compareDue`**：截止排序比**完整时刻**（`dueMoment`，没有时刻按当天 23:59:59），不再比日期字符串——否则同一天里「09:00 到期」与「只精确到天」永远平手，顺序交给 sort 的稳定性 = 交给插入顺序（表现是「带时刻的恒在上面，升序降序都一样」）。无日期的两个方向都沉底。
-- **`tools/catalog.ts` / `tools/navigation.ts`**：工具**目录**（id/名称/描述）与**注册表**（图标 + 懒加载组件）分开，侧栏的固定行只需要前者——让 nav 直接 import registry 会把 lucide 图标与所有工具 chunk 拉进首屏链。`navigation.ts` 管 `tool:<id>` ↔ 固定行 id。
+- **`tools/catalog.ts` / `tools/navigation.ts`**：工具**目录**（id/名称/描述）与**注册表**（图标 + 懒加载组件）分开，侧栏的固定行只需要前者——让 nav 直接 import registry 会把 lucide 图标与所有工具 chunk 拉进首屏链。`navigation.ts` 管 `tool:<id>` ↔ 固定行 id；**v0.8.4 起它还是「当前打开哪个工具」的唯一真源**（`toolRoute: Writable<ToolId | null>`，子视图纯派生）。
+
+**v0.8.4 新增的纯逻辑**：
+
+- **`windowing.ts`**：长列表窗口化的全部公式（`prefixSums` / `indexAtOffset` 二分 / `windowRange`（上下 overscan + `maxCount` 硬上限）/ `initialCount`（首屏至少 30）/ 滚动锚点 `anchorAt` + `scrollTopForAnchor`）。单独成模块是为了能跑 node 单测——这几条公式分错了只表现为「列表跳一下」，肉眼很难定位。13 条单测。
+- **`colorPreview.ts`**：取色预览的活值 store（`scope` = 节点 id / `diary` / `ledger` / `toolbox`）+ 三个纯选择器（`accentWithPreview` / `backgroundWithPreview` / `dueColorsWithPreview`）。**消费端只认自己那一份 scope**（不然在日记页改色会把工作区也染上）；6 条单测。
 
 ### 前端单测（v0.8.0，vitest）
 
@@ -97,6 +102,8 @@ v9 ScheduleEntry（spec/state/ui 三段）↔ UI 编辑模型双向适配，patc
 **v0.8.1 的两条渲染纪律**：① 卡片的完整渲染交给 `deferredMarkdown.ts`，别把重活压在展开那一次 flush 里；② `setConfig` 一律**先本地生效再落盘**（等 IPC + 原子写回来才翻 UI = 点一下顿一下），失败按原值回滚。
 
 **v0.8.2 的四条**：① 长卡片**两阶段**（快速版同步上屏，装饰异步补），短卡片一条老路；② `canExpand` = 多行 ∪ 标题溢出 ∪ **当前就是展开的**（展开态挂载时 `measureTitle` 不在树上，量出来的那两项都不可信；`DiaryCard` 同款）；③ 插图不再进渲染缓存键——渲染出的是 `<img src="" data-md-img="nodeId/file">` 占位，由 `markdownWire` 的 `fillImagesIn` 订阅 `mdImageCache` 异步填（预热走 `preloadMarkdownImages`），缓存键因此与图片解析进度解耦；④ `SettingsDrawer` **分两段挂载**（`deepReady` 双 rAF）：个人资料/外观效果立即画，「特性开关」到「关于与更新」随后——移动端点头像进设置卡顿就是这么治的。
+
+**v0.8.4 的五条**：① **长列表一律走 `VirtualStack.svelte`**（窗口化：`slot="item" let:row` 拿当前项；`fullBelow` 阈值内全量直出；高度由 `measureBus` 跟踪）——**store 里数据永远全量，只调「挂多少」**；virtua 用不了（runes `children` snippet 与 legacy `let:` 不兼容，编译期就报 `invalid_default_snippet`）。② **`$:` 语句里别依赖「被调用函数写的状态」重新调度**：Svelte 5 legacy 的 `legacy_pre_effect` 把 `active_effect` 指向父分支再 `untrack`，写入不会重新调度同组语句或模板（症状：路由到了界面不动）——`ToolboxView` 因此改成「store 派生」，`ToolboxView` / `Sidebar` 的固定行都从这个真源读。③ **收缩包裹容器里的内容一加粗就改变容器尺寸**：日历面板、菜单子面板里的内容都要定宽（`.date-picker-grid` 228px）。④ **`position: fixed` 之外，挂在主容器外的浮层还要 `--accent` 兜底**（`.app-shell` 上给一次默认值）——裸 `var(--accent)` 未定义会让整条声明失效（日历里「选中日白字透明底」就是这么来的）。⑤ **拖拽重排的落点要按布局算**：单列比 Y（行内上半/下半），双列/图标模式在同一竖带内比 X；拖动过程用「行实时让位 + `animate:flip`」而不是只画落点线。
 
 **v0.8.3 的五条**：① **一个面板组件、多个入口**——`TaskDateReminderPanel.svelte` 被右键菜单（`Workspace`）、卡片日期浮层（`TaskCard`）、编辑器工具栏（`MarkdownEditorModal`）三处挂载，入口只给 `onSave`/`onClear`/`onClose`，内部状态机（`main`/`time`/`custom`）与返回键层级自洽（`embedded` prop 决定退到顶时是关浮层还是交还给宿主）；日历抽成 `CalendarGrid.svelte` 与 `DatePicker` 共用。② **`deferredMarkdown` 的短路键是「文本 + nodeId」**：同一份正文搬到别的条目下，本地图的解析结果完全不同（`transformLocalImages` 按 nodeId 找文件），只比文本会让搬走的卡片一直挂着指向旧节点的占位——随后跑「释放空间」那些图会被当孤儿真删。③ **色盘一律「活值在组件 state、`change` 才落盘」**：`<input type="color">` 的 `input` 事件在拖动过程中连发，逐次 `config.set` 会把 settings.json 的原子写打爆（用户看到的「自定义颜色保存失败：原子替换失败」）。四处（临期配色四块、节点色、背景色、日记/记账外观）同一套纪律。④ **`position: fixed` 的整屏浮层要进宿主的 `closeOverlays`，并在自己根上 `on:click|stopPropagation`**：前者保证公共入口关得掉（否则切页后浮层盖在新页面上残留），后者保证 App 的「点空白关所有浮层」不会让「在浮层里点一下」把自己关掉（`LedgerImagePreview` / 两个管理器都是这个写法）。⑤ **同一个浮层的返回键与 Esc 共用一个 `stepBack()`**：各写一份迟早分叉（`AccountManager` 的 Esc 曾跳过「账户类型小表单」那一档）。
 

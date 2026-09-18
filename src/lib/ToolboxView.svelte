@@ -2,84 +2,109 @@
   /**
    * 工具箱的壳（两端整页视图，v0.7.5 起桌面也有）：注册表驱动——
    * 列表页画 `availableTools()`（平台过滤在 src/lib/tools/registry.ts 里做），
-   * 点开一个工具就懒加载它的子视图组件挂进来，返回按钮收回列表。
+   * 点开一个工具就懒加载它的子视图组件挂进来，返回收回列表。
    * 壳不认识任何具体工具：新增工具只动注册表与组件文件。
    *
-   * v0.8.3 加了两件事：
-   * - **固定此工具**：卡片右键 / 长按出菜单，把工具钉进侧栏固定区（`tool:<id>` 行）；
-   * - **直达路由**：从钉住的行进来时（`toolRoute.fromPin`）直接落在子视图上，
-   *   返回时连工具箱整页一起收——停在列表上等于给用户一个他没来过的页面。
+   * v0.8.4 起**打开哪一个工具只有一处真源**——`tools/navigation.ts` 的 `toolRoute`：
+   * 列表点卡片、侧栏钉住的行直达，都只是 `toolRoute.set(id)`；子视图从它纯派生，
+   * 加载交给 `{#await}` + 记忆化的 `loadToolModule`。壳里不再有 `activeToolId`
+   * 这样的影子状态，也就没有「路由到了、界面不动」的两份状态对不齐。
+   * （v0.8.3 的 `fromPin` 也随之删掉：返回一律回工具箱主界面。）
+   *
+   * 子视图的头部（v0.8.4 需求 7）：不再有「返回工具箱」那一行——工具该拿到一块干净的
+   * 画布；改成右上角两个按钮：左 = 回到工具箱，右 = ⋯ 菜单（只提供更换背景色 / 主题色）。
    */
-  import { ChevronLeft, Pin, PinOff, Toolbox } from "@lucide/svelte";
-  import type { Component } from "svelte";
+  import { ArrowLeft, MoreHorizontal, Palette, Pin, PinOff, RotateCcw, Toolbox } from "@lucide/svelte";
   import MobileBack from "./MobileBack.svelte";
-  import { appSettings, showToast, toolboxOpen } from "./stores";
-  import { createBackGuard, isMobile, showMobileList } from "./platform";
+  import { appSettings } from "./stores";
+  import { setConfig } from "./actions";
+  import { createBackGuard } from "./platform";
   import { setToolPinned } from "./actions";
   import { navToolId } from "./nav";
-  import { resetToolRoute, toolRoute } from "./tools/navigation";
-  import { availableTools, type ToolDefinition } from "./tools/registry";
+  import { openToolboxTool, resetToolRoute, toolRoute } from "./tools/navigation";
+  import { availableTools, loadToolModule, type ToolDefinition } from "./tools/registry";
   import { longpress, isLongPressSuppressed } from "./longpress";
   import ContextMenu from "./menu/ContextMenu.svelte";
   import MenuItem from "./menu/MenuItem.svelte";
+  import ColorDraftActions from "./ColorDraftActions.svelte";
+  import { clearColorPreview, accentWithPreview, backgroundWithPreview, colorPreview, setColorPreview } from "./colorPreview";
+  import { toolboxAccent } from "./styles";
+  import { defaultBackground, themePresets } from "./defaults";
 
-  let activeToolId: string | null = null;
-  let toolComponent: Component | null = null;
-  let loadFailed = false;
   let cardMenu: { tool: ToolDefinition; x: number; y: number } | null = null;
 
   $: tools = availableTools();
-  $: activeTool = tools.find((tool) => tool.id === activeToolId) ?? null;
+  $: activeTool = $toolRoute === null ? null : (tools.find((tool) => tool.id === $toolRoute) ?? null);
   $: pinnedIds = $appSettings.appearance.navItems
     .filter((id) => id.startsWith("tool:"))
     .map((id) => id.slice("tool:".length));
   // 列表一露头就把各工具的 chunk 取回来：工具箱里的组件都是小件（注册表约定），
   // 而「点一下先看到正在打开…」是纯亏——用户看到的是没反馈，省下的是几 KB。
   // 放在这里而不是启动时：启动包不受影响，进工具箱又一定是瞬开。
-  $: if (!activeTool) void Promise.all(tools.map((tool) => tool.load().catch(() => undefined)));
+  $: if (!activeTool) void Promise.all(tools.map((tool) => loadToolModule(tool).catch(() => undefined)));
 
-  // 从钉住的行进来：直达子视图（路由变了也要跟上，比如用户在侧栏换了另一个钉住的行）
-  $: if ($toolRoute.id && $toolRoute.id !== activeToolId) {
-    const target = tools.find((tool) => tool.id === $toolRoute.id);
-    if (target) void openTool(target);
+  /** 打开一个工具 = 把路由指向它（列表 = null）。 */
+  function openTool(tool: ToolDefinition): void {
+    openToolboxTool(tool.id);
   }
 
-  async function openTool(tool: ToolDefinition): Promise<void> {
-    activeToolId = tool.id;
-    toolComponent = null;
-    loadFailed = false;
-    // 首次点开（预取还没回来）时 chunk 请求可能失败：**不能让它永远停在「正在打开…」**，
-    // 重试一次再失败就明确报错给用户。
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const module = await tool.load();
-        if (activeToolId === tool.id) toolComponent = module.default;
-        return;
-      } catch (error) {
-        if (attempt === 1 && activeToolId === tool.id) {
-          loadFailed = true;
-          showToast(`打开「${tool.name}」失败：${String(error)}`);
-        }
-      }
-    }
-  }
-
-  function clearToolView(): void {
-    activeToolId = null;
-    toolComponent = null;
-    loadFailed = false;
-  }
-
-  /** 返回：从钉住的行进来的连整页一起收，否则只退回工具列表 */
+  /** 返回：一律回工具箱主界面（列表）。移动端再按一次返回键才轮到整页退出。 */
   function backFromTool(): void {
-    if ($toolRoute.fromPin) {
-      resetToolRoute();
-      clearToolView();
-      if ($isMobile) showMobileList();
-      else toolboxOpen.set(false);
-      return;
-    }
-    clearToolView();
+    resetToolRoute();
+  }
+
+  // ---- 子视图的 ⋯ 菜单：工具页的外观（背景色 / 主题色，走需求 9 的「草稿 → 保存」）----
+  const TOOLBOX_SCOPE = "toolbox";
+  let appearanceMenu: { x: number; y: number } | null = null;
+  let draft: { accent?: string; background?: string } = {};
+  let customPicker: HTMLInputElement;
+  $: toolboxAccentValue = toolboxAccent($appSettings.toolbox);
+  $: toolboxBackgroundValue = $appSettings.toolbox.backgroundColor || defaultBackground.color;
+  $: accentShown = draft.accent ?? toolboxAccentValue;
+  $: backgroundShown = draft.background ?? toolboxBackgroundValue;
+  $: accentDirty = draft.accent !== undefined && draft.accent !== toolboxAccentValue;
+  $: backgroundDirty = draft.background !== undefined && draft.background !== toolboxBackgroundValue;
+  $: presets = $appSettings.appearance.themePresets.length ? $appSettings.appearance.themePresets : themePresets;
+  // 预览（需求 9）：拖色盘时整页立刻跟着变，保存才落盘；菜单一关就回退
+  $: previewAccent = accentWithPreview($colorPreview, TOOLBOX_SCOPE, toolboxAccentValue);
+  $: previewBackground = backgroundWithPreview($colorPreview, TOOLBOX_SCOPE, { color: toolboxBackgroundValue });
+  $: toolboxStyle = `--accent: ${previewAccent}; background: ${previewBackground.color};`;
+
+  function pushPreview(): void {
+    setColorPreview(TOOLBOX_SCOPE, { accent: draft.accent, background: draft.background });
+  }
+
+  function closeAppearanceMenu(): void {
+    appearanceMenu = null;
+    draft = {};
+    if ($colorPreview?.scope === TOOLBOX_SCOPE) clearColorPreview();
+  }
+
+  function pickAccent(event: Event): void {
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLInputElement)) return;
+    draft = { ...draft, accent: target.value };
+    pushPreview();
+  }
+
+  function pickBackground(color: string): void {
+    draft = { ...draft, background: color };
+    pushPreview();
+  }
+
+  function pickBackgroundFromInput(event: Event): void {
+    const target = event.currentTarget;
+    if (target instanceof HTMLInputElement) pickBackground(target.value);
+  }
+
+  function cancelAccent(): void {
+    draft = { ...draft, accent: undefined };
+    pushPreview();
+  }
+
+  function cancelBackground(): void {
+    draft = { ...draft, background: undefined };
+    pushPreview();
   }
 
   // ---- 卡片右键 / 长按：固定与取消固定 ----
@@ -104,19 +129,44 @@
   // 工具详情是工具箱整页里的一个层级（不占历史栈）：返回键先退回工具列表，
   // 再按一次才轮到历史栈把整页弹掉。
   const backGuard = createBackGuard();
-  $: backGuard(activeToolId !== null, backFromTool);
+  $: backGuard(activeTool !== null, backFromTool);
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<section class="toolbox-view" on:click|stopPropagation>
-  <header class="toolbox-header">
-    <MobileBack />
-    <span class="toolbox-header-icon"><Toolbox size={26} /></span>
-    <strong class="toolbox-header-title">工具箱</strong>
-  </header>
-
-  {#if !activeTool}
+<section class="toolbox-view" style={toolboxStyle} on:click|stopPropagation>
+  {#if activeTool}
+    <!-- 子视图的头部（需求 7）：只有两枚按钮——返回工具箱 + ⋯ 外观菜单。
+         工具该拿到一块干净的画布，「返回工具箱」占一整行太扎眼。 -->
+    <header class="toolbox-sub-bar">
+      <button class="toolbox-icon-button" type="button" title="返回工具箱" aria-label="返回工具箱" on:click={backFromTool}>
+        <ArrowLeft size={19} />
+      </button>
+      <button
+        class="toolbox-icon-button"
+        type="button"
+        title="外观"
+        aria-label="外观"
+        on:click={(event) => (appearanceMenu = { x: event.clientX, y: event.clientY })}
+      >
+        <MoreHorizontal size={19} />
+      </button>
+    </header>
+    {#await loadToolModule(activeTool)}
+      <p class="toolbox-empty">正在打开…</p>
+    {:then module}
+      <svelte:component this={module.default} />
+    {:catch error}
+      <!-- 懒加载的 chunk 拉不到（离线 / 缓存出问题）时要说一声：`loadToolModule`
+           失败不留缓存，返回后再点一次就是一次真正的重试。 -->
+      <p class="toolbox-empty">打开失败：{String(error)}</p>
+    {/await}
+  {:else}
+    <header class="toolbox-header">
+      <MobileBack />
+      <span class="toolbox-header-icon"><Toolbox size={26} /></span>
+      <strong class="toolbox-header-title">工具箱</strong>
+    </header>
     <div class="toolbox-list">
       {#each tools as tool (tool.id)}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -124,7 +174,7 @@
           class="toolbox-card"
           class:toolbox-card-pinned={pinnedIds.includes(tool.id)}
           type="button"
-          on:click={() => void openTool(tool)}
+          on:click={() => openTool(tool)}
           on:contextmenu={(event) => handleCardContext(event, tool)}
           use:longpress={(pos) => openCardMenuAt(pos.x, pos.y, tool)}
         >
@@ -141,21 +191,69 @@
         <p class="toolbox-empty">这一端暂时没有可用的工具。</p>
       {/each}
     </div>
-  {:else}
-    <div class="toolbox-sub-host">
-      <button class="toolbox-sub-back" type="button" on:click={backFromTool}>
-        <ChevronLeft size={18} /> 返回工具箱
-      </button>
-      {#if toolComponent}
-        <svelte:component this={toolComponent} />
-      {:else if loadFailed}
-        <p class="toolbox-empty">打开失败，请返回后重试。</p>
-      {:else}
-        <p class="toolbox-empty">正在打开…</p>
-      {/if}
-    </div>
   {/if}
 </section>
+
+{#if appearanceMenu}
+  {@const menu = appearanceMenu}
+  <ContextMenu x={menu.x} y={menu.y} minWidth={228} onClose={closeAppearanceMenu}>
+    <div class="menu-section-title">主题颜色</div>
+    <div class="ui-color-row">
+      <label class="ui-color-picker" title="工具页的主题色">
+        <span style={`--swatch: ${accentShown}`}></span>
+        <!-- input 与 change 都只改草稿并预览：整页与色块一起变，保存才落盘（需求 9） -->
+        <input type="color" value={accentShown} on:input={pickAccent} on:change={pickAccent} />
+      </label>
+      <span class="ui-color-value">{accentShown}</span>
+      <button
+        class="menu-action-button"
+        type="button"
+        on:click={() => { draft = { ...draft, accent: undefined }; pushPreview(); void setConfig("toolbox.accent", ""); }}
+      >默认</button>
+    </div>
+    {#if accentDirty}
+      <ColorDraftActions
+        onSave={() => { const value = draft.accent; if (value !== undefined) void setConfig("toolbox.accent", value); }}
+        onCancel={cancelAccent}
+      />
+    {/if}
+
+    <div class="menu-section-title">背景颜色</div>
+    <div class="color-grid">
+      {#each presets as preset, index (preset.name + index)}
+        <button
+          type="button"
+          title={preset.name}
+          class:active={backgroundShown === preset.color}
+          style={`--swatch: ${preset.color}; --accent-color: ${preset.color}`}
+          on:click={() => pickBackground(preset.color)}
+        ></button>
+      {/each}
+      <button type="button" class="palette-button" title="自定义颜色" on:click={() => customPicker?.click()}></button>
+      <button
+        type="button"
+        class="reset-bg-button"
+        title="恢复默认背景色"
+        on:click={() => { draft = { ...draft, background: undefined }; pushPreview(); void setConfig("toolbox.backgroundColor", defaultBackground.color); }}
+      >
+        <RotateCcw size={14} />
+      </button>
+    </div>
+    {#if backgroundDirty}
+      <ColorDraftActions
+        onSave={() => { const color = draft.background; if (color !== undefined) void setConfig("toolbox.backgroundColor", color); }}
+        onCancel={cancelBackground}
+      />
+    {/if}
+    <input
+      bind:this={customPicker}
+      class="hidden-file"
+      type="color"
+      value={backgroundShown}
+      on:change={pickBackgroundFromInput}
+    />
+  </ContextMenu>
+{/if}
 
 {#if cardMenu}
   {@const menu = cardMenu}

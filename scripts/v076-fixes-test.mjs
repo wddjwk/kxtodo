@@ -237,7 +237,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.waitForSelector(".ledger-editor-sheet", { state: "detached", timeout: 8000 });
 
   // 12 记账搜索：分类 / 备注 / 金额 + 汇总 + 单条卡片
-  await page.click(".ledger-view .header-actions button[title='更多操作']");
+  await page.click(".ledger-view .header-actions button[title='记账菜单'], .ledger-view .header-actions button[title='更多操作']");
   await page.click(".ledger-gear-panel .menu-item-button:has-text('搜索记账')");
   await page.waitForSelector(".ledger-search", { timeout: 5000 });
   check("齿轮里能打开搜索框（12）", (await page.$$(".ledger-search input")).length === 1);
@@ -270,7 +270,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.fill(".ledger-search input", "");
   await page.waitForTimeout(150);
   check("清空搜索词回到正常视图（12）", (await page.$$(".ledger-month-bar")).length === 1);
-  await page.click(".ledger-view .header-actions button[title='更多操作']");
+  await page.click(".ledger-view .header-actions button[title='记账菜单'], .ledger-view .header-actions button[title='更多操作']");
   await page.click(".ledger-gear-panel .menu-item-button:has-text('关闭搜索')");
   await page.waitForTimeout(150);
   check("关闭搜索后搜索框收起（12）", (await page.$$(".ledger-search")).length === 0);
@@ -444,7 +444,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.waitForSelector(".ledger-trend-full", { state: "detached", timeout: 8000 });
 
   // 7 分类管理「添加分类」：全部图标也能滚到底（颜色 + 预览可见）
-  await page.click(".ledger-view .header-actions button[title='更多操作']");
+  await page.click(".ledger-view .header-actions button[title='记账菜单'], .ledger-view .header-actions button[title='更多操作']");
   await page.click(".ledger-gear-panel .menu-item-button:has-text('分类管理')");
   await page.waitForSelector(".ledger-manager", { timeout: 8000 });
   await page.click(".ledger-sheet-foot button:has-text('添加大类')");

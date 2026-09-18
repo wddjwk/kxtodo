@@ -4,7 +4,8 @@
   import { collapsedMarkdownLine, hasMultipleMarkdownLines, renderInlineMarkdown } from "./markdown";
   import { taskToggleIndex, toggleMarkdownTask } from "./markdownTasks";
   import { tagChipStyle } from "./tagColors";
-  import { dueHighlightOf, dueHighlightStyle } from "./dueHighlight";
+  import { dueHighlightOf, dueHighlightStyle, DEFAULT_DUE_COLORS } from "./dueHighlight";
+  import { colorPreview, dueColorsWithPreview } from "./colorPreview";
   import { currentMinute } from "./currentTime";
   import { fullDayLabel } from "./diary";
   import { createDeferredMarkdown } from "./deferredMarkdown";
@@ -101,10 +102,13 @@
   // 已完成的卡片不画——它有自己的一整套完成态样式。
   // `now` 用一分钟一跳的 store：「已过期」档要在跨过时刻的那一分钟自己翻色，
   // 只依赖任务与设置的话得等下一次无关重渲才换。
+  // 取色预览（需求 9）：三点菜单里拖自己那一档的色块时，本页卡片立刻换色；
+  // 菜单一关（没保存）预览就清掉，卡片回到落盘值。
+  $: dueColors = dueColorsWithPreview($colorPreview, nodeId, $appSettings.appearance.dueColors[nodeId], DEFAULT_DUE_COLORS);
   $: dueHighlight =
     task.completed || !task.dueDate
       ? null
-      : dueHighlightOf(task, $appSettings.features.dueHighlight, $appSettings.appearance.dueColors[nodeId], $currentMinute);
+      : dueHighlightOf(task, $appSettings.features.dueHighlight, dueColors, $currentMinute);
   // 可展开 = 多行 ∪ 折叠态量出来显示不全 ∪ **当前就是展开的**。
   // 第三项治的是「折行卡片以展开态挂载」（编辑器保存后、展开全部后重挂载）：
   // 那时 measureTitle 根本不在树上（它只挂在折叠分支），titleOverflow 永远是 false，

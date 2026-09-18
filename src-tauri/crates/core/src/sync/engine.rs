@@ -524,7 +524,10 @@ fn run_sync_inner(
     // 3. MERGE（按域分事务）
     let data_records: Vec<EntityRecord> = records
         .iter()
-        .filter(|record| (record.kind == "node" || record.kind == "task") && scopes.data)
+        .filter(|record| {
+            (record.kind == "node" || record.kind == "task" || record.kind == "scratchpad")
+                && scopes.data
+        })
         .cloned()
         .collect();
     // 日记是独立的领域文件（独立事务、独立 revision），v0.7.0 起有自己独立的范围勾选
@@ -698,7 +701,7 @@ fn run_sync_inner(
     let schedule_after = repo.load_schedule()?;
     for record in &records {
         let local_ts = match record.kind.as_str() {
-            "node" | "task" => data_entity_stamp(&data_after, &record.id),
+            "node" | "task" | "scratchpad" => data_entity_stamp(&data_after, &record.id),
             "diary" => diary_entity_stamp(&diary_after, &record.id),
             kind if crate::sync::merge::is_ledger_kind(kind) => {
                 ledger_entity_stamp(&ledger_after, &record.kind, &record.id)
@@ -887,7 +890,7 @@ fn resolve_conflict(
     let state_snapshot = state.clone();
     let mut warnings: Vec<String> = Vec::new();
     match entity.kind.as_str() {
-        "node" | "task" => {
+        "node" | "task" | "scratchpad" => {
             let records = vec![remote.clone()];
             let _ = repo.write_data(None, None, "sync.conflict", |file| {
                 merge_data_records(file, &records, &state_snapshot, &mut warnings);

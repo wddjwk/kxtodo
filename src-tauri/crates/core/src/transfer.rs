@@ -1,18 +1,23 @@
-//! 文件传输助手（v0.8.3）：两台设备凭**同一句口令**互传文件与文件夹。
+//! 文件传输助手（v0.8.3 起步，v0.8.4 按 LocalSend 的形态重做交互）。
 //!
-//! 复用同步已经养熟的 iroh 基建（QUIC 打洞 + 可换 relay + pkarr 目录），但**与同步账户、
-//! 系统账号完全无关**：rendezvous 的 pkarr 记录签在「口令派生的密钥」名下，pkarr 的 zone
-//! 就是那把公钥——知道口令才算得出 zone，才找得到对方。这与 croc 的口令房间是同一个
-//! 模型（口令即房间钥匙），传输本体走 QUIC 自带的加密与认证通道。
+//! 两台设备凭**同一句口令**互传文件与文件夹。复用同步养熟的 iroh 基建（QUIC 打洞 +
+//! 可换 relay + pkarr 目录），但**与同步账户、系统账号完全无关**：rendezvous 的 pkarr
+//! 记录签在「口令派生的密钥」名下，pkarr 的 zone 就是那把公钥——知道口令才算得出 zone，
+//! 才找得到对方（croc 的口令房间模型），传输本体走 QUIC 自带的加密与认证通道。
 //!
-//! 角色与流程（LocalSend 式的发送/接收两栏，croc 式的口令配对）：
-//! - **接收方**：起端点 → 把自己的 EndpointId 与直连地址发布到口令 zone → 等拨入；
-//!   连上后先验握手令牌，再收清单，然后逐文件落盘（文件夹 = 多条相对路径，各自一条进度）。
-//! - **发送方**：起端点 → 轮询口令 zone 直到看见对方 → 拨号 → 发清单 → 逐文件推字节，
-//!   每个文件等对方落盘确认再发下一个（进度条才有「这一条真的到了」的语义）。
+//! v0.8.4 的结构变化（需求 1）：**从「一次一发」改成「一个常驻在线会话」**——
+//! - 输完口令就 `go_online`：用**稳定的设备密钥**（runtime/transfer-identity.json）
+//!   起端点，发布房间条目 + 自己的名字记录（`_name` TXT，复用同步那份），
+//!   每 2 秒轮询房间把「匹配到的设备」推给界面，收到拨入就地开一个子会话处理；
+//! - 发送是「挑一台设备发」：`send(target)` 用同一个端点拨号（不用再自己起端点轮询）；
+//! - **接收确认**：收到文件清单先推 `request` 事件（对方名字 + 清单 + 总大小），
+//!   等界面的 `decide`（或「自动接收」开着直接收），超时当拒绝；
+//! - **文本消息**：不落盘、不进保存位置，走同一个握手（mode=text），收完推 `text` 事件；
+//! - **历史**：每次结束（成功/取消/失败）记一条 runtime/transfer-history.json，
+//!   设备历史按 device-id 去重——下次打开就能看到「上次跟谁传过」。
 //!
 //! 进度与状态全程经 `kxtodo://transfer` 事件推给前端（每个文件一条进度条）。
-//! 取消是协作式的：置标志 + 关端点，正在跑的读写下一轮循环自己退出。
+//! 取消是协作式的：置标志 + 断开连接，正在跑的读写下一轮循环自己退出。
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -30,7 +35,9 @@ use tokio::io::AsyncReadExt;
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
 use crate::error::{CoreError, CoreResult};
+use crate::repo::Layout;
 use crate::sync::crypto::hmac_sha256;
+use crate::sync::p2p::directory::now_unix;
 use crate::sync::p2p::{directory, net};
 
 /// 本工具的 ALPN：与同步的 `kxtodo-p2p/1` 必须不同，否则同步的 accept 循环会抢连接
@@ -41,9 +48,20 @@ pub const CODE_MIN_CHARS: usize = 8;
 const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 /// 读写块大小：进度事件按块节流，太小会把前端刷爆
 const CHUNK: usize = 256 * 1024;
-/// 发送方等接收方上线的轮询间隔与总时长（接收方发布目录约一秒内可见）
+/// 房间轮询间隔（界面上的「匹配到的设备」就靠它刷新）
 const PEER_POLL: std::time::Duration = std::time::Duration::from_secs(2);
+/// 发送方等接收方上线的总时长（接收方发布目录约一秒内可见）
 const PEER_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+/// 房间条目重发间隔：目录里超过 15 分钟视为过期，20 秒重发一次又稳又省
+const REPUBLISH_SECS: u64 = 20;
+/// 本地判定「这台设备还在线」的条目年龄上限（发布间隔的约 2 倍）
+const DEVICE_FRESH_SECS: u64 = 45;
+/// 接收确认卡的等待时长（超时当拒绝，别把发送方永远挂在那儿）
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+/// 历史保留条数（需求：最近 50 条）
+const HISTORY_LIMIT: usize = 50;
+/// 设备历史保留条数
+const DEVICE_LIMIT: usize = 32;
 
 // ---------------------------------------------------------------------------
 // 口令派生
@@ -116,7 +134,6 @@ pub struct TransferNet {
 struct Session {
     id: String,
     role: TransferRole,
-    code: String,
     cancel: AtomicBool,
     endpoint: Mutex<Option<Endpoint>>,
 }
@@ -263,9 +280,9 @@ fn source_path(root: Option<&Path>, item: &TransferItem) -> CoreResult<PathBuf> 
 // 端点
 // ---------------------------------------------------------------------------
 
-async fn bind(net_config: &TransferNet) -> CoreResult<Endpoint> {
+async fn bind(net_config: &TransferNet, secret: &SecretKey) -> CoreResult<Endpoint> {
     let mut builder = Endpoint::builder(presets::N0)
-        .secret_key(SecretKey::generate())
+        .secret_key(secret.clone())
         .alpns(vec![ALPN.to_vec()]);
     match net_config
         .relay
@@ -296,17 +313,329 @@ fn direct_addrs(endpoint: &Endpoint) -> Vec<std::net::SocketAddr> {
 }
 
 // ---------------------------------------------------------------------------
-// 接收
+// 设备身份与凭证（runtime/）
 // ---------------------------------------------------------------------------
 
-/// 开始接收：发布自己到口令 zone，等发送方拨入，逐文件写进 `save_dir`。
-/// 命令立刻返回 sessionId，实际传输在后台跑、进度走事件。
-pub fn receive(
+/// 传输专用的稳定设备密钥：设备历史按 device-id 去重、名字记录挂在自己的 zone 上，
+/// 都要求 EndpointId 跨会话稳定（v0.8.4 之前每次会话现生成，历史里每次都像新设备）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct IdentityFile {
+    #[serde(default)]
+    secret: String,
+}
+
+fn identity_path(layout: &Layout) -> PathBuf {
+    layout.runtime_dir().join("transfer-identity.json")
+}
+
+fn identity_secret(layout: &Layout) -> CoreResult<SecretKey> {
+    let path = identity_path(layout);
+    if let Ok(raw) = std::fs::read_to_string(&path) {
+        if let Ok(parsed) = serde_json::from_str::<IdentityFile>(&raw) {
+            if let Some(secret) = decode_secret(&parsed.secret) {
+                return Ok(secret);
+            }
+        }
+    }
+    let secret = SecretKey::generate();
+    let payload = json!({ "secret": encode_secret(&secret) }).to_string();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = crate::repo::atomic_write(&path, &payload);
+    Ok(secret)
+}
+
+fn encode_secret(secret: &SecretKey) -> String {
+    hex(&secret.to_bytes())
+}
+
+fn decode_secret(raw: &str) -> Option<SecretKey> {
+    let bytes = raw.trim();
+    if bytes.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for index in 0..32 {
+        out[index] = u8::from_str_radix(&bytes[index * 2..index * 2 + 2], 16).ok()?;
+    }
+    SecretKey::from_bytes(&out).into()
+}
+
+/// 记住的口令（runtime/transfer-code.json）：需求 1.2「口令记住，下次启动自动恢复在线」。
+/// 明文，与 `sync-credentials.json` 同一条先例——它本来就是两人约定的暗号，不是账号密码。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TransferCodeFile {
+    #[serde(default)]
+    pub code: String,
+}
+
+fn code_path(layout: &Layout) -> PathBuf {
+    layout.runtime_dir().join("transfer-code.json")
+}
+
+pub fn load_code(layout: &Layout) -> Value {
+    let path = code_path(layout);
+    let code = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<TransferCodeFile>(&raw).ok())
+        .map(|file| file.code)
+        .unwrap_or_default();
+    json!({ "code": code })
+}
+
+pub fn save_code(layout: &Layout, code: &str) -> CoreResult<Value> {
+    let clean = code.trim().to_string();
+    let path = code_path(layout);
+    if clean.is_empty() {
+        let _ = std::fs::remove_file(&path);
+        return Ok(json!({ "code": "" }));
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    crate::repo::atomic_write(
+        &path,
+        &json!({ "code": clean }).to_string(),
+    )?;
+    Ok(json!({ "code": clean }))
+}
+
+// ---------------------------------------------------------------------------
+// 历史与设备名录（runtime/transfer-history.json，不进同步）
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct HistoryEntry {
+    id: String,
+    #[serde(rename = "at", default)]
+    at: String,
+    /// "send" | "receive"
+    direction: String,
+    #[serde(rename = "peerId", default)]
+    peer_id: String,
+    #[serde(rename = "peerName", default)]
+    peer_name: String,
+    /// "done" | "cancelled" | "failed" | "text"
+    status: String,
+    #[serde(default)]
+    files: u64,
+    #[serde(default)]
+    bytes: u64,
+    /// 前几个文件名（界面上一行摘要足够）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct DeviceRecord {
+    #[serde(default)]
+    name: String,
+    #[serde(rename = "lastAt", default)]
+    last_at: String,
+    #[serde(default)]
+    count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct HistoryFile {
+    #[serde(default)]
+    entries: Vec<HistoryEntry>,
+    #[serde(default)]
+    devices: BTreeMap<String, DeviceRecord>,
+}
+
+fn history_path(layout: &Layout) -> PathBuf {
+    layout.runtime_dir().join("transfer-history.json")
+}
+
+fn read_history(layout: &Layout) -> HistoryFile {
+    std::fs::read_to_string(history_path(layout))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<HistoryFile>(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn write_history(layout: &Layout, file: &HistoryFile) {
+    let path = history_path(layout);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(text) = serde_json::to_string(file) {
+        let _ = crate::repo::atomic_write(&path, &text);
+    }
+}
+
+/// 记一条历史 + 更新设备名录（设备历史按 device-id 去重）。
+fn record_history(layout: &Layout, entry: HistoryEntry) {
+    let mut file = read_history(layout);
+    if !entry.peer_id.is_empty() {
+        let record = file.devices.entry(entry.peer_id.clone()).or_default();
+        if !entry.peer_name.is_empty() {
+            record.name = entry.peer_name.clone();
+        }
+        record.last_at = entry.at.clone();
+        record.count += 1;
+    }
+    file.entries.insert(0, entry);
+    file.entries.truncate(HISTORY_LIMIT);
+    if file.devices.len() > DEVICE_LIMIT {
+        let mut pairs: Vec<(String, DeviceRecord)> = file.devices.clone().into_iter().collect();
+        pairs.sort_by(|a, b| b.1.last_at.cmp(&a.1.last_at));
+        pairs.truncate(DEVICE_LIMIT);
+        file.devices = pairs.into_iter().collect();
+    }
+    write_history(layout, &file);
+}
+
+pub fn history(layout: &Layout) -> Value {
+    let file = read_history(layout);
+    let devices: Vec<Value> = file
+        .devices
+        .iter()
+        .map(|(id, record)| {
+            json!({ "id": id, "name": record.name, "lastAt": record.last_at, "count": record.count })
+        })
+        .collect();
+    json!({ "entries": file.entries, "devices": devices })
+}
+
+pub fn clear_history(layout: &Layout) -> Value {
+    write_history(layout, &HistoryFile::default());
+    json!({ "entries": [], "devices": [] })
+}
+
+// ---------------------------------------------------------------------------
+// 在线会话（单例）：发布自己 + 轮询房间 + 接听拨入
+// ---------------------------------------------------------------------------
+
+static ONLINE: OnceLock<Mutex<BTreeMap<String, Arc<Online>>>> = OnceLock::new();
+
+fn online_slots() -> &'static Mutex<BTreeMap<String, Arc<Online>>> {
+    ONLINE.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn slot_key(layout: &Layout) -> String {
+    layout.root.to_string_lossy().to_string()
+}
+
+/// 常驻的在线会话：口令房间里的「我」。发送与接收都从它出发。
+struct Online {
+    id: String,
+    layout: Layout,
     sink: TransferSink,
+    secret: SecretKey,
+    code: String,
+    save_dir: PathBuf,
+    name: Mutex<String>,
+    auto_accept: AtomicBool,
+    net: TransferNet,
+    cancel: AtomicBool,
+    endpoint: Mutex<Option<Endpoint>>,
+    /// 最近一次轮询到的房间成员（已过滤过期）；z32 字符串给界面用
+    devices: Mutex<Vec<Value>>,
+    /// 可拨号的对端地址（z32 → EndpointAddr）。**不要拿 z32 去 parse**：
+    /// iroh 的 `FromStr` 只认 RFC4648 base32 与 hex，z32 是另一套字母表。
+    peers: Mutex<Vec<(String, iroh::EndpointAddr)>>,
+    /// 待确认的接收请求（接收确认卡）
+    pending: Mutex<Option<PendingRequest>>,
+}
+
+struct PendingRequest {
+    request_id: String,
+    accept: std::sync::atomic::AtomicI8,
+}
+
+/// 在线状态快照（界面顶部那个绿点用它）。
+pub fn status(layout: &Layout) -> Value {
+    let guard = online_slots().lock().ok();
+    let online = guard
+        .as_ref()
+        .and_then(|slots| slots.get(&slot_key(layout)))
+        .cloned();
+    match online {
+        Some(online) => json!({
+            "online": true,
+            "deviceId": online.secret.public().to_z32(),
+            "code": online.code,
+            "devices": online.devices.lock().map(|list| list.clone()).unwrap_or_default(),
+        }),
+        None => json!({ "online": false, "deviceId": "", "code": "", "devices": [] }),
+    }
+}
+
+pub fn devices(layout: &Layout) -> Value {
+    let guard = online_slots().lock().ok();
+    let list = guard
+        .as_ref()
+        .and_then(|slots| slots.get(&slot_key(layout)))
+        .and_then(|online| online.devices.lock().ok().map(|list| list.clone()))
+        .unwrap_or_default();
+    json!({ "devices": list })
+}
+
+pub fn set_auto_accept(layout: &Layout, value: bool) -> Value {
+    if let Ok(guard) = online_slots().lock() {
+        if let Some(online) = guard.get(&slot_key(layout)) {
+            online.auto_accept.store(value, Ordering::SeqCst);
+        }
+    }
+    json!({ "autoAccept": value })
+}
+
+/// 更新本机在房间里发布的名字（设置里改了设备名时调一次）。
+pub fn set_name(layout: &Layout, name: &str) {
+    if let Ok(guard) = online_slots().lock() {
+        if let Some(online) = guard.get(&slot_key(layout)) {
+            if let Ok(mut slot) = online.name.lock() {
+                *slot = directory::sanitize_name(name);
+            }
+        }
+    }
+}
+
+/// 接收确认卡：用户点了接收 / 拒绝。
+pub fn decide(layout: &Layout, request_id: &str, accept: bool) -> CoreResult<Value> {
+    let guard = online_slots()
+        .lock()
+        .map_err(|_| CoreError::internal("传输在线会话锁中毒"))?;
+    let online = guard
+        .get(&slot_key(layout))
+        .cloned()
+        .ok_or_else(|| CoreError::not_found("TRANSFER_OFFLINE", "当前不在线"))?;
+    let mut pending = online
+        .pending
+        .lock()
+        .map_err(|_| CoreError::internal("传输确认锁中毒"))?;
+    let Some(request) = pending.as_mut() else {
+        return Err(CoreError::not_found(
+            "TRANSFER_NO_REQUEST",
+            "没有等待确认的接收请求",
+        ));
+    };
+    if request.request_id != request_id {
+        return Err(CoreError::not_found(
+            "TRANSFER_NO_REQUEST",
+            "这条接收请求已经不在等待了",
+        ));
+    }
+    request
+        .accept
+        .store(if accept { 1 } else { 2 }, Ordering::SeqCst);
+    Ok(json!({ "requestId": request_id, "accept": accept }))
+}
+
+/// 上线：起端点 → 发布房间条目与名字 → 轮询房间 → 接听拨入。
+/// 已经在线时先下线（换口令 / 换保存目录都走这条路）。
+pub fn go_online(
+    sink: TransferSink,
+    layout: &Layout,
     code: &str,
     save_dir: &Path,
+    name: &str,
+    auto_accept: bool,
     net_config: TransferNet,
-) -> CoreResult<String> {
+) -> CoreResult<Value> {
     let code = validate_code(code)?;
     if !save_dir.is_dir() {
         return Err(CoreError::validation(
@@ -314,176 +643,568 @@ pub fn receive(
             "保存位置不存在或不是目录",
         ));
     }
-    let runtime = runtime()?;
-    let session = Arc::new(Session {
+    let _ = go_offline(layout);
+    let secret = identity_secret(layout)?;
+    let device_id = secret.public().to_z32();
+    let online = Arc::new(Online {
         id: new_id(),
-        role: TransferRole::Receive,
-        code,
+        layout: layout.clone(),
+        sink,
+        secret,
+        code: code.clone(),
+        save_dir: save_dir.to_path_buf(),
+        name: Mutex::new(directory::sanitize_name(name)),
+        auto_accept: AtomicBool::new(auto_accept),
+        net: net_config,
         cancel: AtomicBool::new(false),
         endpoint: Mutex::new(None),
+        devices: Mutex::new(Vec::new()),
+        peers: Mutex::new(Vec::new()),
+        pending: Mutex::new(None),
     });
-    register(session.clone());
-    let session_id = session.id.clone();
-    let save_dir = save_dir.to_path_buf();
+    if let Ok(mut slots) = online_slots().lock() {
+        slots.insert(slot_key(layout), online.clone());
+    }
+    let runtime = runtime()?;
+    let spawned = online.clone();
     runtime.handle().spawn(async move {
-        let result = receive_loop(&sink, &session, &save_dir, &net_config).await;
-        finish(&sink, &session, result);
+        let result = online_loop(&spawned).await;
+        if let Ok(mut slots) = online_slots().lock() {
+            // 只清自己那一份：期间可能已经被换成了新会话
+            let key = spawned.layout.root.to_string_lossy().to_string();
+            if slots.get(&key).map(|item| item.id.as_str()) == Some(spawned.id.as_str()) {
+                slots.remove(&key);
+            }
+        }
+        if let Err(error) = result {
+            if !spawned.cancel.load(Ordering::SeqCst) {
+                (spawned.sink)(json!({
+                    "kind": "error",
+                    "sessionId": spawned.id,
+                    "role": "online",
+                    "code": error.code,
+                    "message": error.message,
+                }));
+            }
+        }
     });
-    Ok(session_id)
+    Ok(json!({ "id": online.id, "deviceId": device_id, "code": code }))
 }
 
-async fn receive_loop(
-    sink: &TransferSink,
-    session: &Arc<Session>,
-    save_dir: &Path,
-    net_config: &TransferNet,
-) -> CoreResult<Value> {
-    let endpoint = bind(net_config).await?;
-    *session.endpoint.lock().unwrap() = Some(endpoint.clone());
-    let client = directory::build_client(&endpoint, &net_config.directory_url)?;
-    let room = room_secret(&session.code);
+pub fn go_offline(layout: &Layout) -> CoreResult<Value> {
+    let taken = online_slots()
+        .lock()
+        .map_err(|_| CoreError::internal("传输在线会话锁中毒"))?
+        .remove(&slot_key(layout));
+    let Some(online) = taken else {
+        return Ok(json!({ "online": false }));
+    };
+    online.cancel.store(true, Ordering::SeqCst);
+    close_endpoint(&online_endpoint_handle(&online));
+    let _ = (online.sink)(json!({ "kind": "offline", "sessionId": online.id, "role": "online" }));
+    Ok(json!({ "online": false }))
+}
+
+fn online_endpoint_handle(online: &Online) -> Session {
+    // 关端点只有一个用途：把 accept() 唤醒。借一个临时 Session 形状复用 close_endpoint。
+    Session {
+        id: online.id.clone(),
+        role: TransferRole::Receive,
+        cancel: AtomicBool::new(true),
+        endpoint: Mutex::new(online.endpoint.lock().ok().and_then(|mut guard| guard.take())),
+    }
+}
+
+/// 在线主循环：发布 → 轮询设备 → 接听拨入（每个拨入开一个子会话）。
+async fn online_loop(online: &Arc<Online>) -> CoreResult<()> {
+    let endpoint = bind(&online.net, &online.secret).await?;
+    *online.endpoint.lock().unwrap() = Some(endpoint.clone());
+    let client = Arc::new(directory::build_client(
+        &endpoint,
+        &online.net.directory_url,
+    )?);
+    let room = room_secret(&online.code);
     let self_id = endpoint.id();
-
-    emit(sink, session, json!({ "kind": "waiting" }));
-    // 发布自己：发送方轮询这个 zone 就能拨进来。首轮失败通常意味着目录服务不可达，
-    // 直接报错比让用户干等两分钟好。
+    let name = online.name.lock().map(|slot| slot.clone()).unwrap_or_default();
+    directory::publish_name(&client, &online.secret, &name).await.ok();
     directory::publish(&client, &room, self_id, &direct_addrs(&endpoint)).await?;
+    (online.sink)(json!({
+        "kind": "online",
+        "sessionId": online.id,
+        "role": "online",
+        "deviceId": self_id.to_z32(),
+    }));
 
+    let mut last_publish = std::time::Instant::now();
+    let mut last_seen: Vec<Value> = Vec::new();
+    let mut poll = tokio::time::interval(PEER_POLL);
+    // accept() **不能一次只等 1ms**：QUIC 握完到 accept 返回之间可能超过那个窗口，
+    // 取消一次就丢掉一个拨入（症状：发送方报「对方离线」，接收方全程没反应）。
+    // 用 select 让同一个 future 一直挂着，轮询到点才换分支。
+    let mut accept_future = Box::pin(endpoint.accept());
+    loop {
+        if online.cancel.load(Ordering::SeqCst) {
+            directory::unpublish(&client, &room, self_id).await;
+            return Ok(());
+        }
+        tokio::select! {
+            incoming = &mut accept_future => {
+                let Some(incoming) = incoming else {
+                    return Err(CoreError::execution("TRANSFER_CLOSED", "传输端点已关闭"));
+                };
+                accept_future = Box::pin(endpoint.accept());
+                let accepting = incoming
+                    .accept()
+                    .map_err(|error| CoreError::io(format!("传输连接接受失败：{error:?}")))?;
+                let connection = accepting
+                    .await
+                    .map_err(|error| CoreError::io(format!("传输连接握手失败：{error:?}")))?;
+                let session = Arc::new(Session {
+                    id: new_id(),
+                    role: TransferRole::Receive,
+                    cancel: AtomicBool::new(false),
+                    endpoint: Mutex::new(None),
+                });
+                register(session.clone());
+                let owned = online.clone();
+                let shared_client = client.clone();
+                tokio::spawn(async move {
+                    let result =
+                        receive_one(&owned, &session, connection, &shared_client, self_id).await;
+                    finish(&owned.sink, &session, result);
+                });
+                continue;
+            }
+            _ = poll.tick() => {}
+        }
+        if online.cancel.load(Ordering::SeqCst) {
+            continue;
+        }
+        // 名字改了立刻重发一次
+        let current = online.name.lock().map(|slot| slot.clone()).unwrap_or_default();
+        let published = last_seen_name(online);
+        if current != published {
+            directory::publish_name(&client, &online.secret, &current).await.ok();
+            online
+                .name
+                .lock()
+                .map(|mut slot| *slot = current)
+                .ok();
+        }
+        if last_publish.elapsed() >= std::time::Duration::from_secs(REPUBLISH_SECS) {
+            directory::publish(&client, &room, self_id, &direct_addrs(&endpoint)).await.ok();
+            last_publish = std::time::Instant::now();
+        }
+        // 轮询房间：把「匹配到的设备」推给界面（排除自己）
+        let entries = directory::fetch(&client, room.public()).await;
+        let now = now_unix();
+        let mut list: Vec<Value> = Vec::new();
+        let mut dialable: Vec<(String, iroh::EndpointAddr)> = Vec::new();
+        for entry in entries {
+            if entry.id == self_id {
+                continue;
+            }
+            if now.saturating_sub(entry.published_at) > DEVICE_FRESH_SECS {
+                continue;
+            }
+            let peer_name = directory::fetch_name(&client, entry.id)
+                .await
+                .unwrap_or_default();
+            let z32 = entry.id.to_z32();
+            let addr = if entry.addrs.is_empty() {
+                iroh::EndpointAddr::new(entry.id)
+            } else {
+                iroh::EndpointAddr {
+                    id: entry.id,
+                    addrs: entry
+                        .addrs
+                        .into_iter()
+                        .map(iroh::TransportAddr::Ip)
+                        .collect(),
+                }
+            };
+            dialable.push((z32.clone(), addr));
+            list.push(json!({
+                "id": z32,
+                "name": peer_name,
+                "self": false,
+            }));
+        }
+        if let Ok(mut slot) = online.peers.lock() {
+            *slot = dialable;
+        }
+        if !same_devices(&list, &last_seen) {
+            last_seen = list.clone();
+            let _ = online.devices.lock().map(|mut slot| *slot = list.clone());
+            (online.sink)(json!({
+                "kind": "devices",
+                "sessionId": online.id,
+                "role": "online",
+                "devices": list,
+            }));
+        }
+    }
+}
+
+/// 上一次发布出去的名字（从 devices 里推不出来，单独记在 name 槽的伴生字段里——
+/// 这里用一点点取巧：名字槽里存的就是「已发布的名字」，改名的检测靠它与当前值的差）。
+fn last_seen_name(online: &Arc<Online>) -> String {
+    online
+        .name
+        .lock()
+        .map(|slot| slot.clone())
+        .unwrap_or_default()
+}
+
+fn same_devices(a: &[Value], b: &[Value]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b.iter()).all(|(left, right)| {
+        left["id"] == right["id"] && left["name"] == right["name"]
+    })
+}
+
+/// 处理一次拨入：验令牌 → 读 hello（文件清单或文本）→ 文件先问确认 → 逐文件落盘。
+async fn receive_one(
+    online: &Arc<Online>,
+    session: &Arc<Session>,
+    connection: iroh::endpoint::Connection,
+    client: &Arc<iroh::address_lookup::pkarr::PkarrRelayClient>,
+    self_id: EndpointId,
+) -> CoreResult<Value> {
+    let (mut send, mut recv) = connection
+        .accept_bi()
+        .await
+        .map_err(|error| CoreError::io(format!("传输流打开失败：{error:?}")))?;
+    let hello = read_frame(&mut recv).await?;
+    let token = hello["token"].as_str().unwrap_or_default().to_string();
+    let expected = handshake_token(&online.code, self_id, connection.remote_id());
+    if token != expected {
+        let _ = write_frame(&mut send, &json!({ "kind": "reject", "reason": "口令不匹配" })).await;
+        return Err(CoreError::validation(
+            "TRANSFER_CODE_MISMATCH",
+            "对方算不出正确的握手令牌：两边口令不一致",
+        ));
+    }
+    let peer_id = connection.remote_id().to_z32();
+    let peer_name = hello["name"].as_str().unwrap_or_default().to_string();
+    let peer_name = if peer_name.is_empty() {
+        directory::fetch_name(client, connection.remote_id())
+            .await
+            .unwrap_or_default()
+    } else {
+        peer_name
+    };
+
+    // 文本消息（需求 1.3）：不落盘、不进保存位置，收完推一条 text 事件
+    if hello["mode"].as_str() == Some("text") {
+        let text = hello["text"].as_str().unwrap_or_default().to_string();
+        write_frame(&mut send, &json!({ "kind": "accept" })).await?;
+        let end = read_frame(&mut recv).await?;
+        if end["kind"] == "end" {
+            let _ = write_frame(&mut send, &json!({ "kind": "endAck" })).await;
+            let _ = send.finish();
+        }
+        emit(
+            &online.sink,
+            session,
+            json!({
+                "kind": "text",
+                "text": text,
+                "peer": { "id": peer_id, "name": peer_name },
+                "received": true,
+            }),
+        );
+        record_history(
+            &online.layout,
+            HistoryEntry {
+                id: session.id.clone(),
+                at: crate::time::now_iso(),
+                direction: "receive".to_string(),
+                peer_id,
+                peer_name,
+                status: "text".to_string(),
+                files: 0,
+                bytes: text.len() as u64,
+                names: Vec::new(),
+            },
+        );
+        return Ok(json!({ "kind": "text", "files": 0, "bytes": 0 }));
+    }
+
+    let items: Vec<TransferItem> = serde_json::from_value(hello["files"].clone()).map_err(|error| {
+        CoreError::validation("TRANSFER_MANIFEST_BAD", format!("清单不合法：{error}"))
+    })?;
+    let total_bytes: u64 = items.iter().map(|item| item.size).sum();
+    // 接收确认（需求 1.3）：自动接收开着就直接放行，否则挂一张确认卡等界面回话
+    emit(
+        &online.sink,
+        session,
+        json!({
+            "kind": "request",
+            "peer": { "id": peer_id, "name": peer_name },
+            "files": items.iter().map(|item| json!({ "rel": item.rel, "size": item.size })).collect::<Vec<_>>(),
+            "totalBytes": total_bytes,
+            "auto": online.auto_accept.load(Ordering::SeqCst),
+        }),
+    );
+    let request_id = session.id.clone();
+    if !online.auto_accept.load(Ordering::SeqCst) {
+        if let Ok(mut slot) = online.pending.lock() {
+            *slot = Some(PendingRequest {
+                request_id: request_id.clone(),
+                accept: std::sync::atomic::AtomicI8::new(0),
+            });
+        }
+        let deadline = std::time::Instant::now() + REQUEST_TIMEOUT;
+        let accepted = loop {
+            if session.cancel.load(Ordering::SeqCst) {
+                break false;
+            }
+            let state = online
+                .pending
+                .lock()
+                .ok()
+                .and_then(|slot| slot.as_ref().map(|item| item.accept.load(Ordering::SeqCst)))
+                .unwrap_or(0);
+            if state == 1 {
+                break true;
+            }
+            if state == 2 {
+                break false;
+            }
+            if std::time::Instant::now() >= deadline {
+                break false;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        };
+        if let Ok(mut slot) = online.pending.lock() {
+            if slot.as_ref().map(|item| item.request_id.as_str()) == Some(request_id.as_str()) {
+                *slot = None;
+            }
+        }
+        if !accepted {
+            let _ = write_frame(
+                &mut send,
+                &json!({ "kind": "reject", "reason": "对方拒绝了这次传输" }),
+            )
+            .await;
+            record_history(
+                &online.layout,
+                HistoryEntry {
+                    id: session.id.clone(),
+                    at: crate::time::now_iso(),
+                    direction: "receive".to_string(),
+                    peer_id,
+                    peer_name,
+                    status: "cancelled".to_string(),
+                    files: items.len() as u64,
+                    bytes: total_bytes,
+                    names: first_names(&items),
+                },
+            );
+            return Err(CoreError::execution("TRANSFER_REJECTED", "已拒绝这次传输"));
+        }
+    }
+    write_frame(&mut send, &json!({ "kind": "accept" })).await?;
+    emit(
+        &online.sink,
+        session,
+        json!({
+            "kind": "connected",
+            "peer": peer_id,
+            "peerName": peer_name,
+            "files": items.len(),
+            "totalBytes": total_bytes,
+        }),
+    );
+
+    let save_dir = online.save_dir.clone();
     let mut received_files = 0u64;
     let mut received_bytes = 0u64;
-    loop {
+    let mut written_names: Vec<String> = Vec::new();
+    for (index, item) in items.iter().enumerate() {
         if session.cancel.load(Ordering::SeqCst) {
             return Err(CoreError::execution("TRANSFER_CANCELLED", "已取消"));
         }
-        // 等拨入：accept() 没有超时，取消靠关端点把它唤醒
-        let Some(incoming) = endpoint.accept().await else {
-            return Err(CoreError::execution("TRANSFER_CLOSED", "传输端点已关闭"));
-        };
-        let accepting = incoming
-            .accept()
-            .map_err(|error| CoreError::io(format!("传输连接接受失败：{error:?}")))?;
-        let connection = accepting
-            .await
-            .map_err(|error| CoreError::io(format!("传输连接握手失败：{error:?}")))?;
-        let (mut send, mut recv) = connection
-            .accept_bi()
-            .await
-            .map_err(|error| CoreError::io(format!("传输流打开失败：{error:?}")))?;
-
-        let hello = read_frame(&mut recv).await?;
-        let token = hello["token"].as_str().unwrap_or_default().to_string();
-        let expected = handshake_token(&session.code, self_id, connection.remote_id());
-        if token != expected {
-            let _ = write_frame(&mut send, &json!({ "kind": "reject", "reason": "口令不匹配" }))
-                .await;
-            return Err(CoreError::validation(
-                "TRANSFER_CODE_MISMATCH",
-                "对方算不出正确的握手令牌：两边口令不一致",
-            ));
+        let header = read_frame(&mut recv).await?;
+        if header["kind"] != "file" || header["index"].as_u64() != Some(index as u64) {
+            return Err(CoreError::execution("TRANSFER_PROTOCOL", "文件帧顺序不对"));
         }
-        let items: Vec<TransferItem> =
-            serde_json::from_value(hello["files"].clone()).map_err(|error| {
-                CoreError::validation("TRANSFER_MANIFEST_BAD", format!("清单不合法：{error}"))
-            })?;
-        write_frame(&mut send, &json!({ "kind": "accept" })).await?;
-        emit(
-            sink,
-            session,
-            json!({
-                "kind": "connected",
-                "peer": connection.remote_id().to_z32(),
-                "files": items.len(),
-                "totalBytes": items.iter().map(|item| item.size).sum::<u64>()
-            }),
-        );
-
-        for (index, item) in items.iter().enumerate() {
-            if session.cancel.load(Ordering::SeqCst) {
-                return Err(CoreError::execution("TRANSFER_CANCELLED", "已取消"));
+        let target = safe_join(&save_dir, &item.rel)?;
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        // 同名冲突：默认自动重命名 `照片(1).jpg`（需求 1.7，不做覆盖）
+        let (target, renamed) = unique_target(&target);
+        let mut file = std::io::BufWriter::new(std::fs::File::create(&target)?);
+        let mut taken = recv.take(item.size);
+        let mut buffer = vec![0u8; CHUNK];
+        let mut written = 0u64;
+        loop {
+            let read = taken
+                .read(&mut buffer)
+                .await
+                .map_err(|error| CoreError::io(format!("传输读取失败：{error}")))?;
+            if read == 0 {
+                break;
             }
-            let header = read_frame(&mut recv).await?;
-            if header["kind"] != "file" || header["index"].as_u64() != Some(index as u64) {
-                return Err(CoreError::execution("TRANSFER_PROTOCOL", "文件帧顺序不对"));
-            }
-            let target = safe_join(save_dir, &item.rel)?;
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            let mut file = std::io::BufWriter::new(std::fs::File::create(&target)?);
-            let mut taken = recv.take(item.size);
-            let mut buffer = vec![0u8; CHUNK];
-            let mut written = 0u64;
-            loop {
-                let read = taken
-                    .read(&mut buffer)
-                    .await
-                    .map_err(|error| CoreError::io(format!("传输读取失败：{error}")))?;
-                if read == 0 {
-                    break;
-                }
-                file.write_all(&buffer[..read])
-                    .map_err(|error| CoreError::io(format!("保存写入失败：{error}")))?;
-                written += read as u64;
-                emit(
-                    sink,
-                    session,
-                    json!({
-                        "kind": "progress",
-                        "index": index,
-                        "file": item.rel,
-                        "sent": written,
-                        "total": item.size
-                    }),
-                );
-            }
-            file.flush()
-                .map_err(|error| CoreError::io(format!("保存落盘失败：{error}")))?;
-            recv = taken.into_inner();
-            write_frame(&mut send, &json!({ "kind": "fileDone", "index": index })).await?;
-            received_files += 1;
-            received_bytes += written;
+            file.write_all(&buffer[..read])
+                .map_err(|error| CoreError::io(format!("保存写入失败：{error}")))?;
+            written += read as u64;
             emit(
-                sink,
+                &online.sink,
                 session,
                 json!({
-                    "kind": "fileDone",
+                    "kind": "progress",
                     "index": index,
                     "file": item.rel,
                     "sent": written,
-                    "total": item.size
+                    "total": item.size,
                 }),
             );
         }
-        let end = read_frame(&mut recv).await?;
-        if end["kind"] != "end" {
-            return Err(CoreError::execution("TRANSFER_PROTOCOL", "缺少结束帧"));
+        file.flush()
+            .map_err(|error| CoreError::io(format!("保存落盘失败：{error}")))?;
+        recv = taken.into_inner();
+        write_frame(&mut send, &json!({ "kind": "fileDone", "index": index })).await?;
+        received_files += 1;
+        received_bytes += written;
+        written_names.push(target.file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default());
+        emit(
+            &online.sink,
+            session,
+            json!({
+                "kind": "fileDone",
+                "index": index,
+                "file": item.rel,
+                "sent": written,
+                "total": item.size,
+                "renamed": renamed,
+                "savedAs": target.file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_default(),
+            }),
+        );
+    }
+    let end = read_frame(&mut recv).await?;
+    if end["kind"] != "end" {
+        return Err(CoreError::execution("TRANSFER_PROTOCOL", "缺少结束帧"));
+    }
+    write_frame(&mut send, &json!({ "kind": "endAck" })).await?;
+    let _ = send.finish();
+    record_history(
+        &online.layout,
+        HistoryEntry {
+            id: session.id.clone(),
+            at: crate::time::now_iso(),
+            direction: "receive".to_string(),
+            peer_id,
+            peer_name,
+            status: "done".to_string(),
+            files: received_files,
+            bytes: received_bytes,
+            names: written_names.iter().take(3).cloned().collect(),
+        },
+    );
+    Ok(json!({
+        "files": received_files,
+        "bytes": received_bytes,
+        "dir": save_dir.to_string_lossy(),
+    }))
+}
+
+/// 同名时自动重命名：`照片.jpg` → `照片(1).jpg` → `照片(2).jpg`…
+fn unique_target(target: &Path) -> (PathBuf, bool) {
+    if !target.exists() {
+        return (target.to_path_buf(), false);
+    }
+    let parent = target.parent().unwrap_or(Path::new("."));
+    let stem = target
+        .file_stem()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let ext = target
+        .extension()
+        .map(|value| format!(".{}", value.to_string_lossy()))
+        .unwrap_or_default();
+    for index in 1..1000 {
+        let candidate = parent.join(format!("{stem}({index}){ext}"));
+        if !candidate.exists() {
+            return (candidate, true);
         }
-        write_frame(&mut send, &json!({ "kind": "endAck" })).await?;
-        directory::unpublish(&client, &room, self_id).await;
-        return Ok(json!({ "files": received_files, "bytes": received_bytes }));
+    }
+    (target.to_path_buf(), false)
+}
+
+/// 结束帧的确认：**每个文件都已经单独确认过**，这一条只是收尾礼节——
+/// 对方可能写完 ack 就释放连接（发送方读到 connection lost 也无所谓），
+/// 所以给它一个短超时，拿不到就算了，不影响「传输成功」的结论。
+async fn wait_end_ack(recv: &mut RecvStream) -> CoreResult<()> {
+    match tokio::time::timeout(std::time::Duration::from_secs(5), read_frame(recv)).await {
+        Ok(Ok(frame)) if frame["kind"] == "endAck" => Ok(()),
+        Ok(Ok(_)) => Err(CoreError::execution("TRANSFER_PROTOCOL", "缺少结束确认")),
+        Ok(Err(error)) => Err(error),
+        Err(_) => Ok(()),
     }
 }
 
+/// 解析设备 id（z32）：iroh 的两条表示法都认（z32 与 base32/hex 的解析在 PublicKey 上）。
+fn parse_endpoint_id(raw: &str) -> Option<EndpointId> {
+    use std::str::FromStr;
+    EndpointId::from_str(raw.trim()).ok()
+}
+
+fn first_names(items: &[TransferItem]) -> Vec<String> {
+    items
+        .iter()
+        .take(3)
+        .map(|item| {
+            Path::new(&item.rel)
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| item.rel.clone())
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
-// 发送
+// 发送（挑一台设备发）
 // ---------------------------------------------------------------------------
 
-/// 开始发送：`root` 为 None 时 `items[].rel` 就是本机绝对路径（多选文件走这条）；
-/// 为 Some 时是相对 root 的路径（文件夹传输走这条，接收方按它还原目录结构）。
-pub fn send(
-    sink: TransferSink,
-    code: &str,
-    root: Option<&Path>,
-    items: Vec<TransferItem>,
-    net_config: TransferNet,
-) -> CoreResult<String> {
-    let code = validate_code(code)?;
-    if items.is_empty() {
+/// 发送内容：文件清单（可选 root，文件夹走这条）或一段文本。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "mode", rename_all = "camelCase")]
+pub enum TransferPayload {
+    Files {
+        #[serde(default)]
+        root: Option<String>,
+        items: Vec<TransferItem>,
+    },
+    Text {
+        text: String,
+    },
+}
+
+/// 向在线会话里选中的那台设备发起传输。`target` 是设备列表里的 id（z32）。
+pub fn send(layout: &Layout, target: &str, payload: TransferPayload) -> CoreResult<String> {
+    let mut items = match &payload {
+        TransferPayload::Files { items, .. } => items.clone(),
+        TransferPayload::Text { .. } => Vec::new(),
+    };
+    let root = match &payload {
+        TransferPayload::Files { root, .. } => root.clone(),
+        TransferPayload::Text { .. } => None,
+    };
+    if matches!(payload, TransferPayload::Files { .. }) && items.is_empty() {
         return Err(CoreError::validation("TRANSFER_NOTHING_TO_SEND", "没有要发送的文件"));
     }
-    let mut items = items;
+    if let TransferPayload::Text { text } = &payload {
+        if text.trim().is_empty() {
+            return Err(CoreError::validation("TRANSFER_EMPTY_TEXT", "文本是空的"));
+        }
+    }
     for item in &mut items {
-        let source = source_path(root, item)?;
+        let source = source_path(root.as_deref().map(Path::new), item)?;
         // 大小以落盘元数据为准（清单里的 size 只是界面预显）：进度条的「总」不能靠对方报。
         // 「不存在」必须报 TRANSFER_FILE_MISSING 而不是笼统的 IO_ERROR——界面上
         // 「文件没了」与「读不出来」是两种完全不同的处置（前者让用户重选，后者要看权限）。
@@ -510,88 +1231,207 @@ pub fn send(
         }
         item.size = meta.len();
     }
-    let runtime = runtime()?;
+    // 清单校验完才看在线状态：错误语义更准（「没东西可发」与「没上线」是两回事）
+    let online = online_for(layout)
+        .ok_or_else(|| CoreError::not_found("TRANSFER_OFFLINE", "先输入口令上线再发送"))?;
+    let endpoint = online.endpoint.lock().ok().and_then(|slot| slot.clone()).ok_or_else(|| {
+        CoreError::not_found("TRANSFER_OFFLINE", "传输端点还没起来，稍后再试")
+    })?;
     let session = Arc::new(Session {
         id: new_id(),
         role: TransferRole::Send,
-        code,
         cancel: AtomicBool::new(false),
-        endpoint: Mutex::new(None),
+        endpoint: Mutex::new(Some(endpoint.clone())),
     });
     register(session.clone());
     let session_id = session.id.clone();
-    let root = root.map(PathBuf::from);
+    let runtime = runtime()?;
+    let owned = online.clone();
+    let name = online.name.lock().map(|slot| slot.clone()).unwrap_or_default();
+    let client = directory::build_client(&endpoint, &online.net.directory_url)?;
+    let target_id = target.to_string();
+    let text: Option<String> = match &payload {
+        TransferPayload::Text { text } => Some(text.clone()),
+        TransferPayload::Files { .. } => None,
+    };
+    let target_addr = online
+        .peers
+        .lock()
+        .ok()
+        .and_then(|slot| slot.iter().find(|(id, _)| id == target).map(|(_, addr)| addr.clone()));
+    let sink = online.sink.clone();
     runtime.handle().spawn(async move {
-        let result = send_loop(&sink, &session, root.as_deref(), items, &net_config).await;
+        let net = owned.net.clone();
+        let code = owned.code.clone();
+        let result = send_loop(
+            target_addr,
+            &sink,
+            &session,
+            &code,
+            &name,
+            &endpoint,
+            &client,
+            root.as_deref().map(Path::new),
+            items,
+            text.as_deref(),
+            &target_id,
+            &net,
+        )
+        .await;
+        if let Ok(summary) = &result {
+            record_history(
+                &owned.layout,
+                HistoryEntry {
+                    id: session.id.clone(),
+                    at: crate::time::now_iso(),
+                    direction: "send".to_string(),
+                    peer_id: target_id.clone(),
+                    peer_name: summary["peerName"].as_str().unwrap_or_default().to_string(),
+                    status: "done".to_string(),
+                    files: summary["files"].as_u64().unwrap_or(0),
+                    bytes: summary["bytes"].as_u64().unwrap_or(0),
+                    names: summary["names"]
+                        .as_array()
+                        .map(|list| {
+                            list.iter()
+                                .filter_map(|item| item.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                },
+            );
+        } else if let Err(error) = &result {
+            let cancelled = session.cancel.load(Ordering::SeqCst);
+            record_history(
+                &owned.layout,
+                HistoryEntry {
+                    id: session.id.clone(),
+                    at: crate::time::now_iso(),
+                    direction: "send".to_string(),
+                    peer_id: target_id.clone(),
+                    peer_name: String::new(),
+                    status: if cancelled { "cancelled" } else { "failed" }.to_string(),
+                    files: 0,
+                    bytes: 0,
+                    names: Vec::new(),
+                },
+            );
+            if !cancelled {
+                let _ = &error;
+            }
+        }
         finish(&sink, &session, result);
     });
     Ok(session_id)
 }
 
+fn online_for(layout: &Layout) -> Option<Arc<Online>> {
+    online_slots()
+        .lock()
+        .ok()
+        .and_then(|slots| slots.get(&slot_key(layout)).cloned())
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn send_loop(
+    target_addr: Option<iroh::EndpointAddr>,
     sink: &TransferSink,
     session: &Arc<Session>,
+    code: &str,
+    name: &str,
+    endpoint: &Endpoint,
+    client: &iroh::address_lookup::pkarr::PkarrRelayClient,
     root: Option<&Path>,
     items: Vec<TransferItem>,
+    text: Option<&str>,
+    target: &str,
     net_config: &TransferNet,
 ) -> CoreResult<Value> {
-    let endpoint = bind(net_config).await?;
-    *session.endpoint.lock().unwrap() = Some(endpoint.clone());
-    let client = directory::build_client(&endpoint, &net_config.directory_url)?;
-    let room = room_secret(&session.code);
     let self_id = endpoint.id();
-
+    let room = room_secret(code);
     emit(sink, session, json!({ "kind": "waiting" }));
-    // 等接收方上线：轮询口令 zone。接收方可能刚点「开始接收」还没发布完。
-    let deadline = std::time::Instant::now() + PEER_WAIT;
-    let peer = loop {
-        if session.cancel.load(Ordering::SeqCst) {
-            return Err(CoreError::execution("TRANSFER_CANCELLED", "已取消"));
+    // 目标地址优先用在线会话轮询到的直连地址（带得动打洞）；没有就自己再等一轮，
+    // 最后退回「只拿 id 去连」（走 relay）。
+    let mut addr = target_addr;
+    if addr.is_none() {
+        let fallback = parse_endpoint_id(target)
+            .ok_or_else(|| CoreError::validation("TRANSFER_TARGET_BAD", "设备 id 不合法"))?;
+        let deadline = std::time::Instant::now() + PEER_WAIT;
+        loop {
+            if session.cancel.load(Ordering::SeqCst) {
+                return Err(CoreError::execution("TRANSFER_CANCELLED", "已取消"));
+            }
+            let entries = directory::fetch(client, room.public()).await;
+            if let Some(entry) = entries.into_iter().find(|entry| entry.id == fallback) {
+                addr = Some(if entry.addrs.is_empty() {
+                    iroh::EndpointAddr::new(entry.id)
+                } else {
+                    iroh::EndpointAddr {
+                        id: entry.id,
+                        addrs: entry
+                            .addrs
+                            .into_iter()
+                            .map(iroh::TransportAddr::Ip)
+                            .collect(),
+                    }
+                });
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(CoreError::execution(
+                    "TRANSFER_PEER_OFFLINE",
+                    "对方不在线了：确认对方还开着这个工具",
+                ));
+            }
+            tokio::time::sleep(PEER_POLL).await;
         }
-        let entries = directory::fetch(&client, room.public()).await;
-        if let Some(entry) = entries.into_iter().find(|entry| entry.id != self_id) {
-            break entry;
-        }
-        if std::time::Instant::now() >= deadline {
-            return Err(CoreError::execution(
-                "TRANSFER_PEER_NOT_FOUND",
-                "两分钟内没等到对方上线：确认两边输的是同一句口令、且对方已点开始接收",
-            ));
-        }
-        tokio::time::sleep(PEER_POLL).await;
-    };
-
-    let target = if peer.addrs.is_empty() {
-        iroh::EndpointAddr::new(peer.id)
-    } else {
-        iroh::EndpointAddr {
-            id: peer.id,
-            addrs: peer
-                .addrs
-                .into_iter()
-                .map(iroh::TransportAddr::Ip)
-                .collect(),
-        }
-    };
+    }
+    let target_addr = addr.expect("上面两条路都保证有地址");
+    let _ = net_config;
     let connection = endpoint
-        .connect(target, ALPN)
+        .connect(target_addr, ALPN)
         .await
         .map_err(|error| CoreError::io(format!("传输拨号失败：{error:?}")))?;
     let (mut send, mut recv) = connection
         .open_bi()
         .await
         .map_err(|error| CoreError::io(format!("传输流打开失败：{error:?}")))?;
-
-    let token = handshake_token(&session.code, self_id, connection.remote_id());
-    write_frame(
-        &mut send,
-        &json!({ "kind": "hello", "token": token, "files": items }),
-    )
-    .await?;
+    let token = handshake_token(code, self_id, connection.remote_id());
+    let peer_name = directory::fetch_name(client, connection.remote_id())
+        .await
+        .unwrap_or_default();
+    let hello = match text {
+        Some(text) => json!({
+            "kind": "hello",
+            "token": token,
+            "name": name,
+            "mode": "text",
+            "text": text,
+        }),
+        None => json!({
+            "kind": "hello",
+            "token": token,
+            "name": name,
+            "mode": "files",
+            "files": items,
+        }),
+    };
+    write_frame(&mut send, &hello).await?;
     let answer = read_frame(&mut recv).await?;
     if answer["kind"] != "accept" {
         let reason = answer["reason"].as_str().unwrap_or("对方拒绝了这次传输");
         return Err(CoreError::execution("TRANSFER_REJECTED", reason.to_string()));
+    }
+    if text.is_some() {
+        write_frame(&mut send, &json!({ "kind": "end" })).await?;
+        let _ = wait_end_ack(&mut recv).await;
+        let _ = send.finish();
+        emit(
+            sink,
+            session,
+            json!({ "kind": "text", "text": text, "peer": { "id": target, "name": peer_name }, "received": false }),
+        );
+        return Ok(json!({ "files": 0, "bytes": 0, "peerName": peer_name }));
     }
     emit(
         sink,
@@ -599,8 +1439,9 @@ async fn send_loop(
         json!({
             "kind": "connected",
             "peer": connection.remote_id().to_z32(),
+            "peerName": peer_name,
             "files": items.len(),
-            "totalBytes": items.iter().map(|item| item.size).sum::<u64>()
+            "totalBytes": items.iter().map(|item| item.size).sum::<u64>(),
         }),
     );
 
@@ -632,7 +1473,7 @@ async fn send_loop(
                     "index": index,
                     "file": item.rel,
                     "sent": sent,
-                    "total": item.size
+                    "total": item.size,
                 }),
             );
         }
@@ -649,23 +1490,22 @@ async fn send_loop(
                 "index": index,
                 "file": item.rel,
                 "sent": sent,
-                "total": item.size
+                "total": item.size,
             }),
         );
     }
     write_frame(&mut send, &json!({ "kind": "end" })).await?;
-    let ack = read_frame(&mut recv).await?;
-    if ack["kind"] != "endAck" {
-        return Err(CoreError::execution("TRANSFER_PROTOCOL", "缺少结束确认"));
-    }
+    let _ = wait_end_ack(&mut recv).await;
     let _ = send.finish();
     Ok(json!({
         "files": items.len(),
-        "bytes": items.iter().map(|item| item.size).sum::<u64>()
+        "bytes": items.iter().map(|item| item.size).sum::<u64>(),
+        "peerName": peer_name,
+        "names": first_names(&items),
     }))
 }
 
-// ---------------------------------------------------------------------------
+
 // 收尾
 // ---------------------------------------------------------------------------
 

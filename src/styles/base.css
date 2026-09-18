@@ -3,7 +3,11 @@
 :root {
   color: #1f1f1f;
   background: #f7f7f7;
-  font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", "WenQuanYi Micro Hei", system-ui, sans-serif;
+  /* 全应用的基础字体栈（v0.8.4）：抽成变量是因为**编辑器的正文也要用同一份**
+     （CodeMirror 自带的基础主题给 .cm-scroller 写死了 monospace，得在
+     editor.css 里显式覆盖；没有变量就只能把这一长串抄第二遍）。 */
+  --font-body: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", "WenQuanYi Micro Hei", system-ui, sans-serif;
+  font-family: var(--font-body);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -23,6 +27,14 @@ body,
   height: 100%;
   margin: 0;
   overflow: clip;
+}
+
+/* 触屏点任何元素时那层蓝色半透明遮罩来自 WebView 默认的 tap highlight。
+ * 它是继承属性，在根上关一次就全应用生效（v0.8.4 之前是散在 6 个文件里
+ * 逐个元素打补丁，于是屡禁不止）。**别顺手去碰 :active / :hover**——
+ * 按钮的点击阴影与悬浮效果是另一套机制，要保留。 */
+html {
+  -webkit-tap-highlight-color: transparent;
 }
 
 button,
@@ -81,6 +93,12 @@ button,
   --font-ledger: 18px;
   --font-diary: 18px;
   --font-drawer-title: 24px;
+  /* 主题色兜底（v0.8.4）：各页的主容器（工作区/日记/记账/工具箱）会用自己的
+     --accent 覆盖它，但**挂在主容器之外的浮层**（编辑器对话框、菜单、设置抽屉、
+     日历…）拿不到那些覆盖——裸 `var(--accent)` 在「未定义」时整条声明失效，
+     症状是「白字 + 透明底 = 日历里选中的那个数字看不见」。在壳上给一次默认值，
+     比在 100 多处 var() 里逐个补回退稳。 */
+  --accent: #2564cf;
 
   width: var(--app-width);
   height: var(--app-height);

@@ -1359,6 +1359,7 @@ pub fn default_data_file() -> DataFile {
         tasks: Vec::new(),
         selected_node_id: inbox_id,
         backgrounds,
+        scratchpad: Default::default(),
         extra: Map::new(),
     }
 }

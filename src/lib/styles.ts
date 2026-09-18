@@ -66,6 +66,18 @@ export function ledgerBackground(ledger: Settings["ledger"]): ListBackground {
   };
 }
 
+/** 工具箱的主题色（v0.8.4）：设置里空着就用默认主题色。 */
+export function toolboxAccent(toolbox: Settings["toolbox"]): string {
+  return isHexColor(toolbox.accent) ? toolbox.accent : DEFAULT_ACCENT;
+}
+
+/** 工具箱的背景色（v0.8.4）：只有颜色，没有图（工具页三点菜单就这一个入口）。 */
+export function toolboxBackground(toolbox: Settings["toolbox"]): ListBackground {
+  return {
+    color: isHexColor(toolbox.backgroundColor) ? toolbox.backgroundColor : defaultBackground.color
+  };
+}
+
 export function avatarStyle(avatar: string): string {
   return avatar ? `background-image: url("${escapeCssUrl(avatar)}");` : "";
 }

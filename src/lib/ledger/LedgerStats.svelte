@@ -54,8 +54,10 @@
     };
   }>();
 
-  /** 结余 = 收支同图再叠一条收-支的曲线（v0.7.4 的「收支」两条线升级而来） */
-  type Side = LedgerSide | "balance";
+  /** 段控里的「侧」只剩收支两档；**结余曲线改由图例胶囊切出**（v0.8.4 需求 10） */
+  type Side = LedgerSide;
+  /** 图上要画的曲线：三枚图例胶囊各自开关，默认 收入 + 支出 亮、结余灰 */
+  type LegendKey = "income" | "expense" | "balance";
 
   const MODES: Array<{ id: StatsMode; label: string }> = [
     { id: "week", label: "周" },
@@ -66,13 +68,13 @@
   ];
   const SIDE_LABELS: Record<Side, { full: string; short: string }> = {
     expense: { full: "支出", short: "支" },
-    income: { full: "收入", short: "收" },
-    balance: { full: "结余", short: "结余" }
+    income: { full: "收入", short: "收" }
   };
-  const SIDES: Side[] = ["expense", "income", "balance"];
+  const SIDES: Side[] = ["expense", "income"];
 
   let mode: StatsMode = "month";
   let side: Side = "expense";
+  let legend: Record<LegendKey, boolean> = { income: true, expense: true, balance: false };
   /** 周周期的锚点日（周一起算那一周）；自定义周期的起止 */
   let weekAnchor = todayDate();
   let customFrom = `${cursor.year}-${(cursor.month + 1).toString().padStart(2, "0")}-01`;
@@ -84,7 +86,8 @@
   /** 趋势图上正在读数的桶（桌面悬浮 / 移动点按）；null = 没在读 */
   let hoverIndex: number | null = null;
 
-  $: modes = $isMobile ? MODES.filter((item) => item.id !== "week") : MODES;
+  // 「周」两端都有（v0.8.4 需求 10 把移动端加回来——侧段控少了一档，宽度腾出来了）
+  $: modes = MODES;
   $: sideText = (key: Side) => ($isMobile ? SIDE_LABELS[key].short : SIDE_LABELS[key].full);
   $: bounds = statsBounds(entries, mode, cursor, weekAnchor, customFrom, customTo, $weekStart);
   $: periodLabel = statsPeriodLabel(mode, bounds, cursor);
@@ -93,9 +96,9 @@
   $: series = statsSeries(entries, bounds);
   $: totalIncome = series.reduce((sum, point) => sum + point.income, 0);
   $: totalExpense = series.reduce((sum, point) => sum + point.expense, 0);
-  /** 侧 = 结余时占比环仍画支出：环的语义是"钱花在哪一类" */
+  /** 占比环与排行跟着侧段控（支出/收入）走：环的语义是"钱花在哪一类" */
   let catSide: LedgerSide = "expense";
-  $: catSide = side === "balance" ? "expense" : side;
+  $: catSide = side;
   $: stats = categoryStats(book, rangeEntries, catSide).filter((item) => item.cents > 0);
   $: statsTotal = stats.reduce((sum, item) => sum + item.cents, 0);
   // 桶类型看键长：month 桶的键是 "2026-09"（7 位），day 桶是 "2026-09-14"。
@@ -125,26 +128,47 @@
   const COLOR_IN = "#2f9e6e";
   const COLOR_OUT = "#e0654f";
   const COLOR_BAL = "#2b3038";
+  /**
+   * 折线「描边动画」的长度基准：和 `ledger.css` 里 `.ledger-line` 的
+   * `stroke-dasharray / stroke-dashoffset` 必须是同一个数。
+   *
+   * 它通过 SVG 的 `pathLength` 生效——把路径长度**归一化**成这个值，于是
+   * dash 图案永远恰好等于「整条路径」，与真实几何长度解耦。不这么做的症状
+   * （v0.8.4 修）：点数一多、折线一陡，真实长度超过 dash 常量之后图案会重复
+   * （2400 实 + 2400 空），折线中间断掉、末尾画不出来，看着没盖住阴影区域。
+   */
+  const CHART_DASH_LEN = 2400;
 
   function balanceOf(point: { income: number; expense: number }): number {
     return point.income - point.expense;
   }
 
-  /** 当前侧要画的曲线（名字 / 取值 / 颜色），结余侧是三条 */
-  $: lines =
-    side === "expense"
-      ? [{ key: "expense" as const, name: "支出", color: COLOR_OUT, value: (p: { income: number; expense: number }) => p.expense }]
-      : side === "income"
-        ? [{ key: "income" as const, name: "收入", color: COLOR_IN, value: (p: { income: number; expense: number }) => p.income }]
-        : [
-            { key: "expense" as const, name: "支出", color: COLOR_OUT, value: (p: { income: number; expense: number }) => p.expense },
-            { key: "income" as const, name: "收入", color: COLOR_IN, value: (p: { income: number; expense: number }) => p.income },
-            { key: "balance" as const, name: "结余", color: COLOR_BAL, value: balanceOf }
-          ];
+  /** 三条曲线的定义（与图例胶囊一一对应） */
+  const LINE_SPECS: Array<{
+    key: LegendKey;
+    name: string;
+    color: string;
+    value: (point: { income: number; expense: number }) => number;
+  }> = [
+    { key: "income", name: "收入", color: COLOR_IN, value: (p) => p.income },
+    { key: "expense", name: "支出", color: COLOR_OUT, value: (p) => p.expense },
+    { key: "balance", name: "结余", color: COLOR_BAL, value: balanceOf }
+  ];
+
+  /** 图上要画的曲线 = 图例开着的那几条（至少留一条，否则点没了就没图可看） */
+  $: lines = LINE_SPECS.filter((spec) => legend[spec.key]);
 
   $: visibleValues = series.flatMap((point) => lines.map((line) => line.value(point)));
   $: hi = Math.max(1, ...visibleValues);
-  $: lo = side === "balance" ? Math.min(0, ...visibleValues) : 0;
+  // 结余可以是负的：画了结余就把 0 以下也纳进纵向范围
+  $: lo = legend.balance ? Math.min(0, ...visibleValues) : 0;
+
+  /** 图例开关：点一下就切换；最后一条亮着的不许关（关掉整张图就空了） */
+  function toggleLegend(key: LegendKey): void {
+    if (legend[key] && lines.length === 1) return;
+    legend = { ...legend, [key]: !legend[key] };
+    hoverIndex = null;
+  }
   $: stepX = series.length > 1 ? (W - PAD_X * 2) / (series.length - 1) : 0;
   function pointX(index: number): number {
     return PAD_X + index * stepX;
@@ -246,8 +270,8 @@
     return date.replaceAll("-", "/");
   }
 
-  // 周期/侧/区间一变，图整个重画：读数标记不能留在旧位置
-  $: chartKey = `${mode}-${side}-${bounds.from}-${bounds.to}`;
+  // 周期/侧/区间/图例一变，图整个重画：读数标记不能留在旧位置
+  $: chartKey = `${mode}-${side}-${bounds.from}-${bounds.to}-${legend.income ? "i" : ""}${legend.expense ? "e" : ""}${legend.balance ? "b" : ""}`;
   $: if (chartKey) hoverIndex = null;
 
   function handleKeydown(event: KeyboardEvent): void {
@@ -413,10 +437,22 @@
 
   <section class="ledger-panel">
     <header class="ledger-panel-head">
-      <h2>{side === "expense" ? "支出趋势" : side === "income" ? "收入趋势" : "收支结余趋势"}</h2>
-      <span class="ledger-legend">
-        {#each lines as line (line.key)}
-          <i style="background: {line.color}"></i>{line.name}
+      <h2>收支趋势</h2>
+      <!-- 图例即开关（v0.8.4 需求 10）：三枚胶囊各自显隐一条曲线，
+           默认收入 + 支出亮、结余灰。 -->
+      <span class="ledger-legend" role="group" aria-label="显示哪些曲线">
+        {#each LINE_SPECS as spec (spec.key)}
+          <button
+            type="button"
+            class:on={legend[spec.key]}
+            class:bal={spec.key === "balance"}
+            title={`${legend[spec.key] ? "隐藏" : "显示"}${spec.name}曲线`}
+            aria-pressed={legend[spec.key]}
+            on:click|stopPropagation={() => toggleLegend(spec.key)}
+          >
+            <!-- 亮着才给 --dot（空值时 var() 取不到回退色，色块会整个透明） -->
+            <i style={legend[spec.key] ? `--dot: ${spec.color}` : ""}></i>{spec.name}
+          </button>
         {/each}
       </span>
     </header>
@@ -438,11 +474,15 @@
           {#if lo < 0}
             <line class="ledger-chart-zero" x1={PAD_X} x2={W - PAD_X} y1={pointY(0)} y2={pointY(0)} />
           {/if}
-          {#if side !== "balance" && lines.length === 1}
+          {#if lines.length === 1}
             <path class="ledger-line-area {lines[0].key === "income" ? "in" : "out"}" d={areaPath(lines[0].value)} />
           {/if}
           {#each lines as line (line.key)}
-            <path class="ledger-line {line.key === "income" ? "in" : line.key === "expense" ? "out" : "bal"}" d={linePath(line.value)} />
+            <path
+              class="ledger-line {line.key === "income" ? "in" : line.key === "expense" ? "out" : "bal"}"
+              pathLength={CHART_DASH_LEN}
+              d={linePath(line.value)}
+            />
           {/each}
           {#if hoverPoint}
             <line class="ledger-chart-marker" x1={pointX(hoverIndex ?? 0)} x2={pointX(hoverIndex ?? 0)} y1={PAD_TOP - 6} y2={H - PAD_BOTTOM} />

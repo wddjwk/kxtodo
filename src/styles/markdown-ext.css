@@ -341,6 +341,33 @@ pre.diagram-source {
 
 /* ---------- GFM 任务列表（- [ ] / - [x]）：只留 checkbox，不要列表圆点 ---------- */
 
+/* ---------- 有序列表的层级编号（v0.8.4 需求 15.3.3） ----------
+   源码里永远是标准 markdown（`1.` 开头），层级编号只是**渲染层的展示**：
+   CSS counters 把「第几层的第几项」拼成 2.1 / 2.1.1。浏览器自带的 decimal 到
+   第二层就换成 lower-roman（github-markdown-css 的规则），看不出层级关系。
+   任务项（`1. [ ] x`）不画编号——它有自己的勾选框，编号会跟框挤在一起。 */
+.markdown-body ol {
+  counter-reset: kx-ol;
+}
+
+.markdown-body ol > li {
+  counter-increment: kx-ol;
+  position: relative;
+}
+
+.markdown-body ol > li:not(:has(> input.md-task-box)):not(:has(> p:first-child > input.md-task-box)) {
+  list-style: none;
+}
+
+.markdown-body ol > li:not(:has(> input.md-task-box)):not(:has(> p:first-child > input.md-task-box))::before {
+  content: counters(kx-ol, ".") ". ";
+  position: absolute;
+  right: calc(100% + 0.4em);
+  white-space: nowrap;
+  color: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
 /* 任务项：去圆点、整体左移抵消列表容器的 2em 缩进。
    只认「自己的勾选框」（直接子级、或松散列表第一个 p 的直接子级）——
    后代选择器会把「嵌套了任务列表的祖先 li」也一起命中，缩进就乱了。 */
@@ -555,7 +582,6 @@ body.kx-dragging * {
   background: transparent;
   color: #9aa1ac;
   cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
   transition: background 0.12s ease, color 0.12s ease;
 }
 

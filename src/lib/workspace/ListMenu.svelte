@@ -35,6 +35,9 @@
   import { caps } from "../capabilities";
   import { isLocalImageRef, localImageFilename, localImageRef, primeImageCache, compressBackgroundImage } from "../images";
   import { DEFAULT_DUE_COLORS } from "../dueHighlight";
+  import { clearColorPreview, colorPreview, setColorPreview } from "../colorPreview";
+  import ColorDraftActions from "../ColorDraftActions.svelte";
+  import { onDestroy } from "svelte";
   import { showMobileList } from "../platform";
   import { sortLabels, type SortMode } from "../sort";
   import type { AppNode, ListBackground } from "../types";
@@ -81,16 +84,49 @@
    */
   let opacityLive = false;
   let opacityValue = 0;
-  let uiColorLive = false;
-  let uiColorValue = "";
   let linkLive = false;
   let linkValue = "";
 
+  /**
+   * 取色草稿（v0.8.4 需求 9）：主题色 / 背景色 / 临期配色**共用一套**——
+   * 取色只改草稿并把活值推给界面预览（`colorPreview`），点「保存」才落盘；
+   * 「取消」或菜单直接关掉 = 丢掉草稿、预览回退。
+   * 从前三处各写各的：主题色只动色块不动界面、背景色只动界面不动色块、临期两个都不动。
+   */
+  let colorDraft: { accent?: string; background?: string; due?: Record<number, string> } = {};
+
   $: opacityCommitted = Math.round((bg.imageOpacity ?? defaultBackground.imageOpacity ?? 0.28) * 100);
   $: if (!opacityLive) opacityValue = opacityCommitted;
-  $: if (!uiColorLive) uiColorValue = accentValue;
   $: linkCommitted = isLocalImageRef(bg.image) ? "" : (bg.image ?? "");
   $: if (!linkLive) linkValue = linkCommitted;
+
+  /** 预览作用域：条目页是节点 id，日记/记账是各自的 settings 前缀 */
+  $: colorScope = diaryMode ? "diary" : ledgerMode ? "ledger" : (node?.id ?? "");
+  $: accentShown = colorDraft.accent ?? accentValue;
+  $: backgroundShown = colorDraft.background ?? bg.color;
+  $: accentDirty = colorDraft.accent !== undefined && colorDraft.accent !== accentValue;
+  $: backgroundDirty = colorDraft.background !== undefined && colorDraft.background !== bg.color;
+  $: dueDirty = Object.entries(colorDraft.due ?? {}).some(
+    ([index, color]) => color !== dueColorValue(Number(index))
+  );
+
+  /** 把草稿推给界面（预览）。没在草稿里的槽位一律 null，落盘值由消费端兜底。 */
+  function pushColorPreview(): void {
+    if (!colorScope) return;
+    setColorPreview(colorScope, {
+      accent: colorDraft.accent,
+      background: colorDraft.background,
+      due: colorDraft.due
+    });
+  }
+
+  /** 丢掉草稿并回退预览（取消 / 菜单关闭）。只清自己那一份作用域，别误伤别的页。 */
+  function discardColorDrafts(): void {
+    colorDraft = {};
+    if (get(colorPreview)?.scope === colorScope) clearColorPreview();
+  }
+
+  onDestroy(discardColorDrafts);
 
   /** 同步已配对且没暂停才给「立即同步」入口（与设置页/下拉同一口径，总开关关掉一律不给） */
   $: syncReady =
@@ -172,16 +208,11 @@
     });
   }
 
-  function applyTheme(color: string): void {
-    setBackground({ color });
-  }
-
-  /** 背景取色器：松手（change）才写一次。逐 input 写盘与临期色盘是同一个病——
-   *  拖动一下几十次原子写，settings/data 的写队列被打满就报「原子替换失败」。 */
+  /** 自定义背景色的取色器：只改草稿 + 预览，保存才落盘（需求 9） */
   function commitColorPick(event: Event): void {
     const target = event.currentTarget;
     if (target instanceof HTMLInputElement) {
-      applyTheme(target.value);
+      pickBackgroundColor(target.value);
     }
   }
 
@@ -300,24 +331,30 @@
     void setUiColorAction(node.id, color);
   }
 
-  /** 拖动取色器：只改本地草稿（色盘实时跟着动），**不落盘** */
+  /** 取主题色：只改草稿 + 推预览（界面立刻换色），保存才落盘 */
   function handleUiColorPick(event: Event): void {
     const target = event.currentTarget;
-    if (target instanceof HTMLInputElement) {
-      uiColorLive = true;
-      uiColorValue = target.value;
-    }
+    if (!(target instanceof HTMLInputElement)) return;
+    colorDraft = { ...colorDraft, accent: target.value };
+    pushColorPreview();
   }
 
-  /** 松手（change）才写一次：逐 input 落盘会把 settings.json 的原子写打满，
-   *  报「自定义颜色保存失败：原子替换失败」（需求 12） */
-  function endUiColorPick(event: Event): void {
-    uiColorLive = false;
-    const target = event.currentTarget;
-    if (target instanceof HTMLInputElement) setUiColor(target.value);
+  /** 保存主题色：这一步才写 settings / uiColors */
+  function saveUiColor(): void {
+    const value = colorDraft.accent;
+    if (value === undefined) return;
+    setUiColor(value);
+  }
+
+  function cancelUiColor(): void {
+    colorDraft = { ...colorDraft, accent: undefined };
+    pushColorPreview();
   }
 
   function resetUiColor(): void {
+    // 「默认」是显式复位，直接落盘；顺手把这一区的草稿丢掉，别留着旧活值
+    colorDraft = { ...colorDraft, accent: undefined };
+    pushColorPreview();
     if (settingsPrefix) {
       // 空串 = 用该域默认主题色（与 core 的 diary.accent / ledger.accent 同口径）
       void setConfigAction(`${settingsPrefix}.accent`, "");
@@ -330,8 +367,6 @@
   // ---- 临期高亮色（每个页面一套，存在 appearance.dueColors[节点id]）----
   // 四档（v0.8.3）：已过期 / 今天 / 明天 / 后天，顺序与 dueHighlight.DEFAULT_DUE_COLORS 一致
   const dueColorLabels = ["已过期", "今天到期", "明天到期", "后天到期"];
-  /** 正在拖动的草稿（下标 → 颜色）；空 = 没有正在拖的，色块显示落盘值 */
-  let dueColorLive: Record<number, string> = {};
 
   /** 这一页当前的四色：没配过就用默认（灰 → 红 → 黄 → 蓝） */
   function dueColorValue(index: number): string {
@@ -340,9 +375,9 @@
     return candidate && /^#[0-9a-f]{6}$/i.test(candidate) ? candidate : DEFAULT_DUE_COLORS[index];
   }
 
-  /** 色块显示值：拖动中看草稿，其余看落盘值（需求 12「色盘要实时展示变化」） */
+  /** 色块显示值：取色中看草稿，其余看落盘值 */
   function dueColorDisplay(index: number): string {
-    return dueColorLive[index] ?? dueColorValue(index);
+    return colorDraft.due?.[index] ?? dueColorValue(index);
   }
 
   /** 配色的归属键：普通列表用节点 id；日记/记账那种按域存（settingsPrefix） */
@@ -350,28 +385,62 @@
     return settingsPrefix ? settingsPrefix : (node?.id ?? "");
   }
 
-  function updateDueColor(index: number, color: string): void {
+  /** 取临期配色：只改草稿 + 推预览，保存才落盘 */
+  function pickDueColor(index: number, color: string): void {
+    colorDraft = { ...colorDraft, due: { ...(colorDraft.due ?? {}), [index]: color } };
+    pushColorPreview();
+  }
+
+  /** 保存临期配色：四档**一次写完**（逐档写会互相覆盖——后一档读到的还是旧数组） */
+  function saveDueColors(): void {
     const key = dueColorKey();
     if (!key) return;
-    const next = [...[0, 1, 2, 3].map((slot) => dueColorValue(slot))];
-    next[index] = color;
+    const next = [0, 1, 2, 3].map((slot) => dueColorDisplay(slot));
+    colorDraft = { ...colorDraft, due: undefined };
     void setConfigAction("appearance.dueColors", {
       ...$appSettings.appearance.dueColors,
       [key]: next
     });
   }
 
+  function cancelDueColors(): void {
+    colorDraft = { ...colorDraft, due: undefined };
+    pushColorPreview();
+  }
+
   function resetDueColors(): void {
     const key = dueColorKey();
     if (!key) return;
+    colorDraft = { ...colorDraft, due: undefined };
+    pushColorPreview();
     const next = { ...$appSettings.appearance.dueColors };
     delete next[key];
     void setConfigAction("appearance.dueColors", next);
   }
 
   function resetBackgroundToDefault(): void {
+    colorDraft = { ...colorDraft, background: undefined };
+    pushColorPreview();
     void setConfigAction("appearance.themePresets", themePresets.map((preset) => ({ ...preset })));
     setBackground({ color: defaultBackground.color });
+  }
+
+  // ---- 背景色（预设色块 / 自定义色盘）：与主题色同一套「草稿 → 保存」 ----
+  /** 选背景色：只改草稿 + 推预览，保存才落盘 */
+  function pickBackgroundColor(color: string): void {
+    colorDraft = { ...colorDraft, background: color };
+    pushColorPreview();
+  }
+
+  function saveBackgroundColor(): void {
+    const color = colorDraft.background;
+    if (color === undefined) return;
+    setBackground({ color });
+  }
+
+  function cancelBackgroundColor(): void {
+    colorDraft = { ...colorDraft, background: undefined };
+    pushColorPreview();
   }
 
   function beginPresetEdit(index: number): void {
@@ -678,6 +747,9 @@
 </script>
 
 <ContextMenu {x} {y} {xAlign} minWidth={300} {anchor} onClose={handleClose}>
+  <!-- 宿主自带的条目（v0.8.4 需求 14：记账把「分类管理 / 账户与转账」放到这张菜单里）。
+       壳保持通用，菜单里有什么由调用方决定。 -->
+  <slot name="extra" />
   {#if syncReady}
     <MenuItem icon={RefreshCw} label={syncing ? "同步中…" : "立即同步"} onSelect={() => { onClose(); void runSync(); }} />
   {/if}
@@ -697,7 +769,7 @@
       </div>
     </MenuItem>
   {/if}
-  {#if !isScheduled && !diaryMode}
+  {#if !isScheduled && !diaryMode && !ledgerMode}
     <MenuItem icon={ArrowUpDown} label="排序方式">
       <div slot="submenu" class="submenu-list">
         {#each Object.entries(sortLabels) as [mode, label]}
@@ -795,12 +867,16 @@
   <div class="menu-section-title">UI颜色</div>
   <div class="ui-color-row">
     <label class="ui-color-picker" title="修改当前界面的标题和控件颜色">
-      <span style={`--swatch: ${uiColorValue}`}></span>
-      <input type="color" value={uiColorValue} on:input={handleUiColorPick} on:change={endUiColorPick} />
+      <span style={`--swatch: ${accentShown}`}></span>
+      <!-- input 与 change 都只改草稿并预览：界面（--accent）与色块一起变，保存才落盘 -->
+      <input type="color" value={accentShown} on:input={handleUiColorPick} on:change={handleUiColorPick} />
     </label>
-    <span class="ui-color-value">{uiColorValue}</span>
+    <span class="ui-color-value">{accentShown}</span>
     <button class="menu-action-button" type="button" on:click={resetUiColor}>默认</button>
   </div>
+  {#if accentDirty}
+    <ColorDraftActions onSave={saveUiColor} onCancel={cancelUiColor} />
+  {/if}
 
   {#if $appSettings.features.dueHighlight !== "off" && !settingsPrefix}
     <div class="menu-section-title">临期高亮色</div>
@@ -810,19 +886,20 @@
       {#each dueColorLabels as label, index (label)}
         <label class="ui-color-picker" title={`${label}的高亮色`}>
           <span style={`--swatch: ${dueColorDisplay(index)}`}></span>
+          <!-- 拖动时色块与本页卡片的临期底色一起变（预览），保存才写 appearance.dueColors -->
           <input
             type="color"
             value={dueColorDisplay(index)}
-            on:input={(event) => (dueColorLive = { ...dueColorLive, [index]: event.currentTarget.value })}
-            on:change={(event) => {
-              dueColorLive = {};
-              updateDueColor(index, event.currentTarget.value);
-            }}
+            on:input={(event) => pickDueColor(index, event.currentTarget.value)}
+            on:change={(event) => pickDueColor(index, event.currentTarget.value)}
           />
         </label>
       {/each}
       <button class="menu-action-button" type="button" title="恢复默认配色（过期灰 / 今天红 / 明天黄 / 后天蓝）" on:click={resetDueColors}>默认</button>
     </div>
+    {#if dueDirty}
+      <ColorDraftActions onSave={saveDueColors} onCancel={cancelDueColors} />
+    {/if}
   {/if}
 
   <div class="menu-section-title">背景颜色</div>
@@ -832,8 +909,9 @@
         type="button"
         title={`${preset.name}（右键编辑）`}
         class:editing={editingPresetIndex === index}
+        class:active={backgroundShown === preset.color}
         style={`--swatch: ${preset.color}; --accent-color: ${preset.color}`}
-        on:click={() => applyTheme(preset.color)}
+        on:click={() => pickBackgroundColor(preset.color)}
         on:contextmenu|preventDefault|stopPropagation={() => beginPresetEdit(index)}
       ></button>
     {/each}
@@ -842,6 +920,9 @@
       <RotateCcw size={14} />
     </button>
   </div>
+  {#if backgroundDirty}
+    <ColorDraftActions onSave={saveBackgroundColor} onCancel={cancelBackgroundColor} />
+  {/if}
   {#if editingPresetIndex !== null}
     <div class="preset-editor">
       <div class="preset-editor-title">编辑预设颜色</div>
@@ -856,7 +937,7 @@
       </div>
     </div>
   {/if}
-  <input bind:this={colorPickerInput} class="hidden-file" type="color" value={bg.color} on:change={commitColorPick} />
+  <input bind:this={colorPickerInput} class="hidden-file" type="color" value={backgroundShown} on:change={commitColorPick} />
   <label class="background-link">
     背景图片链接
     <input value={linkValue} placeholder="https://..." on:focus={() => (linkLive = true)} on:input={updateBackgroundLink} on:blur={endBackgroundLinkEdit} />

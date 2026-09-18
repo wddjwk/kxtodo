@@ -55,7 +55,7 @@
   let weather = existing?.weather ?? "";
   let tags: Tag[] = existing ? existing.tags.map((tag) => ({ ...tag })) : [];
 
-  const initial = { date, time, title, text, mood, weather, tags: JSON.stringify(tags) };
+  const initial = { date, title, text, mood, weather, tags: JSON.stringify(tags) };
 
   let openPicker: "" | "date" | "mood" | "weather" | "tag" = "";
   /** 触屏上被点了一下、露出删除叉的标签（桌面靠 hover，不用它） */
@@ -158,7 +158,7 @@
     if (editingId) {
       const changes: DiaryChanges = {};
       if (date !== initial.date) changes.date = date;
-      if (time !== initial.time) changes.time = time;
+      // 时刻不再有编辑入口（需求 13）：新建时按当前时刻落盘，之后跟 createdAt 不变
       if (trimmedTitle !== initial.title) changes.title = trimmedTitle;
       if (markdown !== initial.text) changes.markdown = markdown;
       if (mood !== initial.mood) changes.mood = mood;
@@ -206,11 +206,6 @@
   function pickDate(value: string): void {
     date = value;
     openPicker = "";
-  }
-
-  /** 拨时刻不收浮层：滚轮常常要再动一下 */
-  function pickTime(value: string): void {
-    time = value;
   }
 
   function pickMood(emoji: string): void {
@@ -388,12 +383,11 @@
         </button>
         {#if openPicker === "date"}
           <div class="editor-meta-pop">
+            <!-- 只有日历、没有时刻（v0.8.4 需求 13）：日记改日期不该顺带改时间，
+                 与卡片右键的「修改日期」同款。 -->
             <DatePicker
               value={date}
-              {time}
-              withTime
               on:select={(event) => pickDate(event.detail)}
-              on:selectTime={(event) => pickTime(event.detail)}
               on:clear={() => pickDate(today)}
               on:close={() => (openPicker = "")}
             />

@@ -618,28 +618,6 @@
   z-index: 1;
 }
 
-/* ---------- 齿轮面板（桌面） ----------
-   移动端那一份在 mobile.css（.app-shell.mobile .header-menu-panel）；日记的齿轮
-   在桌面也出现，所以这里补一份同形状的桌面规则，不去动 workspace.css。 */
-.app-shell:not(.mobile) .diary-gear-panel {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 2200;
-  display: grid;
-  gap: 2px;
-  /* 宽度自适应：固定 176px 比最长的一条宽出半截，看着空旷（条目自己 nowrap，
-     max-content 只比最长条目略宽一点） */
-  width: max-content;
-  min-width: 0;
-  padding: 6px;
-  border: 1px solid #e5e5e5;
-  border-radius: 12px;
-  background: #ffffff;
-  box-shadow: 0 16px 50px rgb(0 0 0 / 16%), 0 2px 8px rgb(0 0 0 / 8%);
-  animation: menu-fade-in 0.1s ease-out;
-}
-
 /* ---------- 菜单里的「按日期范围导出」 ---------- */
 
 .diary-export-range {
@@ -673,17 +651,6 @@
   gap: 6px;
   align-items: center;
   justify-content: center;
-}
-
-/* ---------- 触屏：不要那层蓝色点按高亮 ----------
-   WebView 默认给可点元素补一层 tap highlight，日记卡片单击是展开、双击是编辑，
-   罩子看起来像「卡片被选中了」，纯粹是干扰。 */
-.diary-view button,
-.diary-card,
-.diary-calendar-cell,
-.diary-fab,
-.diary-fab-today {
-  -webkit-tap-highlight-color: transparent;
 }
 
 .diary-card:focus,

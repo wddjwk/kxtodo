@@ -35,7 +35,8 @@ const mdHighlight = HighlightStyle.define([
   { tag: tags.quote, color: "#6b7280", fontStyle: "italic" },
   { tag: tags.monospace, color: "#b91c1c", backgroundColor: "#f3f4f6", borderRadius: "3px" },
   { tag: [tags.processingInstruction, tags.punctuation], color: "#9ca3af" },
-  { tag: tags.list, color: "#2563eb" },
+  // 列表标记不再单独着色（v0.8.4 需求 15.2）：`-` / `1.` 跟正文一个颜色，
+  // 编辑态里满屏蓝点看着像语法错误提示。
   { tag: tags.contentSeparator, color: "#d1d5db" },
   { tag: tags.labelName, color: "#7c3aed" }
 ]);
@@ -144,11 +145,21 @@ export function replaceDocument(view: EditorView, text: string): void {
 /** 列表行：`缩进 + 标记 + 可选的 `[ ] ` 勾选框 + 空白`。 */
 const LIST_ITEM_RE = /^(\s*)([-*+]|\d+[.)])(\s+)(\[[ xX]\]\s+)?/;
 
+/**
+ * 一级缩进的宽度（v0.8.4 需求 15.3.2）：**3 个空格**。
+ *
+ * 从前是 2：无序父项 `- ` 的内容列宽恰好 2，缩进去仍能被 CommonMark 认成子列表；
+ * 但有序父项 `1. ` 是 **3** 列，2 空格缩进去的行会被当 lazy continuation 摊平——
+ * 表现就是「编辑态看着有层级、预览里全平了」。3 对两种父项都成立（≥ 父项内容列宽），
+ * 也够不上「≥4 空格 = 缩进代码块」的门槛。
+ */
+const INDENT_STEP = 3;
+
 /** 无序标记按层级轮换，缩进一眼能看出嵌套关系。 */
 const BULLETS = ["-", "*", "+"];
 
 function bulletFor(indent: number): string {
-  return BULLETS[Math.floor(indent / 2) % BULLETS.length];
+  return BULLETS[Math.floor(indent / INDENT_STEP) % BULLETS.length];
 }
 
 /**
@@ -190,8 +201,8 @@ export function indentListItem(view: EditorView, direction: 1 | -1): boolean {
       // 缩进续行：跟着所属条目一起动；其它行（空行/正文）不打断也不处理
       if (inItem && isContinuation(line.text)) {
         const ownIndent = line.text.length - line.text.trimStart().length;
-        const removeLen = direction === 1 ? 0 : Math.min(2, ownIndent);
-        const insert = direction === 1 ? "  " : "";
+        const removeLen = direction === 1 ? 0 : Math.min(INDENT_STEP, ownIndent);
+        const insert = direction === 1 ? " ".repeat(INDENT_STEP) : "";
         changes.push({ from: line.from, to: line.from + removeLen, insert });
         delta += insert.length - removeLen;
         cursorAnchor = line.to + delta;
@@ -208,8 +219,8 @@ export function indentListItem(view: EditorView, direction: 1 | -1): boolean {
     const ordered = /^\d/.test(marker);
     const nextIndent =
       direction === 1
-        ? indent + "  "
-        : indent.slice(0, Math.max(0, indent.length - 2));
+        ? indent + " ".repeat(INDENT_STEP)
+        : indent.slice(0, Math.max(0, indent.length - INDENT_STEP));
     // 有序列表的标记交给重新编号那一步改写，这里只动缩进
     const nextMarker = ordered ? marker : bulletFor(nextIndent.length);
     const nextText = nextIndent + nextMarker + match[3] + (match[4] ?? "");

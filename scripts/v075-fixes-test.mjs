@@ -215,12 +215,13 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   const sideLabels = await page.$$eval(".ledger-side-switch button", (els) =>
     els.map((el) => el.textContent?.trim() ?? "")
   );
-  check("桌面侧段控是支出/收入/结余", sideLabels.join(",") === "支出,收入,结余", sideLabels.join(","));
+  // v0.8.4 需求 10：侧段控只剩 支出|收入，「结余」曲线改由图例胶囊切出
+  check("桌面侧段控是支出/收入", sideLabels.join(",") === "支出,收入", sideLabels.join(","));
   const axisTexts = await page.$$eval(".ledger-chart-axis", (els) => els.map((el) => el.textContent ?? ""));
   check("月视图横轴没有 NaN", axisTexts.every((text) => !text.includes("NaN")), axisTexts.join("|"));
-  await page.click(".ledger-side-switch button:has-text('结余')");
-  await page.waitForTimeout(200);
-  check("结余侧画三条曲线", (await page.$$(".ledger-line.out")).length === 1 &&
+  await page.locator(".ledger-legend button", { hasText: "结余" }).click();
+  await page.waitForTimeout(400);
+  check("点结余胶囊后画三条曲线", (await page.$$(".ledger-line.out")).length === 1 &&
     (await page.$$(".ledger-line.in")).length === 1 && (await page.$$(".ledger-line.bal")).length === 1);
   const chartBox = await page.locator(".ledger-chart-box").boundingBox();
   await page.mouse.move(chartBox.x + chartBox.width / 2, chartBox.y + chartBox.height / 2);
@@ -374,10 +375,10 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
     await page.$eval(".workspace", (el) => getComputedStyle(el).display === "none")
   );
   await page.click(".toolbox-card >> nth=0");
-  await page.waitForSelector(".toolbox-sub-back", { timeout: 8000 });
+  await page.waitForSelector(".toolbox-sub-bar", { timeout: 8000 });
   await page.waitForSelector(".toolbox-field-row", { timeout: 8000 });
   check("工具子视图打开（懒加载组件）", (await page.$$(".toolbox-field-row")).length >= 3);
-  await page.click(".toolbox-sub-back");
+  await page.click(".toolbox-sub-bar button");
   await page.waitForSelector(".toolbox-list", { timeout: 5000 });
   await page.keyboard.press("Control+,");
   await page.waitForSelector("aside.settings-drawer", { timeout: 8000 });
@@ -431,11 +432,12 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   const mModes = await page.$$eval(".ledger-stats-bar .ledger-segmented:first-child button", (els) =>
     els.map((el) => el.textContent?.trim() ?? "")
   );
-  check("移动周期段控四项无周", mModes.join(",") === "月,年,总,自定义", mModes.join(","));
+  // v0.8.4 需求 10：移动端把「周」加回来（侧段控少了一档，宽度腾出来了）
+  check("移动周期段控含周共五项", mModes.join(",") === "周,月,年,总,自定义", mModes.join(","));
   const mSides = await page.$$eval(".ledger-side-switch button", (els) =>
     els.map((el) => el.textContent?.trim() ?? "")
   );
-  check("移动侧段控短文案", mSides.join(",") === "支,收,结余", mSides.join(","));
+  check("移动侧段控只剩支/收（短文案）", mSides.join(",") === "支,收", mSides.join(","));
   const statsBarBox = await page.locator(".ledger-stats-bar").boundingBox();
   check(
     "段控不超出屏幕",

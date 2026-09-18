@@ -312,12 +312,13 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.waitForSelector(".editor-overlay", { timeout: 8000 });
   await page.click(".editor-meta-field .editor-meta-trigger >> nth=0");
   await page.waitForSelector(".editor-meta-pop .date-picker", { timeout: 5000 });
-  check("日记编辑器日期浮层带时刻行", (await page.$$(".editor-meta-pop .dp-time-trigger")).length === 1);
-  await page.click(".editor-meta-pop .dp-time-switch input");
-  await page.waitForTimeout(200);
-  await page.click(".editor-meta-pop .dp-time-trigger");
-  await page.waitForSelector(".editor-meta-pop .time-picker", { timeout: 5000 });
-  check("日记也能选到分钟", (await page.$$(".editor-meta-pop .time-col")).length === 2);
+  // v0.8.4 需求 13：日记编辑器的日期浮层只有日历（日记不需要改时间，
+  // 与卡片右键「修改日期」同款）
+  check("日记编辑器日期浮层没有时刻行", (await page.$$(".editor-meta-pop .dp-time-trigger")).length === 0);
+  check(
+    "日记编辑器的日历可选日期",
+    (await page.$$(".editor-meta-pop .date-picker-grid .dp-cell")).length > 0
+  );
   check("日记页没有页面错误", errors.length === 0, errors.join(" | ").slice(0, 300));
   await context.close();
 }

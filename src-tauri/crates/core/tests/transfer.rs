@@ -1,5 +1,6 @@
-//! 文件传输助手（v0.8.3）端到端：两个会话（收/发）凭同一句口令，经**本地 mock pkarr
-//! 目录**互相发现、loopback 直连，跑一次含子目录的多文件传输。
+//! 文件传输助手端到端：两台「设备」（各带自己的 runtime）凭同一句口令，经**本地 mock
+//! pkarr 目录**互相发现、loopback 直连，跑一次含子目录的多文件传输（v0.8.4 起是
+//! 「双端各自 online + 挑设备发」的模型）。
 //!
 //! 完全离线可跑：目录用本文件里的 mock pkarr relay（回环 HTTP），relay 设成 `disabled`
 //! （两个端点在同机，目录里带的回环直连地址足够建连），不碰任何公共服务——
@@ -12,7 +13,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
-use kxtodo_core::transfer::{self, TransferItem, TransferNet};
+use kxtodo_core::repo::Layout;
+use kxtodo_core::transfer::{self, TransferItem, TransferNet, TransferPayload};
 
 const CODE: &str = "kxtodo-transfer-e2e-code";
 
@@ -154,65 +156,98 @@ fn code_must_be_at_least_eight_chars() {
 
 #[test]
 fn send_rejects_missing_files_and_bad_paths() {
-    let recorder = Recorder::default();
     let dir = tempfile::tempdir().unwrap();
+    let offline_root = tempfile::tempdir().unwrap();
+    let offline_layout = Layout::new(offline_root.path().to_path_buf());
     // 不存在的文件
     let error = transfer::send(
-        recorder.sink(),
-        CODE,
-        None,
-        vec![TransferItem {
-            rel: dir.path().join("nope.txt").to_string_lossy().to_string(),
-            size: 1,
-        }],
-        net("http://127.0.0.1:1"),
+        &offline_layout,
+        "target",
+        TransferPayload::Files {
+            root: None,
+            items: vec![TransferItem {
+                rel: dir.path().join("nope.txt").to_string_lossy().to_string(),
+                size: 1,
+            }],
+        },
     )
     .err()
     .unwrap();
     assert_eq!(error.code, "TRANSFER_FILE_MISSING");
     // 越界路径
     let error = transfer::send(
-        recorder.sink(),
-        CODE,
-        Some(dir.path()),
-        vec![TransferItem {
-            rel: "../escape.txt".to_string(),
-            size: 1,
-        }],
-        net("http://127.0.0.1:1"),
+        &offline_layout,
+        "target",
+        TransferPayload::Files {
+            root: Some(dir.path().to_string_lossy().to_string()),
+            items: vec![TransferItem {
+                rel: "../escape.txt".to_string(),
+                size: 1,
+            }],
+        },
     )
     .err()
     .unwrap();
     assert_eq!(error.code, "TRANSFER_PATH_UNSAFE");
-    // 空清单
-    let error = transfer::send(recorder.sink(), CODE, None, vec![], net("http://127.0.0.1:1"))
-        .err()
-        .unwrap();
+    // 空清单：校验先于在线检查（没上线也报「没东西可发」）
+    let error = transfer::send(
+        &offline_layout,
+        "target",
+        TransferPayload::Files {
+            root: None,
+            items: vec![],
+        },
+    )
+    .err()
+    .unwrap();
     assert_eq!(error.code, "TRANSFER_NOTHING_TO_SEND");
+    // 空文本
+    let error = transfer::send(
+        &offline_layout,
+        "target",
+        TransferPayload::Text {
+            text: "   ".to_string(),
+        },
+    )
+    .err()
+    .unwrap();
+    assert_eq!(error.code, "TRANSFER_EMPTY_TEXT");
+    // 清单合法但没上线 → TRANSFER_OFFLINE
+    let error = transfer::send(
+        &offline_layout,
+        "target",
+        TransferPayload::Text {
+            text: "你好".to_string(),
+        },
+    )
+    .err()
+    .unwrap();
+    assert_eq!(error.code, "TRANSFER_OFFLINE");
 }
 
 #[test]
-fn cancel_drops_the_session() {
+fn go_offline_clears_the_online_slot() {
     let recorder = Recorder::default();
+    let root = tempfile::tempdir().unwrap();
     let save = tempfile::tempdir().unwrap();
-    let session = transfer::receive(
+    std::fs::create_dir_all(root.path().join("runtime")).unwrap();
+    let layout = Layout::new(root.path().to_path_buf());
+    // 目录服务不可达：online 会在后台报错，但槽位先建出来了
+    let result = transfer::go_online(
         recorder.sink(),
+        &layout,
         CODE,
         save.path(),
+        "测试设备",
+        false,
         net("http://127.0.0.1:1"),
     );
-    // 目录服务不可达：receive 会在后台报错，但会话先建出来了
-    match session {
-        Ok(id) => {
-            assert_eq!(transfer::active_count(), 1);
-            transfer::cancel(&id).unwrap();
-            assert_eq!(transfer::active_count(), 0);
-            assert!(recorder
-                .wait_for(&id, "cancelled", Duration::from_secs(5))
-                .is_some());
-        }
-        Err(error) => panic!("接收应能先建会话：{}", error.message),
-    }
+    assert!(result.is_ok(), "上线应能先建会话");
+    let status = transfer::status(&layout);
+    assert_eq!(status["online"], Value::Bool(true));
+    assert!(!status["deviceId"].as_str().unwrap_or_default().is_empty());
+    transfer::go_offline(&layout).unwrap();
+    assert_eq!(transfer::status(&layout)["online"], Value::Bool(false));
 }
 
 #[test]
@@ -236,41 +271,105 @@ fn folder_transfer_roundtrip_with_progress() {
         },
     ];
 
-    // 接收侧
+    // 接收侧：自己的 runtime（身份 / 口令都落在那儿），上线待命
     let save = tempfile::tempdir().unwrap();
     let receiver = Recorder::default();
-    let receive_id =
-        transfer::receive(receiver.sink(), CODE, save.path(), net(&directory_url)).unwrap();
+    let receiver_root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(receiver_root.path().join("runtime")).unwrap();
+    let receiver_layout = Layout::new(receiver_root.path().to_path_buf());
+    let receive_info = transfer::go_online(
+        receiver.sink(),
+        &receiver_layout,
+        CODE,
+        save.path(),
+        "接收机",
+        true, // 自动接收：这一版默认关，测试里直接放行
+        net(&directory_url),
+    )
+    .expect("接收侧上线");
+    let receiver_id = receive_info["deviceId"].as_str().unwrap().to_string();
 
-    // 等接收方把目录发布出去
+    // 发送侧：也上线，等看到接收机
     let sender = Recorder::default();
-    let send_id = loop {
-        match transfer::send(
-            sender.sink(),
-            CODE,
-            Some(source.path()),
-            items.clone(),
-            net(&directory_url),
-        ) {
-            Ok(id) => break id,
-            Err(_) => std::thread::sleep(Duration::from_millis(200)),
+    let sender_root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(sender_root.path().join("runtime")).unwrap();
+    let sender_layout = Layout::new(sender_root.path().to_path_buf());
+    transfer::go_online(
+        sender.sink(),
+        &sender_layout,
+        CODE,
+        save.path(),
+        "发送机",
+        false,
+        net(&directory_url),
+    )
+    .expect("发送侧上线");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        let devices = transfer::devices(&sender_layout);
+        if devices["devices"]
+            .as_array()
+            .map(|list| list.iter().any(|item| item["id"] == Value::String(receiver_id.clone())))
+            .unwrap_or(false)
+        {
+            break;
         }
-    };
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(
+        transfer::devices(&sender_layout)["devices"]
+            .as_array()
+            .map(|list| list.iter().any(|item| item["id"] == Value::String(receiver_id.clone())))
+            .unwrap_or(false),
+        "房间列表里应该看得到接收机"
+    );
+
+    let send_id = transfer::send(
+        &sender_layout,
+        &receiver_id,
+        TransferPayload::Files {
+            root: Some(source.path().to_string_lossy().to_string()),
+            items: items.clone(),
+        },
+    )
+    .expect("发送应能建会话");
 
     let done = sender.wait_for(&send_id, "done", Duration::from_secs(60));
     assert!(
         done.is_some(),
         "发送侧没等到 done：{:?}",
-        sender.kinds()
+        sender
+            .events()
+            .iter()
+            .map(|event| format!("{}/{}", event["kind"], event["message"]))
+            .collect::<Vec<_>>()
     );
-    let received = receiver.wait_for(&receive_id, "done", Duration::from_secs(30));
-    assert!(
-        received.is_some(),
-        "接收侧没等到 done：{:?}",
-        receiver.kinds()
-    );
-    let summary = received.unwrap();
+    // 接收侧的子会话：等任意一条 done（id 由 core 生成，这里按 kind 找）
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut received: Option<Value> = None;
+    while Instant::now() < deadline {
+        received = receiver
+            .events()
+            .into_iter()
+            .find(|event| event["kind"] == "done" && event["role"] == "receive");
+        if received.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let summary = received.unwrap_or_else(|| {
+        panic!(
+            "接收侧没等到 done：{:?}",
+            receiver
+                .events()
+                .iter()
+                .map(|event| format!("{}/{}", event["kind"], event["message"]))
+                .collect::<Vec<_>>()
+        )
+    });
     assert_eq!(summary["files"], 2);
+    // 接收确认卡：自动接收开着也会推一条 request（界面拿它做提示）
+    assert!(receiver.kinds().iter().any(|kind| kind == "request"));
 
     // 落盘内容与目录结构
     let landed = std::fs::read_to_string(save.path().join("a.txt")).unwrap();
@@ -280,12 +379,13 @@ fn folder_transfer_roundtrip_with_progress() {
     assert!(blob.iter().all(|byte| *byte == 7));
 
     // 每个文件都有进度与完成事件，且进度单调到顶
+    let receive_session = summary["sessionId"].as_str().unwrap().to_string();
     for (index, rel) in [(0, "a.txt"), (1, "sub/deep/b.bin")] {
         let progress: Vec<u64> = receiver
             .events()
             .iter()
             .filter(|event| {
-                event["sessionId"].as_str() == Some(receive_id.as_str())
+                event["sessionId"].as_str() == Some(receive_session.as_str())
                     && event["kind"] == "progress"
                     && event["index"].as_u64() == Some(index)
             })
@@ -307,7 +407,119 @@ fn folder_transfer_roundtrip_with_progress() {
     }
     // 发送侧也看到了 connected 与对方的 id
     assert!(sender.kinds().contains(&"connected".to_string()));
-    assert_eq!(transfer::active_count(), 0, "结束后会话要清干净");
+
+    // 历史：两边各记了一条
+    let sender_log = transfer::history(&sender_layout);
+    assert!(
+        sender_log["entries"]
+            .as_array()
+            .map(|list| !list.is_empty())
+            .unwrap_or(false),
+        "发送侧应留下一条历史"
+    );
+    let receiver_log = transfer::history(&receiver_layout);
+    assert!(
+        receiver_log["entries"]
+            .as_array()
+            .map(|list| !list.is_empty())
+            .unwrap_or(false),
+        "接收侧应留下一条历史"
+    );
+    assert_eq!(
+        receiver_log["entries"][0]["direction"], "receive",
+        "接收侧那条历史的 direction 应为 receive"
+    );
+
+    transfer::go_offline(&receiver_layout).unwrap();
+    transfer::go_offline(&sender_layout).unwrap();
+}
+
+#[test]
+fn text_message_roundtrip() {
+    let directory_url = start_mock_pkarr();
+    let save = tempfile::tempdir().unwrap();
+    let receiver = Recorder::default();
+    let receiver_root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(receiver_root.path().join("runtime")).unwrap();
+    let receiver_layout = Layout::new(receiver_root.path().to_path_buf());
+    let info = transfer::go_online(
+        receiver.sink(),
+        &receiver_layout,
+        CODE,
+        save.path(),
+        "接收机",
+        true,
+        net(&directory_url),
+    )
+    .unwrap();
+    let receiver_id = info["deviceId"].as_str().unwrap().to_string();
+
+    let sender = Recorder::default();
+    let sender_root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(sender_root.path().join("runtime")).unwrap();
+    let sender_layout = Layout::new(sender_root.path().to_path_buf());
+    transfer::go_online(
+        sender.sink(),
+        &sender_layout,
+        CODE,
+        save.path(),
+        "发送机",
+        false,
+        net(&directory_url),
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        let seen = transfer::devices(&sender_layout)["devices"]
+            .as_array()
+            .map(|list| list.iter().any(|item| item["id"] == Value::String(receiver_id.clone())))
+            .unwrap_or(false);
+        if seen {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    let send_id = transfer::send(
+        &sender_layout,
+        &receiver_id,
+        TransferPayload::Text {
+            text: "一段测试文本".to_string(),
+        },
+    )
+    .unwrap();
+    assert!(sender.wait_for(&send_id, "done", Duration::from_secs(30)).is_some());
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut got: Option<Value> = None;
+    while Instant::now() < deadline {
+        got = receiver
+            .events()
+            .into_iter()
+            .find(|event| event["kind"] == "text" && event["received"] == Value::Bool(true));
+        if got.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let event = got.unwrap_or_else(|| {
+        panic!(
+            "接收侧应收到 text 事件：{:?}",
+            receiver
+                .events()
+                .iter()
+                .map(|event| format!("{}/{}/{}", event["kind"], event["received"], event["message"]))
+                .collect::<Vec<_>>()
+        )
+    });
+    assert_eq!(event["text"], "一段测试文本");
+    // 文本不进保存位置
+    assert_eq!(
+        std::fs::read_dir(save.path()).unwrap().count(),
+        0,
+        "文本消息不该在保存目录里落任何文件"
+    );
+    transfer::go_offline(&receiver_layout).unwrap();
+    transfer::go_offline(&sender_layout).unwrap();
 }
 
 #[test]

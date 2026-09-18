@@ -122,10 +122,9 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   check("关掉面板不会多出一笔", (await page.$$(".ledger-entry")).length === 1);
 
   // 齿轮面板 → 记账菜单（三点菜单唤不出就是这条链断在冒泡上）
-  await page.click(".ledger-view .header-actions > button[title='更多操作']");
-  await page.waitForSelector(".ledger-gear-panel", { timeout: 5000 });
-  check("齿轮面板打开", (await page.$$(".ledger-gear-panel .menu-item-button")).length === 4);
-  await page.click(".ledger-gear-panel .menu-item-button:has-text('记账菜单')");
+  await page.click(".ledger-view .header-actions > button[title='记账菜单']");
+  await page.waitForSelector(".context-menu", { timeout: 5000 });
+  check("记账菜单打开", (await page.$$(".context-menu .menu-item-button")).length > 0);
   await page.waitForSelector(".context-menu", { timeout: 5000 });
   const listMenuText = await page.textContent(".context-menu");
   check("记账菜单唤得出", (listMenuText ?? "").includes("导出全部账本"), (listMenuText ?? "").slice(0, 60));
@@ -134,9 +133,9 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.waitForSelector(".context-menu", { state: "detached", timeout: 5000 });
 
   // 齿轮面板 → 分类管理
-  await page.click(".ledger-view .header-actions > button[title='更多操作']");
-  await page.waitForSelector(".ledger-gear-panel", { timeout: 5000 });
-  await page.click(".ledger-gear-panel .menu-item-button:has-text('分类管理')");
+  await page.click(".ledger-view .header-actions > button[title='记账菜单']");
+  await page.waitForSelector(".context-menu", { timeout: 5000 });
+  await page.click(".context-menu .menu-item-button:has-text('分类管理')");
   await page.waitForSelector(".ledger-manager", { timeout: 8000 });
   check("分类管理打开", (await page.$$(".ledger-cat-group")).length >= 8);
   await page.click(".ledger-manager .ledger-cat-chip.add >> nth=0");
@@ -433,9 +432,9 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   check("移动端记一笔进卡片", (await page.textContent(".ledger-entry-amount"))?.trim() === "-12.34");
 
   // 分类管理在窄屏上也要能用（底部抽屉 + 表单子层）
-  await page.click(".ledger-view .header-actions > button[title='更多操作']");
-  await page.waitForSelector(".ledger-gear-panel", { timeout: 5000 });
-  await page.click(".ledger-gear-panel .menu-item-button:has-text('账户与转账')");
+  await page.click(".ledger-view .header-actions > button[title='记账菜单']");
+  await page.waitForSelector(".context-menu", { timeout: 5000 });
+  await page.click(".context-menu .menu-item-button:has-text('账户与转账')");
   await page.waitForSelector(".ledger-manager", { timeout: 8000 });
   check("移动端账户管理打开", (await page.$$(".ledger-account-row")).length >= 4);
   await page.keyboard.press("Escape");

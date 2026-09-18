@@ -2,23 +2,24 @@
   import { onMount, tick } from "svelte";
   import {
     CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Flame, FolderTree,
-    List as ListIcon, MoreHorizontal, NotebookPen, Plus, Search,
+    List as ListIcon, NotebookPen, Plus, Search,
     Settings as SettingsIcon, X
   } from "@lucide/svelte";
   import { appSettings, diaryEditor, diaryEntries, weekStart } from "./stores";
   import { createBackGuard } from "./platform";
   import { setConfig, setDiaryUi } from "./actions";
   import { buildMainStyle, diaryAccent, diaryBackground } from "./styles";
+  import { accentWithPreview, backgroundWithPreview, colorPreview } from "./colorPreview";
   import { imageCache, resolveImageSrc } from "./images";
   import {
     calendarCells, calendarWeekdayHeaders, diaryByDate, diaryStats, filterDiaries,
     fullDayLabel, monthOf, relativeDayLabel, shiftMonth, todayDate,
     yearGroups, type MonthCursor
   } from "./diary";
+  import VirtualStack from "./VirtualStack.svelte";
   import DiaryCard from "./diary/DiaryCard.svelte";
   import DiaryEntryMenu from "./diary/DiaryEntryMenu.svelte";
   import { swipeX } from "./swipe";
-  import MenuItem from "./menu/MenuItem.svelte";
   import MobileBack from "./MobileBack.svelte";
   import MonthPopover from "./MonthPopover.svelte";
   import ListMenu from "./workspace/ListMenu.svelte";
@@ -34,6 +35,8 @@
   ];
 
   let searchOpen = false;
+  /** 列表视图的滚动容器（窗口化要用它当视口） */
+  let scrollEl: HTMLElement | null = null;
   let searchInput: HTMLInputElement;
   let query = "";
   let showGear = false;
@@ -45,7 +48,9 @@
   let monthPopOpen = false;
   let monthLabelEl: HTMLElement;
   /** 分组视图的年/月折叠状态（本机 UI 状态，不持久化） */
-  let collapsed: Record<string, boolean> = {};
+  /** 分组视图：记「展开」而不是「折叠」（v0.8.4 需求 4）——默认全折叠，
+   *  点开哪一组才渲染哪一组的条目，5000 篇也不会一次全挂上去。 */
+  let expanded: Record<string, boolean> = {};
   // 分钟级 tick：日记页面常常一直开着，跨天后「今天」必须自己跟上，
   // 否则添加按钮会把新的一天写进昨天、连续天数也算错（与 Workspace 同一套路）
   let dayTick = 0;
@@ -84,15 +89,28 @@
   // 日记自己的主题色与背景（settings.diary）：背景图与列表背景走同一套解析与缓存
   $: diaryBg = diaryBackground($appSettings.diary);
   $: resolvedBgImage = resolveImageSrc(diaryBg.image, $imageCache);
-  $: mainStyle = buildMainStyle(diaryBg, diaryAccent($appSettings.diary), resolvedBgImage);
+  // 取色预览（需求 9）：菜单里拖色盘时先把界面染上，点保存才落盘
+  $: mainStyle = buildMainStyle(
+    backgroundWithPreview($colorPreview, "diary", diaryBg),
+    accentWithPreview($colorPreview, "diary", diaryAccent($appSettings.diary)),
+    resolvedBgImage
+  );
 
   // 列表视图 = 年份分隔行 + 卡片。直接摊平分组视图算好的年→月→天，两边顺序天然一致。
-  $: listRows = years.flatMap((year) => [
-    { kind: "year" as const, key: `year-${year.key}`, label: year.label, count: year.count, entry: null as DiaryEntry | null },
+  type DiaryListRow = {
+    kind: "year" | "entry";
+    key: string;
+    label: string;
+    count: number;
+    entry: DiaryEntry | null;
+  };
+
+  $: listRows = years.flatMap((year): DiaryListRow[] => [
+    { kind: "year", key: `year-${year.key}`, label: year.label, count: year.count, entry: null },
     ...year.months.flatMap((month) =>
       month.days.flatMap((day) =>
-        day.entries.map((entry) => ({
-          kind: "entry" as const,
+        day.entries.map((entry): DiaryListRow => ({
+          kind: "entry",
           key: entry.id,
           label: "",
           count: 0,
@@ -102,16 +120,14 @@
     )
   ]);
 
-  // 齿轮面板与月份浮层是这一页的浮层：返回键先收它们
+  // 月份浮层是这一页的浮层：返回键先收它（v0.8.4 起齿轮直接弹菜单，没有中间面板）
   const backGuard = createBackGuard();
-  $: backGuard(showGear || monthPopOpen, () => {
-    showGear = false;
+  $: backGuard(monthPopOpen, () => {
     monthPopOpen = false;
   });
 
   export function closeOverlays(): void {
     entryMenu = null;
-    showGear = false;
     listMenuAt = null;
     monthPopOpen = false;
   }
@@ -125,35 +141,21 @@
     void setConfig("diary.view", mode);
   }
 
-  /** 齿轮面板与其它头部浮层互斥（与 Workspace 的齿轮同一套开合规则）。 */
-  function toggleGear(): void {
-    showGear = !showGear;
-    listMenuAt = null;
-    entryMenu = null;
-  }
-
+  /** 搜索按钮（v0.8.4 需求 14）：从齿轮面板里挪到头部，一次点击直接开/关搜索框 */
   function toggleSearch(): void {
     searchOpen = !searchOpen;
-    showGear = false;
+    listMenuAt = null;
     entryMenu = null;
     if (!searchOpen) query = "";
     void tick().then(() => searchInput?.focus());
   }
 
-  /** 齿轮面板 → 日记菜单：锚在齿轮按钮右下角（视口像素，ContextMenu 内部除以缩放）。 */
+  /** 齿轮按钮直接弹「日记菜单」（需求 14）：省掉中间那层只有两项的面板 */
   function openListMenuFromGear(): void {
-    showGear = false;
     const rect = gearButtonEl?.getBoundingClientRect();
     if (!rect) return;
     listMenuAt = { x: rect.right, y: rect.bottom + 6 };
     entryMenu = null;
-  }
-
-  function handlePanelKeydown(event: KeyboardEvent): void {
-    if (!showGear) return;
-    if (event.key === "Escape" && !event.isComposing && event.keyCode !== 229) {
-      showGear = false;
-    }
   }
 
   function createEntry(): void {
@@ -187,7 +189,7 @@
   }
 
   function toggleGroup(key: string): void {
-    collapsed = { ...collapsed, [key]: !collapsed[key] };
+    expanded = { ...expanded, [key]: !expanded[key] };
   }
 
   function handleExpand(event: CustomEvent<{ id: string; expanded: boolean }>): void {
@@ -205,8 +207,6 @@
   }
 
 </script>
-
-<svelte:window on:keydown={handlePanelKeydown} />
 
 <main class="diary-view" style={mainStyle}>
   <section class="list-header">
@@ -230,20 +230,20 @@
         {/each}
       </div>
       <button
+        type="button"
+        title={searchOpen ? "关闭搜索" : "搜索日记"}
+        aria-label={searchOpen ? "关闭搜索" : "搜索日记"}
+        aria-pressed={searchOpen}
+        on:click|stopPropagation={toggleSearch}
+      >{#if searchOpen}<X size={21} />{:else}<Search size={21} />{/if}</button>
+      <button
         bind:this={gearButtonEl}
         type="button"
-        title="更多操作"
-        aria-label="更多操作"
-        aria-expanded={showGear}
-        on:click|stopPropagation={toggleGear}
+        title="日记菜单"
+        aria-label="日记菜单"
+        aria-expanded={listMenuAt !== null}
+        on:click|stopPropagation={openListMenuFromGear}
       ><SettingsIcon size={21} /></button>
-
-      {#if showGear}
-        <div class="header-menu-panel diary-gear-panel" role="menu" tabindex="-1">
-          <MenuItem icon={searchOpen ? X : Search} label={searchOpen ? "关闭搜索" : "搜索日记"} onSelect={toggleSearch} />
-          <MenuItem icon={MoreHorizontal} label="日记菜单" onSelect={openListMenuFromGear} />
-        </div>
-      {/if}
     </div>
   </section>
 
@@ -265,26 +265,30 @@
     </label>
   {/if}
 
-  <section class="diary-scroll">
+  <section class="diary-scroll" bind:this={scrollEl}>
     {#if view === "list"}
-      {#each listRows as row (row.key)}
-        {#if row.kind === "year"}
-          <div class="diary-year-divider">
-            <span>{row.label}</span>
-            <em>{row.count} 篇</em>
-          </div>
-        {:else if row.entry}
-          <DiaryCard
-            entry={row.entry}
-            {today}
-            selected={entryMenu?.id === row.entry.id}
-            on:expand={handleExpand}
-            on:edit={(event) => openEntry(event.detail)}
-            on:context={handleContext}
-            on:openLink={handleOpenLink}
-          />
-        {/if}
-      {/each}
+      <!-- 窗口化（v0.8.4 需求 3）：5000 篇也只在树上挂视口附近的几十张卡 -->
+      <VirtualStack items={listRows} keyOf={(row) => (row as { key: string }).key} scroller={scrollEl} estimate={96} overscan={10}>
+        <svelte:fragment slot="item" let:row>
+          {@const item = row as DiaryListRow}
+          {#if item.kind === "year"}
+            <div class="diary-year-divider">
+              <span>{item.label}</span>
+              <em>{item.count} 篇</em>
+            </div>
+          {:else if item.entry}
+            <DiaryCard
+              entry={item.entry}
+              {today}
+              selected={entryMenu?.id === item.entry.id}
+              on:expand={handleExpand}
+              on:edit={(event) => openEntry(event.detail)}
+              on:context={handleContext}
+              on:openLink={handleOpenLink}
+            />
+          {/if}
+        </svelte:fragment>
+      </VirtualStack>
 
     {:else if view === "calendar"}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -363,19 +367,19 @@
       {#each years as year (year.key)}
         <section class="diary-group">
           <button class="diary-group-head" type="button" on:click|stopPropagation={() => toggleGroup(`y-${year.key}`)}>
-            <ChevronDown class={collapsed[`y-${year.key}`] ? "collapsed" : ""} size={16} />
+            <ChevronDown class={expanded[`y-${year.key}`] ? "" : "collapsed"} size={16} />
             <strong>{year.label}</strong>
             <em>{year.count} 篇</em>
           </button>
-          {#if !collapsed[`y-${year.key}`]}
+          {#if expanded[`y-${year.key}`]}
             {#each year.months as month (month.key)}
               <section class="diary-group-month">
                 <button class="diary-group-subhead" type="button" on:click|stopPropagation={() => toggleGroup(`m-${month.key}`)}>
-                  <ChevronDown class={collapsed[`m-${month.key}`] ? "collapsed" : ""} size={14} />
+                  <ChevronDown class={expanded[`m-${month.key}`] ? "" : "collapsed"} size={14} />
                   <span>{month.month + 1}月</span>
                   <em>{month.count} 篇</em>
                 </button>
-                {#if !collapsed[`m-${month.key}`]}
+                {#if expanded[`m-${month.key}`]}
                   {#each month.days.flatMap((day) => day.entries) as entry (entry.id)}
                     <DiaryCard
                       {entry}

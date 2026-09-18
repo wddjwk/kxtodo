@@ -36,22 +36,20 @@ check("日记界面打开", await page.locator(".diary-view").isVisible());
 check("任务工作区被隐藏", !(await page.locator(".workspace").isVisible()));
 check("三种视图切换按钮", (await page.locator(".diary-view-switch button").count()) === 3);
 
-// --- 齿轮取代了原来的搜索按钮（需求 1）---
-check("头部有齿轮按钮", (await page.locator(".diary-view .header-actions > button").count()) === 1);
-await page.locator(".diary-view .header-actions > button").click();
+// --- v0.8.4：头部两枚按钮（搜索 + 日记菜单），齿轮直弹菜单 ---
+check("头部有搜索与日记菜单按钮", (await page.locator(".diary-view .header-actions > button").count()) === 2);
+await page.locator(".diary-view .header-actions button[title='日记菜单']").click();
 await page.waitForTimeout(250);
-const gearText = await page.locator(".diary-gear-panel").innerText();
-check("齿轮面板里有搜索与三点菜单", gearText.includes("搜索日记") && gearText.includes("日记菜单"), gearText.replace(/\n/g, " | "));
+// v0.8.4：齿轮面板撤了，点击齿轮就是日记菜单本身（搜索另有独立按钮）
+check("齿轮直弹日记菜单", (await page.locator(".context-menu").count()) >= 1);
 
 // 齿轮 → 搜索
-await page.locator(".diary-gear-panel .menu-item-button", { hasText: "搜索日记" }).click();
+await page.locator(".diary-view .header-actions button[title='搜索日记']").click();
 await page.waitForTimeout(300);
-check("点搜索后面板收起、搜索框出现", (await page.locator(".diary-gear-panel").count()) === 0 && (await page.locator(".diary-search input").count()) === 1);
+check("点搜索后搜索框出现", (await page.locator(".diary-search input").count()) === 1);
 
 // --- 齿轮 → 日记菜单（UI 主题色 / 背景 / 导入导出）---
-await page.locator(".diary-view .header-actions > button").click();
-await page.waitForTimeout(250);
-await page.locator(".diary-gear-panel .menu-item-button", { hasText: "日记菜单" }).click();
+await page.locator(".diary-view .header-actions button[title='日记菜单']").click();
 await page.waitForTimeout(350);
 const menuText = await page.locator(".context-menu").first().innerText();
 for (const item of ["导出全部日记", "按日期范围导出", "导入日记压缩包", "UI颜色", "背景颜色", "背景图片链接", "图片透明度"]) {
@@ -67,12 +65,17 @@ await page.locator(".ui-color-picker input").fill("#b64a30");
 await page.locator(".ui-color-picker input").dispatchEvent("input");
 await page.waitForTimeout(400);
 const accentAfter = await page.locator(".diary-view").evaluate((el) => getComputedStyle(el).getPropertyValue("--accent").trim());
-check("改 UI 颜色会换日记主题色", accentAfter === "#b64a30", `${accentBefore} -> ${accentAfter}`);
+check("改 UI 颜色会换日记主题色（取色即预览）", accentAfter === "#b64a30", `${accentBefore} -> ${accentAfter}`);
+// v0.8.4 需求 9：取色只预览，点保存才落盘
+await page.locator(".color-draft-actions .menu-action-button.primary").click();
+await page.waitForTimeout(500);
 
-await page.locator(".color-grid button").first().click();
+await page.locator(".color-grid button").nth(1).click();
 await page.waitForTimeout(400);
 const bgAfter = await page.locator(".diary-view").evaluate((el) => el.style.background);
 check("改背景色会换日记背景", bgAfter.includes("rgb"), bgAfter);
+await page.locator(".color-draft-actions .menu-action-button.primary").last().click();
+await page.waitForTimeout(500);
 
 // 关掉菜单
 await page.keyboard.press("Escape");
@@ -134,17 +137,17 @@ await page.waitForTimeout(400);
 check("空草稿不留垃圾", (await page.locator(".diary-card").count()) === 1);
 
 // --- 搜索（齿轮里）---
-await page.locator(".diary-view .header-actions > button").click();
+await page.locator(".diary-view .header-actions button[title='日记菜单']").click();
 await page.waitForTimeout(250);
 // 前面测齿轮时已经开过一次搜索，这里先关掉，保证走的是「打开」这条路径
-if (await page.locator(".diary-gear-panel .menu-item-button", { hasText: "关闭搜索" }).count()) {
-  await page.locator(".diary-gear-panel .menu-item-button", { hasText: "关闭搜索" }).click();
+if (await page.locator(".diary-view .header-actions button[title='关闭搜索']").count()) {
+  await page.locator(".diary-view .header-actions button[title='关闭搜索']").click();
   await page.waitForTimeout(300);
   check("关闭搜索后搜索框消失", (await page.locator(".diary-search").count()) === 0);
-  await page.locator(".diary-view .header-actions > button").click();
+  await page.locator(".diary-view .header-actions button[title='日记菜单']").click();
   await page.waitForTimeout(250);
 }
-await page.locator(".diary-gear-panel .menu-item-button", { hasText: "搜索日记" }).click();
+await page.locator(".diary-view .header-actions button[title='搜索日记']").click();
 await page.waitForTimeout(300);
 await page.locator(".diary-search input").fill("独立文件");
 await page.waitForTimeout(350);
@@ -152,9 +155,9 @@ check("日记内搜索命中", (await page.locator(".diary-card").count()) === 1
 await page.locator(".diary-search input").fill("找不到的词");
 await page.waitForTimeout(350);
 check("日记内搜索能筛空", (await page.locator(".diary-card").count()) === 0);
-await page.locator(".diary-view .header-actions > button").click();
+await page.locator(".diary-view .header-actions button[title='日记菜单']").click();
 await page.waitForTimeout(250);
-await page.locator(".diary-gear-panel .menu-item-button", { hasText: "关闭搜索" }).click();
+await page.locator(".diary-view .header-actions button[title='关闭搜索']").click();
 await page.waitForTimeout(350);
 check("关闭搜索后列表恢复", (await page.locator(".diary-card").count()) === 1);
 
@@ -173,7 +176,11 @@ check("「今」跳回今天", (await page.locator(".diary-calendar-cell.today.s
 
 await page.locator(".diary-view-switch button").nth(2).click();
 await page.waitForTimeout(350);
-check("分组视图有年/月标题", (await page.locator(".diary-group-head").count()) >= 1 && (await page.locator(".diary-group-subhead").count()) >= 1);
+// v0.8.4 需求 4：分组视图默认全折叠，展开一个年才出月份小标题
+check("分组视图默认折叠", (await page.locator(".diary-group-head").count()) >= 1 && (await page.locator(".diary-group-subhead").count()) === 0);
+await page.locator(".diary-group-head").first().click();
+await page.waitForTimeout(350);
+check("展开一年后有年月标题", (await page.locator(".diary-group-head").count()) >= 1 && (await page.locator(".diary-group-subhead").count()) >= 1);
 await page.reload({ waitUntil: "networkidle" });
 await page.waitForTimeout(700);
 await page.locator(".system-nav .nav-row", { hasText: "日记" }).click();
@@ -326,7 +333,7 @@ await mpage.waitForTimeout(400);
 await mpage.locator(".system-nav .nav-row", { hasText: "日记" }).click();
 await mpage.waitForTimeout(500);
 check("移动端日记整页层", (await mpage.locator(".app-shell.mobile.view-diary").count()) === 1);
-check("移动端日记也有齿轮", (await mpage.locator(".diary-view .header-actions > button").count()) === 1);
+check("移动端日记也有搜索与菜单按钮", (await mpage.locator(".diary-view .header-actions > button").count()) === 2);
 await mpage.locator(".diary-fab").click();
 await mpage.waitForTimeout(900);
 await mpage.locator(".editor-title-input").fill("移动端的一篇");

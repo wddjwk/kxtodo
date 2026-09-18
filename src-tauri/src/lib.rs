@@ -2414,9 +2414,20 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
             cards_export_zip,
             cards_import_zip,
             cards_import_folder,
-            transfer_receive,
+            transfer_online,
+            transfer_offline,
+            transfer_status,
+            transfer_decide,
+            transfer_set_auto_accept,
+            transfer_set_name,
+            transfer_load_code,
+            transfer_save_code,
+            transfer_history,
+            transfer_clear_history,
             transfer_send,
             transfer_cancel,
+            transfer_open_path,
+            transfer_save_text,
             transfer_stat_files,
             transfer_list_folder,
             transfer_outbox_path,
@@ -2938,20 +2949,27 @@ fn transfer_sink(app: &AppHandle) -> domain::transfer::TransferSink {
     })
 }
 
-/// 开始接收：立刻返回会话 id，传输在后台跑、进度走 `kxtodo://transfer` 事件。
+/// 上线（v0.8.4）：发布自己进口令房间 + 轮询匹配到的设备 + 接听拨入。
+/// 传输全程在后台跑、进度走 `kxtodo://transfer` 事件。
 #[tauri::command]
-async fn transfer_receive(
+async fn transfer_online(
     app: AppHandle,
     core: State<'_, Arc<domain::host::HostCore>>,
     code: String,
     save_dir: String,
-) -> Result<String, String> {
+    device_name: String,
+    auto_accept: bool,
+) -> Result<Value, String> {
     let host = core.inner().clone();
+    let layout = host.repo.layout.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        domain::transfer::receive(
+        domain::transfer::go_online(
             transfer_sink(&app),
+            &layout,
             &code,
             std::path::Path::new(&save_dir),
+            &device_name,
+            auto_accept,
             transfer_net(&host),
         )
     })
@@ -2960,34 +2978,95 @@ async fn transfer_receive(
     .map_err(|error| error.message)
 }
 
-/// 开始发送：`root` 为 None 时 items 的 rel 是本机绝对路径（多选文件）；
-/// 为 Some 时是相对 root 的路径（文件夹，接收方按它还原目录结构）。
+#[tauri::command]
+fn transfer_offline(core: State<'_, Arc<domain::host::HostCore>>) -> Result<Value, String> {
+    domain::transfer::go_offline(&core.repo.layout).map_err(|error| error.message)
+}
+
+#[tauri::command]
+fn transfer_status(core: State<'_, Arc<domain::host::HostCore>>) -> Value {
+    domain::transfer::status(&core.repo.layout)
+}
+
+#[tauri::command]
+fn transfer_decide(
+    core: State<'_, Arc<domain::host::HostCore>>,
+    request_id: String,
+    accept: bool,
+) -> Result<Value, String> {
+    domain::transfer::decide(&core.repo.layout, &request_id, accept).map_err(|error| error.message)
+}
+
+#[tauri::command]
+fn transfer_set_auto_accept(core: State<'_, Arc<domain::host::HostCore>>, value: bool) -> Value {
+    domain::transfer::set_auto_accept(&core.repo.layout, value)
+}
+
+#[tauri::command]
+fn transfer_set_name(core: State<'_, Arc<domain::host::HostCore>>, name: String) -> Value {
+    domain::transfer::set_name(&core.repo.layout, &name);
+    serde_json::json!({ "name": name })
+}
+
+#[tauri::command]
+fn transfer_load_code(core: State<'_, Arc<domain::host::HostCore>>) -> Value {
+    domain::transfer::load_code(&core.repo.layout)
+}
+
+#[tauri::command]
+fn transfer_save_code(core: State<'_, Arc<domain::host::HostCore>>, code: String) -> Result<Value, String> {
+    domain::transfer::save_code(&core.repo.layout, &code).map_err(|error| error.message)
+}
+
+#[tauri::command]
+fn transfer_history(core: State<'_, Arc<domain::host::HostCore>>) -> Value {
+    domain::transfer::history(&core.repo.layout)
+}
+
+#[tauri::command]
+fn transfer_clear_history(core: State<'_, Arc<domain::host::HostCore>>) -> Value {
+    domain::transfer::clear_history(&core.repo.layout)
+}
+
+/// 发送（挑一台设备）：文件清单或一段文本，立刻返回会话 id。
 #[tauri::command]
 async fn transfer_send(
-    app: AppHandle,
     core: State<'_, Arc<domain::host::HostCore>>,
-    code: String,
-    root: Option<String>,
-    items: Vec<domain::transfer::TransferItem>,
+    payload: domain::transfer::TransferPayload,
+    target: String,
 ) -> Result<String, String> {
-    let host = core.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        domain::transfer::send(
-            transfer_sink(&app),
-            &code,
-            root.as_deref().map(std::path::Path::new),
-            items,
-            transfer_net(&host),
-        )
-    })
-    .await
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.message)
+    let layout = core.repo.layout.clone();
+    tauri::async_runtime::spawn_blocking(move || domain::transfer::send(&layout, &target, payload))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.message)
 }
 
 #[tauri::command]
 fn transfer_cancel(session_id: String) -> Result<Value, String> {
     domain::transfer::cancel(&session_id).map_err(|error| error.message)
+}
+
+/// 打开一个本地路径（接收完成后「打开文件夹」，需求 1.4）。
+#[tauri::command]
+fn transfer_open_path(app: AppHandle, path: String) -> Result<(), String> {
+    let target = std::path::Path::new(&path);
+    if !target.exists() {
+        return Err("路径不存在".to_string());
+    }
+    tauri_plugin_opener::OpenerExt::opener(&app)
+        .open_path(path, None::<&str>)
+        .map_err(|error| error.to_string())
+}
+
+/// 把一段文本写成文件（收到文本消息后的「保存为 .txt」，需求 1.3）。
+#[tauri::command]
+fn transfer_save_text(path: String, text: String) -> Result<(), String> {
+    let target = std::path::PathBuf::from(&path);
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    std::fs::write(&target, text).map_err(|error| error.to_string())
 }
 
 /// 列出一批绝对路径文件的字节数（发送清单的界面预显；真正发送时 core 会再 stat 一次）。
@@ -3321,9 +3400,20 @@ pub fn run() {
                 cards_export_zip,
                 cards_import_zip,
                 cards_import_folder,
-                transfer_receive,
+                transfer_online,
+                transfer_offline,
+                transfer_status,
+                transfer_decide,
+                transfer_set_auto_accept,
+                transfer_set_name,
+                transfer_load_code,
+                transfer_save_code,
+                transfer_history,
+                transfer_clear_history,
                 transfer_send,
                 transfer_cancel,
+                transfer_open_path,
+                transfer_save_text,
                 transfer_stat_files,
                 transfer_list_folder,
                 transfer_outbox_path,

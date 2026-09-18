@@ -425,10 +425,26 @@ export async function pickExecutableFile(): Promise<string | null> {
 
 export type TransferItemDto = { rel: string; size: number };
 
+/** 房间里的其他设备（界面上的设备卡片） */
+export type TransferDeviceDto = { id: string; name: string; self?: boolean };
+
+/** 传输事件（v0.8.4）：进度类挂子会话，在线/设备/接收请求挂在线会话。 */
 export type TransferEvent = {
   sessionId: string;
-  role: "send" | "receive";
-  kind: "waiting" | "connected" | "progress" | "fileDone" | "done" | "error" | "cancelled";
+  role: "send" | "receive" | "online";
+  kind:
+    | "online"
+    | "offline"
+    | "devices"
+    | "request"
+    | "waiting"
+    | "connected"
+    | "progress"
+    | "fileDone"
+    | "text"
+    | "done"
+    | "error"
+    | "cancelled";
   index?: number;
   file?: string;
   sent?: number;
@@ -437,6 +453,20 @@ export type TransferEvent = {
   totalBytes?: number;
   code?: string;
   message?: string;
+  deviceId?: string;
+  devices?: TransferDeviceDto[];
+  /** 接收确认卡：对方是谁 */
+  peer?: { id: string; name: string } | string;
+  peerName?: string;
+  /** 收到的 / 发出的文本消息 */
+  text?: string;
+  received?: boolean;
+  /** 同名冲突自动重命名 */
+  renamed?: boolean;
+  savedAs?: string;
+  /** 自动接收开着（确认卡只作提示） */
+  auto?: boolean;
+  dir?: string;
 };
 
 /** 多选任意文件（传输用，不加扩展名过滤）；移动端无原生对话框，返回空数组。 */
@@ -463,12 +493,57 @@ export const transferSpoolWrite = (rel: string, data: string, append: boolean): 
   invoke("transfer_spool_write", { rel, data, append });
 export const transferSpoolClear = (): Promise<void> => invoke("transfer_spool_clear");
 export const transferDefaultSaveDir = (): Promise<string> => invoke("transfer_default_save_dir");
-export const transferReceive = (code: string, saveDir: string): Promise<string> =>
-  invoke("transfer_receive", { code, saveDir });
-export const transferSend = (code: string, root: string | null, items: TransferItemDto[]): Promise<string> =>
-  invoke("transfer_send", { code, root, items });
+export type TransferPayloadDto =
+  | { mode: "files"; root: string | null; items: TransferItemDto[] }
+  | { mode: "text"; text: string };
+
+/** 上线：发布自己进口令房间 + 轮询设备 + 接听拨入（v0.8.4 需求 1.2）。 */
+export const transferOnline = (
+  code: string,
+  saveDir: string,
+  deviceName: string,
+  autoAccept: boolean
+): Promise<{ id: string; deviceId: string; code: string }> =>
+  invoke("transfer_online", { code, saveDir, deviceName, autoAccept });
+export const transferOffline = (): Promise<unknown> => invoke("transfer_offline");
+export const transferStatus = (): Promise<{
+  online: boolean;
+  deviceId: string;
+  code: string;
+  devices: TransferDeviceDto[];
+}> => invoke("transfer_status");
+export const transferDecide = (requestId: string, accept: boolean): Promise<unknown> =>
+  invoke("transfer_decide", { requestId, accept });
+export const transferSetAutoAccept = (value: boolean): Promise<unknown> =>
+  invoke("transfer_set_auto_accept", { value });
+export const transferSetName = (name: string): Promise<unknown> => invoke("transfer_set_name", { name });
+export const transferLoadCode = (): Promise<{ code: string }> => invoke("transfer_load_code");
+export const transferSaveCode = (code: string): Promise<{ code: string }> =>
+  invoke("transfer_save_code", { code });
+export const transferHistory = (): Promise<{
+  entries: Array<{
+    id: string;
+    at: string;
+    direction: string;
+    peerId: string;
+    peerName: string;
+    status: string;
+    files: number;
+    bytes: number;
+    names?: string[];
+  }>;
+  devices: Array<{ id: string; name: string; lastAt: string; count: number }>;
+}> => invoke("transfer_history");
+export const transferClearHistory = (): Promise<unknown> => invoke("transfer_clear_history");
+export const transferSend = (target: string, payload: TransferPayloadDto): Promise<string> =>
+  invoke("transfer_send", { target, payload });
 export const transferCancel = (sessionId: string): Promise<unknown> =>
   invoke("transfer_cancel", { sessionId });
+/** 接收完成后打开保存目录（走壳里的 opener 插件）。 */
+export const transferOpenPath = (path: string): Promise<void> => invoke("transfer_open_path", { path });
+/** 收到文本消息后另存为 .txt。 */
+export const transferSaveText = (path: string, text: string): Promise<void> =>
+  invoke("transfer_save_text", { path, text });
 
 /** 传输进度事件（每个文件一条进度条）。返回取消订阅函数。 */
 export async function listenTransfer(handler: (payload: TransferEvent) => void): Promise<() => void> {

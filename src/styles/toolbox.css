@@ -33,8 +33,7 @@
   overflow-y: auto;
 }
 
-.app-shell:not(.mobile) .toolbox-list,
-.app-shell:not(.mobile) .toolbox-sub-host {
+.app-shell:not(.mobile) .toolbox-list {
   width: 100%;
 }
 
@@ -54,7 +53,7 @@
 .toolbox-header-icon {
   display: grid;
   place-items: center;
-  color: #2564cf;
+  color: var(--accent, #2564cf);
 }
 
 .toolbox-header-title {
@@ -111,8 +110,8 @@
   height: 42px;
   flex: 0 0 42px;
   border-radius: 10px;
-  color: #2564cf;
-  background: rgb(37 100 207 / 10%);
+  color: var(--accent, #2564cf);
+  background: color-mix(in srgb, var(--accent, #2564cf) 10%, transparent);
 }
 
 .toolbox-card-text {
@@ -131,31 +130,31 @@
   color: #6b7280;
 }
 
-.toolbox-sub-host {
+/* 子视图头部（v0.8.4 需求 7）：右上角两枚按钮——返回工具箱 + ⋯ 外观菜单。
+   从前那一整行「返回工具箱」占着画布，工具没法干净地铺开。 */
+.toolbox-sub-bar {
   display: flex;
-  flex: 1;
-  min-height: 0;
-  flex-direction: column;
-  gap: 14px;
-  align-items: stretch;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: -8px;
 }
 
-.toolbox-sub-back {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 8px 10px;
-  margin-left: -10px;
-  border: 0;
+.toolbox-icon-button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
-  color: #2564cf;
-  font-size: calc(var(--font-control) - 3px);
+  color: #4b5563;
   cursor: pointer;
+  transition: background 0.12s ease;
 }
 
-.toolbox-sub-back:hover {
-  background: rgb(0 0 0 / 6%);
+.toolbox-icon-button:hover {
+  background: rgb(0 0 0 / 7%);
 }
 
 .toolbox-sub {
@@ -193,7 +192,7 @@
 
 .toolbox-text-input:focus {
   outline: none;
-  border-color: #2564cf;
+  border-color: var(--accent, #2564cf);
 }
 
 .toolbox-rmb-result {
@@ -281,13 +280,6 @@
   gap: 8px;
 }
 
-.scratchpad-status {
-  display: flex;
-  justify-content: space-between;
-  color: #8a919c;
-  font-size: calc(var(--font-control) - 5px);
-}
-
 .scratchpad-area {
   flex: 1;
   width: 100%;
@@ -297,7 +289,9 @@
   border-radius: 12px;
   background: #ffffff;
   color: #1f2937;
-  font-size: var(--font-control);
+  /* 字号与编辑器正文同源（v0.8.4 需求 15.1）：设置里的「编辑器字体大小」一改，
+     两边一起变——草稿纸本来就是「一块随手写的纯文本」，与编辑器同字号最顺眼。 */
+  font-size: var(--editor-font-size);
   line-height: 1.7;
   resize: none;
 }
@@ -307,141 +301,637 @@
   border-color: var(--accent, #2564cf);
 }
 
-/* ---------- 文件传输助手（v0.8.3）：LocalSend 式的发送 / 接收两栏 ---------- */
-.transfer-head {
+/* ---------- 文件传输助手（v0.8.4）：LocalSend 式，内容列限宽居中 ---------- */
+
+.transfer {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-/* 右上角的 relay 选择：默认跟 p2p 同步同一个，可单独换（需求 11） */
-.transfer-relay {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: #6b7280;
-  font-size: calc(var(--font-control) - 5px);
-}
-
-.transfer-relay select {
-  padding: 4px 6px;
-  border: 1px solid #d7dbe0;
-  border-radius: 7px;
-  background: #fff;
-  font-size: calc(var(--font-control) - 5px);
-}
-
-.transfer-relay .toolbox-text-input {
-  max-width: 180px;
-  padding: 4px 8px;
-}
-
-.transfer-grid {
-  display: grid;
-  gap: 12px;
-}
-
-.app-shell:not(.mobile) .transfer-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.transfer-pane {
-  display: flex;
+  min-height: 0;
   flex-direction: column;
-  gap: 8px;
-  padding: 14px;
+  gap: 14px;
+  /* 桌面与移动端同一条：内容列限宽居中（720px），别一条横条拉满整个宽屏 */
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.transfer-identity {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
   border: 1px solid #e5e7eb;
   border-radius: 12px;
   background: #ffffff;
 }
 
-.transfer-pane header {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: #1f2937;
-  font-size: calc(var(--font-control) - 2px);
-  font-weight: 600;
+.transfer-field {
+  display: grid;
+  gap: 5px;
 }
 
-.transfer-pane-actions {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.transfer-batch-note {
+.transfer-field > span {
   color: #6b7280;
   font-size: calc(var(--font-control) - 5px);
+}
+
+.transfer-field input {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid #dedede;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1f2937;
+  font-size: calc(var(--font-control) - 3px);
+  outline: none;
+}
+
+.transfer-field input:focus {
+  border-color: var(--accent, #2564cf);
+}
+
+.transfer-code-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.transfer-code-row input {
+  padding-right: 38px;
+}
+
+.transfer-eye {
+  position: absolute;
+  right: 6px;
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.transfer-eye:hover {
+  background: rgb(0 0 0 / 6%);
+}
+
+.transfer-status-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #6b7280;
+  font-size: calc(var(--font-control) - 4px);
+}
+
+.transfer-status-line .menu-action-button {
+  margin-left: auto;
+}
+
+.transfer-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #c8ccd2;
+}
+
+.transfer-dot.on {
+  background: #2f9e6e;
+  box-shadow: 0 0 0 3px rgb(47 158 110 / 18%);
+}
+
+/* 居中分段滑块：发送 | 接收 */
+.transfer-tabs {
+  display: flex;
+  align-self: center;
+  padding: 3px;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  background: #eceef1;
+}
+
+.transfer-tabs button {
+  min-width: 96px;
+  padding: 7px 18px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #4b5563;
+  font-size: calc(var(--font-control) - 3px);
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.transfer-tabs button.active {
+  background: #ffffff;
+  color: #1f2937;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 10%);
+}
+
+/* 四个大图标块：桌面 1×4，移动端 2×2 */
+.transfer-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.transfer-action-button {
+  display: grid;
+  place-items: center;
+  gap: 6px;
+  padding: 16px 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  background: #ffffff;
+  color: #4b5563;
+  cursor: pointer;
+  transition: border-color 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease;
+}
+
+.transfer-action-button:hover {
+  border-color: var(--accent, #2564cf);
+  color: var(--accent, #2564cf);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 6%);
+  transform: translateY(-1px);
+}
+
+.transfer-action-button span {
+  font-size: calc(var(--font-control) - 4px);
+}
+
+.transfer-text-pop {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.transfer-text-pop textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #dedede;
+  border-radius: 8px;
+  font-size: calc(var(--font-control) - 3px);
+  resize: vertical;
+  outline: none;
+}
+
+.transfer-text-pop textarea:focus {
+  border-color: var(--accent, #2564cf);
+}
+
+.transfer-text-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* 已选清单 */
+.transfer-picked-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #4b5563;
+  font-size: calc(var(--font-control) - 4px);
+}
+
+.transfer-picked {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.transfer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  height: 28px;
+  padding: 0 4px 0 9px;
+  border: 1px solid #dfe3e8;
+  border-radius: 999px;
+  background: #f7f8f9;
+  color: #4b5563;
+  font-size: calc(var(--font-control) - 5px);
   overflow: hidden;
+}
+
+.transfer-chip em {
+  overflow: hidden;
+  min-width: 0;
+  font-style: normal;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.transfer-state {
-  min-height: 1.4em;
-  font-size: calc(var(--font-control) - 4px);
-  color: #6b7280;
-}
-
-.transfer-state-error {
-  color: #b3261e;
-}
-
-.transfer-state-done {
-  color: #2f9e6e;
-}
-
-.transfer-state-waiting,
-.transfer-state-connected {
-  color: var(--accent, #2564cf);
-}
-
-/* 每个文件一条进度条（文件夹 = 多条） */
-.transfer-bars {
+.transfer-chip button {
   display: grid;
-  gap: 6px;
-  max-height: 220px;
-  overflow-y: auto;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #9aa1ac;
+  cursor: pointer;
+  line-height: 0;
 }
 
-.transfer-bar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 2px 8px;
-  font-size: calc(var(--font-control) - 5px);
+.transfer-chip button:hover {
+  background: rgb(0 0 0 / 10%);
   color: #4b5563;
 }
 
-.transfer-bar-name {
+/* 匹配到的设备 */
+.transfer-devices-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #6b7280;
+  font-size: calc(var(--font-control) - 5px);
+}
+
+.transfer-devices-head em {
+  font-style: normal;
+}
+
+.transfer-devices {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 8px;
+}
+
+.transfer-device {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #1f2937;
+  font-size: calc(var(--font-control) - 3px);
+  cursor: pointer;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.transfer-device:hover {
+  border-color: #cdd2d9;
+}
+
+.transfer-device.selected {
+  border-color: var(--accent, #2564cf);
+  box-shadow: 0 0 0 3px rgb(37 100 207 / 12%);
+}
+
+.transfer-device em {
+  margin-left: auto;
+  color: var(--accent, #2564cf);
+  font-style: normal;
+}
+
+.transfer-device-icon {
+  display: grid;
+  place-items: center;
+  color: #6b7280;
+}
+
+.transfer-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px;
+  border: 1px dashed #dfe3e8;
+  border-radius: 12px;
+  color: #8a919c;
+  font-size: calc(var(--font-control) - 4px);
+}
+
+.transfer-empty em {
+  margin-left: auto;
+  font-style: normal;
+  color: #2f9e6e;
+}
+
+/* 胶囊发送按钮：桌面右下角、移动端底部悬浮（避让安全区） */
+.transfer-send-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.transfer-send-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 26px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent, #2564cf);
+  color: #ffffff;
+  font-size: calc(var(--font-control) - 2px);
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgb(37 100 207 / 28%);
+  transition: transform 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease;
+}
+
+.transfer-send-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px rgb(37 100 207 / 34%);
+}
+
+.transfer-send-button:disabled {
+  opacity: 0.45;
+  box-shadow: none;
+}
+
+/* 接收侧 */
+.transfer-receive-head {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.transfer-save-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.transfer-save-dir {
   overflow: hidden;
+  flex: 1;
+  color: #6b7280;
+  font-size: calc(var(--font-control) - 4px);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.transfer-bar-num {
-  font-variant-numeric: tabular-nums;
-  color: #8a919c;
+.transfer-auto {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #6b7280;
+  font-size: calc(var(--font-control) - 4px);
 }
 
-.transfer-bar-track {
-  grid-column: 1 / -1;
-  height: 5px;
+.transfer-request {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1.5px solid var(--accent, #2564cf);
+  border-radius: 12px;
+  background: #f5f8fe;
+}
+
+.transfer-request-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: #4b5563;
+  font-size: calc(var(--font-control) - 5px);
+}
+
+.transfer-request-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.transfer-text-cards {
+  display: grid;
+  gap: 10px;
+}
+
+.transfer-text-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.transfer-text-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #6b7280;
+  font-size: calc(var(--font-control) - 5px);
+}
+
+.transfer-text-card p {
+  margin: 0;
+  max-height: 160px;
+  overflow-y: auto;
+  color: #1f2937;
+  font-size: calc(var(--font-control) - 3px);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 会话卡片（传输中 / 完成） */
+.transfer-sessions {
+  display: grid;
+  gap: 8px;
+}
+
+.transfer-session {
+  display: grid;
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.transfer-session header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: calc(var(--font-control) - 4px);
+}
+
+.transfer-session header strong {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transfer-session header em {
+  margin-left: auto;
+  color: #8a919c;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.transfer-session-dir {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: 50%;
+  background: #eef2f9;
+  color: var(--accent, #2564cf);
+  font-size: calc(var(--font-control) - 6px);
+}
+
+.transfer-session.done .transfer-session-dir {
+  background: #e6f4ea;
+  color: #2f9e6e;
+}
+
+.transfer-session.failed .transfer-session-dir {
+  background: #fdecea;
+  color: #d93025;
+}
+
+.transfer-session footer {
+  display: flex;
+  gap: 10px;
+  color: #8a919c;
+  font-size: calc(var(--font-control) - 6px);
+}
+
+.transfer-session-cancel {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #9aa1ac;
+  cursor: pointer;
+}
+
+.transfer-session-cancel:hover {
+  background: #fdecea;
+  color: #d93025;
+}
+
+.transfer-bar {
+  height: 6px;
   border-radius: 999px;
   background: #eef0f3;
   overflow: hidden;
 }
 
-.transfer-bar-track span {
+.transfer-bar span {
   display: block;
   height: 100%;
   border-radius: 999px;
   background: var(--accent, #2564cf);
-  transition: width 0.15s linear;
+  transition: width 0.2s ease-out;
 }
 
-.transfer-bar-track span.transfer-bar-done {
-  background: #2f9e6e;
+/* 传输历史 */
+.transfer-history {
+  display: grid;
+  gap: 8px;
+  padding: 4px 0 12px;
+}
+
+.transfer-history-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #4b5563;
+  font-size: calc(var(--font-control) - 4px);
+  cursor: pointer;
+}
+
+.transfer-history-head em {
+  margin-left: auto;
+  color: #8a919c;
+  font-style: normal;
+}
+
+.transfer-history-caret {
+  transition: transform 0.16s ease;
+}
+
+.transfer-history-caret.open {
+  transform: rotate(180deg);
+}
+
+.transfer-history-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.transfer-history-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  background: #f7f8f9;
+  color: #4b5563;
+  font-size: calc(var(--font-control) - 5px);
+}
+
+.transfer-history-list li strong {
+  overflow: hidden;
+  min-width: 0;
+  flex: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transfer-history-list li em {
+  color: #8a919c;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.transfer-history-list li .ok { color: #2f9e6e; }
+.transfer-history-list li .bad { color: #d93025; }
+.transfer-history-list li .text { color: #2564cf; }
+
+.transfer-history-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #8a919c;
+  font-size: calc(var(--font-control) - 6px);
+}
+
+.transfer-history-actions .menu-action-button {
+  margin-left: auto;
+}
+
+/* 移动端：四个大图标 2×2、设备单列、发送按钮底部悬浮避让安全区 */
+.app-shell.mobile .transfer-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.app-shell.mobile .transfer-devices {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.app-shell.mobile .transfer-send-row {
+  position: sticky;
+  bottom: calc(10px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
+  justify-content: center;
+  padding-top: 6px;
+}
+
+.app-shell.mobile .transfer-send-button {
+  min-width: 180px;
+  justify-content: center;
 }

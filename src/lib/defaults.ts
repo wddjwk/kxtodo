@@ -154,7 +154,9 @@ export const defaultSettings: Settings = {
     reconnectSeconds: 300
   },
   transfer: {
-    relay: ""
+    relay: "",
+    deviceName: "",
+    autoAccept: false
   },
   updates: {
     autoCheck: true
@@ -182,6 +184,11 @@ export const defaultSettings: Settings = {
     backgroundColor: "#eef3ee",
     backgroundImage: "",
     backgroundOpacity: 0.28
+  },
+  toolbox: {
+    accent: "",
+    // 与 .toolbox-view 一直以来的底色一致（桌面与移动端同一份）
+    backgroundColor: "#f0f0f0"
   }
 };
 
@@ -317,6 +324,7 @@ export function emptyState(): AppState {
     backgrounds: {
       [inbox.id]: { ...defaultBackground }
     },
+    scratchpad: { text: "", updatedAt: "" },
     scheduler: emptySchedulerState()
   };
 }
@@ -723,6 +731,11 @@ export function normalizeState(raw: unknown): AppState {
     tasks,
     selectedNodeId,
     backgrounds,
+    // 草稿纸（v0.8.4 需求 2）：纯文本 + 版本戳，跟着数据域同步
+    scratchpad: {
+      text: typeof source?.scratchpad?.text === "string" ? source.scratchpad.text : "",
+      updatedAt: typeof source?.scratchpad?.updatedAt === "string" ? source.scratchpad.updatedAt : ""
+    },
     scheduler: normalizeSchedulerState(source?.scheduler)
   };
 }
@@ -1215,7 +1228,9 @@ export function normalizeSettings(raw: unknown): Settings {
           : 300
     },
     transfer: {
-      relay: typeof source?.transfer?.relay === "string" ? source.transfer.relay : ""
+      relay: typeof source?.transfer?.relay === "string" ? source.transfer.relay : "",
+      deviceName: typeof source?.transfer?.deviceName === "string" ? source.transfer.deviceName : "",
+      autoAccept: typeof source?.transfer?.autoAccept === "boolean" ? source.transfer.autoAccept : false,
     },
     updates: {
       autoCheck: typeof source?.updates?.autoCheck === "boolean" ? source.updates.autoCheck : true
@@ -1257,6 +1272,10 @@ export function normalizeSettings(raw: unknown): Settings {
         typeof source?.ledger?.backgroundOpacity === "number" && Number.isFinite(source.ledger.backgroundOpacity)
           ? Math.min(1, Math.max(0, source.ledger.backgroundOpacity))
           : defaultSettings.ledger.backgroundOpacity
+    },
+    toolbox: {
+      accent: normalizeHexColor(source?.toolbox?.accent ?? "", ""),
+      backgroundColor: normalizeHexColor(source?.toolbox?.backgroundColor, defaultSettings.toolbox.backgroundColor)
     }
   };
 }

@@ -735,6 +735,28 @@ export async function setBackground(
   commit(state());
 }
 
+/**
+ * 草稿纸（v0.8.4 需求 2）：整篇覆盖写。
+ *
+ * 它是**内容**（跟数据域一起同步，LWW 整段覆盖），所以写路径走 core 命令
+ * （`gui.set-scratchpad`）而不是停留在 localStorage；localStorage 只留作首帧缓存。
+ * 调用方（ScratchpadTool）把防抖拉到秒级：每一次落盘 = 一条审计 + 一次 revision，
+ * 逐键写会把台账灌爆。
+ */
+export async function setScratchpad(text: string): Promise<boolean> {
+  const mutate = (): void => {
+    appState.update((s) => ({ ...s, scratchpad: { text, updatedAt: new Date().toISOString() } }));
+  };
+  if (coreMode) {
+    return withRollback(appState, "草稿纸保存失败", mutate, () =>
+      coreDispatch("gui.set-scratchpad", { text })
+    );
+  }
+  mutate();
+  commit(state());
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // 设置
 // ---------------------------------------------------------------------------

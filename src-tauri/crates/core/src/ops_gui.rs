@@ -200,6 +200,27 @@ pub fn gui_dispatch(
             meta.revision = Some(outcome.revision);
             Ok(json!({ "nodeId": node_id }))
         }
+        "set-scratchpad" => {
+            // 草稿纸（v0.8.4 需求 2）：整篇一段纯文本，写一次就是一条审计 + 一次
+            // revision（前端把防抖拉长到秒级，台账不会被逐键输入灌爆）。
+            let text = inv
+                .params
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let stamp = crate::time::now_iso();
+            let (_file, outcome) = ctx.repo.write_data(None, None, &inv.command, |file| {
+                file.scratchpad = crate::model::Scratchpad {
+                    text: text.clone(),
+                    updated_at: stamp.clone(),
+                };
+                Ok(json!({ "updatedAt": stamp }))
+            })?;
+            meta.revision_domain = Some(Domain::Data);
+            meta.revision = Some(outcome.revision);
+            Ok(json!({ "text": text, "updatedAt": stamp }))
+        }
         "apply-tree-order" => {
             let ordered_ids: Vec<String> = inv
                 .params

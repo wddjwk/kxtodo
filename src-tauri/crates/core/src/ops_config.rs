@@ -45,6 +45,9 @@ pub fn is_shared_settings_path(path: &str) -> bool {
             | "ledger.backgroundColor"
             | "ledger.backgroundImage"
             | "ledger.backgroundOpacity"
+            // 工具箱外观同日记/记账（v0.8.4）：工具页换台设备该是同一副样子
+            | "toolbox.accent"
+            | "toolbox.backgroundColor"
     )
 }
 
@@ -342,6 +345,18 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         is_map: false,
     },
     FieldMeta {
+        path: "transfer.deviceName",
+        kind: "string",
+        description: "文件传输助手：本机设备名（展示给对方看；本机偏好，不跨设备同步）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "transfer.autoAccept",
+        kind: "bool",
+        description: "文件传输助手：自动接收（默认关；开着就不再弹接收确认卡）",
+        is_map: false,
+    },
+    FieldMeta {
         path: "sync.serverUrl",
         kind: "string",
         description: "自建服务方式的服务器地址（http(s)://host:port）",
@@ -511,6 +526,18 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         description: "记账界面背景图透明度（0-1）",
         is_map: false,
     },
+    FieldMeta {
+        path: "toolbox.accent",
+        kind: "color",
+        description: "工具箱界面主题色（空串 = 默认主题色）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "toolbox.backgroundColor",
+        kind: "color",
+        description: "工具箱界面背景色",
+        is_map: false,
+    },
 ];
 
 pub fn field_meta(path: &str) -> Option<&'static FieldMeta> {
@@ -603,6 +630,8 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "sync.p2pRelay" => json!(settings.sync.p2p_relay),
         "sync.p2pDirectory" => json!(settings.sync.p2p_directory),
         "transfer.relay" => json!(settings.transfer.relay),
+        "transfer.deviceName" => json!(settings.transfer.device_name),
+        "transfer.autoAccept" => json!(settings.transfer.auto_accept),
         "sync.serverUrl" => json!(settings.sync.server_url),
         "sync.username" => json!(settings.sync.username),
         "sync.secret" => json!(settings.sync.secret),
@@ -631,6 +660,8 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "ledger.backgroundColor" => json!(settings.ledger.background_color),
         "ledger.backgroundImage" => json!(settings.ledger.background_image),
         "ledger.backgroundOpacity" => json!(settings.ledger.background_opacity),
+        "toolbox.accent" => json!(settings.toolbox.accent),
+        "toolbox.backgroundColor" => json!(settings.toolbox.background_color),
         _ => return Err(unknown_field(path)),
     };
     Ok(value)
@@ -1177,6 +1208,14 @@ pub fn set_value(
             }
             settings.transfer.relay = raw;
         }
+        "transfer.deviceName" => {
+            settings.transfer.device_name = expect_string(path, &value)?.trim().to_string();
+        }
+        "transfer.autoAccept" => {
+            settings.transfer.auto_accept = value
+                .as_bool()
+                .ok_or_else(|| invalid_value(path, "应为 true/false"))?;
+        }
         "sync.serverUrl" => {
             let raw = expect_string(path, &value)?;
             if !raw.is_empty() && !raw.starts_with("http://") && !raw.starts_with("https://") {
@@ -1305,6 +1344,16 @@ pub fn set_value(
                 .as_f64()
                 .ok_or_else(|| invalid_value(path, "应为 0-1 的数字"))?;
             settings.ledger.background_opacity = raw.clamp(0.0, 1.0);
+        }
+        "toolbox.accent" => {
+            let raw = expect_string(path, &value)?.trim().to_string();
+            if !raw.is_empty() && !is_hex_color(&raw) {
+                return Err(invalid_value(path, "应为 #rrggbb 颜色或空串"));
+            }
+            settings.toolbox.accent = raw;
+        }
+        "toolbox.backgroundColor" => {
+            settings.toolbox.background_color = expect_color(path, &value)?;
         }
         _ => return Err(unknown_field(path)),
     }
@@ -1494,6 +1543,10 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "sync.p2pRelay" => target.sync.p2p_relay = defaults.sync.p2p_relay.clone(),
         "sync.p2pDirectory" => target.sync.p2p_directory = defaults.sync.p2p_directory.clone(),
         "transfer.relay" => target.transfer.relay = defaults.transfer.relay.clone(),
+        "transfer.deviceName" => {
+            target.transfer.device_name = defaults.transfer.device_name.clone()
+        }
+        "transfer.autoAccept" => target.transfer.auto_accept = defaults.transfer.auto_accept,
         "sync.serverUrl" => target.sync.server_url = defaults.sync.server_url.clone(),
         "sync.username" => target.sync.username = defaults.sync.username.clone(),
         "sync.secret" => target.sync.secret = defaults.sync.secret.clone(),
@@ -1541,6 +1594,10 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         }
         "ledger.backgroundOpacity" => {
             target.ledger.background_opacity = defaults.ledger.background_opacity
+        }
+        "toolbox.accent" => target.toolbox.accent = defaults.toolbox.accent.clone(),
+        "toolbox.backgroundColor" => {
+            target.toolbox.background_color = defaults.toolbox.background_color.clone()
         }
         _ => return Err(unknown_field(path)),
     }

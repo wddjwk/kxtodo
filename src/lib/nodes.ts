@@ -209,6 +209,8 @@ export function exportStateForNode(node: AppNode, state: AppState): AppState {
     tasks,
     selectedNodeId: node.id,
     backgrounds: Object.fromEntries(exportedNodes.map((item) => [item.id, getBackground(item.id, state.backgrounds)])),
+    // 草稿纸不属于任何条目（单例），导某一条时原样带着走，免得导出再导入把它清掉
+    scratchpad: state.scratchpad,
     scheduler: node.id === "scheduled" ? state.scheduler : emptySchedulerState()
   };
 }

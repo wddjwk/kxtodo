@@ -173,6 +173,10 @@ iroh 1.1 承载（QUIC + 打洞 + n0 免费公共 relay；`sync.p2pRelay`/`sync.
 - **房间密钥的派生串带自己的域前缀**（`kxtodo-transfer/v1/room/{code}`、握手令牌 `kxtodo-transfer/v1/token/{code}`）：口令 → sha256 → pkarr 的 `SecretKey`，zone 就是公钥，所以「同一句口令 = 同一个房间」。域前缀分开，传输的房间就不可能撞上同步的记录。
 - **relay 与 pkarr 目录沿用同步那一套**：`transfer.relay` 空 = 跟 `sync.p2pRelay` 同一个，再空 = n0 公共服务，`disabled` = 只直连/局域网；工具界面右上角可自选（与 P2P 同步的高级覆盖同一个交互）。这两个字段都是**本机配置、不进共享子集**。
 - **与账号体系完全无关**（需求明确要求）：不读同步凭据、不写审计、不进 settings 的同步子集。会话是内存里的 `Session`（`cancel(id)` 可中止），进度经 `TransferSink`（`Arc<dyn Fn(Value)>`）吐给前端。
+- **v0.8.4 起是「一个常驻在线会话」**（不再是「一次一发」）：输完口令就 `go_online`——用**稳定设备密钥**（`runtime/transfer-identity.json`）起端点、发布房间条目 + 自己的名字（`_name` TXT，复用同步那份 `publish_name`/`fetch_name`，挂在**自己 EndpointId 的 zone** 上）、每 2 秒轮询房间把「匹配到的设备」推给界面、收到拨入就地开一个子会话；发送是「挑一台设备发」（`send(target, payload)`，文件清单或一段文本）。口令记住在 `runtime/transfer-code.json`（明文，与 `sync-credentials.json` 同一条先例），历史与设备名录在 `runtime/transfer-history.json`（近 50 条 + 按 device-id 去重 32 台）——**这三个都在 runtime、不进同步**。
+- **接收确认是协议的一部分**：收到文件清单先推 `request` 事件（对方名字 + 清单 + 总大小），等界面 `decide`（60 秒超时当拒绝）；「自动接收」（`transfer.autoAccept`）只是跳过等待。**文本消息走同一条握手**（`mode=text`），不落盘、不进保存位置。
+- **别拿 `to_z32()` 的 id 去 `FromStr`**：iroh 只认 RFC4648 base32 与 hex，z32 是另一套字母表——会话里另存一份「z32 → EndpointAddr」的地址表，发送时查表拿可拨号地址。
+- 设备名在 `transfer.deviceName`、自动接收在 `transfer.autoAccept`（都是**本机偏好**，`is_shared_settings_path` 不含 `transfer.*`）。
 - 握手令牌对**排序后的两个 EndpointId** 做 HMAC：连上之后还要确认对面就是同一句口令的那台，而不是同房间里的第三者。
 - 移动端：发送侧走 webview 的 file input，字节按 base64 分片暂存 `runtime/transfer-outbox`（scoped storage 下 core 只能这样拿到内容）；**接收目录两端是同一份实现**——都用 `app.path().download_dir()` 下的 `kxtodo-transfer`。理由：Android 的 `download_dir()` 就是 `getExternalFilesDir(DIRECTORY_DOWNLOADS)`（外部目录，不需要任何权限、USB 与文件管理器都看得到），而 `app_data_dir()` 在 Android 上是**内部** `/data/data/<pkg>`，收到的文件用户根本找不到。**Tauri v2 的 `PathResolver` 没有 `external_app_data_dir()`**（Android 那份只有 audio/cache/config/data/local_data/document/download/picture/public/video/resource/`app_*`/temp/home 这些），凭空写一个平台专有 API 的后果是本地桌面编译与 `ci.yml` 全绿、只有 `release.yml` 的安卓那一栏红。
 - 测试用**假的 pkarr relay**（从 `p2p_e2e.rs` 抄的那一套）在本机跑通完整往返，不依赖公网：`crates/core/tests/transfer.rs`。

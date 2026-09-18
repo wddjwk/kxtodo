@@ -56,3 +56,16 @@
   color: #555;
   font-variant-numeric: tabular-nums;
 }
+
+/* ---------- 窗口化列表（v0.8.4 需求 3/5） ----------
+   VirtualStack 的两段占位把「没挂的那些项」的高度占住，滚动条长度因此与全量一致；
+   占位自身不参与命中与选中。 */
+.virtual-stack {
+  display: block;
+  min-width: 0;
+}
+
+.virtual-spacer {
+  width: 100%;
+  pointer-events: none;
+}

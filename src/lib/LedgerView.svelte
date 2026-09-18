@@ -8,11 +8,12 @@
   import { onMount, tick } from "svelte";
   import {
     CalendarDays, ChartPie, ChevronLeft, ChevronRight,
-    List as ListIcon, MoreHorizontal, Plus, Search, Settings as SettingsIcon, Tags, Wallet, X
+    List as ListIcon, Plus, Search, Settings as SettingsIcon, Tags, Wallet, X
   } from "@lucide/svelte";
   import { appSettings, ledgerData, ledgerEditor, ledgerCategoryDraft } from "./stores";
   import { setConfig } from "./actions";
   import { buildMainStyle, ledgerAccent, ledgerBackground } from "./styles";
+  import { accentWithPreview, backgroundWithPreview, colorPreview } from "./colorPreview";
   import { imageCache, resolveImageSrc } from "./images";
   import { monthOf, shiftMonth, todayDate, type MonthCursor } from "./diary";
   import {
@@ -46,7 +47,6 @@
     { mode: "assets", label: "资产视图", icon: Wallet }
   ];
 
-  let showGear = false;
   let gearButtonEl: HTMLButtonElement;
   let listMenuAt: { x: number; y: number } | null = null;
   let entryMenu: { id: string; x: number; y: number } | null = null;
@@ -101,7 +101,12 @@
   $: monthLabel = `${cursor.year}年${cursor.month + 1}月`;
   $: ledgerBg = ledgerBackground($appSettings.ledger);
   $: resolvedBgImage = resolveImageSrc(ledgerBg.image, $imageCache);
-  $: mainStyle = buildMainStyle(ledgerBg, ledgerAccent($appSettings.ledger), resolvedBgImage);
+  // 取色预览（需求 9）：同日记
+  $: mainStyle = buildMainStyle(
+    backgroundWithPreview($colorPreview, "ledger", ledgerBg),
+    accentWithPreview($colorPreview, "ledger", ledgerAccent($appSettings.ledger)),
+    resolvedBgImage
+  );
   $: menuEntry = entryMenu ? book.entries.find((entry) => entry.id === entryMenu?.id) ?? null : null;
 
   /** 列表视图只展示 cursor 一个月：滚到底整屏换成上一个月，滚到顶下拉换回下一个月 */
@@ -127,15 +132,13 @@
       : cursor.year !== thisMonth.year || cursor.month !== thisMonth.month;
   $: showTodayButton = awayFromToday;
 
-  // 齿轮面板与月份浮层是这一页的浮层：返回键先收它们（其余浮层各自有 guard）
+  // 月份浮层是这一页的浮层：返回键先收它（v0.8.4 起齿轮直接弹菜单，没有中间面板）
   const backGuard = createBackGuard();
-  $: backGuard(showGear || monthPopOpen, () => {
-    showGear = false;
+  $: backGuard(monthPopOpen, () => {
     monthPopOpen = false;
   });
 
   export function closeOverlays(): void {
-    showGear = false;
     listMenuAt = null;
     entryMenu = null;
     drill = null;
@@ -153,7 +156,6 @@
   $: if ($ledgerCategoryDraft) {
     categoryStart = $ledgerCategoryDraft;
     ledgerCategoryDraft.set(null);
-    showGear = false;
     listMenuAt = null;
     entryMenu = null;
     drill = null;
@@ -171,35 +173,21 @@
     void setConfig("ledger.view", mode);
   }
 
-  /** 搜索输入框的开合（齿轮面板里那一条，与日记同一套）；收起时清词回到正常视图 */
+  /** 搜索输入框的开合（v0.8.4 需求 14：从齿轮面板挪到头部按钮）；收起时清词回到正常视图 */
   function toggleSearch(): void {
     searchOpen = !searchOpen;
-    showGear = false;
     entryMenu = null;
     listMenuAt = null;
     if (!searchOpen) query = "";
     void tick().then(() => searchInput?.focus());
   }
 
-  /** 齿轮面板与其它头部浮层互斥（与日记/工作区同一套开合规则）。 */
-  function toggleGear(): void {
-    showGear = !showGear;
-    listMenuAt = null;
-    entryMenu = null;
-  }
-
-  /** 齿轮面板 → 记账菜单：锚在齿轮按钮右下角（视口像素，ContextMenu 内部除以缩放）。 */
+  /** 齿轮按钮直接弹「记账菜单」（v0.8.4 需求 14）：省掉中间那层只有四项的面板。 */
   function openListMenuFromGear(): void {
-    showGear = false;
     const rect = gearButtonEl?.getBoundingClientRect();
     if (!rect) return;
     listMenuAt = { x: rect.right, y: rect.bottom + 6 };
     entryMenu = null;
-  }
-
-  function handlePanelKeydown(event: KeyboardEvent): void {
-    if (!showGear) return;
-    if (event.key === "Escape" && !event.isComposing && event.keyCode !== 229) showGear = false;
   }
 
   function resetScroll(): void {
@@ -363,7 +351,6 @@
   }
 </script>
 
-<svelte:window on:keydown={handlePanelKeydown} />
 
 <main class="ledger-view" style={mainStyle}>
   <section class="list-header">
@@ -387,22 +374,20 @@
         {/each}
       </div>
       <button
+        type="button"
+        title={searchOpen ? "关闭搜索" : "搜索记账"}
+        aria-label={searchOpen ? "关闭搜索" : "搜索记账"}
+        aria-pressed={searchOpen}
+        on:click|stopPropagation={toggleSearch}
+      >{#if searchOpen}<X size={21} />{:else}<Search size={21} />{/if}</button>
+      <button
         bind:this={gearButtonEl}
         type="button"
-        title="更多操作"
-        aria-label="更多操作"
-        aria-expanded={showGear}
-        on:click|stopPropagation={toggleGear}
+        title="记账菜单"
+        aria-label="记账菜单"
+        aria-expanded={listMenuAt !== null}
+        on:click|stopPropagation={openListMenuFromGear}
       ><SettingsIcon size={21} /></button>
-
-      {#if showGear}
-        <div class="header-menu-panel ledger-gear-panel" role="menu" tabindex="-1">
-          <MenuItem icon={searchOpen ? X : Search} label={searchOpen ? "关闭搜索" : "搜索记账"} onSelect={toggleSearch} />
-          <MenuItem icon={Tags} label="分类管理" onSelect={openCategories} />
-          <MenuItem icon={Wallet} label="账户与转账" onSelect={() => openAccounts("list")} />
-          <MenuItem icon={MoreHorizontal} label="记账菜单" onSelect={openListMenuFromGear} />
-        </div>
-      {/if}
     </div>
   </section>
 
@@ -479,7 +464,6 @@
           on:image={(event) => void openEntryImage(event.detail)}
           on:context={(event) => {
             entryMenu = event.detail;
-            showGear = false;
             listMenuAt = null;
           }}
         />
@@ -504,7 +488,6 @@
             on:image={(event) => void openEntryImage(event.detail)}
             on:context={(event) => {
               entryMenu = event.detail;
-              showGear = false;
               listMenuAt = null;
             }}
           />
@@ -536,7 +519,6 @@
         on:month={(event) => changeMonth(event.detail)}
         on:drill={(event) => {
           drill = event.detail;
-          showGear = false;
           entryMenu = null;
         }}
       />
@@ -561,7 +543,13 @@
       background={ledgerBg}
       accentColor={ledgerAccent($appSettings.ledger)}
       onClose={() => (listMenuAt = null)}
-    />
+    >
+      <!-- v0.8.4 需求 14：这两项从齿轮面板挪进「记账菜单」，少一层入口 -->
+      <svelte:fragment slot="extra">
+        <MenuItem icon={Tags} label="分类管理" onSelect={() => { listMenuAt = null; openCategories(); }} />
+        <MenuItem icon={Wallet} label="账户与转账" onSelect={() => { listMenuAt = null; openAccounts("list"); }} />
+      </svelte:fragment>
+    </ListMenu>
   {/if}
 
   {#if entryMenu && menuEntry}

@@ -110,22 +110,26 @@
 </script>
 
 <div class="calendar-grid-panel">
-  <div class="date-picker-header">
-    <button type="button" on:click={prev} aria-label="上个月"><ChevronLeft size={16} /></button>
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions a11y_no_noninteractive_element_to_interactive_role -->
-    <span
-      class="dp-title pickable"
-      role="button"
-      tabindex="0"
-      title="点击直接选年月"
-      on:click={() => { panel = panel === "days" ? "months" : "days"; }}
-    >{viewYear}年{viewMonth + 1}月</span>
-    <button type="button" on:click={next} aria-label="下个月"><ChevronRight size={16} /></button>
-  </div>
-
   {#if panel === "months"}
+    <!-- 年月网格是**整块替换**（v0.8.4）：连日历自己的头部一起换掉。
+         只换网格的话，日视图那行「2026年9月 ‹ ›」会留在上面，看起来是两套日历
+         叠在一起（记账统计「自定义」点日期最明显）。MonthPicker 自带头部与
+         「本月」，选掉一个月就回到那个月的日网格。 -->
     <MonthPicker year={viewYear} month={viewMonth} on:select={pickMonth} />
   {:else}
+    <div class="date-picker-header">
+      <button type="button" on:click={prev} aria-label="上个月"><ChevronLeft size={16} /></button>
+      <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions a11y_no_noninteractive_element_to_interactive_role -->
+      <span
+        class="dp-title pickable"
+        role="button"
+        tabindex="0"
+        title="点击直接选年月"
+        on:click={() => (panel = "months")}
+      >{viewYear}年{viewMonth + 1}月</span>
+      <button type="button" on:click={next} aria-label="下个月"><ChevronRight size={16} /></button>
+    </div>
+
     <div class="date-picker-grid">
       {#each weekDayLabels as label}
         <span class="dp-head">{label}</span>

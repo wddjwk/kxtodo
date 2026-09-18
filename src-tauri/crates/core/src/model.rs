@@ -96,9 +96,23 @@ pub struct DataFile {
     pub selected_node_id: String,
     #[serde(default)]
     pub backgrounds: Map<String, Value>,
+    /// 工具箱草稿纸（v0.8.4）：整篇一段纯文本，改了整段覆盖（LWW）。
+    /// 住在数据域而不是 independent 的运行时文件里，因为它是**内容**——
+    /// 换台设备该带着走（同步走 data 范围，实体 kind = scratchpad）。
+    #[serde(default)]
+    pub scratchpad: Scratchpad,
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
+}
+
+/// 草稿纸：一段纯文本 + 它的版本戳（LWW 的实体时间戳就是 updatedAt）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct Scratchpad {
+    #[serde(default)]
+    pub text: String,
+    #[serde(rename = "updatedAt", default)]
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -912,6 +926,8 @@ pub struct SettingsFile {
     pub diary: DiarySettings,
     #[serde(default)]
     pub ledger: LedgerSettings,
+    #[serde(default)]
+    pub toolbox: ToolboxSettings,
     /// 设置同步实体的 LWW 时间戳（仅共享子集变化时刷新）。
     #[serde(rename = "syncUpdatedAt", default, skip_serializing_if = "Option::is_none")]
     pub sync_updated_at: Option<String>,
@@ -1466,6 +1482,13 @@ pub struct TransferSettings {
     /// `disabled` = 不用 relay（只直连/局域网）
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub relay: String,
+    /// 本机在传输房间里展示的设备名（v0.8.4）。**本机偏好**：不同设备本来就该有
+    /// 不同的名字，不进同步共享子集（`is_shared_settings_path` 不含 transfer.*）。
+    #[serde(rename = "deviceName", default, skip_serializing_if = "String::is_empty")]
+    pub device_name: String,
+    /// 自动接收（默认关）：收到传输请求不再弹确认卡，直接收。
+    #[serde(rename = "autoAccept", default)]
+    pub auto_accept: bool,
 }
 
 fn default_lan_port() -> u16 {
@@ -1793,6 +1816,38 @@ impl Default for LedgerSettings {
             background_color: default_ledger_background_color(),
             background_image: String::new(),
             background_opacity: default_ledger_background_opacity(),
+            extra: Map::new(),
+        }
+    }
+}
+
+/// 工具箱外观（v0.8.4）。与日记/记账同一口径：主题色与背景色是**外观**，
+/// 跟着同步的共享子集走——换台设备打开工具箱该是同一副样子。
+///
+/// 只有两个字段：需求里工具页三点菜单就只提供「更换背景颜色 / 主题颜色」，
+/// 背景图与透明度还没有入口，不加没有消费者的字段。
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ToolboxSettings {
+    /// 主题色（#rrggbb）；空 = 用默认主题色
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub accent: String,
+    /// 背景色（#rrggbb）
+    #[serde(rename = "backgroundColor", default = "default_toolbox_background_color")]
+    pub background_color: String,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
+}
+
+fn default_toolbox_background_color() -> String {
+    "#f0f0f0".to_string()
+}
+
+impl Default for ToolboxSettings {
+    fn default() -> Self {
+        Self {
+            accent: String::new(),
+            background_color: default_toolbox_background_color(),
             extra: Map::new(),
         }
     }

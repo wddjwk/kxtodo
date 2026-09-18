@@ -152,27 +152,6 @@
   opacity: 1;
 }
 
-/* 齿轮面板：与日记同形状（移动端那一份在 mobile.css）。
-   面板必须放在 .header-actions 里面——它才是那个 absolute 包含块，
-   放在 .list-header 下的话点菜单项会冒泡到 app-shell 把刚开出来的记账菜单立刻关掉。 */
-.app-shell:not(.mobile) .ledger-gear-panel {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 2200;
-  display: grid;
-  gap: 2px;
-  /* 宽度自适应：固定 176px 比最长的一条（「账户与转账」）宽出半截，看着空旷 */
-  width: max-content;
-  min-width: 0;
-  padding: 6px;
-  border: 1px solid #e5e5e5;
-  border-radius: 12px;
-  background: #ffffff;
-  box-shadow: 0 16px 50px rgb(0 0 0 / 16%), 0 2px 8px rgb(0 0 0 / 8%);
-  animation: menu-fade-in 0.1s ease-out;
-}
-
 /* ---------- 月份标题行（只有列表视图渲染；其余三个视图有自己的顶栏） ----------
    这一行是标题不是小字：月份比正文大一号、加粗、走主题色，收/支/结余跟在后面。
    左对齐到卡片左边界（内容区左缘），不是标题文字的起点。 */
@@ -475,7 +454,6 @@
   flex: 0 0 auto;
   color: #b6bcc6;
   cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
   transition: color 0.12s ease;
 }
 
@@ -904,34 +882,47 @@
   color: var(--ledger-out);
 }
 
+/* 图例即开关（v0.8.4 需求 10）：三段胶囊，亮 = 该曲线在图上（色块是对应侧的颜色），
+   灰 = 隐藏。默认 收入 + 支出 亮、结余灰。 */
 .ledger-legend {
   display: inline-flex;
-  gap: 6px;
+  gap: 2px;
   align-items: center;
   margin-left: auto;
-  color: #8b929e;
+  padding: 2px;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  background: #f7f8f9;
+}
+
+.ledger-legend button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #9aa1ac;
   font-size: calc(var(--font-ledger) - 5px);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.ledger-legend button.on {
+  background: #ffffff;
+  color: #4b5563;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
 }
 
 .ledger-legend i {
   display: inline-block;
   width: 9px;
   height: 9px;
-  margin-left: 10px;
   border-radius: 3px;
-  background: #9aa1ac;
-}
-
-.ledger-legend i:first-child {
-  margin-left: 0;
-}
-
-.ledger-legend i.in {
-  background: var(--ledger-in);
-}
-
-.ledger-legend i.out {
-  background: var(--ledger-out);
+  /* 亮着时内联给 --dot = 该侧颜色；灰掉时落到这枚中性灰 */
+  background: var(--dot, #c8ccd2);
 }
 
 .ledger-legend em {
@@ -963,6 +954,9 @@
   stroke-width: 2.4;
   stroke-linecap: round;
   stroke-linejoin: round;
+  /* 2400 与 LedgerStats.svelte 的 CHART_DASH_LEN 是同一个数：那边用 SVG 的
+     pathLength 把真实长度归一化成 2400，dash 图案因此永远等于整条路径。
+     没有 pathLength 的话，路径真实长度超过 2400 之后图案重复 → 折线中断。 */
   stroke-dasharray: 2400;
   stroke-dashoffset: 2400;
   animation: ledger-draw 0.9s ease-out forwards;
@@ -1403,7 +1397,6 @@
   background: transparent;
   cursor: pointer;
   text-align: left;
-  -webkit-tap-highlight-color: transparent;
 }
 
 .ledger-drill-row:hover,
@@ -2081,7 +2074,6 @@
   border-radius: 12px;
   background: transparent;
   cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
   transition: background 0.12s ease;
 }
 
@@ -2374,7 +2366,6 @@
   font-size: calc(var(--font-ledger) - 3px);
   white-space: nowrap;
   cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
   transition: color 0.12s ease;
 }
 
@@ -2514,7 +2505,6 @@
   font-variant-numeric: tabular-nums;
   cursor: pointer;
   box-shadow: 0 1px 2px rgb(0 0 0 / 5%);
-  -webkit-tap-highlight-color: transparent;
   transition: background 0.08s ease, transform 0.08s ease;
 }
 
@@ -2944,18 +2934,6 @@
   border-style: dashed;
   color: #9aa1ac;
   padding-left: 10px;
-}
-
-/* ---------- 触屏：不要那层蓝色点按高亮 ---------- */
-
-.ledger-view button,
-.ledger-card,
-.ledger-entry,
-.ledger-calendar-cell,
-.ledger-fab,
-.ledger-fab-today,
-.ledger-sheet button {
-  -webkit-tap-highlight-color: transparent;
 }
 
 .ledger-card:focus,

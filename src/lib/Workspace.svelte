@@ -24,12 +24,14 @@
   import { pullToRefresh } from "./pullrefresh";
   import { taskMoveTargets } from "./nodes";
   import { buildMainStyle, ledgerAccent } from "./styles";
+  import { accentWithPreview, backgroundWithPreview, colorPreview, dueColorsWithPreview } from "./colorPreview";
   import { hasMultipleMarkdownLines } from "./markdown";
   import { openExternalUrl, isTauriRuntime, saveMdImageFromDataUrl, mdImageUrl } from "./backend";
   import { imageCache, resolveImageSrc, mdImageCache, primeMdImageCache } from "./images";
   import IconGlyph from "./IconGlyph.svelte";
   import MobileBack from "./MobileBack.svelte";
   import TaskCard from "./TaskCard.svelte";
+  import VirtualStack from "./VirtualStack.svelte";
   import DiaryCard from "./diary/DiaryCard.svelte";
   import DiaryEntryMenu from "./diary/DiaryEntryMenu.svelte";
   import LedgerEntryCard from "./ledger/LedgerEntryCard.svelte";
@@ -120,6 +122,8 @@
   let schedulerViewRef: ScheduledTasksView;
   let showHeaderMenu = false;
   let gearButtonEl: HTMLButtonElement;
+  /** 任务列表的滚动容器（窗口化要用它当视口） */
+  let listScrollEl: HTMLElement | null = null;
   let linkPreviewUrl = "";
   /** 内置浏览器顶部标题栏的文字：链接文字 → 同源时读到的网页标题 → 主机名兜底 */
   let linkPreviewTitle = "";
@@ -180,7 +184,13 @@
   let myDayViewDate = todayIso();
 
   $: resolvedBgImage = resolveImageSrc($selectedBackground.image, $imageCache);
-  $: mainStyle = buildMainStyle($selectedBackground, $accent, resolvedBgImage);
+  // 取色预览（需求 9）：菜单里拖色盘时先把界面染上，点保存才落盘
+  $: previewScope = $selectedNode?.id ?? "";
+  $: mainStyle = buildMainStyle(
+    backgroundWithPreview($colorPreview, previewScope, $selectedBackground),
+    accentWithPreview($colorPreview, previewScope, $accent),
+    resolvedBgImage
+  );
   $: isMyDay = $selectedNode?.id === "my-day";
   $: isPlanned = $selectedNode?.id === "planned" && !$isSearching;
   $: isScheduled = caps.scheduler && !$isSearching && $selectedNode?.id === "scheduled";
@@ -222,9 +232,20 @@
           todayIso()
         )
       : [];
+  /** 渲染行：分区标题与卡片拍平成同一条列表（窗口化要吃一份可索引的数据） */
+  type TaskRow = {
+    kind: "label" | "task";
+    key: string;
+    label: string;
+    count: number;
+    sectionKey: string;
+    collapsed: boolean;
+    task: Task | null;
+  };
+
   // 渲染行：分区标题 + 卡片 拍平成一条列表，避免把 TaskCard 的接线复制第三遍；
   // 折叠的分区只留标题行（标题本身是折叠按钮）
-  $: taskRows = plannedSectionList.length
+  $: taskRows = (plannedSectionList.length
     ? plannedSectionList.flatMap((section) => {
         const collapsed = Boolean(collapsedSections[section.key]);
         return [
@@ -250,15 +271,15 @@
               })))
         ];
       })
-    : incompleteTasks.map((task) => ({
-        kind: "task" as const,
+    : incompleteTasks.map((task): TaskRow => ({
+        kind: "task",
         key: task.id,
         label: "",
         count: 0,
         sectionKey: "",
         collapsed: false,
-        task: task as Task | null
-      }));
+        task
+      }))) as TaskRow[];
   $: taskMenuTask = taskMenu ? $appState.tasks.find((task) => task.id === taskMenu?.taskId) : null;
   $: diaryMenuEntry = diaryMenu ? $diaryEntries.find((entry) => entry.id === diaryMenu?.id) ?? null : null;
   /** 记账搜索结果的 --accent：工作区里拿不到 LedgerView 的内联主题色，从设置算一份 */
@@ -1056,6 +1077,7 @@
 
   <section
     class="task-list"
+    bind:this={listScrollEl}
     use:pullToRefresh={{
       enabled: () => syncAvailable && $mobileView === "content",
       busy: () => pullBusy,
@@ -1121,32 +1143,45 @@
         {/if}
       {/each}
     {:else}
-    {#each taskRows as row (row.key)}
-      {#if row.kind === "label"}
-        <button class="task-section-label" type="button" on:click|stopPropagation={() => toggleSection(row.sectionKey)}>
-          <ChevronDown class={row.collapsed ? "collapsed" : ""} size={15} />
-          {row.label} {row.count}
-        </button>
-      {:else if row.task}
-        <TaskCard
-          task={row.task}
-          nodeId={row.task.nodeId}
-          cardStyle={cardStyleByNode.get(row.task.nodeId) ?? "todo"}
-          selected={taskMenu?.taskId === row.task.id}
-          on:toggle={(event) => toggleCompletion(event.detail)}
-          on:expand={(event) => toggleTaskExpansion(event.detail.id, event.detail.expanded)}
-          on:measure={handleCardMeasure}
-          on:edit={(event) => openTaskEditor(event.detail)}
-          on:context={openTaskMenu}
-          on:openLink={openTaskLink}
-          on:setSchedule={handleTaskSetSchedule}
-          on:removeTag={(e) => removeTagFromTask(e.detail.id, e.detail.tagId)}
-          on:editTag={(e) => editTagAtTask(e.detail.id, e.detail.tagId, e.detail.text)}
-          on:removeEmoji={(e) => removeEmojiFromTask(e.detail.id, e.detail.index)}
-          on:pickEmoji={(e) => openEmojiPickerAt(e.detail.id, e.detail.index)}
-        />
-      {/if}
-    {/each}
+    <!-- 任务一多（>100）就窗口化（v0.8.4 需求 5）：只有视口附近那几十张卡在树上，
+         公式与日记列表同一套（VirtualStack / windowing.ts）。100 以内全量直出，
+         不为小列表付虚拟化的代价。 -->
+    <VirtualStack
+      items={taskRows}
+      keyOf={(row) => (row as TaskRow).key}
+      scroller={listScrollEl}
+      fullBelow={100}
+      estimate={84}
+      overscan={10}
+    >
+      <svelte:fragment slot="item" let:row>
+        {@const item = row as TaskRow}
+        {#if item.kind === "label"}
+          <button class="task-section-label" type="button" on:click|stopPropagation={() => toggleSection(item.sectionKey)}>
+            <ChevronDown class={item.collapsed ? "collapsed" : ""} size={15} />
+            {item.label} {item.count}
+          </button>
+        {:else if item.task}
+          <TaskCard
+            task={item.task}
+            nodeId={item.task.nodeId}
+            cardStyle={cardStyleByNode.get(item.task.nodeId) ?? "todo"}
+            selected={taskMenu?.taskId === item.task.id}
+            on:toggle={(event) => toggleCompletion(event.detail)}
+            on:expand={(event) => toggleTaskExpansion(event.detail.id, event.detail.expanded)}
+            on:measure={handleCardMeasure}
+            on:edit={(event) => openTaskEditor(event.detail)}
+            on:context={openTaskMenu}
+            on:openLink={openTaskLink}
+            on:setSchedule={handleTaskSetSchedule}
+            on:removeTag={(e) => removeTagFromTask(e.detail.id, e.detail.tagId)}
+            on:editTag={(e) => editTagAtTask(e.detail.id, e.detail.tagId, e.detail.text)}
+            on:removeEmoji={(e) => removeEmojiFromTask(e.detail.id, e.detail.index)}
+            on:pickEmoji={(e) => openEmojiPickerAt(e.detail.id, e.detail.index)}
+          />
+        {/if}
+      </svelte:fragment>
+    </VirtualStack>
 
     {#if !$isSearching && completedTasks.length}
       <section class="completed-section">

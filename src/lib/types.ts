@@ -300,6 +300,10 @@ export type Settings = {
   transfer: {
     /** 自选 iroh relay（空 = 跟 p2p 同步同一个；disabled = 不用 relay） */
     relay: string;
+    /** 本机在传输房间里展示的设备名（v0.8.4；本机偏好，不跨设备同步） */
+    deviceName: string;
+    /** 自动接收：开着就不再弹接收确认卡（默认关） */
+    autoAccept: boolean;
   };
   syncUpdatedAt?: string;
   updates: {
@@ -337,6 +341,12 @@ export type Settings = {
     backgroundColor: string;
     backgroundImage: string;
     backgroundOpacity: number;
+  };
+  /** 工具箱外观（v0.8.4）。工具页三点菜单就两件事，字段也只有这两个。 */
+  toolbox: {
+    /** 主题色 #rrggbb；空 = 用默认主题色 */
+    accent: string;
+    backgroundColor: string;
   };
 };
 
@@ -434,5 +444,7 @@ export type AppState = {
   tasks: Task[];
   selectedNodeId: string;
   backgrounds: Record<string, ListBackground>;
+  /** 工具箱草稿纸（v0.8.4）：一段纯文本 + 版本戳，跟着数据域同步（LWW 整段覆盖） */
+  scratchpad: { text: string; updatedAt: string };
   scheduler: SchedulerState;
 };

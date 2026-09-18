@@ -168,7 +168,8 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   const modeCount = (await page.locator(".ledger-stats-bar .ledger-segmented").nth(0).locator("button").count());
   const sideCount = (await page.locator(".ledger-stats-bar .ledger-segmented").nth(1).locator("button").count());
   check("周期段控五项", modeCount === 5, String(modeCount));
-  check("收支侧段控三项", sideCount === 3, String(sideCount));
+  // v0.8.4 需求 10：侧段控只剩 支出|收入（结余改由图例胶囊切）
+  check("收支侧段控两项", sideCount === 2, String(sideCount));
   void modeButtons;
   const statsText = (await page.textContent(".ledger-stats")) ?? "";
   check("去掉了「个日子」注释", !statsText.includes("个日子"));
@@ -176,11 +177,12 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   check("白块里有三标签行", (await page.$$(".ledger-summary-labels span")).length === 3);
   check("白块里有三数额", (await page.$$(".ledger-summary strong")).length === 3);
 
-  await page.click(".ledger-side-switch button:has-text('结余')");
-  await page.waitForTimeout(300);
-  check("结余侧画三条曲线（v0.7.5）", (await page.$$(".ledger-line.in")).length === 1 && (await page.$$(".ledger-line.out")).length === 1 && (await page.$$(".ledger-line.bal")).length === 1);
-  check("收支结余趋势标题", ((await page.textContent(".ledger-panel-head h2")) ?? "").includes("收支结余趋势"));
-  await page.click(".ledger-side-switch button:has-text('支出')");
+  // v0.8.4 需求 10：结余改由右上角图例胶囊切（三枚可点），标题固定「收支趋势」
+  await page.locator(".ledger-legend button", { hasText: "结余" }).click();
+  await page.waitForTimeout(400);
+  check("点结余胶囊画三条曲线", (await page.$$(".ledger-line.in")).length === 1 && (await page.$$(".ledger-line.out")).length === 1 && (await page.$$(".ledger-line.bal")).length === 1);
+  check("折线图标题固定「收支趋势」", ((await page.textContent(".ledger-panel-head h2")) ?? "").includes("收支趋势"));
+  await page.locator(".ledger-legend button", { hasText: "结余" }).click();
   await page.waitForTimeout(200);
 
   await page.click(".ledger-stats-bar .ledger-segmented >> nth=0 >> button:has-text('周')");
@@ -224,7 +226,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.waitForSelector(".ledger-drill-pop", { state: "detached", timeout: 5000 });
 
   // 8. 账户管理：不 autofocus、自定义类型、账户专用图标分组、备注在名称下面
-  await page.click(".ledger-view .header-actions > button[title='更多操作']");
+  await page.click(".ledger-view .header-actions > button[title='记账菜单'], .ledger-view .header-actions > button[title='更多操作']");
   await page.waitForSelector(".ledger-gear-panel", { timeout: 5000 });
   await page.click(".ledger-gear-panel .menu-item-button:has-text('账户与转账')");
   await page.waitForSelector(".ledger-manager", { timeout: 8000 });
@@ -255,7 +257,7 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.waitForSelector(".ledger-manager", { state: "detached", timeout: 8000 });
 
   // 10. 分类管理不 autofocus
-  await page.click(".ledger-view .header-actions > button[title='更多操作']");
+  await page.click(".ledger-view .header-actions > button[title='记账菜单'], .ledger-view .header-actions > button[title='更多操作']");
   await page.waitForSelector(".ledger-gear-panel", { timeout: 5000 });
   await page.click(".ledger-gear-panel .menu-item-button:has-text('分类管理')");
   await page.waitForSelector(".ledger-manager", { timeout: 8000 });

@@ -20,9 +20,11 @@
 import { chromium } from "playwright-core";
 
 const URL = "http://127.0.0.1:1420/";
-const TASK_COUNT = 300;
-const DIARY_COUNT = 300;
-const ENTRY_COUNT = 3000;
+// v0.8.4 需求 6：口径提到「真实会卡的量级」——300/300/3000 测不出「全量挂载」这类问题
+// （日记界面卡死、内存 2GB 就是在这个量级下才暴露的）。
+const TASK_COUNT = 1000;
+const DIARY_COUNT = 5000;
+const ENTRY_COUNT = 10000;
 
 const STATE_KEY = "todo-note-state-v3";
 const DIARY_KEY = "todo-note-diary-v1";
@@ -79,7 +81,9 @@ function buildSeed() {
       id: `bench-diary-${index}`,
       date,
       title: `基准日记 ${index}`,
-      markdown: `今天做了第 ${index} 件事。`.repeat(12),
+      // 5000 篇要塞进 localStorage（约 5MB 配额），正文别太长——这一项测的是
+      // 「卡片数量」而不是「单卡正文体积」
+      markdown: `今天做了第 ${index} 件事。`.repeat(4),
       tags: [],
       mood: "",
       weather: "",
@@ -175,6 +179,93 @@ try {
     stats !== null && stats.block === 0,
     `block=${stats?.block}，卡片 ${cardCount} 张全部折叠`
   );
+
+
+  // --- 日记列表（v0.8.4 需求 3/6）：5000 篇的打开耗时、挂载卡片数与滚动长任务 ---
+  const diaryOpen = await page.evaluate(async () => {
+    const at = performance.now();
+    document.querySelector(".system-nav .nav-row[title='日记']")?.click();
+    const deadline = at + 15000;
+    while (performance.now() < deadline) {
+      if (document.querySelector(".diary-card")) break;
+      await new Promise((resolve) => setTimeout(resolve, 8));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    return performance.now() - at;
+  });
+  const diaryStats = await page.evaluate(() => ({
+    cards: document.querySelectorAll(".diary-card").length,
+    nodes: document.querySelector(".diary-scroll")?.querySelectorAll("*").length ?? 0,
+    heap: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : -1
+  }));
+  console.log(`--- 日记列表（${DIARY_COUNT} 篇）---`);
+  console.log(`${"打开日记界面（首张卡上屏）".padEnd(40)} ${diaryOpen.toFixed(1).padStart(8)} ms`);
+  console.log(`挂载卡片 ${diaryStats.cards}   子树节点 ${diaryStats.nodes}   堆 ${diaryStats.heap}MB`);
+  check("日记界面打开 < 1000ms（需求 6 验收）", diaryOpen < 1000, `${diaryOpen.toFixed(0)}ms`);
+  check("日记只挂视口附近的一段（不是 5000 张）", diaryStats.cards > 0 && diaryStats.cards < 120, `${diaryStats.cards} 张`);
+  check("堆占用 < 500MB（需求 6 验收）", diaryStats.heap > 0 && diaryStats.heap < 500, `${diaryStats.heap}MB`);
+
+  // 滚动长任务：PerformanceObserver 抓 >100ms 的 longtask
+  const scrollLong = await page.evaluate(async () => {
+    const scroller = document.querySelector(".diary-scroll");
+    if (!scroller) return { tasks: -1, max: -1, cards: -1 };
+    const longTasks = [];
+    let observer = null;
+    try {
+      observer = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) longTasks.push(entry.duration);
+      });
+      observer.observe({ entryTypes: ["longtask"] });
+    } catch {
+      observer = null;
+    }
+    for (let step = 1; step <= 8; step += 1) {
+      scroller.scrollTop = (scroller.scrollHeight / 9) * step;
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    observer?.disconnect();
+    return {
+      tasks: longTasks.length,
+      max: longTasks.length ? Math.max(...longTasks) : 0,
+      cards: document.querySelectorAll(".diary-card").length
+    };
+  });
+  console.log(
+    `滚动 8 屏：长任务 ${scrollLong.tasks} 个（最长 ${scrollLong.max.toFixed(0)}ms），当前挂载 ${scrollLong.cards} 张`
+  );
+  check(
+    "滚动过程没有 >100ms 的长任务（需求 6 验收）",
+    scrollLong.max < 100,
+    `最长 ${scrollLong.max.toFixed(0)}ms（${scrollLong.tasks} 个长任务）`
+  );
+  check("滚动后仍只挂一段", scrollLong.cards > 0 && scrollLong.cards < 120, `${scrollLong.cards} 张`);
+
+  // --- Entry 任务列表（1000 条，需求 5/6）---
+  await page.evaluate(() => {
+    const rows = [...document.querySelectorAll(".tree-row")];
+    rows.find((el) => (el.textContent ?? "").includes("基准条目"))?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  const entryOpen = await page.evaluate(async () => {
+    const at = performance.now();
+    const deadline = at + 15000;
+    while (performance.now() < deadline) {
+      if (document.querySelector(".task-list .task-card")) break;
+      await new Promise((resolve) => setTimeout(resolve, 8));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    return performance.now() - at;
+  });
+  const entryStats = await page.evaluate(() => ({
+    cards: document.querySelectorAll(".task-list .task-card").length,
+    heap: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : -1
+  }));
+  console.log(`--- Entry（${TASK_COUNT} 条任务）---`);
+  console.log(`${"打开条目（首张卡上屏）".padEnd(40)} ${entryOpen.toFixed(1).padStart(8)} ms`);
+  console.log(`挂载卡片 ${entryStats.cards}   堆 ${entryStats.heap}MB`);
+  check("1000 卡条目打开 < 2000ms（需求 6 验收）", entryOpen < 2000, `${entryOpen.toFixed(0)}ms`);
+  check("任务列表只挂一段（不是 1000 张）", entryStats.cards > 0 && entryStats.cards < 120, `${entryStats.cards} 张`);
+
 
   console.log("\n--- 交互（页内计时，各取 3 次中位数）---");
   await timed(page, "勾选一条任务 → 上屏", async (i) => {

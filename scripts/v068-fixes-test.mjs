@@ -71,7 +71,7 @@ await dp.locator(".system-nav .nav-row", { hasText: "日记" }).click();
 await dp.waitForTimeout(500);
 await dp.locator(".diary-view .header-actions > button").first().click();
 await dp.waitForTimeout(300);
-await dp.locator(".diary-gear-panel .menu-item-button", { hasText: "日记菜单" }).click();
+await dp.locator(".diary-view .header-actions button[title='日记菜单']").click();
 await dp.waitForTimeout(400);
 const slider = dp.locator(".opacity-row input");
 for (const v of ["10", "30", "55", "70"]) {

@@ -204,6 +204,37 @@ h1 {
   box-shadow: 0 0 0 2px var(--accent), 0 0 0 5px rgb(0 0 0 / 6%);
 }
 
+/* 当前落盘背景色（或草稿色）：与「正在编辑预设」区分开，只画一圈细描边 */
+.color-grid button.active {
+  box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px rgb(0 0 0 / 32%);
+}
+
+/* 取色草稿的「取消 / 保存」行（需求 9）：三种颜色配置共用，保存才落盘 */
+.color-draft-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin: -2px 0 2px;
+}
+
+.color-draft-actions .menu-action-button {
+  min-height: 28px;
+  padding: 4px 9px;
+  font-size: calc(var(--font-control) - 4px);
+}
+
+.menu-action-button.primary {
+  border-color: var(--accent, #2564cf);
+  background: var(--accent, #2564cf);
+  color: #ffffff;
+}
+
+.menu-action-button.primary:hover,
+.menu-action-button.primary:focus-visible {
+  border-color: var(--accent, #2564cf);
+  background: color-mix(in srgb, var(--accent, #2564cf) 86%, #000000);
+}
+
 .color-grid .palette-button {
   border: 1px solid #e0e0e0;
   background: conic-gradient(from 0deg, #ff6b6b, #ffd93d, #6bcb77, #4d96ff, #9b59b6, #ff6b6b);
@@ -1265,7 +1296,6 @@ h1 {
   background: transparent;
   color: var(--accent);
   cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
   transition: background 0.14s ease, transform 0.14s ease;
 }
 
@@ -1347,7 +1377,11 @@ h1 {
 /* 计划内「全部」的分区标题（已逾期/今天/近三天/本周/稍后）：半透明淡白，
    比白色卡片（84%）更透一档，读起来是卡片的浅色同类而不是灰块；本身是折叠按钮 */
 .task-section-label {
-  display: inline-flex;
+  /* display:flex 而不是 inline-flex：分区标题必须是**块级**的。
+     折叠掉一个分区后它后面不再有卡片把行撑开，inline-flex 会让下一个分区标题
+     接着同一行排（「今天」折叠后「近三天」跑到它右边）；fit-content 保住胶囊宽度。 */
+  display: flex;
+  width: fit-content;
   align-items: center;
   gap: 6px;
   margin: 10px 0 10px;
@@ -1711,6 +1745,11 @@ h1 {
 
 .date-picker-grid {
   display: grid;
+  /* **定宽**（v0.8.4 需求 12）：7 列等分 228px 是它在 248 面板里的标准宽度。
+     不写死宽度时，网格在「外层是收缩包裹的容器」（右键菜单子面板、编辑器
+     元数据浮层）里按 max-content 定宽——选中日加粗（.selected 的 font-weight:600）
+     会把某一列撑宽，于是**点哪天尺寸不一样**、面板跟着忽宽忽窄。 */
+  width: 228px;
   grid-template-columns: repeat(7, 1fr);
   gap: 2px;
 }
@@ -1891,7 +1930,15 @@ h1 {
 }
 
 .dp-time-wheel {
-  padding: 2px 6px 4px;
+  /* 定宽 + 定高 + 居中（v0.8.4 需求 12）：228×219 就是日历块（日网格 + 星期行）
+     的实际尺寸——切到「选择时刻」页/切自定义的日期↔时间标签时，整个面板的宽高
+     都不变，上面的标题与下面的 清除/确认 位置也就钉住了。 */
+  display: flex;
+  width: 228px;
+  height: 219px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
 }
 
 /* ---------- 「日期与提醒」面板（TaskDateReminderPanel，v0.8.3） ----------
@@ -1913,7 +1960,9 @@ h1 {
   box-shadow: none;
   border: none;
   padding: 4px 0 0;
-  width: 100%;
+  /* 定宽（v0.8.4 需求 12）：`100%` 在「收缩包裹」的菜单子面板里等于 max-content，
+     提醒胶囊长一点就会把整个面板顶宽——尺寸忽宽忽窄的第二个来源。228 是日历块宽度。 */
+  width: 228px;
 }
 
 /* 时刻行 / 提醒行：与日历之间用一条浅分隔线断开（沿用 .date-picker-time 的做法） */
@@ -2554,6 +2603,10 @@ h1 {
 
 .tag-panel {
   display: grid;
+  /* minmax(0, 1fr) 而不是默认的 auto：grid 项的 min-width 默认是 auto（= min-content），
+     胶囊/输入行在字号调大之后 min-content 会超过面板宽度，整列被撑宽 → 面板里**所有**
+     元素一起伸出浮层边界（v0.8.4 修：UI 字号 22 时溢出 35px）。钉死单列 = 内容自己收缩。 */
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
   width: 100%;
 }

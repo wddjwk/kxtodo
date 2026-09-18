@@ -161,7 +161,7 @@ if (editorOpen) {
 }
 
 // item 4: header gear dropdown replaces title-tap reveal
-const gear = page.locator('.header-actions button[aria-label="更多操作"]');
+const gear = page.locator('.header-actions button[aria-label="列表菜单"], .header-actions button[aria-label="更多操作"]');
 check("mobile header shows gear button", await gear.isVisible());
 check("mobile header renders only the gear", (await page.locator(".header-actions > button").count()) === 1);
 check("title-tap mechanism removed", (await page.locator(".mobile-title-tap").count()) === 0);
@@ -232,7 +232,7 @@ await page.waitForTimeout(250);
 const chipCount = await page.locator(".toolbox-result-chip").count();
 const chipValue = chipCount > 0 ? Number(await page.locator(".toolbox-result-chip").first().innerText()) : NaN;
 check("random tool generates an in-range integer", chipCount >= 1 && Number.isInteger(chipValue) && chipValue >= 1 && chipValue <= 100, String(chipValue));
-await page.locator(".toolbox-sub-back").click();
+await page.locator(".toolbox-sub-bar button").first().click();
 await page.waitForTimeout(250);
 check("sub-view back returns to tool list",
   (await page.locator(".toolbox-card").count()) >= 1 && (await page.locator(".toolbox-sub").count()) === 0);
@@ -330,7 +330,7 @@ check("desktop shows both panes", (await dpage.locator(".sidebar").isVisible()) 
 const dnav = await dpage.locator(".system-nav").innerText();
 check("desktop nav keeps scheduled", dnav.includes("定时任务"));
 check("desktop nav keeps toolbox row (v0.7.5)", dnav.includes("工具箱"));
-check("desktop header has no gear button", (await dpage.locator('.header-actions button[aria-label="更多操作"]').count()) === 0);
+check("desktop header has no gear button", (await dpage.locator('.header-actions button[aria-label="更多操作"], .header-actions button[aria-label="列表菜单"]').count()) === 0);
 check("desktop header keeps list menu button", (await dpage.locator('.header-actions button[title="列表菜单"]').count()) === 1);
 // desktop right-click on a task card still opens menu
 await dpage.locator(".add-task-bar textarea").fill("桌面回归任务");

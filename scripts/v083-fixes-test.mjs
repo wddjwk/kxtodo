@@ -407,14 +407,13 @@ const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 
   const settings = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "{}"), SETTINGS_KEY);
   check("navItems 里落了 tool:rmb", (settings?.appearance?.navItems ?? []).includes("tool:rmb"), J(settings?.appearance?.navItems));
 
-  // 点钉住的行：直达子视图
+  // 点钉住的行：直达子视图（v0.8.4 起子页头部是右上角两枚按钮，返回一律回工具箱主界面）
   await page.locator(".system-nav .nav-row:has-text('人民币大小写')").click();
   await page.waitForTimeout(600);
-  check("钉住的行直达工具子视图", (await page.locator(".toolbox-sub-back").count()) === 1);
-  // 返回：从钉住的行进来 → 整页收
-  await page.locator(".toolbox-sub-back").click();
+  check("钉住的行直达工具子视图", (await page.locator(".toolbox-sub-bar").count()) === 1);
+  await page.locator(".toolbox-sub-bar button").first().click();
   await page.waitForTimeout(500);
-  check("从钉住行进来返回时整页收", (await page.locator(".toolbox-view").count()) === 0);
+  check("子页返回落在工具箱主界面", (await page.locator(".toolbox-list").count()) === 1);
 
   // 右键侧栏工具行 → 取消固定
   await page.locator(".system-nav .nav-row:has-text('人民币大小写')").click({ button: "right" });
@@ -446,7 +445,12 @@ const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 
   await page.mouse.move(a.x + a.width / 2, a.y - 10, { steps: 6 });
   await page.mouse.move(b.x + b.width / 2, b.y + 4, { steps: 10 });
   await page.waitForTimeout(150);
-  check("拖动时画出落点线", (await page.locator(".nav-row.drop-before").count()) === 1);
+  // v0.8.4：落点线换成「行实时让位」——拖动中那一行有抬起态，顺序已就地预览
+  check(
+    "拖动中有抬起态且行已让位",
+    (await page.locator(".nav-row.nav-drag-source").count()) === 1 &&
+      (await page.evaluate(() => document.querySelector(".system-nav .nav-row")?.getAttribute("title"))) === "人民币大小写"
+  );
   await page.mouse.up();
   await page.waitForTimeout(600);
   const after = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "{}")?.appearance?.navItems ?? [], SETTINGS_KEY);
@@ -463,10 +467,12 @@ const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 
   await page.locator(".toolbox-card", { hasText: "草稿纸" }).click();
   await page.waitForSelector(".scratchpad-area", { timeout: 8000 });
   await page.locator(".scratchpad-area").fill("第一行\n# 这不是标题，只是文本");
-  await page.waitForTimeout(700);
+  // v0.8.4：防抖拉到 5 秒（每次落盘 = 一条审计 + 一次 revision），状态提示行撤掉了
+  await page.waitForTimeout(5400);
   const stored = await page.evaluate(() => localStorage.getItem("kxtodo-scratchpad-v1"));
   check("草稿自动保存进 localStorage", stored === "第一行\n# 这不是标题，只是文本", J(stored));
-  check("状态显示已自动保存", ((await page.locator(".scratchpad-status").textContent()) ?? "").includes("已自动保存"));
+  const scratch = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "{}").scratchpad ?? null, STATE_KEY);
+  check("草稿正文进数据域（可同步）", scratch?.text === "第一行\n# 这不是标题，只是文本", J(scratch));
   await page.reload({ waitUntil: "load" });
   await page.waitForTimeout(800);
   await page.click(".system-nav .nav-row:has-text('工具箱')");
@@ -484,14 +490,14 @@ const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 
   await page.waitForSelector(".toolbox-card", { timeout: 8000 });
   check("工具箱里有文件传输助手", (await page.locator(".toolbox-card", { hasText: "文件传输助手" }).count()) === 1);
   await page.locator(".toolbox-card", { hasText: "文件传输助手" }).click();
-  await page.waitForSelector(".transfer-grid", { timeout: 8000 });
-  check("发送 / 接收两栏", (await page.locator(".transfer-pane").count()) === 2);
-  check("右上角可自选 relay", (await page.locator(".transfer-relay select").count()) === 1);
-  const sendDisabled = await page.locator(".transfer-pane").first().locator("button", { hasText: "开始发送" }).isDisabled();
-  check("口令不足 8 位时开始发送禁用", sendDisabled);
-  await page.locator(".transfer-tool .toolbox-text-input-wide").fill("same-code-123");
+  // v0.8.4：两栏换成「发送 / 接收」标签滑块（需求 1.3）
+  await page.waitForSelector(".transfer", { timeout: 8000 });
+  check("发送 / 接收两栏（滑块）", (await page.locator(".transfer-tabs button").count()) === 2);
+  const sendDisabled = await page.locator(".transfer-send-button").isDisabled();
+  check("未上线时发送按钮禁用", sendDisabled);
+  await page.locator(".transfer-code-row input").fill("same-code-123");
   await page.waitForTimeout(200);
-  check("浏览器预览（无壳）下发送按钮仍禁用（选不到文件）", await page.locator(".transfer-pane").first().locator("button", { hasText: "开始发送" }).isDisabled());
+  check("浏览器预览（无壳）下发送按钮仍禁用（没上线）", await page.locator(".transfer-send-button").isDisabled());
   check("传输界面无脚本报错", errors.length === 0, errors[0] ?? "");
   await page.close();
 }
@@ -664,9 +670,10 @@ const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 
   await page.waitForSelector(".ledger-view", { timeout: 10000 });
 
   // 账户管理：列表 → 表单 → 类型小表单，Escape 一档一档退
-  await page.click(".ledger-view button[title='更多操作']");
-  await page.waitForSelector(".ledger-gear-panel", { timeout: 8000 });
-  await page.locator(".ledger-gear-panel .menu-item-button", { hasText: "账户与转账" }).click();
+  // v0.8.4 需求 14：齿轮直接弹记账菜单，两个管理器都收进菜单里
+  await page.click(".ledger-view button[title='记账菜单']");
+  await page.waitForSelector(".context-menu", { timeout: 8000 });
+  await page.locator(".context-menu .menu-item-button", { hasText: "账户与转账" }).click();
   await page.waitForSelector(".ledger-manager", { timeout: 8000 });
   await page.locator(".ledger-manager button", { hasText: "添加账户" }).first().click();
   await page.waitForTimeout(400);
@@ -694,9 +701,9 @@ const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 
 
   // 在浮层里点一下不该把自己关掉（LedgerView.closeOverlays 现在也收这两个管理器，
   // 靠浮层根上的 click|stopPropagation 挡住 App 的「点空白关所有浮层」）
-  await page.click(".ledger-view button[title='更多操作']");
-  await page.waitForSelector(".ledger-gear-panel", { timeout: 8000 });
-  await page.locator(".ledger-gear-panel .menu-item-button", { hasText: "分类管理" }).click();
+  await page.click(".ledger-view button[title='记账菜单']");
+  await page.waitForSelector(".context-menu", { timeout: 8000 });
+  await page.locator(".context-menu .menu-item-button", { hasText: "分类管理" }).click();
   await page.waitForSelector(".ledger-manager", { timeout: 8000 });
   await page.locator(".ledger-manager .ledger-sheet-title").click();
   await page.waitForTimeout(300);

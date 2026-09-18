@@ -65,3 +65,22 @@ export function availableTools(): ToolDefinition[] {
 export function toolById(id: string): ToolDefinition | undefined {
   return TOOLS.find((tool) => tool.id === id);
 }
+
+/**
+ * 子视图 chunk 的加载缓存（v0.8.4）：同一个工具只发一次请求。
+ * **失败不留缓存**——再点一次就是一次真正的重试，否则用户看到的是「返回后再进还是失败」。
+ * 壳用 `{#await loadToolModule(tool)}` 直接把它挂到模板上，不再自己管加载状态。
+ */
+const pendingLoads = new Map<ToolId, Promise<{ default: Component }>>();
+
+export function loadToolModule(tool: ToolDefinition): Promise<{ default: Component }> {
+  let pending = pendingLoads.get(tool.id);
+  if (!pending) {
+    pending = tool.load().catch((error: unknown) => {
+      pendingLoads.delete(tool.id);
+      throw error;
+    });
+    pendingLoads.set(tool.id, pending);
+  }
+  return pending;
+}

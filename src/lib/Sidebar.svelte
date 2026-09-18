@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
   import type { Component } from "svelte";
+  import { flip } from "svelte/animate";
   import {
     ChevronsDownUp, ChevronsUpDown, FilePlus2, FolderInput, FolderPlus, NotebookPen, Pencil, PinOff, Search, Shapes, Toolbox, Trash2, Upload, Wallet
   } from "@lucide/svelte";
@@ -82,7 +83,10 @@
     onSelect: () => void;
   };
 
-  $: navRows = $appSettings.appearance.navItems.flatMap((id): NavRow[] => {
+  /** 拖动中的临时顺序（v0.8.4 需求 8）：拖动时行跟着让位，松手才落盘。 */
+  let navDragOrder: NavItemId[] | null = null;
+
+  $: navRows = (navDragOrder ?? $appSettings.appearance.navItems).flatMap((id): NavRow[] => {
     if (id === "diary") {
       return [{ id, label: "日记", component: NotebookPen, selected: diaryActive, count: 0, onSelect: openDiary }];
     }
@@ -105,7 +109,7 @@
           id,
           label: tool.name,
           component: tool.icon,
-          selected: toolboxActive && $toolRoute.id === toolId,
+          selected: toolboxActive && $toolRoute === toolId,
           count: 0,
           onSelect: () => openPinnedTool(toolId)
         }
@@ -221,11 +225,11 @@
     showToolboxPage();
   }
 
-  /** 钉住的工具行：直达子视图，并记住「这一趟从钉住的行进来」（返回时整页收）。
-   *  路由必须在开页**之后**设：openToolbox 的 reset 会把它清掉。 */
+  /** 钉住的工具行：直达子视图。路由必须在开页**之后**设：
+   *  openToolbox / showToolboxPage 一带的收尾会把可能残留的路由先清掉。 */
   function openPinnedTool(toolId: ToolId): void {
     showToolboxPage();
-    openToolboxTool(toolId, true);
+    openToolboxTool(toolId);
   }
 
   // ---- 固定区：钉住的工具的右键 / 长按菜单（取消固定） ----
@@ -252,29 +256,52 @@
 
   // ---- 固定区拖动排序（鼠标；触屏长按是菜单，与全应用手势一致） ----
   let navEl: HTMLElement;
-  let navDrag: { id: NavItemId; over: number } | null = null;
+  let navDrag: { id: NavItemId } | null = null;
   /** 拖完松手会补一个 click：不压掉的话「排完序顺手把那一行打开了」 */
   let navDragSuppressClick = false;
 
-  function navDropIndex(clientY: number): number {
+  /**
+   * 落点下标：**按布局两种算法**。
+   *
+   * - 单列：一行一项，按 Y 在行内的上半 / 下半决定插在它前还是后（原来就这一条）；
+   * - 双列 / 只图标：同一排有左右两项（图标模式整块只有一排），只比 Y 永远落在
+   *   同一带里、拖谁都只能落到头或尾——所以在「同一竖带内」改按 X 定前后。
+   */
+  function navDropIndex(clientX: number, clientY: number): number {
     const rows = [...(navEl?.querySelectorAll(".nav-row") ?? [])] as HTMLElement[];
+    const stacked = navLayout === "list";
     for (let index = 0; index < rows.length; index++) {
       const rect = rows[index].getBoundingClientRect();
-      if (clientY < rect.top + rect.height / 2) return index;
+      if (rect.height === 0) continue;
+      if (clientY < rect.top) return index;
+      if (clientY <= rect.bottom) {
+        if (stacked) return clientY < rect.top + rect.height / 2 ? index : index + 1;
+        return clientX < rect.left + rect.width / 2 ? index : index + 1;
+      }
     }
     return rows.length;
   }
 
-  function commitNavDrag(drag: { id: NavItemId; over: number }): void {
-    const ids = navRows.map((row) => row.id);
-    const from = ids.indexOf(drag.id);
+  /** 拖动中把行实时挪到落点（松手才落盘）：拖动看着像「行跟着让位」而不是只画一根线 */
+  function previewNavOrder(id: NavItemId, clientX: number, clientY: number): void {
+    const ids = navDragOrder ?? [...$appSettings.appearance.navItems];
+    const from = ids.indexOf(id);
     if (from < 0) return;
-    let to = drag.over;
-    ids.splice(from, 1);
+    let to = navDropIndex(clientX, clientY);
+    const moving = [...ids];
+    moving.splice(from, 1);
     if (to > from) to -= 1;
-    if (to === from) return;
-    ids.splice(to, 0, drag.id);
-    void reorderNavItemsAction(ids);
+    moving.splice(Math.max(0, Math.min(moving.length, to)), 0, id);
+    if (moving.every((item, index) => item === ids[index])) return;
+    navDragOrder = moving;
+  }
+
+  /** 松手：把拖动中的顺序落盘（没动过就不写） */
+  function commitNavDrag(): void {
+    const order = navDragOrder;
+    navDragOrder = null;
+    if (!order) return;
+    void reorderNavItemsAction(order);
   }
 
   function navPointerDown(event: PointerEvent, id: NavItemId): void {
@@ -285,16 +312,17 @@
     const move = (ev: PointerEvent): void => {
       if (!armed && Math.hypot(ev.clientX - startX, ev.clientY - startY) > 5) {
         armed = true;
-        navDrag = { id, over: navRows.findIndex((row) => row.id === id) };
+        navDrag = { id };
       }
       if (!armed || !navDrag) return;
       ev.preventDefault();
-      navDrag = { id, over: navDropIndex(ev.clientY) };
+      previewNavOrder(id, ev.clientX, ev.clientY);
     };
     const up = (): void => {
       window.removeEventListener("pointermove", move, true);
       window.removeEventListener("pointerup", up, true);
-      if (armed && navDrag) commitNavDrag(navDrag);
+      if (armed) commitNavDrag();
+      else navDragOrder = null;
       navDrag = null;
       if (armed) {
         navDragSuppressClick = true;
@@ -560,8 +588,6 @@
       <button
         class="nav-row"
         class:selected={row.selected}
-        class:drop-before={navDrag !== null && navDrag.id !== row.id && navDrag.over === index}
-        class:drop-after={navDrag !== null && navDrag.id !== row.id && navDrag.over === navRows.length && index === navRows.length - 1}
         class:nav-drag-source={navDrag?.id === row.id}
         type="button"
         title={row.label}
@@ -569,6 +595,7 @@
         on:pointerdown={(event) => navPointerDown(event, row.id)}
         on:contextmenu={(event) => { if (toolRow) handleNavContext(event, row.id); }}
         use:longpress={(pos) => { if (toolRow) openNavMenuAt(pos.x, pos.y, row.id); }}
+        animate:flip={{ duration: 150 }}
       >
         <span class="active-rail"></span>
         <span class="system-icon">
