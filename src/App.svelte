@@ -13,6 +13,7 @@
   import { isMobile, mobileView, startMobileRouter } from "./lib/platform";
   import { imeViewport, startImeViewport } from "./lib/imeViewport";
   import { startAutoSync } from "./lib/syncRunner";
+  import { ensureTransferRuntime } from "./lib/transferStore";
   import { revealMainWindow } from "./lib/backend";
   import { oversizedAvatarShrink } from "./lib/images";
   import { checkForUpdate } from "./lib/updater";
@@ -62,6 +63,9 @@
     void revealMainWindow();
     // 自动同步循环（全平台：配对后按 intervalSeconds 周期 pull+push）
     startAutoSync();
+    // 文件传输的全局运行时（v0.8.5 需求 4）：事件订阅 + 恢复记住的口令都在这里，
+    // 工具页没开也收得到拨入（人不在工具页时靠系统通知接住）
+    ensureTransferRuntime();
     window.addEventListener("keydown", handleShortcut);
     // 启动后静默检查一次更新（全平台，可在设置关闭）
     const timer = window.setTimeout(() => {

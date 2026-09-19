@@ -219,6 +219,9 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   check("桌面侧段控是支出/收入", sideLabels.join(",") === "支出,收入", sideLabels.join(","));
   const axisTexts = await page.$$eval(".ledger-chart-axis", (els) => els.map((el) => el.textContent ?? ""));
   check("月视图横轴没有 NaN", axisTexts.every((text) => !text.includes("NaN")), axisTexts.join("|"));
+  // v0.8.5 需求 8：图例默认跟随侧段控（支出侧只亮支出），先把收入点亮再叠结余
+  await page.locator(".ledger-legend button", { hasText: "收入" }).click();
+  await page.waitForTimeout(200);
   await page.locator(".ledger-legend button", { hasText: "结余" }).click();
   await page.waitForTimeout(400);
   check("点结余胶囊后画三条曲线", (await page.$$(".ledger-line.out")).length === 1 &&

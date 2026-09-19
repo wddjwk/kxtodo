@@ -66,7 +66,13 @@
   }));
 
   function measure(index: number, node: HTMLElement): void {
-    const height = node.getBoundingClientRect().height;
+    // **用 offsetHeight，绝不用 getBoundingClientRect**（v0.8.5 查出的真根因）：
+    // 壳上有 `transform: scale(uiScale)`（默认 0.75），rect 拿到的是**缩放后的视觉
+    // 尺寸**，而滚动位置（scrollTop）与占位高度都是布局像素。混用两套单位时每行都
+    // 欠 25%，行越靠后累积误差越大——「跳转到某一天」会差出好几张卡。
+    // offsetHeight 是布局像素，与 scrollTop 同一套坐标系；整数取整的误差由下面的
+    // 0.5px 阈值自然吸收。
+    const height = node.offsetHeight;
     if (height <= 0) return;
     const current = heights[index] ?? estimate;
     if (Math.abs(current - height) < 0.5) return;
@@ -75,10 +81,15 @@
     heights = next;
   }
 
-  /** 动作：挂载时同步量一次（首帧就要有正确结论），之后交给共享 RO 跟踪 */
+  /**
+   * 动作：挂载时同步量一次（首帧就要有正确结论），之后交给共享 RO 跟踪。
+   *
+   * **两种模式都要记账**（v0.8.5 修）：早先全量模式下直接 no-op，而 keyed each
+   * 复用的行在 `fullMode` 翻转时 action 不会重建——99 → 101 条之后，这批行永远
+   * 停在 estimate 上，滚动到该区间占位高度与真实高度对不上、来回跳。全量模式的
+   * 项数有 fullBelow 上限（任务列表 100），量高的代价可以忽略，索性一直量。
+   */
   function track(node: HTMLElement, index: number): { update(next: number): void; destroy(): void } {
-    // 全量模式不做高度记账：没有占位要算，量了也白量
-    if (fullMode) return { update: () => undefined, destroy: () => undefined };
     let current = index;
     const release = observeResize(node, () => measure(current, node));
     measure(current, node);
@@ -146,13 +157,32 @@
     scrollTop = restored;
   });
 
-  /** 供宿主跳转（日历点某天 / 搜索定位）：滚到第 index 项 */
+  /**
+   * 供宿主跳转（日历点某天 / 搜索定位）：滚到第 index 项。
+   *
+   * 第一次落位用的是当前前缀和——目标附近的行走还没量过、按估高算，落点会有偏差；
+   * 窗口挂上并对齐附近的行之后前缀和才准，所以双 rAF 后再对一次位（纯修正，不改语义）。
+   * 期间用户自己滚了（滚动位置不再是我们放的那个）就不再纠正。
+   */
   export function scrollToIndex(index: number): void {
     if (!scroller) return;
     const target = Math.min(Math.max(0, index), Math.max(0, items.length - 1));
-    scroller.scrollTop = prefix[target];
-    scrollTop = scroller.scrollTop;
-    anchor = anchorAt(prefix, scrollTop, keys);
+    const place = (): void => {
+      scroller!.scrollTop = prefix[target];
+      scrollTop = scroller!.scrollTop;
+      anchor = anchorAt(prefix, scrollTop, keys);
+    };
+    place();
+    // 第二次对位：第一次落位用的是「目标附近的行走还没量过」的前缀和（估高）。
+    // 窗口挂上并对齐附近的行之后前缀和才准，这一步把估值误差消掉。这里**不设**
+    // 「用户滚过就放弃」的守卫——内容高度被量准后浏览器会顺手把越界的 scrollTop
+    // 夹回来（不是用户操作），那一步正需要修正。
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!scroller || Math.abs(prefix[target] - scroller.scrollTop) < 0.5) return;
+        place();
+      });
+    });
   }
 
   /** 宿主自己动了滚动位置（比如换视图归零）后同步一次 */

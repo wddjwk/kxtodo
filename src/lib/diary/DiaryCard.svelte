@@ -1,8 +1,8 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy } from "svelte";
   import { Image as ImageIcon, PenLine } from "@lucide/svelte";
-  import { markdownTitle } from "../markdown";
-  import { taskToggleIndex, toggleMarkdownTask } from "../markdownTasks";
+  import { markdownTitle, setRenderedTaskBox } from "../markdown";
+  import { markdownTaskChecked, taskToggleIndex, toggleMarkdownTask } from "../markdownTasks";
   import { updateDiaryEntry } from "../actions";
   import { tagChipStyle } from "../tagColors";
   import { createDeferredMarkdown } from "../deferredMarkdown";
@@ -72,11 +72,25 @@
   $: preloadMarkdownImages(entry.markdown, DIARY_IMAGE_NODE);
   let fullHtml = "";
   const fullRender = createDeferredMarkdown((html) => {
-    fullHtml = html;
+    if (html !== fullHtml) {
+      fullHtml = html;
+      return;
+    }
+    // 同值也要真写：勾选手术更新之后文本回退时，DOM 与渲染产物已经不同步，
+    // Svelte 的 `{@html}` 同值不重建——先清空再写回强制重建（同一任务，不闪）
+    fullHtml = "";
+    void Promise.resolve().then(() => (fullHtml = html));
   });
   $: syncFullRender(isExpanded, entry.markdown);
 
+  /** 勾选手术式更新的重渲豁免（需求 33）：与 TaskCard 同一条纪律，只认文本完全一致 */
+  let skipNextRender = "";
+
   function syncFullRender(expanded: boolean, markdown: string): void {
+    if (expanded && markdown === skipNextRender) {
+      skipNextRender = "";
+      return;
+    }
     if (!expanded) {
       fullRender.cancel();
       if (fullHtml !== "") fullHtml = "";
@@ -214,11 +228,20 @@
       dispatch("openLink", { href: link.href, title: (link.textContent ?? "").trim() });
       return;
     }
-    // 任务列表的勾选框：点一下就把正文里的 `- [ ]` / `- [x]` 翻过来存回去
+    // 任务列表的勾选框：点一下就把正文里的 `- [ ]` / `- [x]` 翻过来存回去。
+    // DOM 侧走**手术式**更新（需求 33）：只收敛这一个 li，整篇重渲由豁免跳过。
+    // **不能 preventDefault**：取消激活行为会把原生翻转的 checked 还原回去。
     const boxIndex = taskToggleIndex(event, event.currentTarget as Element);
     if (boxIndex !== null) {
-      event.preventDefault();
-      void updateDiaryEntry(entry.id, { markdown: toggleMarkdownTask(entry.markdown, boxIndex) });
+      const next = toggleMarkdownTask(entry.markdown, boxIndex);
+      const box = (event.target as HTMLElement | null)?.closest?.('input[type="checkbox"]');
+      if (next !== entry.markdown && box instanceof HTMLInputElement) {
+        setRenderedTaskBox(box, markdownTaskChecked(next, boxIndex));
+        skipNextRender = next;
+        // 账本跟上（同 TaskCard）：文本回退时才不会误判「已渲过」而跳过
+        fullRender.adopt(next, DIARY_IMAGE_NODE);
+      }
+      void updateDiaryEntry(entry.id, { markdown: next });
       return;
     }
     if (mobile) handleMobileTap(event);

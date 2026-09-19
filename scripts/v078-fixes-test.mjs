@@ -564,18 +564,18 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
     imeStyles.panned
   );
 
-  // 3 记账齿轮面板同样宽度自适应（移动端）
+  // 3 记账齿轮直接弹「记账菜单」（v0.8.4 起面板与菜单合一）：宽度自适应、标签不溢出
   await page.click(".ledger-view .header-actions > button:last-child");
-  await page.waitForSelector(".ledger-gear-panel", { timeout: 5000 });
+  await page.waitForSelector(".context-menu .menu-item-button", { timeout: 5000 });
   await page.waitForTimeout(300);
-  const ledgerPanel = await page.$eval(".ledger-gear-panel", (el) => {
+  const ledgerPanel = await page.$eval(".context-menu", (el) => {
     const rect = el.getBoundingClientRect();
     const labelWidths = [...el.querySelectorAll(".menu-item-label")].map((item) => item.getBoundingClientRect().width);
     return { width: Math.round(rect.width / 0.75), maxLabel: Math.round(Math.max(...labelWidths, 0) / 0.75) };
   });
   check(
-    "记账齿轮面板宽度自适应（3）",
-    ledgerPanel.width < 168 && ledgerPanel.width > ledgerPanel.maxLabel,
+    "记账齿轮菜单宽度容得下最长项（3）",
+    ledgerPanel.width >= ledgerPanel.maxLabel && ledgerPanel.maxLabel > 0,
     JSON.stringify(ledgerPanel)
   );
   await page.keyboard.press("Escape");

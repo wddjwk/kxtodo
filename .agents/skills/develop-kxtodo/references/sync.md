@@ -181,6 +181,14 @@ iroh 1.1 承载（QUIC + 打洞 + n0 免费公共 relay；`sync.p2pRelay`/`sync.
 - 移动端：发送侧走 webview 的 file input，字节按 base64 分片暂存 `runtime/transfer-outbox`（scoped storage 下 core 只能这样拿到内容）；**接收目录两端是同一份实现**——都用 `app.path().download_dir()` 下的 `kxtodo-transfer`。理由：Android 的 `download_dir()` 就是 `getExternalFilesDir(DIRECTORY_DOWNLOADS)`（外部目录，不需要任何权限、USB 与文件管理器都看得到），而 `app_data_dir()` 在 Android 上是**内部** `/data/data/<pkg>`，收到的文件用户根本找不到。**Tauri v2 的 `PathResolver` 没有 `external_app_data_dir()`**（Android 那份只有 audio/cache/config/data/local_data/document/download/picture/public/video/resource/`app_*`/temp/home 这些），凭空写一个平台专有 API 的后果是本地桌面编译与 `ci.yml` 全绿、只有 `release.yml` 的安卓那一栏红。
 - 测试用**假的 pkarr relay**（从 `p2p_e2e.rs` 抄的那一套）在本机跑通完整往返，不依赖公网：`crates/core/tests/transfer.rs`。
 
+### v0.8.5：生命周期、复用地基的三条硬规则
+
+- **发送会话绝不持有在线端点**：`iroh::Endpoint::close()` 对**任何一个 clone** 调用都会关掉整个端点（没有引用计数保活）。发送从「每次自起端点」改成复用在线端点之后，收尾若还关端点，一次发完就把整台设备弄下线（`TRANSFER_CLOSED`）。取消与收尾关的都是**会话自己的 `Connection`**（`Session.connection`）；端点只有 `go_offline` 关。测试断言：发完 `status(sender)["online"] === true` 且反向还能再传一条。
+- **确认卡是多槽**：`Online.pending` 是 `HashMap<String, PendingRequest>`（request_id 为键），`decide` 按 id 应答；UI 的 `state.requests` 是数组。单槽时第二个拨入会顶掉第一张，第一张的等待循环干等到 60 秒超时当拒绝。
+- **目录查询要有缓存**：设备名按 device-id 缓存 20 秒（`NAME_CACHE_TTL`）——每 2 秒对每台设备各查一次公网 pkarr 是纯浪费。send 的 fallback 与设备列表**同一个 fresh 口径**（45 秒）：列表里看不见的设备，发送也如实说「不在线」；fallback 里在房间条目上按 `entry.id.to_z32() == target` 比对，**不要拿 z32 去 `FromStr`**。
+- **会话状态与事件订阅住 `transferStore.ts`**（前端模块级单例，`App.svelte` 启动调 `ensureTransferRuntime()`）：有活跃任务不断连；已配对（在线）退出工具页保持在线、手动「离线」才下线（并清掉记住的口令）；未配对退出即清理。工具页只是它的视图。人不在工具页时 `request` 发系统通知 + 侧栏「工具箱」行挂待办角标（当前通知栈没有点击回调，这是诚实落位而不是假装点击穿透）。
+- **协议卫生**：大文件读写走 `tokio::fs` / `spawn_blocking`（运行时只有 2 个 worker 线程，同步 IO 会卡住 accept 与心跳）；历史文件读-改-写有进程内锁；同名自动重命名 1000 个候选用尽报 `TRANSFER_NAME_EXHAUSTED`，**绝不回退覆盖**。
+
 ## 相关但住在别处的同步内容
 
 | 主题 | 住在哪 |

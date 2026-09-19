@@ -491,7 +491,7 @@ const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 
   check("工具箱里有文件传输助手", (await page.locator(".toolbox-card", { hasText: "文件传输助手" }).count()) === 1);
   await page.locator(".toolbox-card", { hasText: "文件传输助手" }).click();
   // v0.8.4：两栏换成「发送 / 接收」标签滑块（需求 1.3）
-  await page.waitForSelector(".transfer", { timeout: 8000 });
+  await page.waitForSelector(".transfer-page", { timeout: 8000 });
   check("发送 / 接收两栏（滑块）", (await page.locator(".transfer-tabs button").count()) === 2);
   const sendDisabled = await page.locator(".transfer-send-button").isDisabled();
   check("未上线时发送按钮禁用", sendDisabled);

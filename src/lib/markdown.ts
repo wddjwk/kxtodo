@@ -446,45 +446,93 @@ function transformLocalImages(html: string, nodeId: string): string {
 }
 
 /**
- * 勾选过的任务项打标：`li.md-task-done` + 把「这一行自己的内容」圈进 `span.md-task-label`
- * （松散列表里勾选框在第一个 `<p>` 里，直接给那个 p 打标）。
+ * 勾选某个**已渲染**的任务项：`li.md-task-done` + 把「这一行自己的内容」圈进
+ * `span.md-task-label`（松散列表里勾选框在第一个 `<p>` 里，直接给那个 p 打标）。
  *
  * 为什么不在 CSS 里拿 `li:has(input:checked)` 画删除线——两个都试过、都不行：
  * ① `:has` 的**后代**匹配会把祖先 li 一起命中（勾一个子项，整棵树全划线）；
  * ② `text-decoration` 会从 li **传播**进嵌套子列表，且子级无法取消继承——
  * 只有把被装饰的元素收窄成「这一行的行内内容」（原子行内盒除外，勾选框自己
  * 不会被划穿），删除线才只属于当前行。
+ *
+ * 渲染管线（`markCheckedTaskItems`）与点击路径（`toggleRenderedTaskBox`）共用这一份，
+ * 两边等价性由构造保证（需求 33）。对已打标的 li 幂等：重复调用不会二次搬节点。
  */
+export function markCheckedItem(li: Element): void {
+  const tight = li.querySelector<HTMLInputElement>(":scope > input.md-task-box");
+  const looseP = tight ? null : li.querySelector(":scope > p:first-child");
+  const loose = looseP?.querySelector<HTMLInputElement>(":scope > input.md-task-box") ?? null;
+  const box = tight ?? loose;
+  if (!box || !box.checked) return;
+  li.classList.add("md-task-done");
+  if (looseP && loose) {
+    if (!looseP.classList.contains("md-task-label")) looseP.classList.add("md-task-label");
+    return;
+  }
+  if (!tight) return;
+  if (li.querySelector(":scope > span.md-task-label")) return;
+  const label = document.createElement("span");
+  label.className = "md-task-label";
+  // 勾选框之后、嵌套列表之前的行内内容全进 span（勾选框本身留在外面）
+  const moving: ChildNode[] = [];
+  let node: ChildNode | null = tight.nextSibling;
+  while (node) {
+    if (node instanceof HTMLElement && (node.tagName === "UL" || node.tagName === "OL")) break;
+    moving.push(node);
+    node = node.nextSibling;
+  }
+  if (moving.length === 0) return;
+  tight.after(label);
+  for (const child of moving) label.appendChild(child);
+}
+
+/**
+ * 取消勾选（需求 33）：拆掉 `md-task-done` 与 `md-task-label`——紧列表里 span 要**拆包**
+ * （子节点按原序搬回勾选框之后），松散列表里去掉 p 上的类即可。
+ * 未勾选的项上幂等：没有任何标记时一个节点都不动。
+ */
+export function unmarkCheckedItem(li: Element): void {
+  li.classList.remove("md-task-done");
+  const tightLabel = li.querySelector<HTMLElement>(":scope > span.md-task-label");
+  if (tightLabel) {
+    const parent = tightLabel.parentElement;
+    if (parent) {
+      let anchor: ChildNode = tightLabel;
+      for (const child of [...tightLabel.childNodes]) {
+        parent.insertBefore(child, anchor);
+        anchor = child;
+      }
+    }
+    tightLabel.remove();
+    return;
+  }
+  li.querySelector(":scope > p.md-task-label")?.classList.remove("md-task-label");
+}
+
+/**
+ * 点击渲染态勾选框后的**手术式**更新（需求 33）：把勾选框与行内标记收敛到指定状态，
+ * 只动这一个 li、不触发整篇重渲（长文档重渲要走「快速版 → 完整版」两段，点一下闪一次）。
+ *
+ * `checked` 由调用方**从源码推出**（`markdownTaskChecked`）而不是拿 DOM 取反：
+ * 原生点击在事件派发前就已经把 `checked` 翻过来了，再取反等于翻回去。
+ * 数据路径不在这里：调用方照旧 `toggleMarkdownTask` 写库，卡片重渲由文本豁免跳过。
+ */
+export function setRenderedTaskBox(box: HTMLInputElement, checked: boolean): void {
+  box.checked = checked;
+  // 属性也一起收敛：`:checked` 看的是活动状态（属性只定默认值），但两者保持一致
+  // 不会给「克隆/序列化这段 DOM」的场景留下一个对不上的初值
+  box.toggleAttribute("checked", checked);
+  const li = box.closest("li");
+  if (!li) return;
+  if (checked) markCheckedItem(li);
+  else unmarkCheckedItem(li);
+}
+
 function markCheckedTaskItems(html: string): string {
   if (typeof document === "undefined" || !html.includes("md-task-box")) return html;
   const template = document.createElement("template");
   template.innerHTML = html;
-  template.content.querySelectorAll("li").forEach((li) => {
-    const tight = li.querySelector<HTMLInputElement>(":scope > input.md-task-box");
-    const looseP = tight ? null : li.querySelector(":scope > p:first-child");
-    const loose = looseP?.querySelector<HTMLInputElement>(":scope > input.md-task-box") ?? null;
-    const box = tight ?? loose;
-    if (!box || !box.checked) return;
-    li.classList.add("md-task-done");
-    if (looseP && loose) {
-      looseP.classList.add("md-task-label");
-      return;
-    }
-    if (!tight) return;
-    const label = document.createElement("span");
-    label.className = "md-task-label";
-    // 勾选框之后、嵌套列表之前的行内内容全进 span（勾选框本身留在外面）
-    const moving: ChildNode[] = [];
-    let node: ChildNode | null = tight.nextSibling;
-    while (node) {
-      if (node instanceof HTMLElement && (node.tagName === "UL" || node.tagName === "OL")) break;
-      moving.push(node);
-      node = node.nextSibling;
-    }
-    if (moving.length === 0) return;
-    tight.after(label);
-    for (const child of moving) label.appendChild(child);
-  });
+  template.content.querySelectorAll("li").forEach((li) => markCheckedItem(li));
   return template.innerHTML;
 }
 
@@ -560,7 +608,12 @@ class RenderCache {
   }
 }
 
-const blockCache = new RenderCache(300, 4_000_000);
+/**
+ * 整篇渲染的 memo：键 = 节点 + **全文**（`cacheKey`）。早先叫 `blockCache` 名不副实——
+ * 它从来不是块级的，命中/失效都以整篇为单位。真·块级缓存（勾选只失效所在块、
+ * 编辑只重渲改动段落）是治本方向，v0.8.5 不立项（见 history/v0.8.5）。
+ */
+const docCache = new RenderCache(300, 4_000_000);
 const fastCache = new RenderCache(120, 2_000_000);
 const inlineCache = new RenderCache(800, 400_000);
 
@@ -580,7 +633,7 @@ function cacheKey(markdown: string, nodeId: string): string {
  * 没命中的才走「快速版先上、完整版随后」（见 deferredMarkdown）。
  */
 export function peekMarkdown(markdown: string, nodeId = ""): string | null {
-  const hit = blockCache.get(cacheKey(markdown, nodeId));
+  const hit = docCache.get(cacheKey(markdown, nodeId));
   // 命中也要记数：走记忆化就不经过 `renderMarkdown` 了（展开卡片那条路径正是这样），
   // 不记的话性能基准里的 blockHit 永远是 0，「记忆化到底有没有生效」就测不出来
   if (hit !== undefined) renderStats.blockHit += 1;
@@ -591,13 +644,13 @@ export function peekMarkdown(markdown: string, nodeId = ""): string | null {
 export function renderMarkdown(markdown: string, nodeId = ""): string {
   renderStats.block += 1;
   const key = cacheKey(markdown, nodeId);
-  const cached = blockCache.get(key);
+  const cached = docCache.get(key);
   if (cached !== undefined) {
     renderStats.blockHit += 1;
     return cached;
   }
   const html = renderMarkdownNow(markdown, nodeId, true);
-  blockCache.set(key, html);
+  docCache.set(key, html);
   return html;
 }
 

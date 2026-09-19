@@ -66,16 +66,16 @@ await page.locator(".ui-color-picker input").dispatchEvent("input");
 await page.waitForTimeout(400);
 const accentAfter = await page.locator(".diary-view").evaluate((el) => getComputedStyle(el).getPropertyValue("--accent").trim());
 check("改 UI 颜色会换日记主题色（取色即预览）", accentAfter === "#b64a30", `${accentBefore} -> ${accentAfter}`);
-// v0.8.4 需求 9：取色只预览，点保存才落盘
+// v0.8.4 需求 9：取色器只预览，点保存才落盘
 await page.locator(".color-draft-actions .menu-action-button.primary").click();
 await page.waitForTimeout(500);
 
+// 预设色块：v0.8.5 需求 5 起单击即落盘（不进草稿）
 await page.locator(".color-grid button").nth(1).click();
-await page.waitForTimeout(400);
+await page.waitForTimeout(600);
 const bgAfter = await page.locator(".diary-view").evaluate((el) => el.style.background);
 check("改背景色会换日记背景", bgAfter.includes("rgb"), bgAfter);
-await page.locator(".color-draft-actions .menu-action-button.primary").last().click();
-await page.waitForTimeout(500);
+check("预设背景色不弹草稿条", (await page.locator(".color-draft-actions").count()) === 0);
 
 // 关掉菜单
 await page.keyboard.press("Escape");

@@ -277,6 +277,14 @@
   line-height: 15px;
 }
 
+.tree-item {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  /* 与 .custom-nav 的 gap 同款：包一层不改变行距，flip 才能作用在「行 + 子树」整体上 */
+  gap: 2px;
+}
+
 .tree-row {
   position: relative;
   display: flex;
@@ -299,9 +307,12 @@
   background: #ededed;
 }
 
+/* 被拖的那一行：抬起态（与固定区 .nav-row.nav-drag-source 同款观感） */
 .tree-row.dragging {
-  opacity: 0.55;
+  opacity: 0.6;
   cursor: grabbing;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 16%);
+  background: #ffffff;
 }
 
 .tree-row.category {

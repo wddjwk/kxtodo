@@ -17,7 +17,9 @@
     setNodeIcon as setNodeIconAction,
     setToolPinned as setToolPinnedAction, reorderNavItems as reorderNavItemsAction
   } from "./actions";
-  import { nodeAndDescendantIds, moveTargetOptions, exportStateForNode } from "./nodes";
+  import { nodeAndDescendantIds, planTreeMove, planTreeRootEnd, moveTargetOptions, exportStateForNode } from "./nodes";
+  import type { TreeHover } from "./nodes";
+  import type { AppNode } from "./types";
   import { uiScaleValue, avatarStyle, avatarInitial } from "./styles";
   import { avatarCache, resolveAvatarSrc, isLocalImageRef, localImageFilename } from "./images";
   import { deleteBackgroundImage, deleteNodeImages, exportData } from "./backend";
@@ -33,6 +35,7 @@
   import { navIdToolId } from "./nav";
   import { toolRoute, openToolboxTool, resetToolRoute } from "./tools/navigation";
   import { toolById } from "./tools/registry";
+  import { transferState } from "./transferStore";
   import type { ToolId } from "./tools/catalog";
   import { longpress, isLongPressSuppressed } from "./longpress";
 
@@ -47,6 +50,11 @@
   let treeMenu: { id: string; x: number; y: number } | null = null;
   let emptyAreaMenu: { x: number; y: number } | null = null;
   let draggingId: string | null = null;
+  /**
+   * 拖动中的树预览（v0.8.5 需求 29）：用与落盘**同一个 planner** 算出来的节点顺序渲染，
+   * 行跟着指针实时让位（animate:flip 补平移动画）；松手落盘后清空，回到权威数据。
+   */
+  let treePreview: AppNode[] | null = null;
   let ignoreOverlayCloseOnce = false;
 
   $: treeMenuNode = treeMenu ? $appState.nodes.find((n) => n.id === treeMenu?.id) : null;
@@ -95,8 +103,10 @@
     }
     if (id === "toolbox") {
       // 工具箱两端都有（v0.7.5）；caps 过滤保留着——将来某端不放工具箱时只动 capabilities
+      // 角标 = 传输助手待确认的接收请求（v0.8.5）：人不在工具页时系统通知之外的第二道提示，
+      // 点进来就能看到确认卡，别让 60 秒超时变成「静默拒绝」
       return caps.toolbox
-        ? [{ id, label: "工具箱", component: Toolbox, selected: toolboxActive, count: 0, onSelect: openToolbox }]
+        ? [{ id, label: "工具箱", component: Toolbox, selected: toolboxActive, count: $transferState.requests.length, onSelect: openToolbox }]
         : [];
     }
     // 钉住的工具行（v0.8.3「固定此工具」）：直达该工具的子视图，图标用工具自己的
@@ -263,23 +273,42 @@
   /**
    * 落点下标：**按布局两种算法**。
    *
-   * - 单列：一行一项，按 Y 在行内的上半 / 下半决定插在它前还是后（原来就这一条）；
-   * - 双列 / 只图标：同一排有左右两项（图标模式整块只有一排），只比 Y 永远落在
-   *   同一带里、拖谁都只能落到头或尾——所以在「同一竖带内」改按 X 定前后。
+   * - 单列：一行一项，按 Y 在行内的上半 / 下半决定插在它前还是后；
+   * - 双列 / 只图标：**先按 Y 找所在的「视觉行」**（同一竖带），再在该带内按 X 与
+   *   各行中心的距离取最近的一项，按左/右决定插前还是插后。图标模式整块只有一排、
+   *   所有行共用一个竖带，早前只比 Y 的写法永远在第一行命中、返回 0/1——
+   *   拖谁都只能落到前两位。
    */
   function navDropIndex(clientX: number, clientY: number): number {
     const rows = [...(navEl?.querySelectorAll(".nav-row") ?? [])] as HTMLElement[];
-    const stacked = navLayout === "list";
-    for (let index = 0; index < rows.length; index++) {
-      const rect = rows[index].getBoundingClientRect();
-      if (rect.height === 0) continue;
-      if (clientY < rect.top) return index;
-      if (clientY <= rect.bottom) {
-        if (stacked) return clientY < rect.top + rect.height / 2 ? index : index + 1;
-        return clientX < rect.left + rect.width / 2 ? index : index + 1;
+    const boxes = rows
+      .map((row, index) => {
+        const rect = row.getBoundingClientRect();
+        return { index, top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width, height: rect.height };
+      })
+      .filter((box) => box.height > 0);
+    if (boxes.length === 0) return 0;
+    const midY = (box: { top: number; bottom: number }) => box.top + (box.bottom - box.top) / 2;
+    if (navLayout === "list") {
+      for (const box of boxes) {
+        if (clientY < box.top) return box.index;
+        if (clientY <= box.bottom) return clientY < midY(box) ? box.index : box.index + 1;
       }
+      return boxes[boxes.length - 1].index + 1;
     }
-    return rows.length;
+    const band = boxes.filter((box) => clientY >= box.top && clientY <= box.bottom);
+    if (band.length === 0) {
+      // 落在行间的缝隙或整块之外：按最近一行的中心决定插前还是插后
+      const nearest = boxes.reduce((a, b) =>
+        Math.abs(clientY - midY(a)) <= Math.abs(clientY - midY(b)) ? a : b
+      );
+      return clientY < midY(nearest) ? nearest.index : nearest.index + 1;
+    }
+    const midX = (box: { left: number; width: number }) => box.left + box.width / 2;
+    const nearest = band.reduce((a, b) =>
+      Math.abs(clientX - midX(a)) <= Math.abs(clientX - midX(b)) ? a : b
+    );
+    return clientX < midX(nearest) ? nearest.index : nearest.index + 1;
   }
 
   /** 拖动中把行实时挪到落点（松手才落盘）：拖动看着像「行跟着让位」而不是只画一根线 */
@@ -418,51 +447,42 @@
   }
 
   function moveNode(id: string, targetId: string, position: "before" | "after" | "inside"): void {
-    const source = $appState.nodes.find((n) => n.id === id);
-    const target = $appState.nodes.find((n) => n.id === targetId);
-    if (!source || !target || source.kind === "system" || target.kind === "system") return;
-    if (source.id === target.id || nodeAndDescendantIds(source.id, $appState.nodes).has(target.id)) {
-      showToast("不能移动到自身或自己的子分类中");
+    treePreview = null;
+    draggingId = null;
+    const nodes = $appState.nodes;
+    const plan = planTreeMove(nodes, id, targetId, position);
+    if (!plan) {
+      const source = nodes.find((n) => n.id === id);
+      if (source && nodeAndDescendantIds(source.id, nodes).has(targetId)) {
+        showToast("不能移动到自身或自己的子分类中");
+      }
       return;
     }
-    if (position === "inside" && target.kind !== "category") return;
-    const nextParentId = position === "inside" ? target.id : target.parentId;
-    const sourceWithParent = { ...source, parentId: nextParentId };
-    const withoutSource = $appState.nodes.filter((n) => n.id !== id);
-    const targetIndex = withoutSource.findIndex((n) => n.id === target.id);
-    let insertIndex = withoutSource.length;
-    if (position === "before") {
-      insertIndex = targetIndex >= 0 ? targetIndex : withoutSource.length;
-    } else if (position === "after") {
-      insertIndex = targetIndex >= 0 ? targetIndex + 1 : withoutSource.length;
-    } else {
-      const childIndexes = withoutSource
-        .map((n, i) => ({ n, i }))
-        .filter((item) => item.n.parentId === target.id)
-        .map((item) => item.i);
-      insertIndex = childIndexes.length ? Math.max(...childIndexes) + 1 : targetIndex >= 0 ? targetIndex + 1 : withoutSource.length;
-    }
-    const nodes = [...withoutSource];
-    nodes.splice(insertIndex, 0, sourceWithParent);
-    const ordered = nodes.map((n) => (position === "inside" && n.id === target.id ? { ...n, collapsed: false } : n));
-    void applyTreeOrderAction(ordered, { [id]: nextParentId });
-    draggingId = null;
+    void applyTreeOrderAction(plan.ordered, { [id]: plan.parentId });
   }
 
   /** 拖到空白区：移动为根级最后一项。 */
   function moveNodeToRootEnd(id: string): void {
-    const source = $appState.nodes.find((n) => n.id === id);
-    if (!source || source.kind === "system") return;
-    const withoutSource = $appState.nodes.filter((n) => n.id !== id);
-    const rootIndexes = withoutSource
-      .map((n, i) => ({ n, i }))
-      .filter((item) => !item.n.parentId && item.n.kind !== "system")
-      .map((item) => item.i);
-    const insertIndex = rootIndexes.length ? Math.max(...rootIndexes) + 1 : withoutSource.length;
-    const nodes = [...withoutSource];
-    nodes.splice(insertIndex, 0, { ...source, parentId: null });
-    void applyTreeOrderAction(nodes, { [id]: null });
+    treePreview = null;
     draggingId = null;
+    const plan = planTreeRootEnd($appState.nodes, id);
+    if (!plan) return;
+    void applyTreeOrderAction(plan.ordered, { [id]: plan.parentId });
+  }
+
+  /** 拖动中的悬停：用与落盘同一个 planner 算预览（需求 29 的「行实时让位」） */
+  function handleTreeDragHover(event: CustomEvent<TreeHover>): void {
+    if (!draggingId) return;
+    const hover = event.detail;
+    if (hover.over === "none") {
+      treePreview = null;
+      return;
+    }
+    const plan =
+      hover.over === "rootEnd"
+        ? planTreeRootEnd($appState.nodes, draggingId)
+        : planTreeMove($appState.nodes, draggingId, hover.targetId, hover.position);
+    treePreview = plan ? plan.ordered : null;
   }
 
   function moveNodeToGroup(id: string, parentId: string | null): void {
@@ -619,7 +639,7 @@
 
   <nav class="custom-nav" class:root-drop-active={draggingId !== null} use:longpress={handleEmptyAreaLongPress} on:contextmenu={openEmptyAreaMenu} on:click|stopPropagation>
     <ListTree
-      nodes={$appState.nodes}
+      nodes={treePreview ?? $appState.nodes}
       selectedNodeId={diaryActive || ledgerActive ? "" : $appState.selectedNodeId}
       counts={$listCounts}
       showCategoryCounts={$appSettings.features.showCategoryBadges}
@@ -634,9 +654,10 @@
       on:closeMenu={() => { treeMenu = null; emptyAreaMenu = null; }}
       on:pickIcon={(e) => openIconPicker(e.detail)}
       on:dragStart={(e) => (draggingId = e.detail || null)}
+      on:dragHover={handleTreeDragHover}
       on:dropNode={(e) => moveNode(e.detail.id, e.detail.targetId, e.detail.position)}
       on:dropRootEnd={(e) => moveNodeToRootEnd(e.detail)}
-      on:dragEnd={() => (draggingId = null)}
+      on:dragEnd={() => { draggingId = null; treePreview = null; }}
     />
   </nav>
 

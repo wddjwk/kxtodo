@@ -20,7 +20,6 @@
 //! 取消是协作式的：置标志 + 断开连接，正在跑的读写下一轮循环自己退出。
 
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -31,7 +30,7 @@ use iroh::{Endpoint, EndpointId, RelayMode, SecretKey};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 
 use crate::error::{CoreError, CoreResult};
@@ -56,6 +55,8 @@ const PEER_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
 const REPUBLISH_SECS: u64 = 20;
 /// 本地判定「这台设备还在线」的条目年龄上限（发布间隔的约 2 倍）
 const DEVICE_FRESH_SECS: u64 = 45;
+/// 设备名的缓存时长：只在这段窗口首次见到某台设备时查一次公网目录
+const NAME_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(20);
 /// 接收确认卡的等待时长（超时当拒绝，别把发送方永远挂在那儿）
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 /// 历史保留条数（需求：最近 50 条）
@@ -136,6 +137,11 @@ struct Session {
     role: TransferRole,
     cancel: AtomicBool,
     endpoint: Mutex<Option<Endpoint>>,
+    /// 会话自己的连接（建立后放进来）。取消时关它、收尾时丢掉它——
+    /// **不要拿 `endpoint` 去关在线会话的共享端点**：iroh 的 `Endpoint::close()`
+    /// 对任何一个 clone 调用都会关掉整个端点（没有引用计数保活），
+    /// 发完一次就把整台设备弄下线。
+    connection: Mutex<Option<iroh::endpoint::Connection>>,
 }
 
 static SESSIONS: OnceLock<Mutex<BTreeMap<String, Arc<Session>>>> = OnceLock::new();
@@ -170,7 +176,9 @@ pub fn active_count() -> usize {
     sessions().lock().map(|guard| guard.len()).unwrap_or(0)
 }
 
-/// 取消一个会话：置标志并关端点，正在跑的读写下一轮循环自己退出。
+/// 取消一个会话：置标志并断开本会话的连接，正在跑的读写下一轮自己退出。
+/// 接收会话的 `endpoint` 本来就是 None，发送会话也不持端点（共享的在线端点由
+/// 在线会话自己管）——真正能把它从阻塞读写里叫醒的是 `connection.close()`。
 pub fn cancel(session_id: &str) -> CoreResult<Value> {
     let session = sessions()
         .lock()
@@ -181,7 +189,19 @@ pub fn cancel(session_id: &str) -> CoreResult<Value> {
         })?;
     session.cancel.store(true, Ordering::SeqCst);
     close_endpoint(&session);
+    close_connection(&session);
     Ok(json!({ "id": session_id, "cancelled": true }))
+}
+
+fn close_connection(session: &Session) {
+    let connection = session
+        .connection
+        .lock()
+        .ok()
+        .and_then(|mut guard| guard.take());
+    if let Some(connection) = connection {
+        connection.close(0u32.into(), b"cancelled");
+    }
 }
 
 /// `Endpoint::close` 是异步的，而取消/收尾发生在同步上下文里：
@@ -466,8 +486,17 @@ fn write_history(layout: &Layout, file: &HistoryFile) {
     }
 }
 
+/// 历史文件的读-改-写必须成对：两个会话几乎同时完成时，各自读到同一份、
+/// 各写各的，后写的会把先写的那条吞掉。
+static HISTORY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn history_lock() -> &'static Mutex<()> {
+    HISTORY_LOCK.get_or_init(|| Mutex::new(()))
+}
+
 /// 记一条历史 + 更新设备名录（设备历史按 device-id 去重）。
 fn record_history(layout: &Layout, entry: HistoryEntry) {
+    let _guard = history_lock().lock();
     let mut file = read_history(layout);
     if !entry.peer_id.is_empty() {
         let record = file.devices.entry(entry.peer_id.clone()).or_default();
@@ -501,6 +530,7 @@ pub fn history(layout: &Layout) -> Value {
 }
 
 pub fn clear_history(layout: &Layout) -> Value {
+    let _guard = history_lock().lock();
     write_history(layout, &HistoryFile::default());
     json!({ "entries": [], "devices": [] })
 }
@@ -537,12 +567,12 @@ struct Online {
     /// 可拨号的对端地址（z32 → EndpointAddr）。**不要拿 z32 去 parse**：
     /// iroh 的 `FromStr` 只认 RFC4648 base32 与 hex，z32 是另一套字母表。
     peers: Mutex<Vec<(String, iroh::EndpointAddr)>>,
-    /// 待确认的接收请求（接收确认卡）
-    pending: Mutex<Option<PendingRequest>>,
+    /// 待确认的接收请求（接收确认卡）：按 request_id 多槽共存——
+    /// 单槽会被第二个拨入顶掉，第一张的等待循环干等到超时。
+    pending: Mutex<std::collections::HashMap<String, PendingRequest>>,
 }
 
 struct PendingRequest {
-    request_id: String,
     accept: std::sync::atomic::AtomicI8,
 }
 
@@ -603,22 +633,16 @@ pub fn decide(layout: &Layout, request_id: &str, accept: bool) -> CoreResult<Val
         .get(&slot_key(layout))
         .cloned()
         .ok_or_else(|| CoreError::not_found("TRANSFER_OFFLINE", "当前不在线"))?;
-    let mut pending = online
+    let pending = online
         .pending
         .lock()
         .map_err(|_| CoreError::internal("传输确认锁中毒"))?;
-    let Some(request) = pending.as_mut() else {
-        return Err(CoreError::not_found(
-            "TRANSFER_NO_REQUEST",
-            "没有等待确认的接收请求",
-        ));
-    };
-    if request.request_id != request_id {
+    let Some(request) = pending.get(request_id) else {
         return Err(CoreError::not_found(
             "TRANSFER_NO_REQUEST",
             "这条接收请求已经不在等待了",
         ));
-    }
+    };
     request
         .accept
         .store(if accept { 1 } else { 2 }, Ordering::SeqCst);
@@ -660,7 +684,7 @@ pub fn go_online(
         endpoint: Mutex::new(None),
         devices: Mutex::new(Vec::new()),
         peers: Mutex::new(Vec::new()),
-        pending: Mutex::new(None),
+        pending: Mutex::new(std::collections::HashMap::new()),
     });
     if let Ok(mut slots) = online_slots().lock() {
         slots.insert(slot_key(layout), online.clone());
@@ -712,6 +736,7 @@ fn online_endpoint_handle(online: &Online) -> Session {
         role: TransferRole::Receive,
         cancel: AtomicBool::new(true),
         endpoint: Mutex::new(online.endpoint.lock().ok().and_then(|mut guard| guard.take())),
+        connection: Mutex::new(None),
     }
 }
 
@@ -737,6 +762,8 @@ async fn online_loop(online: &Arc<Online>) -> CoreResult<()> {
 
     let mut last_publish = std::time::Instant::now();
     let mut last_seen: Vec<Value> = Vec::new();
+    let mut name_cache: std::collections::HashMap<EndpointId, (String, std::time::Instant)> =
+        std::collections::HashMap::new();
     let mut poll = tokio::time::interval(PEER_POLL);
     // accept() **不能一次只等 1ms**：QUIC 握完到 accept 返回之间可能超过那个窗口，
     // 取消一次就丢掉一个拨入（症状：发送方报「对方离线」，接收方全程没反应）。
@@ -764,6 +791,8 @@ async fn online_loop(online: &Arc<Online>) -> CoreResult<()> {
                     role: TransferRole::Receive,
                     cancel: AtomicBool::new(false),
                     endpoint: Mutex::new(None),
+                    // 会话持有自己的连接：取消要能从阻塞读写里把它叫醒
+                    connection: Mutex::new(Some(connection.clone())),
                 });
                 register(session.clone());
                 let owned = online.clone();
@@ -807,9 +836,21 @@ async fn online_loop(online: &Arc<Online>) -> CoreResult<()> {
             if now.saturating_sub(entry.published_at) > DEVICE_FRESH_SECS {
                 continue;
             }
-            let peer_name = directory::fetch_name(&client, entry.id)
-                .await
-                .unwrap_or_default();
+            // 名字缓存：每 2 秒对每台设备各查一次公网目录纯属浪费。
+            // 名字改了对方会重发自己的名字记录，这里最多滞后一个缓存的时长。
+            let peer_name = match name_cache.get(&entry.id) {
+                Some((name, at)) if at.elapsed() < NAME_CACHE_TTL => name.clone(),
+                _ => {
+                    if name_cache.len() > 32 {
+                        name_cache.clear();
+                    }
+                    let name = directory::fetch_name(&client, entry.id)
+                        .await
+                        .unwrap_or_default();
+                    name_cache.insert(entry.id, (name.clone(), std::time::Instant::now()));
+                    name
+                }
+            };
             let z32 = entry.id.to_z32();
             let addr = if entry.addrs.is_empty() {
                 iroh::EndpointAddr::new(entry.id)
@@ -952,10 +993,12 @@ async fn receive_one(
     let request_id = session.id.clone();
     if !online.auto_accept.load(Ordering::SeqCst) {
         if let Ok(mut slot) = online.pending.lock() {
-            *slot = Some(PendingRequest {
-                request_id: request_id.clone(),
-                accept: std::sync::atomic::AtomicI8::new(0),
-            });
+            slot.insert(
+                request_id.clone(),
+                PendingRequest {
+                    accept: std::sync::atomic::AtomicI8::new(0),
+                },
+            );
         }
         let deadline = std::time::Instant::now() + REQUEST_TIMEOUT;
         let accepted = loop {
@@ -966,7 +1009,10 @@ async fn receive_one(
                 .pending
                 .lock()
                 .ok()
-                .and_then(|slot| slot.as_ref().map(|item| item.accept.load(Ordering::SeqCst)))
+                .and_then(|slot| {
+                    slot.get(&request_id)
+                        .map(|item| item.accept.load(Ordering::SeqCst))
+                })
                 .unwrap_or(0);
             if state == 1 {
                 break true;
@@ -980,9 +1026,7 @@ async fn receive_one(
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         };
         if let Ok(mut slot) = online.pending.lock() {
-            if slot.as_ref().map(|item| item.request_id.as_str()) == Some(request_id.as_str()) {
-                *slot = None;
-            }
+            slot.remove(&request_id);
         }
         if !accepted {
             let _ = write_frame(
@@ -1034,11 +1078,15 @@ async fn receive_one(
         }
         let target = safe_join(&save_dir, &item.rel)?;
         if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)?;
+            tokio::fs::create_dir_all(parent).await?;
         }
         // 同名冲突：默认自动重命名 `照片(1).jpg`（需求 1.7，不做覆盖）
-        let (target, renamed) = unique_target(&target);
-        let mut file = std::io::BufWriter::new(std::fs::File::create(&target)?);
+        let (target, renamed) = unique_target(&target)?;
+        // 写盘走 tokio::fs（内部 spawn_blocking）：运行时只有 2 个 worker 线程，
+        // 同步写盘会把 accept/心跳/其它传输全部卡住。BufWriter 把网络的小块读
+        // 合成整块再落盘，减少阻塞线程的往返次数。
+        let file = tokio::fs::File::create(&target).await?;
+        let mut file = tokio::io::BufWriter::with_capacity(CHUNK, file);
         let mut taken = recv.take(item.size);
         let mut buffer = vec![0u8; CHUNK];
         let mut written = 0u64;
@@ -1051,6 +1099,7 @@ async fn receive_one(
                 break;
             }
             file.write_all(&buffer[..read])
+                .await
                 .map_err(|error| CoreError::io(format!("保存写入失败：{error}")))?;
             written += read as u64;
             emit(
@@ -1066,6 +1115,7 @@ async fn receive_one(
             );
         }
         file.flush()
+            .await
             .map_err(|error| CoreError::io(format!("保存落盘失败：{error}")))?;
         recv = taken.into_inner();
         write_frame(&mut send, &json!({ "kind": "fileDone", "index": index })).await?;
@@ -1114,9 +1164,10 @@ async fn receive_one(
 }
 
 /// 同名时自动重命名：`照片.jpg` → `照片(1).jpg` → `照片(2).jpg`…
-fn unique_target(target: &Path) -> (PathBuf, bool) {
+/// 1000 个候选全被占就**报错而不是覆盖**：默认语义是绝不覆盖用户的文件。
+fn unique_target(target: &Path) -> CoreResult<(PathBuf, bool)> {
     if !target.exists() {
-        return (target.to_path_buf(), false);
+        return Ok((target.to_path_buf(), false));
     }
     let parent = target.parent().unwrap_or(Path::new("."));
     let stem = target
@@ -1130,10 +1181,19 @@ fn unique_target(target: &Path) -> (PathBuf, bool) {
     for index in 1..1000 {
         let candidate = parent.join(format!("{stem}({index}){ext}"));
         if !candidate.exists() {
-            return (candidate, true);
+            return Ok((candidate, true));
         }
     }
-    (target.to_path_buf(), false)
+    Err(CoreError::validation(
+        "TRANSFER_NAME_EXHAUSTED",
+        format!(
+            "同名文件太多（「{}」已经存在 1000 个），先清理保存位置再传",
+            target
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| target.display().to_string())
+        ),
+    ))
 }
 
 /// 结束帧的确认：**每个文件都已经单独确认过**，这一条只是收尾礼节——
@@ -1146,12 +1206,6 @@ async fn wait_end_ack(recv: &mut RecvStream) -> CoreResult<()> {
         Ok(Err(error)) => Err(error),
         Err(_) => Ok(()),
     }
-}
-
-/// 解析设备 id（z32）：iroh 的两条表示法都认（z32 与 base32/hex 的解析在 PublicKey 上）。
-fn parse_endpoint_id(raw: &str) -> Option<EndpointId> {
-    use std::str::FromStr;
-    EndpointId::from_str(raw.trim()).ok()
 }
 
 fn first_names(items: &[TransferItem]) -> Vec<String> {
@@ -1241,7 +1295,11 @@ pub fn send(layout: &Layout, target: &str, payload: TransferPayload) -> CoreResu
         id: new_id(),
         role: TransferRole::Send,
         cancel: AtomicBool::new(false),
-        endpoint: Mutex::new(Some(endpoint.clone())),
+        // 发送会话**不持端点**：`endpoint.connect` 用的是在线会话的共享端点，
+        // iroh 关掉任何一个 clone 就是关掉整个端点——发完一次会把整台设备弄下线。
+        // 连接建立后存进 `connection`，取消靠关它。
+        endpoint: Mutex::new(None),
+        connection: Mutex::new(None),
     });
     register(session.clone());
     let session_id = session.id.clone();
@@ -1261,7 +1319,6 @@ pub fn send(layout: &Layout, target: &str, payload: TransferPayload) -> CoreResu
         .and_then(|slot| slot.iter().find(|(id, _)| id == target).map(|(_, addr)| addr.clone()));
     let sink = online.sink.clone();
     runtime.handle().spawn(async move {
-        let net = owned.net.clone();
         let code = owned.code.clone();
         let result = send_loop(
             target_addr,
@@ -1275,7 +1332,6 @@ pub fn send(layout: &Layout, target: &str, payload: TransferPayload) -> CoreResu
             items,
             text.as_deref(),
             &target_id,
-            &net,
         )
         .await;
         if let Ok(summary) = &result {
@@ -1345,7 +1401,6 @@ async fn send_loop(
     items: Vec<TransferItem>,
     text: Option<&str>,
     target: &str,
-    net_config: &TransferNet,
 ) -> CoreResult<Value> {
     let self_id = endpoint.id();
     let room = room_secret(code);
@@ -1354,15 +1409,21 @@ async fn send_loop(
     // 最后退回「只拿 id 去连」（走 relay）。
     let mut addr = target_addr;
     if addr.is_none() {
-        let fallback = parse_endpoint_id(target)
-            .ok_or_else(|| CoreError::validation("TRANSFER_TARGET_BAD", "设备 id 不合法"))?;
+        // `target` 是界面传来的 z32 字符串，**不能拿去 parse**（iroh 的 FromStr 只认
+        // RFC4648 base32 与 hex，z32 是另一套字母表）——在房间条目里按 to_z32 比对。
+        // fresh 过滤与设备列表同一个口径：列表里看不见的设备，发送也如实说「不在线」。
         let deadline = std::time::Instant::now() + PEER_WAIT;
         loop {
             if session.cancel.load(Ordering::SeqCst) {
                 return Err(CoreError::execution("TRANSFER_CANCELLED", "已取消"));
             }
             let entries = directory::fetch(client, room.public()).await;
-            if let Some(entry) = entries.into_iter().find(|entry| entry.id == fallback) {
+            let now = now_unix();
+            let found = entries.into_iter().find(|entry| {
+                entry.id.to_z32() == target
+                    && now.saturating_sub(entry.published_at) <= DEVICE_FRESH_SECS
+            });
+            if let Some(entry) = found {
                 addr = Some(if entry.addrs.is_empty() {
                     iroh::EndpointAddr::new(entry.id)
                 } else {
@@ -1387,11 +1448,17 @@ async fn send_loop(
         }
     }
     let target_addr = addr.expect("上面两条路都保证有地址");
-    let _ = net_config;
     let connection = endpoint
         .connect(target_addr, ALPN)
         .await
         .map_err(|error| CoreError::io(format!("传输拨号失败：{error:?}")))?;
+    if let Ok(mut slot) = session.connection.lock() {
+        *slot = Some(connection.clone());
+    }
+    if session.cancel.load(Ordering::SeqCst) {
+        let _ = connection.close(0u32.into(), b"cancelled");
+        return Err(CoreError::execution("TRANSFER_CANCELLED", "已取消"));
+    }
     let (mut send, mut recv) = connection
         .open_bi()
         .await
@@ -1451,12 +1518,14 @@ async fn send_loop(
         }
         let source = source_path(root, item)?;
         write_frame(&mut send, &json!({ "kind": "file", "index": index })).await?;
-        let mut file = std::io::BufReader::new(std::fs::File::open(&source)?);
+        // 读源文件同理走 tokio::fs：2 个 worker 线程不能被磁盘读卡住
+        let mut file = tokio::fs::File::open(&source).await?;
         let mut buffer = vec![0u8; CHUNK];
         let mut sent = 0u64;
         loop {
             let read = file
                 .read(&mut buffer)
+                .await
                 .map_err(|error| CoreError::io(format!("发送读取失败：{error}")))?;
             if read == 0 {
                 break;
@@ -1520,6 +1589,11 @@ fn finish(sink: &TransferSink, session: &Arc<Session>, result: CoreResult<Value>
         guard.remove(&session.id);
     }
     close_endpoint(session);
+    // 本会话的连接句柄：收尾丢掉即可（正常结束时两端都已 ack 完）。
+    // **不要在这里 close 在线会话的端点**——发送会话根本不持端点。
+    if let Ok(mut slot) = session.connection.lock() {
+        let _ = slot.take();
+    }
     match result {
         Ok(mut summary) => {
             if let Some(map) = summary.as_object_mut() {
@@ -1544,4 +1618,28 @@ fn finish(sink: &TransferSink, session: &Arc<Session>, result: CoreResult<Value>
 
 fn new_id() -> String {
     crate::ids::gen_id("transfer")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 同名自动重命名（需求 1.7：绝不覆盖）；1000 个候选全被占时报错而不是回退到覆盖。
+    #[test]
+    fn unique_target_renames_and_refuses_to_overwrite_when_exhausted() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("照片.jpg");
+        std::fs::write(&base, b"x").unwrap();
+        let (next, renamed) = unique_target(&base).unwrap();
+        assert!(renamed);
+        assert_eq!(next.file_name().unwrap().to_string_lossy(), "照片(1).jpg");
+
+        // 占满 1000 个候选：必须报 TRANSFER_NAME_EXHAUSTED，绝不能返回原路径（= 覆盖）
+        std::fs::write(next, b"x").unwrap();
+        for index in 2..1000 {
+            std::fs::write(dir.path().join(format!("照片({index}).jpg")), b"x").unwrap();
+        }
+        let error = unique_target(&base).expect_err("候选用尽应当报错");
+        assert_eq!(error.code, "TRANSFER_NAME_EXHAUSTED");
+    }
 }

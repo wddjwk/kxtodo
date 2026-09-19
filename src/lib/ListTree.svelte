@@ -1,11 +1,15 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy } from "svelte";
+  import { flip } from "svelte/animate";
+  import { get } from "svelte/store";
   import { ChevronDown } from "@lucide/svelte";
   import { longpress, isLongPressSuppressed } from "./longpress";
   import type { AppNode } from "./types";
+  import type { TreeDropPosition, TreeHover } from "./nodes";
+  import { clearTreeDropTarget, setTreeDropRootEnd, setTreeDropTarget, treeDropState } from "./listTreeDrag";
   import IconGlyph from "./IconGlyph.svelte";
 
-  type DropPosition = "before" | "after" | "inside";
+  type DropPosition = TreeDropPosition;
 
   export let nodes: AppNode[] = [];
   export let parentId: string | null = null;
@@ -26,6 +30,8 @@
     closeMenu: void;
     pickIcon: string;
     dragStart: string;
+    /** 拖动中的悬停落点（宿主拿它算「行实时让位」的预览） */
+    dragHover: TreeHover;
     dropNode: { id: string; targetId: string; position: DropPosition };
     dropRootEnd: string;
     dragEnd: void;
@@ -38,9 +44,11 @@
   const AUTO_SCROLL_SPEED_PX = 14;
   const HOVER_EXPAND_MS = 600;
 
-  let dropTargetId: string | null = null;
-  let dropPosition: DropPosition | null = null;
-  let dropRootEnd = false;
+  /**
+   * 落点状态提到共享 store（v0.8.5 需求 29）：每层 ListTree 是独立实例，而目标行
+   * 常常属于另一个实例——状态留在实例里时，跨层的「移入虚框 / 插入位」永远画不出来。
+   * `pointerDrag` 仍然住在实例里：只有按下指针的那一层在跑拖动逻辑，这是对的。
+   */
   let suppressNextClick = false;
   let pointerDrag: { id: string; startX: number; startY: number; active: boolean } | null = null;
   let touchDragArmed: { id: string; startX: number; startY: number } | null = null;
@@ -48,8 +56,19 @@
   let scrollContainer: HTMLElement | null = null;
   let hoverExpandTimer: number | null = null;
   let hoverExpandTarget = "";
+  /** 拖动中最近一次指针位置（自动滚动时行在指针下走，得拿它重算落点） */
+  let lastPointer: { x: number; y: number } | null = null;
+  /** 最近一次派发出去的悬停状态：同样的话不重复派发 */
+  let lastHoverKey = "";
 
   $: children = nodes.filter((node) => node.parentId === parentId && node.kind !== "system");
+
+  function reportHover(hover: TreeHover): void {
+    const key = hover.over === "node" ? `node:${hover.targetId}:${hover.position}` : hover.over;
+    if (key === lastHoverKey) return;
+    lastHoverKey = key;
+    dispatch("dragHover", hover);
+  }
 
   function rowStyle(levelValue: number): string {
     return `--depth: ${levelValue}; padding-left: ${levelValue * 18 + 10}px;`;
@@ -168,17 +187,34 @@
       pointerDrag.active = true;
       suppressNextClick = true;
       scrollContainer = (event.target as Element | null)?.closest?.(".custom-nav") ?? document.querySelector(".custom-nav");
+      scrollContainer?.addEventListener("scroll", handleDragScroll, { passive: true });
       dispatch("dragStart", pointerDrag.id);
     }
 
     event.preventDefault();
+    lastPointer = { x: event.clientX, y: event.clientY };
     autoScroll(event.clientY);
+    updateHover(event.clientX, event.clientY);
+  }
 
-    const targetElement = document.elementFromPoint(event.clientX, event.clientY);
+  /** 自动滚动会把行从指针底下挪走：滚动一次就按最后指针位置重算落点 */
+  function handleDragScroll(): void {
+    if (!pointerDrag?.active || !lastPointer) return;
+    updateHover(lastPointer.x, lastPointer.y);
+  }
+
+  function updateHover(clientX: number, clientY: number): void {
+    if (!pointerDrag) return;
+    const targetElement = document.elementFromPoint(clientX, clientY);
     const row = targetElement?.closest<HTMLElement>(".tree-row[data-node-id]");
     const targetId = row?.dataset.nodeId ?? "";
     const target = nodes.find((node) => node.id === targetId);
-    if (!row || !target || target.kind === "system" || target.id === pointerDrag.id) {
+    if (row && target && target.id === pointerDrag.id) {
+      // 指针正落在被拖的那一行身上（行实时让位之后它就在指针下方）：**保持现落点**。
+      // 若在这里按「拖到自己」清空，行会弹回原位、下一帧又命中，来回抖。
+      return;
+    }
+    if (!row || !target || target.kind === "system") {
       // 落在空白区域：拖到列表末尾（root）
       if (targetElement?.closest(".custom-nav") && !row) {
         setRootEndTarget();
@@ -187,16 +223,15 @@
       }
       return;
     }
-    dropRootEnd = false;
-    dropTargetId = target.id;
-    dropPosition = positionFromClientY(event.clientY, row, target);
+    const position = positionFromClientY(clientY, row, target);
+    setTreeDropTarget(target.id, position);
+    reportHover({ over: "node", targetId: target.id, position });
     scheduleHoverExpand(target);
   }
 
   function setRootEndTarget(): void {
-    dropRootEnd = true;
-    dropTargetId = null;
-    dropPosition = null;
+    setTreeDropRootEnd();
+    reportHover({ over: "rootEnd" });
     clearHoverExpand();
   }
 
@@ -234,10 +269,11 @@
 
   function handlePointerUp(): void {
     if (pointerDrag?.active) {
-      if (dropRootEnd) {
+      const drop = get(treeDropState);
+      if (drop.rootEnd) {
         dispatch("dropRootEnd", pointerDrag.id);
-      } else if (dropTargetId && dropPosition && dropTargetId !== pointerDrag.id) {
-        dispatch("dropNode", { id: pointerDrag.id, targetId: dropTargetId, position: dropPosition });
+      } else if (drop.targetId && drop.position && drop.targetId !== pointerDrag.id) {
+        dispatch("dropNode", { id: pointerDrag.id, targetId: drop.targetId, position: drop.position });
       }
     }
     cleanupPointerDrag();
@@ -263,19 +299,23 @@
     window.removeEventListener("pointerup", handlePointerUp);
     window.removeEventListener("pointercancel", cleanupPointerDrag);
     window.removeEventListener("keydown", handleDragKeydown, true);
-    if (pointerDrag?.active) {
+    scrollContainer?.removeEventListener("scroll", handleDragScroll);
+    const wasDragging = pointerDrag?.active === true;
+    if (wasDragging) {
       dispatch("dragEnd");
+      // 落点状态是全局共享的：**只有真正在拖的这一层**才清，
+      // 别的实例（拖拽中因展开/折叠而重建的那些）销毁时不能顺手把它清掉
+      clearDropTarget();
     }
     pointerDrag = null;
     scrollContainer = null;
-    clearDropTarget();
+    lastPointer = null;
     clearHoverExpand();
   }
 
   function clearDropTarget(): void {
-    dropTargetId = null;
-    dropPosition = null;
-    dropRootEnd = false;
+    clearTreeDropTarget();
+    reportHover({ over: "none" });
   }
 
   onDestroy(() => {
@@ -285,92 +325,98 @@
 </script>
 
 {#each children as node (node.id)}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div
-    class:selected={node.id === selectedNodeId}
-    class:category={node.kind === "category"}
-    class:dragging={draggingId === node.id}
-    class:drop-before={dropTargetId === node.id && dropPosition === "before"}
-    class:drop-after={dropTargetId === node.id && dropPosition === "after"}
-    class:drop-inside={dropTargetId === node.id && dropPosition === "inside"}
-    class="tree-row"
-    data-node-id={node.id}
-    data-level={level}
-    style={rowStyle(level)}
-    use:longpress={handleRowLongPress(node)}
-    on:pointerdown={(event) => handlePointerDown(event, node)}
-    on:click={(event) => handleClick(event, node)}
-    on:contextmenu={(event) => openMenu(event, node)}
-  >
-    <button
-      class="tree-icon"
-      type="button"
-      aria-label="选择图标"
-      on:mousedown|preventDefault|stopPropagation
-      on:pointerdown|stopPropagation
-      on:click|preventDefault|stopPropagation={() => dispatch("pickIcon", node.id)}
+  <!-- 每一项包一层：`animate:flip` 要求 animate 指令所在元素是 each 块的唯一子元素，
+       而这一项里行与子树是并列的两块——包一层才能让整棵子树跟着行一起平移
+       （v0.8.5 需求 29 的「行实时让位」）。间距由 .tree-item 自己补同款 2px。 -->
+  <div class="tree-item" animate:flip={{ duration: 150 }}>
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class:selected={node.id === selectedNodeId}
+      class:category={node.kind === "category"}
+      class:dragging={draggingId === node.id}
+      class:drop-before={$treeDropState.targetId === node.id && $treeDropState.position === "before"}
+      class:drop-after={$treeDropState.targetId === node.id && $treeDropState.position === "after"}
+      class:drop-inside={$treeDropState.targetId === node.id && $treeDropState.position === "inside"}
+      class="tree-row"
+      data-node-id={node.id}
+      data-level={level}
+      style={rowStyle(level)}
+      use:longpress={handleRowLongPress(node)}
+      on:pointerdown={(event) => handlePointerDown(event, node)}
+      on:click={(event) => handleClick(event, node)}
+      on:contextmenu={(event) => openMenu(event, node)}
     >
-      <IconGlyph icon={node.kind === "category" ? node.icon || "folder" : node.icon || "notebook"} size={18} />
-    </button>
-
-    {#if renamingId === node.id}
-      <!-- svelte-ignore a11y_autofocus -->
-      <input
-        use:focusRename
-        class="rename-input"
-        value={renameDraft}
-        autofocus
-        on:click|stopPropagation
+      <button
+        class="tree-icon"
+        type="button"
+        aria-label="选择图标"
+        on:mousedown|preventDefault|stopPropagation
         on:pointerdown|stopPropagation
-        on:input={(event) => dispatch("renameInput", event.currentTarget.value)}
-        on:blur={() => dispatch("renameCommit", node.id)}
-        on:keydown={(event) => {
-          if (event.isComposing || event.keyCode === 229) return;
-          if (event.key === "Enter") dispatch("renameCommit", node.id);
-        }}
-      />
-    {:else}
-      <span class="list-name">{node.name}</span>
-    {/if}
+        on:click|preventDefault|stopPropagation={() => dispatch("pickIcon", node.id)}
+      >
+        <IconGlyph icon={node.kind === "category" ? node.icon || "folder" : node.icon || "notebook"} size={18} />
+      </button>
 
-    {#if node.kind === "category"}
-      {#if showCategoryCounts && node.collapsed && counts[node.id]}
+      {#if renamingId === node.id}
+        <!-- svelte-ignore a11y_autofocus -->
+        <input
+          use:focusRename
+          class="rename-input"
+          value={renameDraft}
+          autofocus
+          on:click|stopPropagation
+          on:pointerdown|stopPropagation
+          on:input={(event) => dispatch("renameInput", event.currentTarget.value)}
+          on:blur={() => dispatch("renameCommit", node.id)}
+          on:keydown={(event) => {
+            if (event.isComposing || event.keyCode === 229) return;
+            if (event.key === "Enter") dispatch("renameCommit", node.id);
+          }}
+        />
+      {:else}
+        <span class="list-name">{node.name}</span>
+      {/if}
+
+      {#if node.kind === "category"}
+        {#if showCategoryCounts && node.collapsed && counts[node.id]}
+          <span class="count-pill">{counts[node.id]}</span>
+        {/if}
+        <button class="collapse-button" type="button" aria-label="折叠分类" on:click|stopPropagation={() => dispatch("toggleCategory", node.id)}>
+          <ChevronDown class={node.collapsed ? "collapsed" : ""} size={19} />
+        </button>
+      {:else if counts[node.id]}
         <span class="count-pill">{counts[node.id]}</span>
       {/if}
-      <button class="collapse-button" type="button" aria-label="折叠分类" on:click|stopPropagation={() => dispatch("toggleCategory", node.id)}>
-        <ChevronDown class={node.collapsed ? "collapsed" : ""} size={19} />
-      </button>
-    {:else if counts[node.id]}
-      <span class="count-pill">{counts[node.id]}</span>
+    </div>
+    {#if node.kind === "category" && !node.collapsed}
+      <svelte:self
+        {nodes}
+        parentId={node.id}
+        {selectedNodeId}
+        {counts}
+        {showCategoryCounts}
+        level={level + 1}
+        {renamingId}
+        {renameDraft}
+        {draggingId}
+        on:selectEntry={(event) => dispatch("selectEntry", event.detail)}
+        on:toggleCategory={(event) => dispatch("toggleCategory", event.detail)}
+        on:renameInput={(event) => dispatch("renameInput", event.detail)}
+        on:renameCommit={(event) => dispatch("renameCommit", event.detail)}
+        on:openMenu={(event) => dispatch("openMenu", event.detail)}
+        on:closeMenu={() => dispatch("closeMenu")}
+        on:pickIcon={(event) => dispatch("pickIcon", event.detail)}
+        on:dragStart={(event) => dispatch("dragStart", event.detail)}
+        on:dragHover={(event) => dispatch("dragHover", event.detail)}
+        on:dropNode={(event) => dispatch("dropNode", event.detail)}
+        on:dropRootEnd={(event) => dispatch("dropRootEnd", event.detail)}
+        on:dragEnd={() => dispatch("dragEnd")}
+      />
     {/if}
   </div>
-  {#if node.kind === "category" && !node.collapsed}
-    <svelte:self
-      {nodes}
-      parentId={node.id}
-      {selectedNodeId}
-      {counts}
-      {showCategoryCounts}
-      level={level + 1}
-      {renamingId}
-      {renameDraft}
-      {draggingId}
-      on:selectEntry={(event) => dispatch("selectEntry", event.detail)}
-      on:toggleCategory={(event) => dispatch("toggleCategory", event.detail)}
-      on:renameInput={(event) => dispatch("renameInput", event.detail)}
-      on:renameCommit={(event) => dispatch("renameCommit", event.detail)}
-      on:openMenu={(event) => dispatch("openMenu", event.detail)}
-      on:closeMenu={() => dispatch("closeMenu")}
-      on:pickIcon={(event) => dispatch("pickIcon", event.detail)}
-      on:dragStart={(event) => dispatch("dragStart", event.detail)}
-      on:dropNode={(event) => dispatch("dropNode", event.detail)}
-      on:dropRootEnd={(event) => dispatch("dropRootEnd", event.detail)}
-      on:dragEnd={() => dispatch("dragEnd")}
-    />
-  {/if}
 {/each}
 
-{#if level === 0 && dropRootEnd}
+{#if level === 0 && $treeDropState.rootEnd}
   <div class="tree-root-drop-line" aria-hidden="true"></div>
 {/if}

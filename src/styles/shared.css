@@ -65,6 +65,14 @@
   min-width: 0;
 }
 
+/* 每项外面包的一层：`display: flow-root` 建立 BFC，让子卡片的外边距留在 wrapper
+   内部——默认块盒会把子元素的 margin-bottom 折叠到 wrapper 之外（margin 逃逸），
+   wrapper 量出来的高度就比它在列表里的实际占位小几像素；行越靠后累积误差越大，
+   「跳转到某天」能差出好几张卡（v0.8.5 需求 9 的锚点就是这么查出根因的）。 */
+.virtual-item {
+  display: flow-root;
+}
+
 .virtual-spacer {
   width: 100%;
   pointer-events: none;

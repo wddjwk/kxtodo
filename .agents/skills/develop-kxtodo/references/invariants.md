@@ -74,6 +74,7 @@ v0.8.0 起的几条补充（来龙去脉在 `history/v0.8.md` 批次 1）：
 9. **触屏点按蓝罩统一关掉**：「`.diary-view` 内的可点元素一律 `-webkit-tap-highlight-color: transparent`」；v0.7.6 补了 `.app-shell.mobile .list-header button`；v0.7.7 补了移动端齿轮按钮的 `:hover`（「点一下留下的「悬停」底色会一直挂着」，本色改由 `:active` 给）。
 10. **grid 的自动最小尺寸压不住**：「img 是 grid 子项，百分比 max-width 压不住 grid 的「自动最小尺寸」（= 内容尺寸），必须显式 `min-width/min-height: 0`」；`.ledger-sheet` 同理「**必须 `min-width:0`**」。
 11. **移动端遮罩别用 grid**：「`.ledger-overlay` 在移动端是 **grid**，auto 行会被超高内容撑到内容高度，抽屉的 `max-height:94%` 就按那个被撑大的行算」→ 改成「**flex 纵向 + `justify-content: flex-end`**」+ 抽屉 `min-height: 0`。
+12. **新增全局选择器一律带模块前缀，禁止裸名词类名**（v0.8.5 两次真实事故）：① 传输页根容器写了裸 `.transfer`，撞上记账转账行的 `<em class="ledger-entry-account transfer">`——`flex-direction: column` 把**所有转账条目**竖排、`gap:14` 撑高、`width:100%+margin:auto` 把时刻挤到另一侧；② 工具箱子页头部新写的 `.toolbox-sub-title` / `.toolbox-sub-actions` 撞上随机数/人民币工具页面里已有的同名类（那边是「操作行右对齐」），随机数工具的按钮被顶到「数量」行上面。**纪律**：新组件样式用 `模块-` 前缀（`transfer-` / `relay-` / `toolbox-sub-bar-` / `scratchpad-` / `tree-`）；**改完拿 `git diff <上版> -- src/styles` 里新增的 `.类名` 逐个 `grep -rl` 回 `src/` 确认只有一个模块在用**（两次事故都是这么漏的）。
 
 ## 八、浮层与安全区铁律
 
@@ -266,7 +267,16 @@ v0.8.0 起的几条补充（来龙去脉在 `history/v0.8.md` 批次 1）：
 - 「**接收确认是协议的一部分**：收到文件清单先推 `request` 事件、等 `decide`（60 秒超时当拒绝），「自动接收」只是跳过等待；**文本消息走同一条握手**（`mode=text`）、不落盘不进保存位置」——同上
 - 「**预览型取色必须自带作废路径**：活值住在按 scope 索引的 `colorPreview` store，菜单关闭即作废；保存才 `setConfigAction`」——`frontend.md`「actions.ts」+ `history/v0.8.4.md` 四
 - 「**列表虚拟化只动渲染层**：store 里数据永远全量，`VirtualStack` 只决定挂谁；`perf-bench.mjs` 与 `window.__kxtodoRenderStats` 是量它的地方」——`frontend.md`「组件」+ `history/v0.8.4.md` 二
-### v0.8.3 新增
+### v0.8.5 新增
+
+- 「**壳上有 `transform: scale(uiScale)`，量尺寸必须分清两套坐标**：`getBoundingClientRect` 给的是**缩放后的视觉像素**，`scrollTop`/`offsetHeight`/`clientHeight`/占位高度都是**布局像素**。`VirtualStack.measure` 早先用 rect 量高，默认 0.75 缩放下每行欠 25%、行越靠后累积误差越大（「跳转到某天」差好几张卡）。**量布局/记账用 `offset*`，做命中与绘制用 rect**」——`frontend.md`「组件」+ `history/v0.8.5.md` 一.3
+- 「**`iroh::Endpoint::close()` 对任何一个 clone 调用都关整个端点**（没有引用计数保活）：复用在线会话端点的发送会话**绝不能持有端点**——取消与收尾关的都是**会话自己的 `Connection`**」——`sync.md`「文件传输助手」+ `history/v0.8.5.md` 一.2
+- 「**递归组件里跨层共享的交互状态必须住在模块级共享 store**：`ListTree` 每层一个实例，拖动逻辑跑在按下指针那层，目标行常属于另一层——落点状态留在实例里时跨层拖动的反馈（虚框/插入位）永远画不出来（功能对、反馈丢）」——`ui-patterns.md`「分组树拖动」+ `history/v0.8.5.md` 二.11/29
+- 「**「渲染为纯函数」的例外只有一类且要三件齐**（渲染态勾选的手术式更新）：`markCheckedItem/unmarkCheckedItem` 渲染与点击共用同一份 + 卡片重渲入口按**文本完全一致**豁免（`skipNextRender`）+ 渲染器的「已应用」账本 `adopt` 跟上。**缺 adopt 的后果**：文本回退（写失败回滚/远端同步）时会被判「已经渲过」而跳过，界面永久停在手术后的状态。另：`{@html}` **只与上一次的值比**，同值不重建——回退要用「先清空再写回」强制重建（同一任务内，不闪）」——`frontend.md`「渲染态勾选」+ `history/v0.8.5.md` 四
+- 「**`preventDefault` 会反转勾选框的原生翻转**：勾选框的 checkedness 在 click 派发前已翻好，取消激活行为会把它还原回去——点击路径**不要** `preventDefault`；目标态要**从源码推**（`markdownTaskChecked`）而不是拿 DOM 取反」——同上
+- 「**预设色块与取色器是两种语义**：预设是离散选择，**单击即落盘**；取色器（`input[type=color]`）才有拖动过程，走「草稿预览 + 保存/取消」」——`frontend.md`「actions.ts」+ `history/v0.8.5.md` 二（#5）
+- 「**传输助手的生命周期三规则**：有活跃任务不断连；已配对（在线）退出工具页保持在线、手动「离线」才下线（并清掉记住的口令）；未配对退出即清理界面状态。状态与事件订阅都在 `transferStore.ts`，工具页只是视图」——`sync.md`「文件传输助手」+ `history/v0.8.5.md` 二.4
+
 
 - 「**乐观更新一律过 `actions.ts::withRollback`**：先本地生效再落盘，失败按原值回滚；回滚前用**对象身份**判「这期间是否又被改过」。`gui.*` 不发域事件 = 失败后没有快照来纠正，不回滚就是界面与盘永久分叉」——`frontend.md`「actions.ts」+ `history/v0.8.3.md` 六（#10）
 - 「**跨语言的孪生常量必须有 `include_str!` 钉子**（`crates/core/tests/frontend_contract.rs`）：TagColor 十色的三处名单、`BACKGROUND_MAX_EDGE` ↔ 壳的背景闸、临期配色档数 ↔ `expect_due_colors`。**注释说「两边要一致」一定会漂**——四档配色漏改 core 的症状是「界面能选四个、保存必失败」」——同上（#11）

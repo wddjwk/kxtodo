@@ -37,6 +37,8 @@
   let searchOpen = false;
   /** 列表视图的滚动容器（窗口化要用它当视口） */
   let scrollEl: HTMLElement | null = null;
+  /** 列表视图的窗口化宿主（日历跳某天 / 回顶时要拿着它调 scrollToIndex / syncScroll） */
+  let stack: VirtualStack | null = null;
   let searchInput: HTMLInputElement;
   let query = "";
   let showGear = false;
@@ -45,6 +47,8 @@
   let entryMenu: { id: string; x: number; y: number } | null = null;
   let cursor: MonthCursor = monthOf(todayDate());
   let selectedDate = todayDate();
+  /** 用户是否在日历里显式点过某天（决定切回列表是定位过去还是回顶） */
+  let calendarPicked = false;
   let monthPopOpen = false;
   let monthLabelEl: HTMLElement;
   /** 分组视图的年/月折叠状态（本机 UI 状态，不持久化） */
@@ -132,13 +136,41 @@
     monthPopOpen = false;
   }
 
+  /** 切视图一律复位滚动（v0.8.2 铁律）：列表内容整批换掉，留在原偏移只会看见中部 */
+  function resetScroll(): void {
+    if (scrollEl) scrollEl.scrollTop = 0;
+    // 立刻刷新窗口自己的锚点，否则 afterUpdate 的锚点还原会把复位顶回去
+    stack?.syncScroll();
+  }
+
   function switchView(mode: DiaryViewMode): void {
     entryMenu = null;
+    if (mode === view) return;
+    const fromCalendar = view === "calendar";
     if (mode === "calendar") {
       cursor = monthOf(selectedDate);
     }
-    if (mode === view) return;
     void setConfig("diary.view", mode);
+    if (mode === "list" && fromCalendar) {
+      // 日历上**点过**的那一天：切到列表时定位到它的第一篇（需求 9 的锚点）。
+      // 只是进日历看了一眼（没点任何格子）就不跳——那种情况按 ① 回顶。
+      if (!calendarPicked) {
+        resetScroll();
+        void tick().then(resetScroll);
+        return;
+      }
+      calendarPicked = false;
+      // 等 tick：列表的 VirtualStack 要等视图换过去才挂载。
+      void tick().then(() => {
+        if (!stack) return;
+        const index = listRows.findIndex((row) => row.entry?.date === selectedDate);
+        if (index >= 0) stack.scrollToIndex(index);
+      });
+      return;
+    }
+    resetScroll();
+    // 换到列表视图时 stack 是这一刻才挂载的：等它出现再同步一次锚点
+    void tick().then(resetScroll);
   }
 
   /** 搜索按钮（v0.8.4 需求 14）：从齿轮面板里挪到头部，一次点击直接开/关搜索框 */
@@ -147,7 +179,15 @@
     listMenuAt = null;
     entryMenu = null;
     if (!searchOpen) query = "";
-    void tick().then(() => searchInput?.focus());
+    void tick().then(() => {
+      searchInput?.focus();
+      resetScroll();
+    });
+  }
+
+  /** 搜索条件一变，可见项整批换掉：回顶，让第一条命中在眼前（需求 9） */
+  function handleQueryInput(): void {
+    resetScroll();
   }
 
   /** 齿轮按钮直接弹「日记菜单」（需求 14）：省掉中间那层只有两项的面板 */
@@ -186,6 +226,8 @@
     selectedDate = date;
     cursor = monthOf(date);
     entryMenu = null;
+    // 用户**显式**点过某天：切回列表时定位到那一组（没点过就按老规矩回顶）
+    calendarPicked = true;
   }
 
   function toggleGroup(key: string): void {
@@ -261,14 +303,21 @@
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <label class="diary-search" on:click|stopPropagation>
       <Search size={16} />
-      <input bind:this={searchInput} bind:value={query} type="text" placeholder="搜索标题、正文或标签" />
+      <input bind:this={searchInput} bind:value={query} type="text" placeholder="搜索标题、正文或标签" on:input={handleQueryInput} />
     </label>
   {/if}
 
   <section class="diary-scroll" bind:this={scrollEl}>
     {#if view === "list"}
       <!-- 窗口化（v0.8.4 需求 3）：5000 篇也只在树上挂视口附近的几十张卡 -->
-      <VirtualStack items={listRows} keyOf={(row) => (row as { key: string }).key} scroller={scrollEl} estimate={96} overscan={10}>
+      <VirtualStack
+        bind:this={stack}
+        items={listRows}
+        keyOf={(row) => (row as { key: string }).key}
+        scroller={scrollEl}
+        estimate={96}
+        overscan={10}
+      >
         <svelte:fragment slot="item" let:row>
           {@const item = row as DiaryListRow}
           {#if item.kind === "year"}

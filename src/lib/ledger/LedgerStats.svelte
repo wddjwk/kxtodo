@@ -74,7 +74,9 @@
 
   let mode: StatsMode = "month";
   let side: Side = "expense";
-  let legend: Record<LegendKey, boolean> = { income: true, expense: true, balance: false };
+  // 图例默认跟随侧段控（v0.8.5 需求 8）：支出侧 = 只亮支出，收入侧 = 只亮收入。
+  // 用户点图例是手动覆盖，直到下次切侧。
+  let legend: Record<LegendKey, boolean> = { income: false, expense: true, balance: false };
   /** 周周期的锚点日（周一起算那一周）；自定义周期的起止 */
   let weekAnchor = todayDate();
   let customFrom = `${cursor.year}-${(cursor.month + 1).toString().padStart(2, "0")}-01`;
@@ -245,8 +247,11 @@
     popOpen = "";
   }
 
+  /** 切侧把图例重置为该侧单条亮：用户再点图例是手动覆盖，直到下次切侧 */
   function switchSide(next: Side): void {
+    if (side === next) return;
     side = next;
+    legend = { income: next === "income", expense: next === "expense", balance: false };
   }
 
   /** 自定义起止的 DatePicker 浮层：窄屏上锚点靠右时会伸出屏幕，开出来后收进视口 */

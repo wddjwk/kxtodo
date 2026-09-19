@@ -135,9 +135,66 @@
 .toolbox-sub-bar {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: 8px;
   margin-bottom: -8px;
+}
+
+/* 子页头部里的标题与按钮组。**名字带 bar**：工具自己的页面里也有
+   `.toolbox-sub-title` / `.toolbox-sub-actions`（RandomTool / RmbTool 的操作行），
+   同名会让两边的声明互相渗透（v0.8.5 踩过一次：随机数工具的按钮被顶到「数量」行上面）。 */
+.toolbox-sub-bar-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolbox-sub-bar-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+/* relay 服务（v0.8.5 需求 31，只在传输工具页的 ⋯ 菜单里出现） */
+.relay-options {
+  display: grid;
+  gap: 6px;
+}
+
+.relay-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #4b5563;
+  font-size: calc(var(--font-control) - 4px);
+  cursor: pointer;
+}
+
+.relay-row input {
+  accent-color: var(--accent, #2564cf);
+}
+
+.relay-input {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid #dedede;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1f2937;
+  font-size: calc(var(--font-control) - 4px);
+  outline: none;
+}
+
+.relay-input:focus {
+  border-color: var(--accent, #2564cf);
+}
+
+.relay-hint {
+  color: #8a919c;
+  font-size: calc(var(--font-control) - 6px);
 }
 
 .toolbox-icon-button {
@@ -301,9 +358,21 @@
   border-color: var(--accent, #2564cf);
 }
 
+/* 字数统计行：只留计数（保存提示按需求 2 不回来） */
+.scratchpad-foot {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 2px;
+}
+
+.scratchpad-count {
+  color: #6b7280;
+  font-size: calc(var(--font-control) - 4px);
+}
+
 /* ---------- 文件传输助手（v0.8.4）：LocalSend 式，内容列限宽居中 ---------- */
 
-.transfer {
+.transfer-page {
   display: flex;
   min-height: 0;
   flex-direction: column;
@@ -314,13 +383,30 @@
   margin: 0 auto;
 }
 
+/* 分区卡片（v0.8.5 需求 30）：身份 / 收发 / 传输中 / 历史各一块。
+   观感与 .ledger-panel 同一套卡片语言（圆角 14 + 一层极淡边框 + 半透明白底）。 */
+.transfer-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid rgb(0 0 0 / 4%);
+  border-radius: 14px;
+  background: rgb(255 255 255 / 88%);
+}
+
+.transfer-card-title {
+  color: #4b5563;
+  font-size: calc(var(--font-control) - 3px);
+  font-weight: 700;
+}
+
 .transfer-identity {
-  display: grid;
   gap: 10px;
-  padding: 14px 16px;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  background: #ffffff;
+}
+
+.transfer-work {
+  gap: 14px;
 }
 
 .transfer-field {
@@ -691,6 +777,12 @@
 }
 
 .transfer-request-list {
+  display: grid;
+  gap: 10px;
+}
+
+/* 确认卡里的文件名胶囊行 */
+.transfer-request-files {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -736,9 +828,8 @@
   word-break: break-word;
 }
 
-/* 会话卡片（传输中 / 完成） */
+/* 会话（传输中 / 完成）：都在 .transfer-card 里，这里只调间距 */
 .transfer-sessions {
-  display: grid;
   gap: 8px;
 }
 
@@ -832,23 +923,21 @@
   transition: width 0.2s ease-out;
 }
 
-/* 传输历史 */
+/* 传输历史：一块卡片，头部就是卡片的标题行（不套第二层边框） */
 .transfer-history {
-  display: grid;
   gap: 8px;
-  padding: 4px 0 12px;
 }
 
 .transfer-history-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  background: #ffffff;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: #4b5563;
-  font-size: calc(var(--font-control) - 4px);
+  font-size: calc(var(--font-control) - 3px);
+  font-weight: 700;
   cursor: pointer;
 }
 

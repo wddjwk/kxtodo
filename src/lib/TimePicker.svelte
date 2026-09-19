@@ -22,7 +22,10 @@
   let hourEl: HTMLDivElement;
   let minuteEl: HTMLDivElement;
   let syncing = false;
-  let settled: ReturnType<typeof setTimeout> | undefined;
+  // 定时器句柄就是 `window.setTimeout` 的返回值（浏览器里是 number）。
+  // 别写 `ReturnType<typeof setTimeout>`：装了 happy-dom 之后全局 setTimeout 的
+  // 类型来源变了，会解析成 Node 的 Timeout，与 window.setTimeout 对不上（v0.8.5 起）。
+  let settled: number | undefined;
 
   interface Clock { hour: number; minute: number }
 

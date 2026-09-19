@@ -22,9 +22,13 @@
   let text = "";
   let timer: number | undefined;
   let seeded = false;
+  /** 有未 flush 的输入（水合到来的覆盖要避让，见下面的 seed 分支） */
+  let dirty = false;
 
   function flush(): void {
     window.clearTimeout(timer);
+    timer = undefined;
+    dirty = false;
     try {
       // 值没变一个字节都不写：同步 setItem 是同步磁盘 I/O
       if (localStorage.getItem(STORAGE_KEY) !== text) localStorage.setItem(STORAGE_KEY, text);
@@ -36,6 +40,7 @@
   }
 
   function handleInput(): void {
+    dirty = true;
     window.clearTimeout(timer);
     timer = window.setTimeout(flush, SAVE_DEBOUNCE_MS);
   }
@@ -45,11 +50,14 @@
   }
 
   onMount(() => {
-    // 首帧：先画缓存里的字（水合还没来）；数据域一到就以它为准
-    try {
-      text = localStorage.getItem(STORAGE_KEY) ?? "";
-    } catch {
-      text = "";
+    // 首帧：先画缓存里的字（水合还没来）。已经 seed 过就别拿缓存盖回去
+    // ——store 已经是权威，缓存可能更旧。
+    if (!seeded) {
+      try {
+        text = localStorage.getItem(STORAGE_KEY) ?? "";
+      } catch {
+        text = "";
+      }
     }
     window.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("pagehide", flush);
@@ -59,7 +67,9 @@
   // 但**只覆盖一次**——之后用户在页面上的输入不能被它拉回去。
   $: if (!seeded && $appState.scratchpad.updatedAt) {
     seeded = true;
-    text = $appState.scratchpad.text;
+    // 水合到达时用户可能已经打了字、防抖还没 flush：脏输入优先。
+    // 无提示地拿旧值盖掉刚打的字，是比「晚几秒合并」严重得多的伤害。
+    if (!dirty) text = $appState.scratchpad.text;
   }
 
   onDestroy(() => {
@@ -77,4 +87,6 @@
     placeholder="随手记点什么…（纯文本，不渲染，自动保存）"
     spellcheck="false"
   ></textarea>
+  <!-- 字数统计：需求 2 只要求隐藏「正在输入/已自动保存」，计数留着（v0.8.5 需求 6） -->
+  <div class="scratchpad-foot"><span class="scratchpad-count">{text.length} 字</span></div>
 </div>

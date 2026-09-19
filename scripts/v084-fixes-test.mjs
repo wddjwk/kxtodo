@@ -535,24 +535,45 @@ const mobile = await browser.newContext({
     page.evaluate(() => getComputedStyle(document.querySelector(".toolbox-view")).getPropertyValue("--accent").trim());
 
   const beforeSave = JSON.stringify((await readSettings()).toolbox ?? null);
+  // v0.8.5 需求 5：预设色块单击即落盘（不再进草稿等保存）
   await page.locator(".context-menu .color-grid button").nth(2).click();
+  await page.waitForTimeout(600);
+  const afterPreset = (await readSettings()).toolbox ?? null;
+  check(
+    "7 预设背景色单击即落盘（不弹草稿条）",
+    JSON.stringify(afterPreset) !== beforeSave &&
+      Boolean(afterPreset?.backgroundColor) &&
+      (await page.locator(".context-menu .color-draft-actions").count()) === 0,
+    J(afterPreset)
+  );
+
+  // 自定义取色（色盘）仍走「草稿 → 保存」
+  await page.evaluate(() => {
+    const input = document.querySelector(".context-menu input.hidden-file[type='color']");
+    input.value = "#123456";
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
   await page.waitForTimeout(400);
   const previewBg = await toolboxBg();
   check(
-    "7 选背景色只预览不落盘",
+    "7 自定义取色只预览不落盘",
     (await page.locator(".context-menu .color-draft-actions").count()) > 0 &&
-      JSON.stringify((await readSettings()).toolbox ?? null) === beforeSave &&
+      JSON.stringify((await readSettings()).toolbox ?? null) === JSON.stringify(afterPreset) &&
       previewBg !== "rgb(240, 240, 240)",
-    `${beforeSave} → ${previewBg}`
+    `preview=${previewBg}`
   );
   await page.locator(".context-menu .color-draft-actions .primary").click();
   await page.waitForTimeout(600);
   const saved = (await readSettings()).toolbox ?? null;
-  check("7 保存后落盘", Boolean(saved?.backgroundColor) && saved.backgroundColor !== "", J(saved));
+  check("7 保存后落盘", saved?.backgroundColor === "#123456", J(saved));
 
   // 取消：预览回退、盘里不动
   const savedBg = await toolboxBg();
-  await page.locator(".context-menu .color-grid button").nth(5).click();
+  await page.evaluate(() => {
+    const input = document.querySelector(".context-menu input.hidden-file[type='color']");
+    input.value = "#777777";
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
   await page.waitForTimeout(300);
   const previewBg2 = await toolboxBg();
   await page.locator(".context-menu .color-draft-actions button").first().click();
@@ -650,26 +671,42 @@ const mobile = await browser.newContext({
   const dueSaved = ((await readSettings()).appearance?.dueColors ?? {})["entry-a"];
   check("9 临期色保存后落盘（四档一次写完）", Array.isArray(dueSaved) && dueSaved.length === 4 && dueSaved[0] === "#808080", J(dueSaved));
 
-  // 背景色：预设色块也只预览、保存才写（与工具箱那份同一套逻辑）
+  // 背景色：预设色块单击即落盘（v0.8.5 需求 5）；自定义色盘才走草稿 → 保存
   const bgBefore = JSON.stringify((await readState()).backgrounds?.["entry-a"] ?? null);
   const pageBg = () =>
     page.evaluate(() => getComputedStyle(document.querySelector(".workspace")).backgroundColor);
   const bgOriginal = await pageBg();
   await page.locator(".context-menu .color-grid button").nth(3).click();
+  await page.waitForTimeout(600);
+  const bgAfterPreset = await pageBg();
+  const presetColor = ((await readSettings()).appearance?.themePresets ?? [])[3]?.color ?? "";
+  check(
+    "9 预设背景色单击即落盘（不再要求保存）",
+    bgAfterPreset !== bgOriginal &&
+      ((await readState()).backgrounds?.["entry-a"]?.color ?? "") === presetColor &&
+      (await page.locator(".context-menu .color-draft-actions").count()) === 0,
+    `${bgOriginal} → ${bgAfterPreset} / ${presetColor}`
+  );
+  const presetSaved = JSON.stringify((await readState()).backgrounds?.["entry-a"] ?? null);
+
+  // 自定义色盘：草稿预览 + 保存
+  await page.evaluate(() => {
+    const input = document.querySelector(".context-menu input.hidden-file[type='color']");
+    input.value = "#3355aa";
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
   await page.waitForTimeout(400);
   const bgPreview = await pageBg();
   check(
-    "9 背景色取色只预览不落盘",
-    bgPreview !== bgOriginal && JSON.stringify((await readState()).backgrounds?.["entry-a"] ?? null) === bgBefore,
-    `${bgOriginal} → ${bgPreview}`
+    "9 自定义取色只预览不落盘",
+    bgPreview !== bgAfterPreset && JSON.stringify((await readState()).backgrounds?.["entry-a"] ?? null) === presetSaved,
+    `${bgAfterPreset} → ${bgPreview}`
   );
   await page.locator(".context-menu .color-draft-actions .primary").last().click();
   await page.waitForTimeout(600);
   check(
     "9 背景色保存后才落盘",
-    ((await readState()).backgrounds?.["entry-a"]?.color ?? "") !== "" &&
-      ((await readState()).backgrounds?.["entry-a"]?.color ?? "") ===
-        ((await readSettings()).appearance?.themePresets ?? [])[3]?.color,
+    ((await readState()).backgrounds?.["entry-a"]?.color ?? "") === "#3355aa",
     J((await readState()).backgrounds?.["entry-a"] ?? null)
   );
   check("9 无脚本报错", errors.length === 0, errors[0] ?? "");
@@ -775,18 +812,38 @@ for (const layout of ["list", "grid", "icons"]) {
   let state = await stats();
   check("10 侧段控只剩支出|收入（结余已去掉）", !state.segments.includes("结余") && state.segments.includes("支出") && state.segments.includes("收入"), J(state.segments));
   check("10 折线图标题固定「收支趋势」", state.title === "收支趋势", state.title);
-  check("10 默认收入+支出亮、结余灰，图上两条线", state.lines.length === 2 && state.legend[2].on === false && state.legend[0].on && state.legend[1].on, J(state));
+  // v0.8.5 需求 8：图例默认跟随侧段控——支出侧只有支出一条
+  check("10 默认图例跟随侧段控（支出侧只亮支出）", state.lines.length === 1 && state.legend[1].on && !state.legend[0].on && !state.legend[2].on, J(state));
   check("10 灰态色块是中性的（不是透明）", state.legend[2].dot === "rgb(200, 204, 210)", state.legend[2].dot);
-
-  await page.locator(".ledger-legend button", { hasText: "结余" }).click();
-  await page.waitForTimeout(700);
-  state = await stats();
-  check("10 点结余后画三条线", state.lines.length === 3 && state.legend[2].on, J(state.lines));
 
   await page.locator(".ledger-legend button", { hasText: "收入" }).click();
   await page.waitForTimeout(700);
   state = await stats();
-  check("10 手动关收入只剩支出+结余", state.lines.length === 2 && state.lines.every((cls) => !cls.includes(" in")), J(state.lines));
+  check("10 手动点亮收入后画两条线", state.lines.length === 2 && state.legend[0].on, J(state.lines));
+
+  await page.locator(".ledger-legend button", { hasText: "结余" }).click();
+  await page.waitForTimeout(700);
+  state = await stats();
+  check("10 再点结余后画三条线", state.lines.length === 3 && state.legend[2].on, J(state.lines));
+
+  // 切侧把图例重置为该侧单条亮（手动叠出来的三条线不该留到下一侧）
+  await page.locator(".ledger-side-switch button", { hasText: "收入" }).click();
+  await page.waitForTimeout(800);
+  state = await stats();
+  check(
+    "10 切到收入侧图例重置为单条（收入亮）",
+    state.lines.length === 1 && state.legend[0].on && !state.legend[1].on && !state.legend[2].on,
+    J(state)
+  );
+
+  await page.locator(".ledger-side-switch button", { hasText: "支出" }).click();
+  await page.waitForTimeout(800);
+  state = await stats();
+  check(
+    "10 切回支出侧同样单条（支出亮）",
+    state.lines.length === 1 && state.legend[1].on && !state.legend[0].on,
+    J(state)
+  );
   check("10 记账统计无脚本报错", errors.length === 0, errors[0] ?? "");
   await page.close();
 }
@@ -985,7 +1042,7 @@ for (const layout of ["list", "grid", "icons"]) {
   });
   await seedState(page, {
     nodes: [{ id: "entry-a", kind: "entry", name: "测试条目", icon: "list", parentId: null }],
-    tasks: [makeTask({ id: "t-list", nodeId: "entry-a", markdown: "1. 甲\n2. 乙\n- 无序项" })]
+    tasks: [makeTask({ id: "t-list", nodeId: "entry-a", markdown: "正文行\n1. 甲\n2. 乙\n- 无序项" })]
   });
 
   // 15.1 编辑器字体与字号（跟草稿纸同源：--font-body + --editor-font-size）
@@ -1035,7 +1092,13 @@ for (const layout of ["list", "grid", "icons"]) {
   });
   const normal = colors.find((item) => item.text.startsWith("-"))?.color;
   const ordered = colors.find((item) => item.text.startsWith("1."))?.color;
-  check("15.2 有序/无序列表都不是蓝色", !/rgb\(37, 99, 235\)|rgb\(37, 100, 207\)/.test(`${normal}${ordered}`), J(colors));
+  const body = colors.find((item) => item.text.startsWith("正文行"))?.color;
+  // 与正文同色比较，别写死色值（v0.8.5 需求 23）：主题一换就误报的断言等于没有
+  check(
+    "15.2 有序/无序列表与正文同色（不单独染蓝）",
+    Boolean(body) && normal === body && ordered === body,
+    J(colors)
+  );
 
   // 15.3.2 / 15.3.1 三级缩进与续号
   await page.evaluate(() => document.querySelector(".editor-cm-host .cm-content")?.focus());
@@ -1054,7 +1117,31 @@ for (const layout of ["list", "grid", "icons"]) {
   await page.keyboard.insertText("子二");
   await page.waitForTimeout(400);
   text = await page.evaluate(() => document.querySelector(".editor-cm-host .cm-content")?.textContent ?? "");
-  check("15.3.1 第三级回车继续递增编号", /1\. 子一\s*2\. 子二/.test(text.replace(/\u00a0/g, " ")), JSON.stringify(text));
+  // 第三级（6 空格）回车继续递增：**缩进层级也要断言**，只比 "1. …2. …" 二级文本也满足（v0.8.5 需求 22）
+  // 注意 textContent 不含换行（每行是独立的 .cm-line），所以用 \s* 而不是 \s+
+  check(
+    "15.3.1 第三级回车继续递增编号（同级缩进不变）",
+    /      1\. 子一\s*      2\. 子二/.test(text.replace(/\u00a0/g, " ")),
+    JSON.stringify(text)
+  );
+
+  // 真四级嵌套（v0.8.5 需求 22）：层次写全（跨级缩进在 CommonMark 里不算新层级），
+  // 光标放第四级行尾回车，应继续第四级的编号
+  await page.evaluate(() => document.querySelector(".editor-cm-host .cm-content")?.focus());
+  await page.keyboard.press("Control+A");
+  await page.keyboard.insertText("1. 甲\n   1. 乙\n      1. 丙\n         1. 丁");
+  await page.waitForTimeout(300);
+  await page.keyboard.press("Control+End");
+  await page.waitForTimeout(200);
+  await page.keyboard.press("Enter");
+  await page.keyboard.insertText("继续");
+  await page.waitForTimeout(400);
+  text = await page.evaluate(() => document.querySelector(".editor-cm-host .cm-content")?.textContent ?? "");
+  check(
+    "15.3.1 四级嵌套回车继续同级递增（9 空格 = 第四级）",
+    /         1\. 丁\s*         2\. 继续/.test(text.replace(/\u00a0/g, " ")),
+    JSON.stringify(text)
+  );
   check("15 编辑器无脚本报错", errors.length === 0, errors[0] ?? "");
   await page.keyboard.press("Escape");
   await page.waitForTimeout(300);
@@ -1284,11 +1371,11 @@ for (const layout of ["list", "grid", "icons"]) {
   await page.locator(".nav-row", { hasText: "工具箱" }).click();
   await page.waitForSelector(".toolbox-card", { timeout: 8000 });
   await page.locator(".toolbox-card", { hasText: "文件传输助手" }).click();
-  await page.waitForSelector(".transfer", { timeout: 8000 });
+  await page.waitForSelector(".transfer-page", { timeout: 8000 });
   await page.waitForTimeout(400);
 
   const shell = await page.evaluate(() => {
-    const root = document.querySelector(".transfer");
+    const root = document.querySelector(".transfer-page");
     const width = Math.round(root?.getBoundingClientRect().width ?? 0);
     return {
       width,
@@ -1332,11 +1419,11 @@ for (const layout of ["list", "grid", "icons"]) {
   await page.locator(".nav-row", { hasText: "工具箱" }).click();
   await page.waitForSelector(".toolbox-card", { timeout: 8000 });
   await page.locator(".toolbox-card", { hasText: "文件传输助手" }).click();
-  await page.waitForSelector(".transfer", { timeout: 8000 });
+  await page.waitForSelector(".transfer-page", { timeout: 8000 });
   await page.waitForTimeout(500);
   const mobileInfo = await page.evaluate(() => {
     const actions = document.querySelector(".transfer-actions");
-    const root = document.querySelector(".transfer");
+    const root = document.querySelector(".transfer-page");
     const rect = root?.getBoundingClientRect();
     const columns = actions ? getComputedStyle(actions).gridTemplateColumns.split(" ").length : 0;
     return {
@@ -1348,6 +1435,111 @@ for (const layout of ["list", "grid", "icons"]) {
   });
   check("1.6 移动端四个大图标是 2×2", mobileInfo.columns === 2, J(mobileInfo));
   check("1.6 移动端不超屏", mobileInfo.overflow === 0 && mobileInfo.right <= mobileInfo.viewport + 1, J(mobileInfo));
+  await page.close();
+}
+
+// ===========================================================================
+// 33 渲染态勾选的手术式更新（v0.8.5）：长文档点勾选不再整篇重渲
+// ===========================================================================
+{
+  const { page, errors } = await freshPage(desktop);
+  const body = [
+    "## 长文档勾选",
+    "",
+    "- [ ] 第一项",
+    "- [ ] 第二项",
+    "",
+    "```js",
+    "const a = 1;",
+    "function hello(name) {",
+    "  return `你好 ${name}`;",
+    "}",
+    "```",
+    "",
+    "正文段落若干。" + "这是一段很长的说明文字，用来把文档推过 1000 字的两阶段渲染阈值。".repeat(30),
+    "",
+    "- [x] 已完成项"
+  ].join("\n");
+  await seedState(page, {
+    nodes: [{ id: "entry-a", kind: "entry", name: "测试条目", icon: "list", parentId: null }],
+    tasks: [makeTask({ id: "t-tick", markdown: body, expanded: true })]
+  });
+  await page.locator(".tree-row", { hasText: "测试条目" }).click();
+  await page.waitForTimeout(800);
+  // 等完整版渲染落地（代码块被 highlight.js 上色）
+  await page.waitForSelector(".markdown-content code.hljs", { timeout: 10000 });
+  await page.waitForTimeout(300);
+  const prepared = await page.evaluate(() => {
+    const code = document.querySelector(".markdown-content code.hljs");
+    window.__codeRef = code;
+    window.__fastBefore = window.__kxtodoRenderStats.fast;
+    return {
+      fast: window.__kxtodoRenderStats.fast,
+      boxes: document.querySelectorAll(".markdown-content input.md-task-box").length,
+      highlighted: Boolean(code)
+    };
+  });
+  check("33 长文档完整渲染落地（代码块已高亮、任务框在）", prepared.boxes === 3 && prepared.highlighted, J(prepared));
+
+  // 点第一个勾选框：同一帧内 checked 已翻、代码块节点身份未变、快速版没有重跑
+  await page.locator(".markdown-content input.md-task-box").first().click();
+  const afterTick = await page.evaluate(() => {
+    const box = document.querySelector(".markdown-content input.md-task-box");
+    const code = document.querySelector(".markdown-content code.hljs");
+    const firstLi = document.querySelector(".markdown-content li");
+    return {
+      checked: box?.checked ?? null,
+      done: Boolean(firstLi?.classList.contains("md-task-done")),
+      sameCode: window.__codeRef === code && code?.isConnected === true,
+      fast: window.__kxtodoRenderStats.fast,
+      fastBefore: window.__fastBefore,
+      label: firstLi?.querySelector(".md-task-label")?.textContent?.trim() ?? ""
+    };
+  });
+  check("33 点击帧内勾选框已翻转且打上删除线标记", afterTick.checked === true && afterTick.done && afterTick.label.includes("第一项"), J(afterTick));
+  check("33 代码块高亮节点没有被替换（未整篇重渲）", afterTick.sameCode, J(afterTick));
+  check("33 快速版渲染没有重跑（renderStats.fast 不增长）", afterTick.fast === afterTick.fastBefore, J(afterTick));
+
+  // 再点一次（勾回去）：拆 span 也要等价，且同样不重渲
+  await page.locator(".markdown-content input.md-task-box").first().click();
+  const afterUntick = await page.evaluate(() => {
+    const box = document.querySelector(".markdown-content input.md-task-box");
+    const code = document.querySelector(".markdown-content code.hljs");
+    const firstLi = document.querySelector(".markdown-content li");
+    return {
+      checked: box?.checked ?? null,
+      done: Boolean(firstLi?.classList.contains("md-task-done")),
+      sameCode: window.__codeRef === code && code?.isConnected === true,
+      fast: window.__kxtodoRenderStats.fast,
+      fastBefore: window.__fastBefore
+    };
+  });
+  check("33 再点一次勾选框回原态且仍未重渲", afterUntick.checked === false && !afterUntick.done && afterUntick.sameCode && afterUntick.fast === afterUntick.fastBefore, J(afterUntick));
+
+  // 文本对不上（写失败回滚 / 远端同步 / 编辑器改写都走这条路）→ 落回正常重渲。
+  // 浏览器预览里没有写失败路径，这里用编辑器把正文写回**原文**来模拟回滚后的那一次源变更：
+  // 卡片应当重渲，勾选框回到与源码一致的状态。
+  await page.locator(".markdown-content input.md-task-box").first().click();
+  await page.waitForTimeout(400);
+  await page.locator(".task-card .edit-button").click();
+  await page.waitForSelector(".editor-dialog", { timeout: 10000 });
+  await page.waitForTimeout(900);
+  await page.evaluate(() => document.querySelector(".editor-cm-host .cm-content")?.focus());
+  await page.keyboard.press("Control+A");
+  await page.keyboard.insertText(body);
+  await page.keyboard.press("Control+s");
+  await page.waitForSelector(".editor-dialog", { state: "detached", timeout: 10000 });
+  await page.waitForTimeout(700);
+  const reverted = await page.evaluate(() => {
+    const firstLi = document.querySelector(".markdown-content li");
+    return {
+      checked: document.querySelector(".markdown-content input.md-task-box")?.checked ?? null,
+      done: Boolean(firstLi?.classList.contains("md-task-done")),
+      source: JSON.parse(localStorage.getItem("todo-note-state-v3")).tasks.find((t) => t.id === "t-tick")?.markdown?.slice(0, 12) ?? ""
+    };
+  });
+  check("33 文本被改回原样时重渲纠正（勾选框回到与源码一致）", reverted.checked === false && !reverted.done, J(reverted));
+  check("33 勾选手术式更新无脚本报错", errors.length === 0, errors[0] ?? "");
   await page.close();
 }
 

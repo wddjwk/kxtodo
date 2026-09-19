@@ -391,12 +391,16 @@
     pushColorPreview();
   }
 
-  /** 保存临期配色：四档**一次写完**（逐档写会互相覆盖——后一档读到的还是旧数组） */
+  /** 保存临期配色（v0.8.5 需求 21）：四档一次写完（逐档写会互相覆盖——后一档读到的
+      还是旧数组），但**没改过的档从已存值/默认值补**，别把草稿里没有的槽位也钉成显式值；
+      保存后草稿保留（与主题色 / 背景色两条路径同一口径，脏标记靠落盘值自然清零）。 */
   function saveDueColors(): void {
     const key = dueColorKey();
-    if (!key) return;
-    const next = [0, 1, 2, 3].map((slot) => dueColorDisplay(slot));
-    colorDraft = { ...colorDraft, due: undefined };
+    if (!key || !dueDirty) return;
+    const stored = $appSettings.appearance.dueColors[key];
+    const next = [0, 1, 2, 3].map(
+      (slot) => colorDraft.due?.[slot] ?? stored?.[slot] ?? DEFAULT_DUE_COLORS[slot]
+    );
     void setConfigAction("appearance.dueColors", {
       ...$appSettings.appearance.dueColors,
       [key]: next
@@ -425,11 +429,19 @@
     setBackground({ color: defaultBackground.color });
   }
 
-  // ---- 背景色（预设色块 / 自定义色盘）：与主题色同一套「草稿 → 保存」 ----
+  // ---- 背景色（预设色块 / 自定义色盘）：预设单击即落盘，只有取色器走「草稿 → 保存」 ----
   /** 选背景色：只改草稿 + 推预览，保存才落盘 */
   function pickBackgroundColor(color: string): void {
     colorDraft = { ...colorDraft, background: color };
     pushColorPreview();
+  }
+
+  /** 预设色块：本身就是一次明确的离散选择，单击即落盘（没有「拖动过程」可预览）。
+      顺手丢掉本区草稿与预览——不然刚落的盘会被残留的旧活值顶回去。 */
+  function applyPresetBackground(color: string): void {
+    colorDraft = { ...colorDraft, background: undefined };
+    if (get(colorPreview)?.scope === colorScope) clearColorPreview();
+    setBackground({ color });
   }
 
   function saveBackgroundColor(): void {
@@ -911,7 +923,7 @@
         class:editing={editingPresetIndex === index}
         class:active={backgroundShown === preset.color}
         style={`--swatch: ${preset.color}; --accent-color: ${preset.color}`}
-        on:click={() => pickBackgroundColor(preset.color)}
+        on:click={() => applyPresetBackground(preset.color)}
         on:contextmenu|preventDefault|stopPropagation={() => beginPresetEdit(index)}
       ></button>
     {/each}

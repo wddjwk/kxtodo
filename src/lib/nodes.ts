@@ -159,8 +159,83 @@ export function buildSearchHits(state: AppState, diaries: DiaryEntry[], ledger: 
   return hits.sort((a, b) => stampOf(b).localeCompare(stampOf(a)));
 }
 
-export function moveTargetOptions(sourceId: string, nodes: AppNode[]): Array<{ id: string; name: string }> {
-  const source = nodes.find((node) => node.id === sourceId);
+/** 拖动落点的三种语义：插到目标前 / 插到目标后 / 移入目标（目标须是分组） */
+export type TreeDropPosition = "before" | "after" | "inside";
+
+/** 拖动中向宿主汇报的悬停状态（宿主拿它算实时预览） */
+export type TreeHover =
+  | { over: "node"; targetId: string; position: TreeDropPosition }
+  | { over: "rootEnd" }
+  | { over: "none" };
+
+export type TreeMovePlan = {
+  /** 移动后的完整节点数组（渲染顺序即数组顺序） */
+  ordered: AppNode[];
+  /** 移动后的父节点（null = 根级） */
+  parentId: string | null;
+};
+
+/**
+ * 拖动落点 → 新的节点顺序。**预览与提交共用这一份**（v0.8.5 需求 29）：
+ * 拖动中行实时让位用的是它，松手落盘也用它是同一个结果，两边不会各算各的。
+ * 非法落点（自身 / 自己的后代 / 系统项；inside 落到非分组）返回 null。
+ */
+export function planTreeMove(
+  nodes: AppNode[],
+  id: string,
+  targetId: string,
+  position: TreeDropPosition
+): TreeMovePlan | null {
+  const source = nodes.find((n) => n.id === id);
+  const target = nodes.find((n) => n.id === targetId);
+  if (!source || !target || source.kind === "system" || target.kind === "system") return null;
+  if (source.id === target.id || nodeAndDescendantIds(source.id, nodes).has(target.id)) return null;
+  if (position === "inside" && target.kind !== "category") return null;
+  const parentId: string | null = position === "inside" ? target.id : target.parentId ?? null;
+  const sourceWithParent = { ...source, parentId };
+  const withoutSource = nodes.filter((n) => n.id !== id);
+  const targetIndex = withoutSource.findIndex((n) => n.id === target.id);
+  let insertIndex = withoutSource.length;
+  if (position === "before") {
+    insertIndex = targetIndex >= 0 ? targetIndex : withoutSource.length;
+  } else if (position === "after") {
+    insertIndex = targetIndex >= 0 ? targetIndex + 1 : withoutSource.length;
+  } else {
+    const childIndexes = withoutSource
+      .map((n, i) => ({ n, i }))
+      .filter((item) => item.n.parentId === target.id)
+      .map((item) => item.i);
+    insertIndex = childIndexes.length
+      ? Math.max(...childIndexes) + 1
+      : targetIndex >= 0
+        ? targetIndex + 1
+        : withoutSource.length;
+  }
+  const ordered = [...withoutSource];
+  ordered.splice(insertIndex, 0, sourceWithParent);
+  return {
+    // 移入折叠的分组时顺手展开，落点看得见
+    ordered: ordered.map((n) => (position === "inside" && n.id === target.id ? { ...n, collapsed: false } : n)),
+    parentId
+  };
+}
+
+/** 拖到空白区：移动为根级最后一项。 */
+export function planTreeRootEnd(nodes: AppNode[], id: string): TreeMovePlan | null {
+  const source = nodes.find((n) => n.id === id);
+  if (!source || source.kind === "system") return null;
+  const withoutSource = nodes.filter((n) => n.id !== id);
+  const rootIndexes = withoutSource
+    .map((n, i) => ({ n, i }))
+    .filter((item) => !item.n.parentId && item.n.kind !== "system")
+    .map((item) => item.i);
+  const insertIndex = rootIndexes.length ? Math.max(...rootIndexes) + 1 : withoutSource.length;
+  const ordered = [...withoutSource];
+  ordered.splice(insertIndex, 0, { ...source, parentId: null });
+  return { ordered, parentId: null };
+}
+
+export function moveTargetOptions(sourceId: string, nodes: AppNode[]): Array<{ id: string; name: string }> {  const source = nodes.find((node) => node.id === sourceId);
   if (!source || source.kind === "system") return [];
   const excluded = source.kind === "category" ? nodeAndDescendantIds(source.id, nodes) : new Set<string>([source.id]);
   return [

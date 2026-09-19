@@ -30,11 +30,37 @@
   import { clearColorPreview, accentWithPreview, backgroundWithPreview, colorPreview, setColorPreview } from "./colorPreview";
   import { toolboxAccent } from "./styles";
   import { defaultBackground, themePresets } from "./defaults";
+  import { applyRelay, transferState } from "./transferStore";
 
   let cardMenu: { tool: ToolDefinition; x: number; y: number } | null = null;
 
   $: tools = availableTools();
   $: activeTool = $toolRoute === null ? null : (tools.find((tool) => tool.id === $toolRoute) ?? null);
+
+  // ---- relay 服务（v0.8.5 需求 31）：跟着传输工具页的 ⋯ 菜单走 ----
+  // core 的 transfer.relay 语义：空 = 跟 p2p 同步；`disabled` = 不用 relay；其它 = 自部署地址
+  let relayMode: "follow" | "disabled" | "custom" = "follow";
+  let relayCustom = "";
+
+  function relayModeOf(value: string): "follow" | "disabled" | "custom" {
+    if (value === "") return "follow";
+    if (value === "disabled") return "disabled";
+    return "custom";
+  }
+
+  function pickRelayMode(mode: "follow" | "disabled" | "custom"): void {
+    relayMode = mode;
+    if (mode === "follow") void applyRelay("");
+    else if (mode === "disabled") void applyRelay("disabled");
+    // 「自定义」等用户把地址填完再保存（下面那个输入框失焦 / 回车）
+  }
+
+  function commitRelayCustom(): void {
+    const value = relayCustom.trim();
+    if (value === "") return;
+    void applyRelay(value);
+  }
+
   $: pinnedIds = $appSettings.appearance.navItems
     .filter((id) => id.startsWith("tool:"))
     .map((id) => id.slice("tool:".length));
@@ -80,6 +106,14 @@
     if ($colorPreview?.scope === TOOLBOX_SCOPE) clearColorPreview();
   }
 
+  /** 打开 ⋯ 菜单：顺手把 relay 三态与自定义地址按当前设置填好 */
+  function openAppearanceMenu(event: MouseEvent): void {
+    const value = $appSettings.transfer?.relay ?? "";
+    relayMode = relayModeOf(value);
+    relayCustom = relayMode === "custom" ? value : "";
+    appearanceMenu = { x: event.clientX, y: event.clientY };
+  }
+
   function pickAccent(event: Event): void {
     const target = event.currentTarget;
     if (!(target instanceof HTMLInputElement)) return;
@@ -90,6 +124,13 @@
   function pickBackground(color: string): void {
     draft = { ...draft, background: color };
     pushPreview();
+  }
+
+  /** 预设色块：离散选择，单击即落盘（只有取色器走「草稿 → 保存」） */
+  function applyPresetBackground(color: string): void {
+    draft = { ...draft, background: undefined };
+    if ($colorPreview?.scope === TOOLBOX_SCOPE) clearColorPreview();
+    void setConfig("toolbox.backgroundColor", color);
   }
 
   function pickBackgroundFromInput(event: Event): void {
@@ -136,21 +177,28 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <section class="toolbox-view" style={toolboxStyle} on:click|stopPropagation>
   {#if activeTool}
-    <!-- 子视图的头部（需求 7）：只有两枚按钮——返回工具箱 + ⋯ 外观菜单。
-         工具该拿到一块干净的画布，「返回工具箱」占一整行太扎眼。 -->
+    <!-- 子视图的头部（需求 7）：左边「图标 + 名称」（与工具箱主界面、我的一天同一格式），
+         右边两枚按钮——返回工具箱 + ⋯ 外观菜单。工具该拿到一块干净的画布，
+         「返回工具箱」占一整行太扎眼。 -->
     <header class="toolbox-sub-bar">
-      <button class="toolbox-icon-button" type="button" title="返回工具箱" aria-label="返回工具箱" on:click={backFromTool}>
-        <ArrowLeft size={19} />
-      </button>
-      <button
-        class="toolbox-icon-button"
-        type="button"
-        title="外观"
-        aria-label="外观"
-        on:click={(event) => (appearanceMenu = { x: event.clientX, y: event.clientY })}
-      >
-        <MoreHorizontal size={19} />
-      </button>
+      <span class="toolbox-sub-bar-title">
+        <span class="toolbox-header-icon"><svelte:component this={activeTool.icon} size={22} /></span>
+        <strong class="toolbox-header-title">{activeTool.name}</strong>
+      </span>
+      <span class="toolbox-sub-bar-actions">
+        <button class="toolbox-icon-button" type="button" title="返回工具箱" aria-label="返回工具箱" on:click={backFromTool}>
+          <ArrowLeft size={19} />
+        </button>
+        <button
+          class="toolbox-icon-button"
+          type="button"
+          title="外观"
+          aria-label="外观"
+          on:click={openAppearanceMenu}
+        >
+          <MoreHorizontal size={19} />
+        </button>
+      </span>
     </header>
     {#await loadToolModule(activeTool)}
       <p class="toolbox-empty">正在打开…</p>
@@ -226,7 +274,7 @@
           title={preset.name}
           class:active={backgroundShown === preset.color}
           style={`--swatch: ${preset.color}; --accent-color: ${preset.color}`}
-          on:click={() => pickBackground(preset.color)}
+          on:click={() => applyPresetBackground(preset.color)}
         ></button>
       {/each}
       <button type="button" class="palette-button" title="自定义颜色" on:click={() => customPicker?.click()}></button>
@@ -252,6 +300,40 @@
       value={backgroundShown}
       on:change={pickBackgroundFromInput}
     />
+
+    {#if activeTool?.id === "transfer"}
+      <!-- relay 服务（v0.8.5 需求 31）：为以后自部署 relay 做准备。
+           relay 在 go_online 时固化进端点，保存后 store 会自己重新上线。 -->
+      <div class="menu-section-title">relay 服务</div>
+      <div class="relay-options">
+        <label class="relay-row">
+          <input type="radio" name="relay-mode" checked={relayMode === "follow"} on:change={() => pickRelayMode("follow")} />
+          <span>跟随同步设置</span>
+        </label>
+        <label class="relay-row">
+          <input type="radio" name="relay-mode" checked={relayMode === "disabled"} on:change={() => pickRelayMode("disabled")} />
+          <span>禁用（只走直连）</span>
+        </label>
+        <label class="relay-row">
+          <input type="radio" name="relay-mode" checked={relayMode === "custom"} on:change={() => pickRelayMode("custom")} />
+          <span>自定义地址</span>
+        </label>
+      </div>
+      {#if relayMode === "custom"}
+        <input
+          class="relay-input"
+          value={relayCustom}
+          placeholder="https://relay.example.com"
+          spellcheck="false"
+          on:input={(event) => (relayCustom = event.currentTarget.value)}
+          on:blur={commitRelayCustom}
+          on:keydown={(event) => { if (event.key === "Enter") (event.target as HTMLInputElement).blur(); }}
+        />
+      {/if}
+      <div class="relay-hint">
+        {$transferState.online ? "传输助手在线：保存后自动重新上线" : "传输助手未上线：下次上线时生效"}
+      </div>
+    {/if}
   </ContextMenu>
 {/if}
 

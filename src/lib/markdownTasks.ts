@@ -64,6 +64,17 @@ export function toggleMarkdownTask(markdown: string, index: number): string {
 }
 
 /**
+ * 第 `index` 个任务项在源码里是否已勾选（`- [x]`）。
+ * 点击路径用它决定渲染态要收敛到哪一态——**以源码为准**而不是拿 DOM 的当前值取反：
+ * 原生点击已经把 checked 翻过来了，再翻一次就翻回去了（v0.8.5 需求 33 踩过）。
+ */
+export function markdownTaskChecked(markdown: string, index: number): boolean {
+  const target = markdownTaskLines(markdown)[index];
+  if (target === undefined) return false;
+  return /\s\[[xX]\]\s/.test(markdown.split("\n")[target]);
+}
+
+/**
  * 点击落在任务勾选框上就回它的序号（第几个），否则回 null。
  *
  * `scope` 必须是**这一份渲染结果**的容器：同一个页面上每张卡片各有一份 markdown-body，

@@ -27,6 +27,8 @@ const TWO_PHASE_MIN_CHARS = 1000;
  */
 export function createDeferredMarkdown(apply: (html: string) => void): {
   schedule: (markdown: string, nodeId?: string) => void;
+  /** 声明「这份文本的 DOM 已经就位」（勾选的手术式更新，见 markdown.setRenderedTaskBox） */
+  adopt: (markdown: string, nodeId?: string) => void;
   cancel: () => void;
 } {
   /** 最后一次被要求渲染的文本（等帧期间内容可能又被改，升级时以它为准） */
@@ -101,6 +103,19 @@ export function createDeferredMarkdown(apply: (html: string) => void): {
         applyOnce(markdown, nodeId, renderMarkdownFast(markdown, nodeId), false);
       }
       scheduleUpgrade();
+    },
+    /**
+     * 声明「这份文本的 DOM 已经就位」：勾选的手术式更新只改了局部 DOM、跳过整篇重渲，
+     * 渲染器的账本必须跟着改——否则将来文本**回退到更早的那一份**时（写失败回滚 /
+     * 远端同步 / 编辑器改写），`applied`/`appliedFull` 还停在旧键上，`schedule` 会
+     * 以为「已经渲过」而跳过，界面留在手术后的状态、与源码永久分叉。
+     * `appliedHtml` 置空：手术结果与整篇重渲等价（有单测钉住），但它的字节不等于
+     * 任何一份渲染产物，下一次 apply 必须真写。
+     */
+    adopt(markdown: string, nodeId = ""): void {
+      applied = keyOf(markdown, nodeId);
+      appliedFull = applied;
+      appliedHtml = "";
     },
     cancel(): void {
       cancelFrame();

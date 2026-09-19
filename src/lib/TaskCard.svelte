@@ -1,8 +1,8 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy } from "svelte";
   import { Check, ChevronUp, PenLine, Plus, X } from "@lucide/svelte";
-  import { collapsedMarkdownLine, hasMultipleMarkdownLines, renderInlineMarkdown } from "./markdown";
-  import { taskToggleIndex, toggleMarkdownTask } from "./markdownTasks";
+  import { collapsedMarkdownLine, hasMultipleMarkdownLines, renderInlineMarkdown, setRenderedTaskBox } from "./markdown";
+  import { markdownTaskChecked, taskToggleIndex, toggleMarkdownTask } from "./markdownTasks";
   import { tagChipStyle } from "./tagColors";
   import { dueHighlightOf, dueHighlightStyle, DEFAULT_DUE_COLORS } from "./dueHighlight";
   import { colorPreview, dueColorsWithPreview } from "./colorPreview";
@@ -82,11 +82,30 @@
   // 浏览器画过一两帧后补上——点击立刻看到完整可读的内容，没有空白块阶段。
   let fullHtml = "";
   const fullRender = createDeferredMarkdown((html) => {
-    fullHtml = html;
+    if (html !== fullHtml) {
+      fullHtml = html;
+      return;
+    }
+    // 同一份 HTML 的「再写一次」（勾选手术更新之后，文本又回退了）：Svelte 的 `{@html}`
+    // 只与上一次的值比，同值不重建——而 DOM 已经被手术改过，必须强制重建一遍。
+    // 先清空再写回，两次都在同一个任务里，浏览器不会在中间绘制，看不出闪。
+    fullHtml = "";
+    void Promise.resolve().then(() => (fullHtml = html));
   });
+  /**
+   * 勾选手术式更新的重渲豁免（需求 33）：点击时记为「勾选后的新文本」，
+   * 卡片重渲入口见到一模一样的文本就跳过——DOM 已经由点击路径自己翻好了。
+   * **必须是文本匹配**：写库失败回滚、远端同步、编辑器改写都会让文本对不上，
+   * 那时照常重渲，DOM 自动纠正，不需要任何专门的回滚代码。
+   */
+  let skipNextRender = "";
   $: syncFullRender(isExpanded, task.markdown, nodeId);
 
   function syncFullRender(expanded: boolean, markdown: string, node: string): void {
+    if (expanded && markdown === skipNextRender) {
+      skipNextRender = "";
+      return;
+    }
     if (!expanded) {
       fullRender.cancel();
       if (fullHtml !== "") fullHtml = "";
@@ -301,11 +320,24 @@
       dispatch("openLink", { href: link.href, title: (link.textContent ?? "").trim() });
       return;
     }
-    // 任务列表的勾选框：点一下就把源码里的 `- [ ]` / `- [x]` 翻过来存回去
+    // 任务列表的勾选框：点一下就把源码里的 `- [ ]` / `- [x]` 翻过来存回去。
+    // DOM 侧走**手术式**更新（需求 33）：只收敛这一个 li 的勾选框与行内标记，
+    // 整篇重渲由 skipNextRender 豁免跳过——长文档点一下不会闪。
+    // **不能 preventDefault**：勾选框的原生翻转就是即时反馈，取消激活行为反而会把
+    // checked 还原回点击前的值（浏览器在事件派发后执行「取消激活步骤」），手术更新就白做了。
     const boxIndex = taskToggleIndex(event, event.currentTarget as Element);
     if (boxIndex !== null) {
-      event.preventDefault();
-      void saveTaskMarkdown(task.id, toggleMarkdownTask(task.markdown, boxIndex), isExpanded);
+      const next = toggleMarkdownTask(task.markdown, boxIndex);
+      const box = (event.target as HTMLElement | null)?.closest?.('input[type="checkbox"]');
+      if (next !== task.markdown && box instanceof HTMLInputElement) {
+        // 目标态以**源码**为准（原生点击已经翻过 checked，拿 DOM 取反会翻回去）
+        setRenderedTaskBox(box, markdownTaskChecked(next, boxIndex));
+        skipNextRender = next;
+        // 渲染器的账本也要跟上：将来文本回退（写失败回滚 / 远端同步）时才不会
+        // 因为「旧的文本已经渲过」而跳过、把界面留在手术后的状态
+        fullRender.adopt(next, nodeId);
+      }
+      void saveTaskMarkdown(task.id, next, isExpanded);
       return;
     }
     if (mobile) handleMobileTap(event);

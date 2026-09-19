@@ -178,6 +178,9 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   check("白块里有三数额", (await page.$$(".ledger-summary strong")).length === 3);
 
   // v0.8.4 需求 10：结余改由右上角图例胶囊切（三枚可点），标题固定「收支趋势」
+  // v0.8.5 需求 8：图例默认跟随侧段控（支出侧只亮支出），先点亮收入再点结余
+  await page.locator(".ledger-legend button", { hasText: "收入" }).click();
+  await page.waitForTimeout(200);
   await page.locator(".ledger-legend button", { hasText: "结余" }).click();
   await page.waitForTimeout(400);
   check("点结余胶囊画三条曲线", (await page.$$(".ledger-line.in")).length === 1 && (await page.$$(".ledger-line.out")).length === 1 && (await page.$$(".ledger-line.bal")).length === 1);
@@ -227,8 +230,8 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
 
   // 8. 账户管理：不 autofocus、自定义类型、账户专用图标分组、备注在名称下面
   await page.click(".ledger-view .header-actions > button[title='记账菜单'], .ledger-view .header-actions > button[title='更多操作']");
-  await page.waitForSelector(".ledger-gear-panel", { timeout: 5000 });
-  await page.click(".ledger-gear-panel .menu-item-button:has-text('账户与转账')");
+  await page.waitForSelector(".context-menu .menu-item-button", { timeout: 5000 });
+  await page.click(".context-menu .menu-item-button:has-text('账户与转账')");
   await page.waitForSelector(".ledger-manager", { timeout: 8000 });
   await page.click(".ledger-sheet-foot button:has-text('添加账户')");
   await page.waitForTimeout(300);
@@ -258,8 +261,8 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
 
   // 10. 分类管理不 autofocus
   await page.click(".ledger-view .header-actions > button[title='记账菜单'], .ledger-view .header-actions > button[title='更多操作']");
-  await page.waitForSelector(".ledger-gear-panel", { timeout: 5000 });
-  await page.click(".ledger-gear-panel .menu-item-button:has-text('分类管理')");
+  await page.waitForSelector(".context-menu .menu-item-button", { timeout: 5000 });
+  await page.click(".context-menu .menu-item-button:has-text('分类管理')");
   await page.waitForSelector(".ledger-manager", { timeout: 8000 });
   await page.click(".ledger-sheet-foot button:has-text('添加大类')");
   await page.waitForTimeout(300);

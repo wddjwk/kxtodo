@@ -294,7 +294,7 @@ fn folder_transfer_roundtrip_with_progress() {
     let sender_root = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(sender_root.path().join("runtime")).unwrap();
     let sender_layout = Layout::new(sender_root.path().to_path_buf());
-    transfer::go_online(
+    let sender_info = transfer::go_online(
         sender.sink(),
         &sender_layout,
         CODE,
@@ -304,6 +304,7 @@ fn folder_transfer_roundtrip_with_progress() {
         net(&directory_url),
     )
     .expect("发送侧上线");
+    let sender_id = sender_info["deviceId"].as_str().unwrap().to_string();
     let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
         let devices = transfer::devices(&sender_layout);
@@ -428,6 +429,33 @@ fn folder_transfer_roundtrip_with_progress() {
     assert_eq!(
         receiver_log["entries"][0]["direction"], "receive",
         "接收侧那条历史的 direction 应为 receive"
+    );
+
+    // 发完一次之后发送侧必须仍然在线（v0.8.4 的 bug：finish 把共享端点关了，
+    // 一次发完 / 一次取消就把整台设备弄下线），并且反向还能再传一条。
+    assert_eq!(
+        transfer::status(&sender_layout)["online"],
+        Value::Bool(true),
+        "发完之后发送侧还必须在线"
+    );
+    let reverse = transfer::send(
+        &receiver_layout,
+        &sender_id,
+        TransferPayload::Text {
+            text: "发完第一条之后的反向".to_string(),
+        },
+    )
+    .expect("发完一次之后应还能发起反向传输");
+    assert!(
+        receiver
+            .wait_for(&reverse, "done", Duration::from_secs(30))
+            .is_some(),
+        "反向传输没等到 done：{:?}",
+        receiver
+            .events()
+            .iter()
+            .map(|event| format!("{}/{}", event["kind"], event["message"]))
+            .collect::<Vec<_>>()
     );
 
     transfer::go_offline(&receiver_layout).unwrap();
