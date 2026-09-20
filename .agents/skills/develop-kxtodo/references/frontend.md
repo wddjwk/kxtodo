@@ -121,6 +121,16 @@ v9 ScheduleEntry（spec/state/ui 三段）↔ UI 编辑模型双向适配，patc
 
 统一菜单系统（ContextMenu/MenuItem/MenuSeparator），所有右键/⋯ 菜单都基于它。
 
+### v0.8.6 新增的前端模块
+
+- `src/lib/searchScan.ts` —— 全局搜索的**分块扫描器**（`createSearchScanner` / `SEARCH_CHUNK` / `SEARCH_HIT_LIMIT`；idle + timeout 调度、token 作废、完成批才排序封顶）。消费端 `stores.ts` 的 `searchHits` / `searchScanning`（可写 store）与 `window.__kxtodoSearch` 调试出口。
+- `src/lib/transferManifest.ts` —— 传输清单的路径语义（四个构造器 + `groupByRoot` / `joinPath` / `splitPathTail` / `isAbsoluteRel`），**纯逻辑、有单测**。
+- `src/lib/transferEvents.ts` —— 传输事件 → 文案的纯映射（`transferErrorText` / `historyStatusStyle`）；单独成模块的理由是 `transferStore.ts` 静态 import 了 Tauri，node 单测 import 不进来。
+- `src/lib/dragHit.ts` —— 拖动落点几何（`settledTop` / `schmitt` / `zoneAt` / `contiguousZones` / `positionInRow` / `keepsPreviousDecision` / `scaleOf`），纯函数 + 单测。
+- `src/lib/cardOverlays.ts` —— 卡片级浮层与露出态的**全局单例**（`datePopoverTaskId` / `revealedTag` / `revealedEmoji`）+ **唯一一份** document pointerdown；App 启动调 `ensureCardOverlayRuntime()`。TaskCard 不再自带 `svelte:window`。
+- `src/lib/colorPickerPanel.ts` + `src/lib/ColorPickerPanel.svelte` + `src/styles/colorpanel.css` —— 全应用统一取色盘（单例请求 store + iro 懒加载 + RGB/HEX 校验纯函数 `normalizeHexInput`/`parseChannelInput`）。12 处入口只调 `openColorPicker({key,color,anchor,onPreview,onConfirm,onCancel})`。
+- `src/lib/popover.ts::placePopover` —— 点锚定浮层的唯一几何（逻辑像素进/出），ContextMenu 与日期浮层共用。
+
 ## CSS
 
 ### 全局 CSS 与级联顺序

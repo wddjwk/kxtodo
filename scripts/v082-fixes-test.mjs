@@ -567,7 +567,11 @@ const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 
     const centers = kids.map((k) => k.top + k.height / 2);
     return {
       count: kids.length,
-      colors: [...r.querySelectorAll("input[type=color]")].map((input) => input.value),
+      // v0.8.6 需求 11：色块从「藏起来的原生 input」换成取色盘按钮，
+      // 颜色读的是同一份活值（内联的 --swatch）
+      colors: [...r.querySelectorAll(".ui-color-picker span")].map((span) =>
+        getComputedStyle(span).getPropertyValue("--swatch").trim().toLowerCase()
+      ),
       centered: centers.every((c) => Math.abs(c - centers[0]) < 4),
       ordered: kids.every((k, i) => i === 0 || k.left >= kids[i - 1].right - 1),
       inRow: kids.length > 0 && kids[kids.length - 1].right <= r.getBoundingClientRect().right + 1

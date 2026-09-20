@@ -14,12 +14,13 @@
    * 子视图的头部（v0.8.4 需求 7）：不再有「返回工具箱」那一行——工具该拿到一块干净的
    * 画布；改成右上角两个按钮：左 = 回到工具箱，右 = ⋯ 菜单（只提供更换背景色 / 主题色）。
    */
-  import { ArrowLeft, MoreHorizontal, Palette, Pin, PinOff, RotateCcw, Toolbox } from "@lucide/svelte";
+  import { ArrowLeft, MoreHorizontal, Palette, Pin, PinOff, Radio, RotateCcw, Toolbox } from "@lucide/svelte";
   import MobileBack from "./MobileBack.svelte";
   import { appSettings } from "./stores";
   import { setConfig } from "./actions";
   import { createBackGuard } from "./platform";
   import { setToolPinned } from "./actions";
+  import { openColorPicker } from "./colorPickerPanel";
   import { navToolId } from "./nav";
   import { openToolboxTool, resetToolRoute, toolRoute } from "./tools/navigation";
   import { availableTools, loadToolModule, type ToolDefinition } from "./tools/registry";
@@ -83,7 +84,6 @@
   const TOOLBOX_SCOPE = "toolbox";
   let appearanceMenu: { x: number; y: number } | null = null;
   let draft: { accent?: string; background?: string } = {};
-  let customPicker: HTMLInputElement;
   $: toolboxAccentValue = toolboxAccent($appSettings.toolbox);
   $: toolboxBackgroundValue = $appSettings.toolbox.backgroundColor || defaultBackground.color;
   $: accentShown = draft.accent ?? toolboxAccentValue;
@@ -114,11 +114,37 @@
     appearanceMenu = { x: event.clientX, y: event.clientY };
   }
 
-  function pickAccent(event: Event): void {
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLInputElement)) return;
-    draft = { ...draft, accent: target.value };
-    pushPreview();
+  /** 工具页主题色：走全应用统一的取色盘（v0.8.6 需求 11），拖动 = 草稿 + 预览 */
+  function openAccentPanel(anchor: HTMLElement): void {
+    openColorPicker({
+      key: "toolbox:accent",
+      color: accentShown,
+      anchor,
+      onPreview: (color) => {
+        draft = { ...draft, accent: color };
+        pushPreview();
+      },
+      onConfirm: (color) => {
+        draft = { ...draft, accent: color };
+        pushPreview();
+        void setConfig("toolbox.accent", color);
+      },
+      onCancel: cancelAccent
+    });
+  }
+
+  function openBackgroundPanel(anchor: HTMLElement): void {
+    openColorPicker({
+      key: "toolbox:background",
+      color: backgroundShown,
+      anchor,
+      onPreview: (color) => pickBackground(color),
+      onConfirm: (color) => {
+        pickBackground(color);
+        void setConfig("toolbox.backgroundColor", color);
+      },
+      onCancel: cancelBackground
+    });
   }
 
   function pickBackground(color: string): void {
@@ -131,11 +157,6 @@
     draft = { ...draft, background: undefined };
     if ($colorPreview?.scope === TOOLBOX_SCOPE) clearColorPreview();
     void setConfig("toolbox.backgroundColor", color);
-  }
-
-  function pickBackgroundFromInput(event: Event): void {
-    const target = event.currentTarget;
-    if (target instanceof HTMLInputElement) pickBackground(target.value);
   }
 
   function cancelAccent(): void {
@@ -177,18 +198,18 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <section class="toolbox-view" style={toolboxStyle} on:click|stopPropagation>
   {#if activeTool}
-    <!-- 子视图的头部（需求 7）：左边「图标 + 名称」（与工具箱主界面、我的一天同一格式），
-         右边两枚按钮——返回工具箱 + ⋯ 外观菜单。工具该拿到一块干净的画布，
-         「返回工具箱」占一整行太扎眼。 -->
+    <!-- 子视图的头部（v0.8.6 需求 6）：与普通页面同构——**左侧 = 返回箭头 + 图标 + 工具名，
+         右侧 = ⋯ 菜单**。返回箭头两端都显示、不受系统设置的「移动端返回键」影响，
+         所以**不能复用 `MobileBack`**（它按 features.mobileBack 在桌面隐藏）。 -->
     <header class="toolbox-sub-bar">
       <span class="toolbox-sub-bar-title">
-        <span class="toolbox-header-icon"><svelte:component this={activeTool.icon} size={22} /></span>
+        <button class="toolbox-icon-button" type="button" title="返回工具箱" aria-label="返回工具箱" on:click={backFromTool}>
+          <ArrowLeft size={20} />
+        </button>
+        <span class="toolbox-header-icon"><svelte:component this={activeTool.icon} size={26} /></span>
         <strong class="toolbox-header-title">{activeTool.name}</strong>
       </span>
       <span class="toolbox-sub-bar-actions">
-        <button class="toolbox-icon-button" type="button" title="返回工具箱" aria-label="返回工具箱" on:click={backFromTool}>
-          <ArrowLeft size={19} />
-        </button>
         <button
           class="toolbox-icon-button"
           type="button"
@@ -247,11 +268,15 @@
   <ContextMenu x={menu.x} y={menu.y} minWidth={228} onClose={closeAppearanceMenu}>
     <div class="menu-section-title">主题颜色</div>
     <div class="ui-color-row">
-      <label class="ui-color-picker" title="工具页的主题色">
+      <button
+        class="ui-color-picker"
+        type="button"
+        title="工具页的主题色"
+        data-color-anchor
+        on:click|stopPropagation={(event) => openAccentPanel(event.currentTarget)}
+      >
         <span style={`--swatch: ${accentShown}`}></span>
-        <!-- input 与 change 都只改草稿并预览：整页与色块一起变，保存才落盘（需求 9） -->
-        <input type="color" value={accentShown} on:input={pickAccent} on:change={pickAccent} />
-      </label>
+      </button>
       <span class="ui-color-value">{accentShown}</span>
       <button
         class="menu-action-button"
@@ -277,7 +302,13 @@
           on:click={() => applyPresetBackground(preset.color)}
         ></button>
       {/each}
-      <button type="button" class="palette-button" title="自定义颜色" on:click={() => customPicker?.click()}></button>
+      <button
+        type="button"
+        class="palette-button"
+        title="自定义颜色"
+        data-color-anchor
+        on:click|stopPropagation={(event) => openBackgroundPanel(event.currentTarget)}
+      ></button>
       <button
         type="button"
         class="reset-bg-button"
@@ -293,46 +324,36 @@
         onCancel={cancelBackground}
       />
     {/if}
-    <input
-      bind:this={customPicker}
-      class="hidden-file"
-      type="color"
-      value={backgroundShown}
-      on:change={pickBackgroundFromInput}
-    />
-
     {#if activeTool?.id === "transfer"}
-      <!-- relay 服务（v0.8.5 需求 31）：为以后自部署 relay 做准备。
-           relay 在 go_online 时固化进端点，保存后 store 会自己重新上线。 -->
-      <div class="menu-section-title">relay 服务</div>
-      <div class="relay-options">
-        <label class="relay-row">
-          <input type="radio" name="relay-mode" checked={relayMode === "follow"} on:change={() => pickRelayMode("follow")} />
-          <span>跟随同步设置</span>
-        </label>
-        <label class="relay-row">
-          <input type="radio" name="relay-mode" checked={relayMode === "disabled"} on:change={() => pickRelayMode("disabled")} />
-          <span>禁用（只走直连）</span>
-        </label>
-        <label class="relay-row">
-          <input type="radio" name="relay-mode" checked={relayMode === "custom"} on:change={() => pickRelayMode("custom")} />
-          <span>自定义地址</span>
-        </label>
-      </div>
-      {#if relayMode === "custom"}
-        <input
-          class="relay-input"
-          value={relayCustom}
-          placeholder="https://relay.example.com"
-          spellcheck="false"
-          on:input={(event) => (relayCustom = event.currentTarget.value)}
-          on:blur={commitRelayCustom}
-          on:keydown={(event) => { if (event.key === "Enter") (event.target as HTMLInputElement).blur(); }}
-        />
-      {/if}
-      <div class="relay-hint">
-        {$transferState.online ? "传输助手在线：保存后自动重新上线" : "传输助手未上线：下次上线时生效"}
-      </div>
+      <!-- relay 服务（v0.8.5 需求 31）从平铺改成**独立一级菜单项 + 二级钻取**（v0.8.6 需求 10）：
+           与「移动到分组」同一套机制——MenuItem 的 submenu 插槽，移动端自动钻入
+           （openSubmenus + mobile.css .sub-open）、桌面自动贴边翻转（MenuItem::adjustSubmenu）。
+           仍然只在传输工具页出现。relay 在 go_online 时固化进端点，保存后 store 会自己重新上线。 -->
+      <MenuItem icon={Radio} label="relay 服务" active={relayMode !== "follow"}>
+        <div slot="submenu" class="submenu-list">
+          <MenuItem label="跟随同步设置" active={relayMode === "follow"} onSelect={() => pickRelayMode("follow")} />
+          <MenuItem label="禁用（只走直连）" active={relayMode === "disabled"} onSelect={() => pickRelayMode("disabled")} />
+          <MenuItem label="自定义地址" active={relayMode === "custom"} onSelect={() => pickRelayMode("custom")} />
+          {#if relayMode === "custom"}
+            <!-- 输入框自己 stopPropagation：否则点在它上面会被菜单的「点外部关闭」收掉 -->
+            <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+            <div class="relay-custom" on:click|stopPropagation>
+              <input
+                class="relay-input"
+                value={relayCustom}
+                placeholder="https://relay.example.com"
+                spellcheck="false"
+                on:input={(event) => (relayCustom = event.currentTarget.value)}
+                on:blur={commitRelayCustom}
+                on:keydown={(event) => { if (event.key === "Enter") (event.target as HTMLInputElement).blur(); }}
+              />
+            </div>
+          {/if}
+          <div class="relay-hint">
+            {$transferState.online ? "传输助手在线：保存后自动重新上线" : "传输助手未上线：下次上线时生效"}
+          </div>
+        </div>
+      </MenuItem>
     {/if}
   </ContextMenu>
 {/if}

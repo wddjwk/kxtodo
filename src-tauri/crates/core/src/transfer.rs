@@ -225,18 +225,80 @@ fn close_endpoint(session: &Session) {
 pub type TransferSink = Arc<dyn Fn(Value) + Send + Sync + 'static>;
 
 /// 推一条会话事件。`kind`：waiting / connected / progress / fileDone /
-/// done / error / cancelled。前端按 sessionId + index 维护进度条。
+/// done / error / cancelled / rejected。
+/// 前端按 sessionId + index 维护进度条。
 fn emit(sink: &TransferSink, session: &Session, mut payload: Value) {
     if let Some(map) = payload.as_object_mut() {
         map.insert("sessionId".to_string(), json!(session.id));
         map.insert("role".to_string(), json!(session.role));
     }
+    trace_event(&payload);
     sink(payload);
 }
+
+/// 事件轨迹（v0.8.6 需求 5.4）：每行一条 JSON 落在 `<data>/runtime/transfer-events.log`。
+/// 「同一会话出现两张卡」这类问题只有拿到 core 实际发过的事件序列才能定案。
+/// 只记**会话生命周期**事件（progress 每 256KB 一条，写进来既没信息量又会阻塞运行时线程）。
+fn trace_event(payload: &Value) {
+    const MAX_TRACE_BYTES: u64 = 2 * 1024 * 1024;
+    if payload["kind"] == json!("progress") {
+        return;
+    }
+    let Some(dir) = trace_dir() else { return };
+    let path = dir.join("transfer-events.log");
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > MAX_TRACE_BYTES {
+            // 超限就砍掉前一半（保留最近的），从行边界切，别留半行
+            if let Ok(content) = std::fs::read(&path) {
+                let start = content.len() / 2;
+                let cut = content[start..]
+                    .iter()
+                    .position(|&byte| byte == b'\n')
+                    .map(|offset| start + offset + 1)
+                    .unwrap_or(start);
+                let _ = std::fs::write(&path, &content[cut..]);
+            }
+        }
+    }
+    let mut line = serde_json::to_string(payload).unwrap_or_default();
+    line.push('\n');
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut file| {
+            use std::io::Write;
+            file.write_all(line.as_bytes())
+        });
+}
+
+/// 事件轨迹的落点（在线会话建立时设，离线清掉）。诊断用途：多份 Layout 并存时
+/// （测试）以最后一个上线的为准，不影响任何功能路径。
+fn trace_dir() -> Option<PathBuf> {
+    TRACE_DIR
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .ok()
+        .and_then(|slot| slot.clone())
+}
+
+static TRACE_DIR: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 
 // ---------------------------------------------------------------------------
 // 帧
 // ---------------------------------------------------------------------------
+
+/// 连接层面的读写失败（对端掉线 / 连接被关）。
+/// 单列一个错误码，界面据此把「对方离线了」与本地错误（写盘失败、路径越界……）
+/// 分开显示——早先界面把所有 connected 之后的失败都写成「对方离线了」，
+/// 本地真实原因（如 `TRANSFER_PATH_UNSAFE`）被整段吞掉（v0.8.6 需求 5.4）。
+fn connection_lost(what: &str, error: impl std::fmt::Display) -> CoreError {
+    CoreError::new(
+        crate::error::ErrorKind::Io,
+        "TRANSFER_CONNECTION_LOST",
+        format!("{what}：{error}"),
+    )
+}
 
 async fn write_frame(send: &mut SendStream, value: &Value) -> CoreResult<()> {
     let bytes = serde_json::to_vec(value)
@@ -246,10 +308,10 @@ async fn write_frame(send: &mut SendStream, value: &Value) -> CoreResult<()> {
     }
     send.write_all(&(bytes.len() as u32).to_be_bytes())
         .await
-        .map_err(|error| CoreError::io(format!("传输帧写入失败：{error}")))?;
+        .map_err(|error| connection_lost("传输帧写入失败", error))?;
     send.write_all(&bytes)
         .await
-        .map_err(|error| CoreError::io(format!("传输帧写入失败：{error}")))?;
+        .map_err(|error| connection_lost("传输帧写入失败", error))?;
     Ok(())
 }
 
@@ -257,7 +319,7 @@ async fn read_frame(recv: &mut RecvStream) -> CoreResult<Value> {
     let mut len_buf = [0u8; 4];
     recv.read_exact(&mut len_buf)
         .await
-        .map_err(|error| CoreError::io(format!("传输帧长度读取失败：{error}")))?;
+        .map_err(|error| connection_lost("传输帧长度读取失败", error))?;
     let len = u32::from_be_bytes(len_buf) as usize;
     if len > MAX_FRAME_BYTES {
         return Err(CoreError::validation("TRANSFER_FRAME_TOO_BIG", "对端发来的帧过大"));
@@ -265,7 +327,7 @@ async fn read_frame(recv: &mut RecvStream) -> CoreResult<Value> {
     let mut buf = vec![0u8; len];
     recv.read_exact(&mut buf)
         .await
-        .map_err(|error| CoreError::io(format!("传输帧读取失败：{error}")))?;
+        .map_err(|error| connection_lost("传输帧读取失败", error))?;
     serde_json::from_slice(&buf)
         .map_err(|error| CoreError::internal(format!("传输帧解析失败：{error}")))
 }
@@ -557,7 +619,12 @@ struct Online {
     secret: SecretKey,
     code: String,
     save_dir: PathBuf,
+    /// 当前设备名（界面上改了就更新，下一轮轮询重发）
     name: Mutex<String>,
+    /// **已经发布出去的名字**（v0.8.6 需求 5.2）。早先 `name` 一个槽既当「当前名」
+    /// 又当「已发布名」，`current != published` 恒为 false——改名后 republish 是死代码，
+    /// 对端永远看不到新名字。拆成两个槽才是真的「改了才重发」。
+    published_name: Mutex<String>,
     auto_accept: AtomicBool,
     net: TransferNet,
     cancel: AtomicBool,
@@ -611,6 +678,19 @@ pub fn set_auto_accept(layout: &Layout, value: bool) -> Value {
         }
     }
     json!({ "autoAccept": value })
+}
+
+/// 设备名为空时的兜底名（v0.8.6 需求 5.2）：房间里至少能认出「这是哪台机器」。
+fn default_device_name() -> String {
+    let platform = match std::env::consts::OS {
+        "windows" => "Windows",
+        "android" => "Android",
+        "linux" => "Linux",
+        "macos" => "macOS",
+        "ios" => "iOS",
+        other => other,
+    };
+    format!("KXToDo·{platform}")
 }
 
 /// 更新本机在房间里发布的名字（设置里改了设备名时调一次）。
@@ -670,6 +750,17 @@ pub fn go_online(
     let _ = go_offline(layout);
     let secret = identity_secret(layout)?;
     let device_id = secret.public().to_z32();
+    // 名字为空就兜底（v0.8.6 需求 5.2）：`publish_name` 会跳过空名字，对端就只剩
+    // 「未命名的设备」可显示。自动恢复上线时前端可能还没水合出设置里的名字，
+    // 这条兜底保证房间里的每台设备始终有一个可读的名字。
+    let resolved_name = {
+        let clean = directory::sanitize_name(name);
+        if clean.is_empty() {
+            default_device_name()
+        } else {
+            clean
+        }
+    };
     let online = Arc::new(Online {
         id: new_id(),
         layout: layout.clone(),
@@ -677,7 +768,8 @@ pub fn go_online(
         secret,
         code: code.clone(),
         save_dir: save_dir.to_path_buf(),
-        name: Mutex::new(directory::sanitize_name(name)),
+        name: Mutex::new(resolved_name),
+        published_name: Mutex::new(String::new()),
         auto_accept: AtomicBool::new(auto_accept),
         net: net_config,
         cancel: AtomicBool::new(false),
@@ -688,6 +780,9 @@ pub fn go_online(
     });
     if let Ok(mut slots) = online_slots().lock() {
         slots.insert(slot_key(layout), online.clone());
+    }
+    if let Some(mut slot) = TRACE_DIR.get_or_init(|| Mutex::new(None)).lock().ok() {
+        *slot = Some(layout.root.join("runtime"));
     }
     let runtime = runtime()?;
     let spawned = online.clone();
@@ -752,6 +847,9 @@ async fn online_loop(online: &Arc<Online>) -> CoreResult<()> {
     let self_id = endpoint.id();
     let name = online.name.lock().map(|slot| slot.clone()).unwrap_or_default();
     directory::publish_name(&client, &online.secret, &name).await.ok();
+    if let Ok(mut slot) = online.published_name.lock() {
+        *slot = name;
+    }
     directory::publish(&client, &room, self_id, &direct_addrs(&endpoint)).await?;
     (online.sink)(json!({
         "kind": "online",
@@ -809,16 +907,14 @@ async fn online_loop(online: &Arc<Online>) -> CoreResult<()> {
         if online.cancel.load(Ordering::SeqCst) {
             continue;
         }
-        // 名字改了立刻重发一次
+        // 名字改了立刻重发一次（当前名 vs **已发布名**两个槽，见 Online::published_name）
         let current = online.name.lock().map(|slot| slot.clone()).unwrap_or_default();
-        let published = last_seen_name(online);
+        let published = published_name(online);
         if current != published {
             directory::publish_name(&client, &online.secret, &current).await.ok();
-            online
-                .name
-                .lock()
-                .map(|mut slot| *slot = current)
-                .ok();
+            if let Ok(mut slot) = online.published_name.lock() {
+                *slot = current;
+            }
         }
         if last_publish.elapsed() >= std::time::Duration::from_secs(REPUBLISH_SECS) {
             directory::publish(&client, &room, self_id, &direct_addrs(&endpoint)).await.ok();
@@ -887,11 +983,10 @@ async fn online_loop(online: &Arc<Online>) -> CoreResult<()> {
     }
 }
 
-/// 上一次发布出去的名字（从 devices 里推不出来，单独记在 name 槽的伴生字段里——
-/// 这里用一点点取巧：名字槽里存的就是「已发布的名字」，改名的检测靠它与当前值的差）。
-fn last_seen_name(online: &Arc<Online>) -> String {
+/// 上一次**发布出去**的名字（与「当前名」分开存：两者相同就说明没有待重发的改动）。
+fn published_name(online: &Arc<Online>) -> String {
     online
-        .name
+        .published_name
         .lock()
         .map(|slot| slot.clone())
         .unwrap_or_default()
@@ -1034,21 +1129,45 @@ async fn receive_one(
                 &json!({ "kind": "reject", "reason": "对方拒绝了这次传输" }),
             )
             .await;
+            // 拒绝是**用户主动决定**，不是错误（v0.8.6 需求 5.3/5.4）：历史记 `rejected`
+            // 而不是 `cancelled`（与超时、断线区分开），并且**不发 error 事件**——
+            // 早先这里返回 Err，界面在「从没建过卡」的会话上凭空画出一张「接收失败」。
             record_history(
                 &online.layout,
                 HistoryEntry {
                     id: session.id.clone(),
                     at: crate::time::now_iso(),
                     direction: "receive".to_string(),
-                    peer_id,
-                    peer_name,
-                    status: "cancelled".to_string(),
+                    peer_id: peer_id.clone(),
+                    peer_name: peer_name.clone(),
+                    status: "rejected".to_string(),
                     files: items.len() as u64,
                     bytes: total_bytes,
                     names: first_names(&items),
                 },
             );
-            return Err(CoreError::execution("TRANSFER_REJECTED", "已拒绝这次传输"));
+            // 信息性事件：界面若有对应会话卡（正常没有）把它收成「已拒绝」态
+            emit(
+                &online.sink,
+                session,
+                json!({
+                    "kind": "rejected",
+                    "peer": peer_id,
+                    "peerName": peer_name,
+                    "files": items.len(),
+                    "totalBytes": total_bytes,
+                }),
+            );
+            // 等对方把 reject 读走再收尾：连接句柄一 drop 就会发 CONNECTION_CLOSE，
+            // 抢在对方读到之前断线的话，发送方只能报「连接断了」而不知道是被拒。
+            // 对方读到 reject 就会自己关连接（正常几毫秒），超时也照常收尾。
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), connection.closed()).await;
+            return Ok(json!({
+                "kind": "rejected",
+                "files": 0,
+                "bytes": 0,
+                "peerName": peer_name,
+            }));
         }
     }
     write_frame(&mut send, &json!({ "kind": "accept" })).await?;
@@ -1252,6 +1371,21 @@ pub fn send(layout: &Layout, target: &str, payload: TransferPayload) -> CoreResu
     if matches!(payload, TransferPayload::Files { .. }) && items.is_empty() {
         return Err(CoreError::validation("TRANSFER_NOTHING_TO_SEND", "没有要发送的文件"));
     }
+    // 发送清单的 tripwire（v0.8.6 需求 5.1）：`rel` 一律是相对传输根的路径。
+    // `root = None` 却拿到绝对路径，说明调用方根本没做归一——Windows 上接收端
+    // 会在 `safe_join` 的 `:` 判定上整单被拒（TRANSFER_PATH_UNSAFE），Linux 上
+    // 更糟：不报错，直接把绝对路径镜像成一棵目录树。在连接之前 fail-fast。
+    if root.is_none() {
+        if let Some(item) = items
+            .iter()
+            .find(|item| item.rel.starts_with('/') || item.rel.starts_with('\\') || item.rel.contains(':'))
+        {
+            return Err(CoreError::validation(
+                "TRANSFER_MANIFEST_ABSOLUTE_PATH",
+                format!("发送清单组装错误：rel 必须是相对路径，收到 {}", item.rel),
+            ));
+        }
+    }
     if let TransferPayload::Text { text } = &payload {
         if text.trim().is_empty() {
             return Err(CoreError::validation("TRANSFER_EMPTY_TEXT", "文本是空的"));
@@ -1366,15 +1500,21 @@ pub fn send(layout: &Layout, target: &str, payload: TransferPayload) -> CoreResu
                     direction: "send".to_string(),
                     peer_id: target_id.clone(),
                     peer_name: String::new(),
-                    status: if cancelled { "cancelled" } else { "failed" }.to_string(),
+                    // 「对方拒绝」与「传输失败」是两回事（v0.8.6 需求 5.3）：
+                    // 前者用户没做错什么，历史里要分开看
+                    status: if cancelled {
+                        "cancelled"
+                    } else if error.code == "TRANSFER_REJECTED" {
+                        "rejected"
+                    } else {
+                        "failed"
+                    }
+                    .to_string(),
                     files: 0,
                     bytes: 0,
                     names: Vec::new(),
                 },
             );
-            if !cancelled {
-                let _ = &error;
-            }
         }
         finish(&sink, &session, result);
     });
@@ -1596,8 +1736,12 @@ fn finish(sink: &TransferSink, session: &Arc<Session>, result: CoreResult<Value>
     }
     match result {
         Ok(mut summary) => {
-            if let Some(map) = summary.as_object_mut() {
-                map.insert("kind".to_string(), json!("done"));
+            // 汇总里显式带了 kind（如「接收方拒绝」这种主动收尾）就不覆盖：
+            // 一律当成 done 会让界面把拒绝画成「接收完成」
+            if summary.get("kind").is_none() {
+                if let Some(map) = summary.as_object_mut() {
+                    map.insert("kind".to_string(), json!("done"));
+                }
             }
             emit(sink, session, summary);
         }
@@ -1641,5 +1785,43 @@ mod tests {
         }
         let error = unique_target(&base).expect_err("候选用尽应当报错");
         assert_eq!(error.code, "TRANSFER_NAME_EXHAUSTED");
+    }
+
+    /// 发送清单的 tripwire（v0.8.6 需求 5.1）：`root = None` + 绝对路径的 `rel`
+    /// 必须在连接之前 fail-fast，而不是让接收端去拒（Windows）或镜像目录树（Linux）。
+    #[test]
+    fn send_rejects_absolute_rel_without_root() {
+        let layout = Layout::new(std::env::temp_dir());
+        let cases = [
+            (r"C:\tmp\照片.jpg", "Windows 盘符"),
+            (r"\\server\share\a.txt", "UNC 前缀"),
+            ("/home/user/a.txt", "POSIX 绝对路径"),
+        ];
+        for (rel, label) in cases {
+            let payload = TransferPayload::Files {
+                root: None,
+                items: vec![TransferItem { rel: rel.to_string(), size: 1 }],
+            };
+            let error = send(&layout, "target-device", payload)
+                .expect_err(&format!("{label} 应当被 tripwire 拦下"));
+            assert_eq!(error.code, "TRANSFER_MANIFEST_ABSOLUTE_PATH", "{label}");
+        }
+        // 纯文件名的相对 rel 不走 tripwire（会往下走到「没上线」这一步）
+        let payload = TransferPayload::Files {
+            root: None,
+            items: vec![TransferItem { rel: "照片.jpg".to_string(), size: 1 }],
+        };
+        let error = send(&layout, "target-device", payload).expect_err("离线时不应当发送成功");
+        assert_eq!(error.code, "TRANSFER_FILE_MISSING");
+    }
+
+    /// 带 root 的清单不受 tripwire 影响：`root` 已经给了基准目录，rel 里的 `:`
+    /// 会在 `safe_join` 那层被当作越界段拒绝（那条纵深防御保持不动）。
+    #[test]
+    fn safe_join_still_rejects_drive_segments() {
+        let root = Path::new("/tmp/save");
+        let error = safe_join(root, r"C:\evil.txt").expect_err("盘符段必须被拒");
+        assert_eq!(error.code, "TRANSFER_PATH_UNSAFE");
+        assert!(safe_join(root, "sub/照片.jpg").is_ok());
     }
 }

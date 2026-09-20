@@ -495,7 +495,8 @@ const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 
   check("发送 / 接收两栏（滑块）", (await page.locator(".transfer-tabs button").count()) === 2);
   const sendDisabled = await page.locator(".transfer-send-button").isDisabled();
   check("未上线时发送按钮禁用", sendDisabled);
-  await page.locator(".transfer-code-row input").fill("same-code-123");
+  // v0.8.6 需求 5.5：口令行是普通文本输入框（.transfer-code-row 与眼睛按钮都没了）
+  await page.locator(".transfer-identity input").nth(1).fill("same-code-123");
   await page.waitForTimeout(200);
   check("浏览器预览（无壳）下发送按钮仍禁用（没上线）", await page.locator(".transfer-send-button").isDisabled());
   check("传输界面无脚本报错", errors.length === 0, errors[0] ?? "");

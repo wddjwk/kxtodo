@@ -27,6 +27,7 @@
     addLedgerAccount, addLedgerAccountType, deleteLedgerAccount, deleteLedgerAccountType,
     transferLedger, updateLedgerAccount, updateLedgerAccountType
   } from "../actions";
+  import { openColorPicker } from "../colorPickerPanel";
   import type { LedgerAccountType, LedgerBook } from "../types";
 
   export let book: LedgerBook;
@@ -554,13 +555,24 @@
                       on:click={() => (typeForm.color = typeForm.color === color ? "" : color)}
                     ></button>
                   {/each}
-                  <label class="ledger-color-custom" title="自定义颜色">
-                    <input
-                      type="color"
-                      value={typeForm.color || "#7f8c8d"}
-                      on:input={(event) => (typeForm.color = event.currentTarget.value)}
-                    />
-                  </label>
+                  <!-- 取色盘（v0.8.6 需求 11）：拖动/手输只改表单草稿，表单保存才落盘 -->
+                  <button
+                    class="ledger-color-custom"
+                    type="button"
+                    title="自定义颜色"
+                    data-color-anchor
+                    on:click={(event) =>
+                      openColorPicker({
+                        key: "ledger:account-type-color",
+                        color: typeForm.color || "#7f8c8d",
+                        anchor: event.currentTarget,
+                        onPreview: (color) => (typeForm.color = color),
+                        onConfirm: (color) => (typeForm.color = color),
+                        onCancel: () => undefined
+                      })}
+                  >
+                    <span style={`--dot: ${typeForm.color || "#7f8c8d"}`}></span>
+                  </button>
                 </div>
               </div>
               <div class="ledger-type-form-actions">
@@ -643,9 +655,23 @@
                 on:click={() => (colorDraft = colorDraft === color ? "" : color)}
               ></button>
             {/each}
-            <label class="ledger-color-custom" title="自定义颜色">
-              <input type="color" value={previewColor} on:input={(event) => (colorDraft = event.currentTarget.value)} />
-            </label>
+            <button
+              class="ledger-color-custom"
+              type="button"
+              title="自定义颜色"
+              data-color-anchor
+              on:click={(event) =>
+                openColorPicker({
+                  key: "ledger:account-color",
+                  color: previewColor,
+                  anchor: event.currentTarget,
+                  onPreview: (color) => (colorDraft = color),
+                  onConfirm: (color) => (colorDraft = color),
+                  onCancel: () => undefined
+                })}
+            >
+              <span style={`--dot: ${previewColor}`}></span>
+            </button>
             {#if colorDraft}
               <button type="button" class="ledger-choice" on:click={() => (colorDraft = "")}>跟随类型</button>
             {/if}

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { ExternalLink, NotebookPen, PenLine, Trash2 } from "@lucide/svelte";
   import {
-    appState, appSettings, diaryEditor, editorTaskId, ledgerData, ledgerEditor, searchHits, searchQuery,
+    appState, appSettings, diaryEditor, editorTaskId, ledgerData, ledgerEditor, searchHits, searchQuery, searchScanning,
     showToast,
     taskEmojiPicker, todayIso
   } from "./stores";
@@ -15,13 +15,14 @@
   import { showMobileContent, showMobileDiary } from "./platform";
   import { accentForNode, diaryAccent, ledgerAccent } from "./styles";
   import TaskCard from "./TaskCard.svelte";
+  import VirtualStack from "./VirtualStack.svelte";
   import DiaryCard from "./diary/DiaryCard.svelte";
   import DiaryEntryMenu from "./diary/DiaryEntryMenu.svelte";
   import LedgerEntryCard from "./ledger/LedgerEntryCard.svelte";
   import ContextMenu from "./menu/ContextMenu.svelte";
   import MenuItem from "./menu/MenuItem.svelte";
   import MenuSeparator from "./menu/MenuSeparator.svelte";
-  import type { ReminderRule, Tag, TagColor } from "./types";
+  import type { ReminderRule, SearchHit, Tag, TagColor } from "./types";
 
   /**
    * 移动端全局搜索的结果面板：挂在侧栏搜索框下面，占大半屏。
@@ -33,6 +34,8 @@
    */
   let taskMenu: { id: string; nodeId: string; x: number; y: number } | null = null;
   let diaryMenu: { id: string; x: number; y: number } | null = null;
+  /** 结果面板自己就是滚动容器（`.search-results` 是 overflow-y:auto），VirtualStack 要它 */
+  let resultsEl: HTMLElement | null = null;
 
   $: diaryHit = diaryMenu
     ? $searchHits.find((hit) => hit.kind === "diary" && hit.entry.id === diaryMenu?.id)
@@ -176,54 +179,70 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<section class="search-results">
-  {#each $searchHits as hit (hit.key)}
-    {#if hit.kind === "task"}
-      <div class="search-hit" style={`--accent: ${hitAccent(hit.task.nodeId)}`}>
-        <TaskCard
-          task={hit.task}
-          nodeId={hit.task.nodeId}
-          cardStyle={hit.cardStyle}
-          selected={taskMenu?.id === hit.task.id}
-          on:toggle={(event) => toggleTask(event.detail)}
-          on:expand={handleTaskExpand}
-          on:edit={(event) => openTaskEditor(event.detail)}
-          on:context={(event) => openTaskMenu(event, hit.task.nodeId)}
-          on:openLink={(event) => openLink(event.detail.href)}
-          on:setSchedule={setTaskSchedule}
-          on:removeTag={removeTaskTag}
-          on:editTag={editTaskTag}
-          on:removeEmoji={removeTaskEmoji}
-          on:pickEmoji={pickTaskEmoji}
-        />
-      </div>
-    {:else if hit.kind === "diary"}
-      <div class="search-hit" style={`--accent: ${diaryHitAccent}`}>
-        <DiaryCard
-          entry={hit.entry}
-          today={todayIso()}
-          selected={diaryMenu?.id === hit.entry.id}
-          on:expand={handleDiaryExpand}
-          on:edit={(event) => openDiaryEntry(event.detail)}
-          on:context={openDiaryMenu}
-          on:openLink={(event) => openLink(event.detail.href)}
-        />
-      </div>
-    {:else}
-      <div class="search-hit" style={`--accent: ${ledgerAccentColor}`}>
-        <LedgerEntryCard
-          book={$ledgerData}
-          entry={hit.entry}
-          on:edit={(event) => openLedgerEntry(event.detail)}
-        />
-      </div>
-    {/if}
-  {:else}
+<section class="search-results" bind:this={resultsEl}>
+  {#if $searchHits.length === 0}
     <div class="search-results-empty">
-      <NotebookPen size={22} />
-      <span>没有匹配的内容</span>
+      {#if $searchScanning}
+        <span>搜索中…</span>
+      {:else}
+        <NotebookPen size={22} />
+        <span>没有匹配的内容</span>
+      {/if}
     </div>
-  {/each}
+  {:else}
+    <!-- 结果同样走 VirtualStack（v0.8.6 需求 1）：命中封顶 200 条，只有视口附近在树上 -->
+    <VirtualStack
+      items={$searchHits}
+      keyOf={(hit) => (hit as SearchHit).key}
+      scroller={resultsEl}
+      estimate={84}
+      overscan={8}
+    >
+      <svelte:fragment slot="item" let:row>
+        {@const hit = row as SearchHit}
+        {#if hit.kind === "task"}
+          <div class="search-hit" style={`--accent: ${hitAccent(hit.task.nodeId)}`}>
+            <TaskCard
+              task={hit.task}
+              nodeId={hit.task.nodeId}
+              cardStyle={hit.cardStyle}
+              selected={taskMenu?.id === hit.task.id}
+              on:toggle={(event) => toggleTask(event.detail)}
+              on:expand={handleTaskExpand}
+              on:edit={(event) => openTaskEditor(event.detail)}
+              on:context={(event) => openTaskMenu(event, hit.task.nodeId)}
+              on:openLink={(event) => openLink(event.detail.href)}
+              on:setSchedule={setTaskSchedule}
+              on:removeTag={removeTaskTag}
+              on:editTag={editTaskTag}
+              on:removeEmoji={removeTaskEmoji}
+              on:pickEmoji={pickTaskEmoji}
+            />
+          </div>
+        {:else if hit.kind === "diary"}
+          <div class="search-hit" style={`--accent: ${diaryHitAccent}`}>
+            <DiaryCard
+              entry={hit.entry}
+              today={todayIso()}
+              selected={diaryMenu?.id === hit.entry.id}
+              on:expand={handleDiaryExpand}
+              on:edit={(event) => openDiaryEntry(event.detail)}
+              on:context={openDiaryMenu}
+              on:openLink={(event) => openLink(event.detail.href)}
+            />
+          </div>
+        {:else}
+          <div class="search-hit" style={`--accent: ${ledgerAccentColor}`}>
+            <LedgerEntryCard
+              book={$ledgerData}
+              entry={hit.entry}
+              on:edit={(event) => openLedgerEntry(event.detail)}
+            />
+          </div>
+        {/if}
+      </svelte:fragment>
+    </VirtualStack>
+  {/if}
 </section>
 
 {#if taskMenu}

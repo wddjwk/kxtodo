@@ -321,6 +321,60 @@ try {
   check("搜索能命中（防抖没有把搜索弄坏）", searchLatency > 0, `${searchLatency.toFixed(0)}ms`);
   console.log(`${"搜索按键 → 结果上屏（含防抖）".padEnd(40)} ${searchLatency.toFixed(1).padStart(8)} ms`);
 
+  // 宽词搜索（v0.8.6 需求 1 验收）：命中 7000+ 条，量「扫完 + 最终结果上屏」的总时长
+  // 与扫描期间的长任务；命中数必须封顶 200。窗口化保证只挂视口附近那段 DOM。
+  const broadSearch = await page.evaluate(async () => {
+    const input = document.querySelector(".search-box input");
+    if (!input) return null;
+    const longTasks = [];
+    let observer = null;
+    try {
+      observer = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) longTasks.push(entry.duration);
+      });
+      observer.observe({ entryTypes: ["longtask"] });
+    } catch {
+      observer = null;
+    }
+    const at = performance.now();
+    input.value = "基";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    const deadline = at + 15000;
+    let settled = -1;
+    while (performance.now() < deadline) {
+      const stats = window.__kxtodoSearch;
+      if (stats && !stats.scanning && stats.hits > 0 && document.querySelector(".task-list .task-card")) {
+        settled = performance.now() - at;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 8));
+    }
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const stats = window.__kxtodoSearch ?? { hits: -1, scanning: true };
+    const result = {
+      settled,
+      hits: stats.hits,
+      domCards: document.querySelectorAll(".task-list .task-card").length,
+      longTasks: longTasks.length,
+      maxTask: longTasks.length ? Math.max(...longTasks) : 0
+    };
+    observer?.disconnect();
+    input.value = "";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    return result;
+  });
+  if (broadSearch) {
+    console.log(`--- 宽词搜索「基」（命中 ${broadSearch.hits} 条）---`);
+    console.log(`${"输入 → 扫描完成、结果上屏".padEnd(40)} ${broadSearch.settled.toFixed(1).padStart(8)} ms`);
+    console.log(
+      `命中 ${broadSearch.hits} 条封顶，DOM 里 ${broadSearch.domCards} 张卡；扫描期长任务 ${broadSearch.longTasks} 个（最长 ${broadSearch.maxTask.toFixed(0)}ms）`
+    );
+    check("宽词搜索响应 < 1000ms（需求 1 验收）", broadSearch.settled > 0 && broadSearch.settled < 1000, `${broadSearch.settled.toFixed(0)}ms`);
+    check("命中数封顶 200 条（需求 1 验收）", broadSearch.hits === 200, `${broadSearch.hits} 条`);
+    check("扫描期间没有 >100ms 的长任务（需求 1 验收）", broadSearch.maxTask < 100, `最长 ${broadSearch.maxTask.toFixed(0)}ms`);
+  }
+
   const ledgerRow = await page.$(".system-nav .nav-row:has-text('记账')");
   if (ledgerRow) {
     await ledgerRow.click();

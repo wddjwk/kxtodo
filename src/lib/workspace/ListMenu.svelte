@@ -37,6 +37,7 @@
   import { DEFAULT_DUE_COLORS } from "../dueHighlight";
   import { clearColorPreview, colorPreview, setColorPreview } from "../colorPreview";
   import ColorDraftActions from "../ColorDraftActions.svelte";
+  import { openColorPicker } from "../colorPickerPanel";
   import { onDestroy } from "svelte";
   import { showMobileList } from "../platform";
   import { sortLabels, type SortMode } from "../sort";
@@ -68,7 +69,6 @@
   export let accentColor: string | null = null;
 
   let importInput: HTMLInputElement;
-  let colorPickerInput: HTMLInputElement;
   let backgroundFileInput: HTMLInputElement;
   let editingPresetIndex: number | null = null;
   let presetNameDraft = "";
@@ -208,16 +208,8 @@
     });
   }
 
-  /** 自定义背景色的取色器：只改草稿 + 预览，保存才落盘（需求 9） */
-  function commitColorPick(event: Event): void {
-    const target = event.currentTarget;
-    if (target instanceof HTMLInputElement) {
-      pickBackgroundColor(target.value);
-    }
-  }
-
-  function openColorPicker(): void {
-    colorPickerInput?.click();
+  function openBackgroundColorPanel(anchor: HTMLElement): void {
+    openColorPanel("background", backgroundShown, anchor, pickBackgroundColor, saveBackgroundColor, cancelBackgroundColor);
   }
 
   function updateBackgroundLink(event: Event): void {
@@ -331,12 +323,37 @@
     void setUiColorAction(node.id, color);
   }
 
-  /** 取主题色：只改草稿 + 推预览（界面立刻换色），保存才落盘 */
-  function handleUiColorPick(event: Event): void {
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLInputElement)) return;
-    colorDraft = { ...colorDraft, accent: target.value };
+  /**
+   * 打开全应用统一的取色盘（v0.8.6 需求 11）：拖动 / 手输 = 只改草稿 + 实时预览，
+   * 「确认」才落盘、「取消」/点外部/Esc 丢弃草稿。以前是原生 `<input type="color">`
+   * ——Chromium 下那是系统小窗，RGB/HEX 与取消/确认都做不进去。
+   */
+  function openColorPanel(
+    key: string,
+    color: string,
+    anchor: HTMLElement | null,
+    preview: (color: string) => void,
+    confirm: (color: string) => void,
+    cancel: (() => void) | null
+  ): void {
+    openColorPicker({
+      key: `list:${colorScope}:${key}`,
+      color,
+      anchor,
+      onPreview: preview,
+      onConfirm: confirm,
+      onCancel: cancel ?? (() => undefined)
+    });
+  }
+
+  /** 取主题色：只改草稿 + 推预览（界面立刻换色），确认才落盘 */
+  function pickUiColor(color: string): void {
+    colorDraft = { ...colorDraft, accent: color };
     pushColorPreview();
+  }
+
+  function openUiColorPanel(anchor: HTMLElement): void {
+    openColorPanel("accent", accentShown, anchor, pickUiColor, saveUiColor, cancelUiColor);
   }
 
   /** 保存主题色：这一步才写 settings / uiColors */
@@ -385,10 +402,21 @@
     return settingsPrefix ? settingsPrefix : (node?.id ?? "");
   }
 
-  /** 取临期配色：只改草稿 + 推预览，保存才落盘 */
+  /** 取临期配色：只改草稿 + 推预览，确认才落盘 */
   function pickDueColor(index: number, color: string): void {
     colorDraft = { ...colorDraft, due: { ...(colorDraft.due ?? {}), [index]: color } };
     pushColorPreview();
+  }
+
+  function openDueColorPanel(index: number, anchor: HTMLElement): void {
+    openColorPanel(
+      `due-${index}`,
+      dueColorDisplay(index),
+      anchor,
+      (color) => pickDueColor(index, color),
+      saveDueColors,
+      cancelDueColors
+    );
   }
 
   /** 保存临期配色（v0.8.5 需求 21）：四档一次写完（逐档写会互相覆盖——后一档读到的
@@ -878,11 +906,15 @@
   <MenuSeparator />
   <div class="menu-section-title">UI颜色</div>
   <div class="ui-color-row">
-    <label class="ui-color-picker" title="修改当前界面的标题和控件颜色">
+    <button
+      class="ui-color-picker"
+      type="button"
+      title="修改当前界面的标题和控件颜色"
+      data-color-anchor
+      on:click|stopPropagation={(event) => openUiColorPanel(event.currentTarget)}
+    >
       <span style={`--swatch: ${accentShown}`}></span>
-      <!-- input 与 change 都只改草稿并预览：界面（--accent）与色块一起变，保存才落盘 -->
-      <input type="color" value={accentShown} on:input={handleUiColorPick} on:change={handleUiColorPick} />
-    </label>
+    </button>
     <span class="ui-color-value">{accentShown}</span>
     <button class="menu-action-button" type="button" on:click={resetUiColor}>默认</button>
   </div>
@@ -896,16 +928,15 @@
          五个孩子被折成两行还各归各列，排版整个乱掉；今/明/后的说明收进 title -->
     <div class="due-color-row">
       {#each dueColorLabels as label, index (label)}
-        <label class="ui-color-picker" title={`${label}的高亮色`}>
+        <button
+          class="ui-color-picker"
+          type="button"
+          title={`${label}的高亮色`}
+          data-color-anchor
+          on:click|stopPropagation={(event) => openDueColorPanel(index, event.currentTarget)}
+        >
           <span style={`--swatch: ${dueColorDisplay(index)}`}></span>
-          <!-- 拖动时色块与本页卡片的临期底色一起变（预览），保存才写 appearance.dueColors -->
-          <input
-            type="color"
-            value={dueColorDisplay(index)}
-            on:input={(event) => pickDueColor(index, event.currentTarget.value)}
-            on:change={(event) => pickDueColor(index, event.currentTarget.value)}
-          />
-        </label>
+        </button>
       {/each}
       <button class="menu-action-button" type="button" title="恢复默认配色（过期灰 / 今天红 / 明天黄 / 后天蓝）" on:click={resetDueColors}>默认</button>
     </div>
@@ -927,7 +958,13 @@
         on:contextmenu|preventDefault|stopPropagation={() => beginPresetEdit(index)}
       ></button>
     {/each}
-    <button type="button" class="palette-button" title="自定义颜色" on:click={openColorPicker}></button>
+    <button
+      type="button"
+      class="palette-button"
+      title="自定义颜色"
+      data-color-anchor
+      on:click|stopPropagation={(event) => openBackgroundColorPanel(event.currentTarget)}
+    ></button>
     <button type="button" class="reset-bg-button" title="恢复默认配色" on:click={resetBackgroundToDefault}>
       <RotateCcw size={14} />
     </button>
@@ -940,7 +977,23 @@
       <div class="preset-editor-title">编辑预设颜色</div>
       <input value={presetNameDraft} maxlength="24" placeholder="颜色名称" on:input={updatePresetName} />
       <div class="preset-color-line">
-        <input type="color" value={presetColorDraft} on:input={updatePresetColor} />
+        <button
+          class="ui-color-picker"
+          type="button"
+          title="选择预设颜色"
+          data-color-anchor
+          on:click|stopPropagation={(event) =>
+            openColorPanel(
+              `preset-${editingPresetIndex}`,
+              presetColorDraft,
+              event.currentTarget,
+              (color) => (presetColorDraft = color),
+              (color) => (presetColorDraft = color),
+              null
+            )}
+        >
+          <span style={`--swatch: ${presetColorDraft}`}></span>
+        </button>
         <input value={presetColorDraft} placeholder="#dfe8df" on:input={updatePresetColor} />
       </div>
       <div class="preset-editor-actions">
@@ -949,7 +1002,6 @@
       </div>
     </div>
   {/if}
-  <input bind:this={colorPickerInput} class="hidden-file" type="color" value={backgroundShown} on:change={commitColorPick} />
   <label class="background-link">
     背景图片链接
     <input value={linkValue} placeholder="https://..." on:focus={() => (linkLive = true)} on:input={updateBackgroundLink} on:blur={endBackgroundLinkEdit} />

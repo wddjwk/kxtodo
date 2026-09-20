@@ -547,13 +547,17 @@ const mobile = await browser.newContext({
     J(afterPreset)
   );
 
-  // 自定义取色（色盘）仍走「草稿 → 保存」
-  await page.evaluate(() => {
-    const input = document.querySelector(".context-menu input.hidden-file[type='color']");
-    input.value = "#123456";
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-  });
-  await page.waitForTimeout(400);
+  // 自定义取色（统一取色盘）仍走「草稿 → 保存」
+  await page.locator(".context-menu .palette-button").click({ force: true });
+  await page.waitForSelector(".kx-color-panel", { timeout: 8000 });
+  await page.waitForTimeout(300);
+  const pickColor = async (hex) => {
+    const input = page.locator(".kx-color-hex");
+    await input.fill(hex);
+    await input.press("Enter");
+    await page.waitForTimeout(200);
+  };
+  await pickColor("#123456");
   const previewBg = await toolboxBg();
   check(
     "7 自定义取色只预览不落盘",
@@ -562,22 +566,21 @@ const mobile = await browser.newContext({
       previewBg !== "rgb(240, 240, 240)",
     `preview=${previewBg}`
   );
-  await page.locator(".context-menu .color-draft-actions .primary").click();
+  // 取色盘的「确认」= 落盘（v0.8.6 需求 11：确认/取消就做在色盘上）
+  await page.locator("[data-color-confirm]").click();
   await page.waitForTimeout(600);
   const saved = (await readSettings()).toolbox ?? null;
   check("7 保存后落盘", saved?.backgroundColor === "#123456", J(saved));
 
   // 取消：预览回退、盘里不动
   const savedBg = await toolboxBg();
-  await page.evaluate(() => {
-    const input = document.querySelector(".context-menu input.hidden-file[type='color']");
-    input.value = "#777777";
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-  });
+  await page.locator(".context-menu .palette-button").click({ force: true });
+  await page.waitForSelector(".kx-color-panel", { timeout: 8000 });
   await page.waitForTimeout(300);
+  await pickColor("#777777");
   const previewBg2 = await toolboxBg();
-  await page.locator(".context-menu .color-draft-actions button").first().click();
-  await page.waitForTimeout(300);
+  await page.locator(".kx-color-panel .menu-action-button", { hasText: "取消" }).click();
+  await page.waitForTimeout(400);
   check(
     "7 取消回退预览且盘里不变",
     previewBg2 !== savedBg && (await toolboxBg()) === savedBg && JSON.stringify((await readSettings()).toolbox) === JSON.stringify(saved),
@@ -585,18 +588,16 @@ const mobile = await browser.newContext({
   );
 
   // 主题色：改 --accent，保存才写
-  await page.evaluate(() => {
-    const input = document.querySelector(".context-menu .ui-color-picker input");
-    input.value = "#b64a30";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  await page.locator(".context-menu .ui-color-row .ui-color-picker").click({ force: true });
+  await page.waitForSelector(".kx-color-panel", { timeout: 8000 });
   await page.waitForTimeout(300);
+  await pickColor("#b64a30");
   check(
     "7 主题色取色时整页立刻变色",
     (await toolboxAccent()) === "#b64a30" && ((await readSettings()).toolbox?.accent ?? "") === "",
     await toolboxAccent()
   );
-  await page.locator(".context-menu .color-draft-actions .primary").last().click();
+  await page.locator("[data-color-confirm]").click();
   await page.waitForTimeout(600);
   check("7 主题色保存后落盘", ((await readSettings()).toolbox?.accent ?? "") === "#b64a30");
 
@@ -632,17 +633,20 @@ const mobile = await browser.newContext({
   const readState = () => page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "{}"), STATE_KEY);
   const accentOf = () => page.evaluate(() => getComputedStyle(document.querySelector(".workspace")).getPropertyValue("--accent").trim());
 
-  // 主题色：取色（input）→ 立即变色、不落盘
+  // 主题色：统一取色盘里改色 → 立即变色、不落盘
   const uiColorsBefore = JSON.stringify((await readSettings()).appearance?.uiColors ?? null);
-  await page.evaluate(() => {
-    const input = document.querySelector(".context-menu .ui-color-picker input");
-    input.value = "#7a4fd0";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  await page.locator(".context-menu .ui-color-row .ui-color-picker").click({ force: true });
+  await page.waitForSelector(".kx-color-panel", { timeout: 8000 });
   await page.waitForTimeout(300);
+  {
+    const hex = page.locator(".kx-color-hex");
+    await hex.fill("#7a4fd0");
+    await hex.press("Enter");
+    await page.waitForTimeout(250);
+  }
   check("9 主题色取色时界面立刻变色", (await accentOf()) === "#7a4fd0", await accentOf());
   check("9 主题色取色时不落盘", JSON.stringify((await readSettings()).appearance?.uiColors ?? null) === uiColorsBefore);
-  await page.locator(".context-menu .color-draft-actions .primary").click();
+  await page.locator("[data-color-confirm]").click();
   await page.waitForTimeout(600);
   check(
     "9 主题色保存后才落盘",
@@ -657,16 +661,18 @@ const mobile = await browser.newContext({
       const el = document.querySelector(".task-card.due-soon");
       return el ? getComputedStyle(el).backgroundColor : "";
     });
-  await page.evaluate(() => {
-    const inputs = document.querySelectorAll(".context-menu .due-color-row .ui-color-picker input");
-    const input = inputs[1];
-    input.value = "#00a000";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  await page.waitForTimeout(400);
+  await page.locator(".context-menu .due-color-row .ui-color-picker").nth(1).click({ force: true });
+  await page.waitForSelector(".kx-color-panel", { timeout: 8000 });
+  await page.waitForTimeout(300);
+  {
+    const hex = page.locator(".kx-color-hex");
+    await hex.fill("#00a000");
+    await hex.press("Enter");
+    await page.waitForTimeout(300);
+  }
   check("9 临期色取色时卡片跟着变", (await cardBg()) !== "", await cardBg());
   check("9 临期色取色时不落盘", JSON.stringify((await readSettings()).appearance?.dueColors ?? null) === dueBefore);
-  await page.locator(".context-menu .color-draft-actions .primary").last().click();
+  await page.locator("[data-color-confirm]").click();
   await page.waitForTimeout(600);
   const dueSaved = ((await readSettings()).appearance?.dueColors ?? {})["entry-a"];
   check("9 临期色保存后落盘（四档一次写完）", Array.isArray(dueSaved) && dueSaved.length === 4 && dueSaved[0] === "#808080", J(dueSaved));
@@ -690,11 +696,15 @@ const mobile = await browser.newContext({
   const presetSaved = JSON.stringify((await readState()).backgrounds?.["entry-a"] ?? null);
 
   // 自定义色盘：草稿预览 + 保存
-  await page.evaluate(() => {
-    const input = document.querySelector(".context-menu input.hidden-file[type='color']");
-    input.value = "#3355aa";
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-  });
+  await page.locator(".context-menu .palette-button").click({ force: true });
+  await page.waitForSelector(".kx-color-panel", { timeout: 8000 });
+  await page.waitForTimeout(300);
+  {
+    const hex = page.locator(".kx-color-hex");
+    await hex.fill("#3355aa");
+    await hex.press("Enter");
+    await page.waitForTimeout(250);
+  }
   await page.waitForTimeout(400);
   const bgPreview = await pageBg();
   check(
@@ -702,7 +712,7 @@ const mobile = await browser.newContext({
     bgPreview !== bgAfterPreset && JSON.stringify((await readState()).backgrounds?.["entry-a"] ?? null) === presetSaved,
     `${bgAfterPreset} → ${bgPreview}`
   );
-  await page.locator(".context-menu .color-draft-actions .primary").last().click();
+  await page.locator("[data-color-confirm]").click();
   await page.waitForTimeout(600);
   check(
     "9 背景色保存后才落盘",
@@ -757,6 +767,106 @@ for (const layout of ["list", "grid", "icons"]) {
     J({ dragging, previewOrder })
   );
   check(`8（${layout}）松手后顺序落盘`, after[0] === "scheduled", J(after));
+  await page.close();
+}
+
+// ===========================================================================
+// 8b 分组树拖动：拖到第 4 位 + 展开是高度动画（v0.8.6 需求 2 的拖动回归补做）
+// ===========================================================================
+{
+  const { page, errors } = await freshPage(desktop);
+  await seedState(page, {
+    nodes: [
+      { id: "group", kind: "category", name: "分组", icon: "folder", parentId: null },
+      { id: "entry-1", kind: "entry", name: "条目一", icon: "inbox", parentId: "group" },
+      { id: "entry-2", kind: "entry", name: "条目二", icon: "inbox", parentId: "group" },
+      { id: "entry-3", kind: "entry", name: "条目三", icon: "inbox", parentId: "group" },
+      { id: "entry-4", kind: "entry", name: "条目四", icon: "inbox", parentId: "group" }
+    ]
+  });
+  const treeNames = () =>
+    page.evaluate(() => [...document.querySelectorAll(".custom-nav .tree-row .list-name")].map((el) => el.textContent));
+  const rowBox = (name) =>
+    page.locator(`.custom-nav .tree-row:has(.list-name:text-is("${name}"))`).first().boundingBox();
+  const from = await rowBox("条目一");
+  const to = await rowBox("条目四");
+  // 从「条目一」拖到「条目四」的下半段（落点 = 第 4 位）。
+  // 横向落点取行宽的 62%：行首有图标按钮（落在它上面按下不会起拖）
+  await page.mouse.move(from.x + from.width * 0.62, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(from.x + from.width * 0.62, from.y + from.height / 2 + 24, { steps: 6 });
+  await page.mouse.move(to.x + to.width * 0.62, to.y + to.height * 0.8, { steps: 14 });
+  await page.waitForTimeout(300);
+  const dragPreview = await treeNames();
+  await page.waitForTimeout(250);
+  const settledPreview = await treeNames();
+  await page.mouse.up();
+  await page.waitForTimeout(700);
+  const treeOrder = await page.evaluate(
+    (key) => (JSON.parse(localStorage.getItem(key) ?? "{}").nodes ?? []).map((node) => node.id),
+    STATE_KEY
+  );
+  check(
+    "8b 拖动中行实时让位（条目一移到第 4 位）",
+    dragPreview.join(",") === "分组,条目二,条目三,条目四,条目一",
+    J(dragPreview)
+  );
+  check("8b 指针停住后预览不再抖（迟滞带生效）", settledPreview.join(",") === dragPreview.join(","), J(settledPreview));
+  check(
+    "8b 松手后落盘为第 4 位",
+    treeOrder.join(",") === "my-day,planned,important,scheduled,group,entry-2,entry-3,entry-4,entry-1",
+    J(treeOrder)
+  );
+  check("8b 拖动无脚本报错", errors.length === 0, errors[0] ?? "");
+  await page.close();
+}
+
+// ===========================================================================
+// 8c 分组树展开/折叠：走高度动画（grid-template-rows 0fr → 1fr），不是瞬间占位
+// ===========================================================================
+{
+  const { page, errors } = await freshPage(desktop);
+  await seedState(page, {
+    nodes: [
+      { id: "group", kind: "category", name: "分组", icon: "folder", parentId: null, collapsed: true },
+      { id: "entry-1", kind: "entry", name: "条目一", icon: "inbox", parentId: "group" },
+      { id: "entry-2", kind: "entry", name: "条目二", icon: "inbox", parentId: "group" }
+    ]
+  });
+  const collapsed = await page.evaluate(() => {
+    const wrap = document.querySelector(".tree-children");
+    const row = document.querySelector(".tree-children .tree-row");
+    return {
+      wrapHeight: wrap ? wrap.getBoundingClientRect().height : -1,
+      transition: wrap ? getComputedStyle(wrap).transitionProperty : "",
+      // 收起态子树仍然挂载（高度动画的代价），但行被裁掉、不可命中
+      rowMounted: Boolean(row),
+      rowHit: row ? document.elementFromPoint(row.getBoundingClientRect().left + 20, row.getBoundingClientRect().top + 20)?.closest(".tree-row")?.dataset.nodeId ?? "" : "none"
+    };
+  });
+  check("8c 收起态子树高度为 0（不占位）", collapsed.wrapHeight === 0, J(collapsed));
+  check("8c 收起态的行不可命中（被裁切）", collapsed.rowHit !== "entry-1", J(collapsed));
+  const anim = await page.evaluate(async () => {
+    const wrap = document.querySelector(".tree-children");
+    const button = document.querySelector(".tree-row .collapse-button");
+    button.click();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const mid = wrap.getBoundingClientRect().height;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    return {
+      mid,
+      settled: wrap.getBoundingClientRect().height,
+      transition: getComputedStyle(wrap).transitionProperty + " " + getComputedStyle(wrap).transitionDuration
+    };
+  });
+  check(
+    "8c 展开是高度动画（中途高度 < 最终高度）",
+    anim.settled > 40 && anim.mid >= 0 && anim.mid < anim.settled,
+    J(anim)
+  );
+  check("8c 动画时长与兄弟行 flip 对齐（150ms）", anim.transition.includes("grid-template-rows") && anim.transition.includes("0.15s"), J(anim));
+  check("8c 展开无脚本报错", errors.length === 0, errors[0] ?? "");
   await page.close();
 }
 
@@ -1383,7 +1493,12 @@ for (const layout of ["list", "grid", "icons"]) {
       tabs: [...document.querySelectorAll(".transfer-tabs button")].map((el) => el.textContent?.trim()),
       actions: [...document.querySelectorAll(".transfer-action-button")].map((el) => el.textContent?.trim()),
       namePlaceholder: document.querySelector(".transfer-field input")?.getAttribute("placeholder") ?? "",
-      codePlaceholder: document.querySelector(".transfer-code-row input")?.getAttribute("placeholder") ?? "",
+      // v0.8.6 需求 5.5：口令行改成普通文本输入框（去掉密码框样式与眼睛按钮）
+      codePlaceholder:
+        [...document.querySelectorAll(".transfer-identity input")].find((input) =>
+          (input.getAttribute("placeholder") ?? "").includes("密钥")
+        )?.getAttribute("placeholder") ?? "",
+      codeTypes: [...document.querySelectorAll(".transfer-identity input")].map((input) => input.type).join(","),
       hasEye: !!document.querySelector(".transfer-eye"),
       empty: document.querySelector(".transfer-empty")?.textContent?.replace(/\s+/g, " ").trim() ?? "",
       hasSendCapsule: !!document.querySelector(".transfer-send-button"),
@@ -1392,9 +1507,16 @@ for (const layout of ["list", "grid", "icons"]) {
     };
   });
   check("1.1 顶部有设备名输入（带提示词）", shell.namePlaceholder.includes("输入设备名"), shell.namePlaceholder);
-  check("1.2 配对口令提示词与眼睛按钮", shell.codePlaceholder.includes("输入和对方约定的密钥（至少8位）") && shell.hasEye, J(shell));
+  check(
+    "1.2 配对口令是普通文本输入框（v0.8.6 需求 5.5 去掉了眼睛按钮）",
+    shell.codePlaceholder.includes("输入和对方约定的密钥") &&
+      !shell.hasEye &&
+      shell.codeTypes.includes("text") &&
+      !shell.codeTypes.includes("password"),
+    J(shell)
+  );
   check("1.3 发送/接收滑块与四个大图标", shell.tabs.join("/") === "发送/接收" && shell.actions.join("/") === "文件/文件夹/文本/剪贴板", J(shell));
-  check("1.3 空状态文案与端到端加密标识", shell.empty.includes("对方输完同一句口令") && shell.empty.includes("端到端加密"), shell.empty);
+  check("1.3 空状态文案与端到端加密标识", shell.empty.includes("输入相同口令以匹配") && shell.empty.includes("端到端加密"), shell.empty);
   check("1.3 发送按钮是胶囊且未上线时禁用", shell.hasSendCapsule && shell.sendDisabled === true, J(shell));
   check("1.4 有传输历史折叠区", shell.history);
   check("1.5 内容列限宽（桌面 720px 内、不超屏）", shell.width <= 720 && shell.overflow === 0, J(shell));

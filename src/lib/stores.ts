@@ -1,5 +1,5 @@
 import { writable, derived, get } from "svelte/store";
-import type { AppNotification, AppState, AppNode, DiaryEditorTarget, DiaryEntry, EmojiPickerTarget, LedgerBook, LedgerEditorTarget, LedgerSide, NotificationTone, SchedulerState, Settings, Task } from "./types";
+import type { AppNotification, AppState, AppNode, DiaryEditorTarget, DiaryEntry, EmojiPickerTarget, LedgerBook, LedgerEditorTarget, LedgerSide, NotificationTone, SchedulerState, SearchHit, Settings, Task } from "./types";
 import { cachedAppearance, cachedFeatures, cachedProfile, cachedState, defaultSchedulerRuntimes, defaultSettings, emptyState, normalizeDiaryEntries, normalizeLedger, normalizeState, normalizeSettings, schedulerRuntimeKeys, seedLedgerBook, writeAppearanceCache, writeFeaturesCache, writeProfileCache, writeStateCache } from "./defaults";
 import {
   loadState, saveState, loadSettings, saveSettings, loadScheduler, saveScheduler,
@@ -8,7 +8,8 @@ import {
   setWebviewZoom, isTauriRuntime, resolveExecutorPaths, sendNativeNotification,
   hasCoreDispatch, coreSnapshot, getAppVersion
 } from "./backend";
-import { buildListCounts, buildSearchHits, buildVisibleTasks, getBackground } from "./nodes";
+import { buildListCounts, buildVisibleTasks, getBackground } from "./nodes";
+import { createSearchScanner } from "./searchScan";
 import { accentForNode, uiScaleValue } from "./styles";
 import { entryToUi, type ScheduleEntryV9 } from "./scheduleAdapter";
 import { weekStartIndex } from "./diary";
@@ -370,11 +371,73 @@ export const isSearching = derived(debouncedSearchQuery, ($q) => $q.trim().lengt
 /**
  * 全局搜索的混排结果（任务 + 日记 + 记账，按最近改动排序）。
  * 桌面在工作区渲染，移动端在侧栏搜索框下方的结果面板渲染——同一份数据，两处视图。
+ *
+ * v0.8.6 需求 1：**从 derived 降级为可写 store + 分块扫描器**。derived 的求值是同步的，
+ * 一万条流水 + 五千篇日记会在一帧里把界面钉死；扫描器分批跑在 idle 上，中途结果渐进写入。
+ * `searchScanning` 是「搜索中…」的开关。
  */
-export const searchHits = derived(
-  [appState, diaryEntries, ledgerData, debouncedSearchQuery],
-  ([$s, $d, $l, $q]) => buildSearchHits($s, $d, $l, $q)
-);
+export const searchHits = writable<SearchHit[]>([]);
+export const searchScanning = writable(false);
+
+const searchScanner = createSearchScanner({
+  source: () => ({ state: get(appState), diaries: get(diaryEntries), ledger: get(ledgerData) }),
+  onBatch: (hits, done) => {
+    searchHits.set(hits);
+    searchScanning.set(!done);
+    publishSearchDebug();
+  }
+});
+
+/** 调试出口（与 `window.__kxtodoRenderStats` 同款）：性能基准量「扫完没有」用得上 */
+function publishSearchDebug(): void {
+  if (typeof window === "undefined") return;
+  (window as Window & { __kxtodoSearch?: { scanning: boolean; hits: number } }).__kxtodoSearch = {
+    scanning: get(searchScanning),
+    hits: get(searchHits).length
+  };
+}
+
+/** 这一轮扫的是哪一份数据：数据没换身份就不重扫（否则点一下树节点都会重扫一遍） */
+let scannedSignature: unknown[] = [];
+const searchSignature = (): unknown[] => {
+  const state = get(appState);
+  const ledger = get(ledgerData);
+  return [state.tasks, state.nodes, get(diaryEntries), ledger.entries, ledger.categories];
+};
+
+function cancelSearch(): void {
+  searchScanner.cancel();
+  scannedSignature = [];
+  searchScanning.set(false);
+  searchHits.set([]);
+  publishSearchDebug();
+}
+
+function startSearch(query: string): void {
+  const needle = query.trim();
+  // 清空立即生效：不走 idle，也不留上一轮的结果
+  if (!needle) {
+    cancelSearch();
+    return;
+  }
+  scannedSignature = searchSignature();
+  searchScanning.set(true);
+  searchScanner.run(query);
+}
+
+// 防抖词变化：作废上一轮、开新一轮（取消由扫描器的 token 保证）
+debouncedSearchQuery.subscribe((value) => startSearch(value));
+
+// 搜索期间数据变了（同步回来一批、勾掉一条、改个名字）：结果要跟着更新。
+// `appState` 每次 UI 操作都会换身份，所以先比签名——数据没真动就一个字节都不重扫。
+[appState, diaryEntries, ledgerData].forEach((store) => {
+  store.subscribe(() => {
+    if (!get(debouncedSearchQuery).trim()) return;
+    const signature = searchSignature();
+    if (signature.every((part, index) => part === scannedSignature[index])) return;
+    startSearch(get(debouncedSearchQuery));
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Legacy persistence（浏览器预览路径；桌面与移动端 Tauri 走 actions.ts 命令化写入）

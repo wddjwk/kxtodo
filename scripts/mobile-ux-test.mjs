@@ -223,6 +223,51 @@ check("toolbox view entered",
   (await page.locator(".app-shell.mobile.view-toolbox").count()) === 1 && (await page.locator(".toolbox-view").isVisible()) === true);
 check("toolbox hides sidebar and workspace",
   !(await page.locator(".sidebar").isVisible()) && !(await page.locator(".workspace").isVisible()));
+
+// v0.8.6 需求 3：整页层是**不透明覆盖**，底下的两栏不再 display:none——
+// 它们仍在树上（返回零重排/零重绘），但被 inert + visibility:hidden 摘出交互与可访问性。
+const covered = await page.evaluate(() => {
+  const sidebar = document.querySelector(".sidebar");
+  const workspace = document.querySelector(".workspace");
+  // 打个标：返回主界面后这个属性还在 = 元素没被重建（零重排的代理断言）
+  sidebar.dataset.keepAlive = "1";
+  return {
+    sidebarDisplay: getComputedStyle(sidebar).display,
+    sidebarVisibility: getComputedStyle(sidebar).visibility,
+    workspaceDisplay: getComputedStyle(workspace).display,
+    sidebarInert: sidebar.hasAttribute("inert"),
+    workspaceInert: workspace.hasAttribute("inert")
+  };
+});
+check(
+  "被盖的两栏仍挂载（display 不变，不是 display:none）",
+  covered.sidebarDisplay !== "none" && covered.workspaceDisplay !== "none",
+  JSON.stringify(covered)
+);
+check(
+  "被盖的两栏 visibility:hidden（旧 WebKit 的 inert 回退）",
+  covered.sidebarVisibility === "hidden",
+  JSON.stringify(covered)
+);
+check(
+  "被盖的两栏带 inert（不可聚焦、摘出可访问性树）",
+  covered.sidebarInert && covered.workspaceInert,
+  JSON.stringify(covered)
+);
+const focusTrail = [];
+for (let step = 0; step < 10; step += 1) {
+  await page.keyboard.press("Tab");
+  focusTrail.push(
+    await page.evaluate(() => {
+      const active = document.activeElement;
+      if (!active) return "";
+      if (active.closest(".sidebar")) return "sidebar";
+      if (active.closest(".workspace")) return "workspace";
+      return "other";
+    })
+  );
+}
+check("被盖的两栏不可 Tab 聚焦", !focusTrail.includes("sidebar") && !focusTrail.includes("workspace"), focusTrail.join(","));
 check("random tool card listed", (await page.locator(".toolbox-card").count()) >= 1);
 await page.locator(".toolbox-card").first().click();
 await page.waitForTimeout(250);
@@ -239,6 +284,10 @@ check("sub-view back returns to tool list",
 await page.goBack();
 await page.waitForTimeout(350);
 check("toolbox back returns to list view", (await page.locator(".app-shell.mobile.view-list").count()) === 1);
+check(
+  "返回主界面时侧栏没有被重建（零闪烁的代理断言）",
+  (await page.evaluate(() => document.querySelector(".sidebar")?.dataset.keepAlive === "1")) === true
+);
 
 // item 2.2: long-press a tree row, keep holding and move → menu closes, drag starts
 {

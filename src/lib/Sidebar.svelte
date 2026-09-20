@@ -38,6 +38,7 @@
   import { transferState } from "./transferStore";
   import type { ToolId } from "./tools/catalog";
   import { longpress, isLongPressSuppressed } from "./longpress";
+  import { DRAG_BAND_PX, scaleOf, schmitt, settledTop } from "./dragHit";
 
   const dispatch = createEventDispatcher<{ suppressClose: void }>();
 
@@ -74,6 +75,12 @@
   $: ledgerActive = $isMobile ? $mobileView === "ledger" : $ledgerOpen;
   // 工具箱 v0.7.5 起两端都有，高亮同一条口径
   $: toolboxActive = $isMobile ? $mobileView === "toolbox" : $toolboxOpen;
+  /**
+   * 被整页视图盖住（v0.8.6 需求 3）：三个整页层改成了不透明覆盖，底下的两栏仍在
+   * 树上（返回零闪烁的代价）——加 `inert` 让它们不可聚焦、不可交互、从可访问性树
+   * 摘除。旧 WebKit 不认 inert 时由 mobile.css 的 `visibility: hidden` 兜底。
+   */
+  $: coveredByFullPage = $isMobile && ($mobileView === "diary" || $mobileView === "ledger" || $mobileView === "toolbox");
 
   /**
    * 固定导航的每一行：四个系统节点（我的一天/计划内/收藏/定时任务）与三条不是节点的
@@ -269,6 +276,8 @@
   let navDrag: { id: NavItemId } | null = null;
   /** 拖完松手会补一个 click：不压掉的话「排完序顺手把那一行打开了」 */
   let navDragSuppressClick = false;
+  /** 上一轮算出的落点下标（迟滞判定的偏置来源，见 navDropIndex） */
+  let navDropIndexLast: number | null = null;
 
   /**
    * 落点下标：**按布局两种算法**。
@@ -278,21 +287,40 @@
    *   各行中心的距离取最近的一项，按左/右决定插前还是插后。图标模式整块只有一排、
    *   所有行共用一个竖带，早前只比 Y 的写法永远在第一行命中、返回 0/1——
    *   拖谁都只能落到前两位。
+   *
+   * 位置同理取**布局位置**（v0.8.6 需求 2）：`.nav-row` 也让位动画走 `animate:flip`
+   * （纯 transform），动画期间的 rect 是半路值，两行互相不自洽——判定会来回抖。
+   * 临界点再加一道迟滞带：越过格心 `band/2` 才改判。
    */
   function navDropIndex(clientX: number, clientY: number): number {
     const rows = [...(navEl?.querySelectorAll(".nav-row") ?? [])] as HTMLElement[];
+    const scale = navEl ? scaleOf(navEl) : 1;
     const boxes = rows
       .map((row, index) => {
         const rect = row.getBoundingClientRect();
-        return { index, top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width, height: rect.height };
+        const top = settledTop(row, scale);
+        const height = row.offsetHeight * scale;
+        return { index, top, bottom: top + height, left: rect.left, width: rect.width, height };
       })
       .filter((box) => box.height > 0);
     if (boxes.length === 0) return 0;
-    const midY = (box: { top: number; bottom: number }) => box.top + (box.bottom - box.top) / 2;
+    const midY = (box: { index: number; top: number; bottom: number }) => box.top + (box.bottom - box.top) / 2;
+    /** 上一轮的结论对某一行来说是不是「插在它后面」（迟滞判定的偏置） */
+    const priorAfter = (index: number): boolean | null =>
+      navDropIndexLast === null || navDropIndexLast === undefined
+        ? null
+        : navDropIndexLast === index + 1
+          ? true
+          : navDropIndexLast === index
+            ? false
+            : null;
     if (navLayout === "list") {
       for (const box of boxes) {
         if (clientY < box.top) return box.index;
-        if (clientY <= box.bottom) return clientY < midY(box) ? box.index : box.index + 1;
+        if (clientY <= box.bottom) {
+          const after = schmitt(clientY, midY(box), DRAG_BAND_PX, priorAfter(box.index));
+          return after ? box.index + 1 : box.index;
+        }
       }
       return boxes[boxes.length - 1].index + 1;
     }
@@ -308,7 +336,8 @@
     const nearest = band.reduce((a, b) =>
       Math.abs(clientX - midX(a)) <= Math.abs(clientX - midX(b)) ? a : b
     );
-    return clientX < midX(nearest) ? nearest.index : nearest.index + 1;
+    const after = schmitt(clientX, midX(nearest), DRAG_BAND_PX, priorAfter(nearest.index));
+    return after ? nearest.index + 1 : nearest.index;
   }
 
   /** 拖动中把行实时挪到落点（松手才落盘）：拖动看着像「行跟着让位」而不是只画一根线 */
@@ -317,10 +346,12 @@
     const from = ids.indexOf(id);
     if (from < 0) return;
     let to = navDropIndex(clientX, clientY);
+    navDropIndexLast = to;
     const moving = [...ids];
     moving.splice(from, 1);
     if (to > from) to -= 1;
-    moving.splice(Math.max(0, Math.min(moving.length, to)), 0, id);
+    const target = Math.max(0, Math.min(moving.length, to));
+    moving.splice(target, 0, id);
     if (moving.every((item, index) => item === ids[index])) return;
     navDragOrder = moving;
   }
@@ -338,6 +369,14 @@
     const startX = event.clientX;
     const startY = event.clientY;
     let armed = false;
+    // 预览重排合并到 rAF：每次判定都要读一圈 rect，而且一改顺序整块就走 flip（v0.8.6 需求 2）
+    let frame = 0;
+    let last: { x: number; y: number } | null = null;
+    const flush = (): void => {
+      frame = 0;
+      if (!armed || !navDrag || !last) return;
+      previewNavOrder(id, last.x, last.y);
+    };
     const move = (ev: PointerEvent): void => {
       if (!armed && Math.hypot(ev.clientX - startX, ev.clientY - startY) > 5) {
         armed = true;
@@ -345,14 +384,20 @@
       }
       if (!armed || !navDrag) return;
       ev.preventDefault();
-      previewNavOrder(id, ev.clientX, ev.clientY);
+      last = { x: ev.clientX, y: ev.clientY };
+      if (frame === 0) frame = requestAnimationFrame(flush);
     };
     const up = (): void => {
       window.removeEventListener("pointermove", move, true);
       window.removeEventListener("pointerup", up, true);
+      if (frame !== 0) {
+        cancelAnimationFrame(frame);
+        frame = 0;
+      }
       if (armed) commitNavDrag();
       else navDragOrder = null;
       navDrag = null;
+      navDropIndexLast = null;
       if (armed) {
         navDragSuppressClick = true;
         window.setTimeout(() => (navDragSuppressClick = false), 0);
@@ -577,7 +622,13 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<aside class="sidebar" class:searching={$isMobile && $isSearching} style={`width: ${sidebarWidth}px; min-width: ${sidebarWidth}px;`} on:click|stopPropagation>
+<aside
+  class="sidebar"
+  class:searching={$isMobile && $isSearching}
+  inert={coveredByFullPage}
+  style={`width: ${sidebarWidth}px; min-width: ${sidebarWidth}px;`}
+  on:click|stopPropagation
+>
   <button class="profile-card" type="button" on:click|stopPropagation={() => { showSettings.update((v) => !v); }}>
     <span class="avatar" style={avStyle}>{$appSettings.profile.avatar ? "" : avInitial}</span>
     <span class="profile-text">

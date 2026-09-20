@@ -18,6 +18,7 @@
   import { categoryTree } from "../ledger";
   import { LEDGER_ICON_CHOICES, LEDGER_ICON_GROUPS, ledgerIcon, softColor } from "../ledgerIcons";
   import { addLedgerCategory, deleteLedgerCategory, updateLedgerCategory } from "../actions";
+  import { openColorPicker } from "../colorPickerPanel";
   import type { LedgerBook, LedgerCategory, LedgerSide } from "../types";
 
   export let book: LedgerBook;
@@ -280,9 +281,23 @@
                 on:click={() => (colorDraft = colorDraft === color ? "" : color)}
               ></button>
             {/each}
-            <label class="ledger-color-custom" title="自定义颜色">
-              <input type="color" value={colorDraft || fallbackColor} on:input={(event) => (colorDraft = event.currentTarget.value)} />
-            </label>
+            <button
+              class="ledger-color-custom"
+              type="button"
+              title="自定义颜色"
+              data-color-anchor
+              on:click={(event) =>
+                openColorPicker({
+                  key: "ledger:category-color",
+                  color: colorDraft || fallbackColor,
+                  anchor: event.currentTarget,
+                  onPreview: (color) => (colorDraft = color),
+                  onConfirm: (color) => (colorDraft = color),
+                  onCancel: () => undefined
+                })}
+            >
+              <span style={`--dot: ${colorDraft || fallbackColor}`}></span>
+            </button>
             {#if colorDraft}
               <button type="button" class="ledger-choice" on:click={() => (colorDraft = "")}>跟随大类</button>
             {/if}

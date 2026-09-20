@@ -6,7 +6,7 @@
    * 是为了能跑单元测试），这里只管输入输出。
    * 子视图不含返回按钮——那是壳（ToolboxView）的事。
    */
-  import { Banknote, Copy } from "@lucide/svelte";
+  import { Copy } from "@lucide/svelte";
   import { formatYuanNumber, fromChineseYuan, toChineseYuan, SUPPORTED_HAN } from "../rmb";
   import { copyText } from "../clipboard";
 
@@ -35,9 +35,6 @@
 </script>
 
 <div class="toolbox-sub">
-  <div class="toolbox-sub-title">
-    <Banknote size={18} /> 人民币金额大小写
-  </div>
   <div class="toolbox-field-row">
     <span>{reverse ? "中文金额" : "金额（元）"}</span>
     <input

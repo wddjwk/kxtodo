@@ -97,16 +97,20 @@
   display: none;
 }
 
-/* Toolbox is a full-screen layer too (mobile-only reserved capability slot). */
+/* Toolbox is a full-screen layer too (mobile-only reserved capability slot).
+   整页层用**不透明覆盖**而不是把底下的两栏 display:none（v0.8.6 需求 3）：
+   从工具箱/记账/日记返回主界面时零重排、零重绘、滚动位置也是留着的。
+   底下的两栏同时被 `inert`（组件里设）+ 这里的 visibility 兜底摘出可访问性树——
+   旧 WebKit 不支持 inert 时这条 CSS 仍然让它们不可聚焦、不可命中。 */
 .app-shell.mobile.view-toolbox .sidebar,
 .app-shell.mobile.view-toolbox .workspace {
-  display: none;
+  visibility: hidden;
 }
 
 /* 日记同样是整页一层（桌面也有；移动端由历史栈的 diary 层驱动）。 */
 .app-shell.mobile.view-diary .sidebar,
 .app-shell.mobile.view-diary .workspace {
-  display: none;
+  visibility: hidden;
 }
 
 .app-shell.mobile .resize-handle {
@@ -679,10 +683,11 @@
   background: transparent;
 }
 
-/* 记账同日记：整页一层，由历史栈的 ledger 层驱动。 */
+/* 记账同日记：整页一层，由历史栈的 ledger 层驱动。同样是覆盖而非 display:none
+   （v0.8.6 需求 3）：返回主界面零闪烁、列表滚动位置保留。 */
 .app-shell.mobile.view-ledger .sidebar,
 .app-shell.mobile.view-ledger .workspace {
-  display: none;
+  visibility: hidden;
 }
 
 .app-shell.mobile .ledger-view {

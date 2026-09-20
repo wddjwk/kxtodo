@@ -4,6 +4,7 @@
   import { appSettings } from "../stores";
   import { createBackGuard, isMobile as isMobileStore } from "../platform";
   import { uiScaleValue } from "../styles";
+  import { placePopover } from "../popover";
   import { openSubmenus, requestSubmenuClose } from "./submenu";
 
   /** 触发点坐标（clientX/clientY，屏幕像素）。 */
@@ -51,14 +52,14 @@
   // 菜单是「挂载中 = 打开着」，卸载时得自己把拦截器摘掉（见 createBackGuard::dispose）
   onDestroy(() => backGuard.dispose());
 
-  /** 视口边缘保留的逻辑像素边距。 */
+  /** 视口边缘保留的逻辑像素边距（浮层定位统一走 popover.ts 的 placePopover）。 */
   const MENU_MARGIN_PX = 8;
 
   /**
    * 跟手定位：调用方传视口像素（clientX/Y 或长按触点），这里统一除以 uiScale
    * 换算成缩放 shell 内的逻辑坐标（只除一次，调用方不做换算）。
-   * 优先落在锚点右下；放不下时贴边收敛，下方溢出则向上翻转；
-   * 菜单比可用高度还高时限高并内部滚动。
+   * 几何规则全在 `popover.ts::placePopover`：优先向下、放不下翻到锚点上方且下边缘对齐、
+   * 四边钳制（v0.8.6 需求 4 把它抽成了三处浮层共用的一份）。
    */
   async function layout(): Promise<void> {
     await tick();
@@ -67,39 +68,29 @@
     const viewWidth = window.innerWidth / scale;
     const viewHeight = window.innerHeight / scale;
     const rect = menuEl.getBoundingClientRect();
-    const width = rect.width / scale;
     // 内容高度取 rect 与 scrollHeight 的较大者：菜单自己带着 inline max-height 时，
     // rect 量到的只是被夹住的高度，重新收敛（子菜单开合）时就发现不了溢出。
     const height = Math.max(rect.height / scale, menuEl.scrollHeight / scale);
-    const anchorX = x / scale;
-    const anchorY = y / scale;
     // 逻辑视口可能比固定 minWidth 还窄（移动端高缩放），先收敛宽度再定位。
     minWidthPx = Math.min(minWidth, Math.max(160, viewWidth - MENU_MARGIN_PX * 2));
-    const anchorLeft = xAlign === "right" ? anchorX - width : anchorX;
-    left = Math.max(MENU_MARGIN_PX, Math.min(anchorLeft, viewWidth - width - MENU_MARGIN_PX));
-
-    // 垂直：**菜单永远从锚点下方展开**（盖住唤起它的按钮会让「点按钮」变成
-    // 「点菜单」，按下/松手直接落在菜单项上）。放不下就按向下空间限高、内部滚动；
-    // 只有向上空间明显更大时才向上翻转（右键菜单在屏幕下半部的常规行为）。
-    const spaceBelow = viewHeight - MENU_MARGIN_PX - anchorY;
-    const spaceAbove = anchorY - MENU_MARGIN_PX;
-    if (height <= spaceBelow) {
-      top = anchorY;
-      maxHeight = 0;
-    } else if (spaceAbove > spaceBelow) {
-      const available = Math.max(120, Math.round(spaceAbove));
-      const used = Math.min(height, available);
-      top = anchorY - used;
-      maxHeight = used < height ? available : 0;
-    } else {
-      top = anchorY;
-      maxHeight = Math.max(120, Math.round(spaceBelow));
-    }
+    const placed = placePopover(
+      { x: x / scale, y: y / scale },
+      { width: Math.max(rect.width / scale, minWidthPx), height },
+      { width: viewWidth, height: viewHeight },
+      { xAlign, margin: MENU_MARGIN_PX }
+    );
+    left = placed.left;
+    top = placed.top;
+    maxHeight = placed.maxHeight;
     ready = true;
   }
 
   function isInside(target: EventTarget | null): boolean {
-    return target instanceof Node && Boolean(menuEl?.contains(target));
+    if (!(target instanceof Node)) return false;
+    if (menuEl?.contains(target)) return true;
+    // 统一取色盘（v0.8.6 需求 11）住在 App 层、不在菜单里，但交互上属于这张菜单：
+    // 点它/在它上面滚动都不该把菜单关掉（否则一按下确认就「菜单关了、草稿作废」）
+    return Boolean((target as Element).closest?.(".kx-color-panel"));
   }
 
   function isAnchor(target: EventTarget | null): boolean {

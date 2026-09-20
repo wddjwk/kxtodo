@@ -14,6 +14,7 @@
   import { imeViewport, startImeViewport } from "./lib/imeViewport";
   import { startAutoSync } from "./lib/syncRunner";
   import { ensureTransferRuntime } from "./lib/transferStore";
+  import { ensureCardOverlayRuntime } from "./lib/cardOverlays";
   import { revealMainWindow } from "./lib/backend";
   import { oversizedAvatarShrink } from "./lib/images";
   import { checkForUpdate } from "./lib/updater";
@@ -24,6 +25,7 @@
   import DiaryView from "./lib/DiaryView.svelte";
   import LedgerView from "./lib/LedgerView.svelte";
   import ToolboxView from "./lib/ToolboxView.svelte";
+  import ColorPickerPanel from "./lib/ColorPickerPanel.svelte";
   import SettingsDrawer from "./lib/SettingsDrawer.svelte";
 
   let sidebarRef: Sidebar;
@@ -66,6 +68,8 @@
     // 文件传输的全局运行时（v0.8.5 需求 4）：事件订阅 + 恢复记住的口令都在这里，
     // 工具页没开也收得到拨入（人不在工具页时靠系统通知接住）
     ensureTransferRuntime();
+    // 卡片级浮层（日期浮层单例 + 触屏露出态）的唯一一份 document 监听（v0.8.6 需求 4）
+    ensureCardOverlayRuntime();
     window.addEventListener("keydown", handleShortcut);
     // 启动后静默检查一次更新（全平台，可在设置关闭）
     const timer = window.setTimeout(() => {
@@ -247,6 +251,9 @@
       </div>
     {/await}
   {/if}
+
+  <!-- 全应用统一的取色盘（v0.8.6 需求 11）：12 处取色入口都走它，挂一次 -->
+  <ColorPickerPanel />
 
   {#if emojiPickerTask && $taskEmojiPicker}
     <!-- 懒加载：IconPicker 静态引入了 emoji-picker-element（自带整份 emoji 数据库），

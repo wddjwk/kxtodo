@@ -34,3 +34,22 @@ export function setTreeDropRootEnd(): void {
 export function clearTreeDropTarget(): void {
   treeDropState.set(EMPTY);
 }
+
+/**
+ * 行元素登记表（v0.8.6 需求 2）：落点判定要用**布局位置**（剔除 flip 的 translate），
+ * 而 `ListTree` 是递归组件——目标行常常属于另一个实例，元素又只在实例内部可达。
+ * 每个行元素挂载时登记、销毁时摘掉，判定统一从这里取。
+ */
+const rowElements = new Map<string, HTMLElement>();
+
+export function registerTreeRow(id: string, element: HTMLElement): () => void {
+  rowElements.set(id, element);
+  return () => {
+    // 只摘自己那一条：重建时同 id 的新元素可能已经登记过
+    if (rowElements.get(id) === element) rowElements.delete(id);
+  };
+}
+
+export function treeRowElements(): ReadonlyMap<string, HTMLElement> {
+  return rowElements;
+}

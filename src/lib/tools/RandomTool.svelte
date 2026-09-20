@@ -3,7 +3,6 @@
    * 随机数生成（工具注册表的第一件工具，v0.7.5 从 ToolboxView 的内联分支抽出来）：
    * 纯前端小工具，两端共用同一份实现。子视图不含返回按钮——那是壳（ToolboxView）的事。
    */
-  import { Dice5 } from "@lucide/svelte";
   import NumberField from "../NumberField.svelte";
 
   const RANDOM_LIMIT = 1_000_000;
@@ -32,9 +31,6 @@
 </script>
 
 <div class="toolbox-sub">
-  <div class="toolbox-sub-title">
-    <Dice5 size={18} /> 随机数生成
-  </div>
   <div class="toolbox-field-row">
     <span>最小值</span>
     <NumberField

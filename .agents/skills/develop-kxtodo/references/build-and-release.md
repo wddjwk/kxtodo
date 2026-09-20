@@ -23,7 +23,7 @@ npm install                # 依赖
 npm run desktop:dev        # 桌面开发（vite + tauri dev）
 scripts/cargo-msvc.sh test -p kxtodo-core   # Rust 测试（Git Bash 下必须用这个包装！）
 npm run test:unit          # 前端纯逻辑单测（vitest 5，node 环境：资金路径 / 时刻 / normalize；断言必须时区无关，见 frontend.md「前端单测」）
-node scripts/perf-bench.mjs # 性能基线（v0.8.0）：往 localStorage 塞 300 任务 / 300 日记 / 3000 账目，量冷启动与页内 rAF 计时的交互，并断言 window.__kxtodoRenderStats 首屏 block 渲染为 0（需先 npm run dev；Node 侧计时会被自己的 waitForTimeout 淹没，所以交互一律页内计时）
+node scripts/perf-bench.mjs # 性能基线（v0.8.0 起；v0.8.4 提到 5000 日记/1000 任务/10000 账目，v0.8.6 新增宽词搜索三条验收：<1s、命中封顶 200、扫描期无长任务）：往 localStorage 塞 300 任务 / 300 日记 / 3000 账目，量冷启动与页内 rAF 计时的交互，并断言 window.__kxtodoRenderStats 首屏 block 渲染为 0（需先 npm run dev；Node 侧计时会被自己的 waitForTimeout 淹没，所以交互一律页内计时）
 .\release.ps1              # 默认 Windows + Android（KXToDo.exe + kxtodo-cli.exe + KXToDo.apk）
 .\release.ps1 win / android / unix   # 单平台（unix = 经 WSL 原生克隆构建 KXToDo.AppImage + kxtodo-cli）
 .\release.ps1 win,unix     # 逗号组合；.\release.ps1 all = 三平台（环境未就绪告警跳过，不终止其它）
@@ -45,6 +45,10 @@ node scripts/v078-fixes-test.mjs   # v0.7.8 回归：移动端输入法跟随（
 node scripts/v077-fixes-test.mjs   # v0.7.7 回归：移动齿轮收起不留底色/编辑器 Esc（标签输入框与内联编辑不再吃掉 Escape，两段式）/桌面记账编辑框高度=宽度−44 且三排贴底、开搁板不跳、搁板带进视野/趋势点图直接读数（桌面悬浮+点击、移动端点按）与只有全屏按钮进全屏（移动直接横屏）/坐标标签互不覆盖/选择图标「常用图标」置顶（最近使用、最多两行、混排）与简笔画区五行自滚/移动端表单图标网格自滚/移动端总资产三块靠右（桌面靠左）/超链接自动标题（30 字截断、手写不动、开关可关）与渲染为卡片（站点+标题+摘要+复制按钮、默认关）
 node scripts/v081-fixes-test.mjs   # v0.8.1 回归：外观缓存收进整个 appearance（首帧不跳导航排布）/名字邮箱失焦或回车才提交/一周从周一起始（日历表头与日期选择器）/超链接渲染三档单选/标签面板（预置胶囊流 + 末尾加号胶囊 + 输入框旁「存入预置」勾选 + 两排 5+5 十色）/临期高亮 due-soon 与周几/桌面工具箱两列 + 人民币大小写**双向** + 生成按钮在「数量」下一行右对齐/渲染出的任务框可点写回源码/编辑器列表缩进与同级重编号
 node scripts/v082-fixes-test.mjs   # v0.8.2 回归（94 项，全是 v0.8.1 的收尾）：长卡片两阶段展开（60ms 内正文可读、hljs+katex 异步补、短卡片不付代价）/折行卡片展开态可收起/日期浮层「精确到分钟」勾得上且时刻不被 now 覆盖、重载后 dueTime 仍在/任务项删除线不传播 + 子级缩进对齐 + 勾选框同高居中 + 点击写回/编辑器 Tab 整行缩进（含松散列表续行）与空项回车退级、顶级清标识/临期高亮三档圆单选 + 色盘一行 + 默认红黄蓝/首帧缓存（state 与 features 都写入并在模块初始化读回）/超链接档位**可逆**（卡片→不渲染→标题→卡片，就地生效不重载）/记账换视图滚动归零且段控不跳位/设置抽屉分两段挂载/**移动端返回键走 window.kxtodoBackHandler()**：账户表单→账户列表→关浮层逐级退、直达表单整层关、表情选择器只关自己
+node scripts/v083-fixes-test.mjs   # v0.8.3 回归：日期与提醒（面板三个入口、点日期不关面板、双轨滚轮、提醒规则、编辑器工具栏日期按钮）/ 文件传输助手 / 工具箱草稿纸 / 标签面板 domain 分流
+node scripts/v084-fixes-test.mjs   # v0.8.4 回归：长列表窗口化（日记与 1000 卡条目只挂一段）/ 传输助手按 LocalSend 重做 / 交互一致性 7–15 / bugfix 16–21；v0.8.6 补了分组树拖到第 4 位与展开高度动画两节
+node scripts/v085-fixes-test.mjs   # v0.8.5 回归：P0 三条（裸类名、Endpoint::close、窗口化跨阈值）/ 传输分区与 relay / 深层编号与大字号日期面板的几何断言 + 两张本地截图（test-data/*.png 不入库）
+node scripts/v086-fixes-test.mjs   # v0.8.6 回归（67 项）：搜索封顶 200 与「搜索中…」/ 菜单四角与日期浮层单例 / 传输界面整治 / 工具页标题两端 / 年月面板大字号 / 齿轮 toggle / 统一取色盘（桌面与移动端：HEX 与 RGB 双向、非法输入、rAF 合帧、Esc 取消、touch-action）
 .\scripts\publish.ps1      # 本地一键发布（离线备用路径，基本不再用——日常发布走 tag 触发云端构建；默认 Windows+Android，all = 三平台）
 git tag vX.Y.Z; git push origin main vX.Y.Z   # 云端发布：触发 GitHub Actions release.yml 构建三平台并发 release（无需本地构建环境）
 ```

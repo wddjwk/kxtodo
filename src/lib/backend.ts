@@ -444,7 +444,8 @@ export type TransferEvent = {
     | "text"
     | "done"
     | "error"
-    | "cancelled";
+    | "cancelled"
+    | "rejected";
   index?: number;
   file?: string;
   sent?: number;

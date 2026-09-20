@@ -91,14 +91,21 @@ h1 {
   white-space: nowrap;
 }
 
+/* 搜索扫描期间跟在标题后的提示（v0.8.6 需求 1）：结果还在分片扫，别当成最终清单 */
+.search-scanning {
+  flex: 0 0 auto;
+  color: var(--text-dim, #8b929e);
+  font-size: calc(var(--font-control) - 2px);
+  white-space: nowrap;
+}
+
 .header-actions {
   position: absolute;
   top: 2px;
   right: 0;
   display: flex;
   flex: 0 0 auto;
-  gap: 16px;
-  z-index: 1001;
+  gap: 16px;  z-index: 1001;
 }
 
 .header-actions > button {
@@ -235,6 +242,19 @@ h1 {
   background: color-mix(in srgb, var(--accent, #2564cf) 86%, #000000);
 }
 
+/* 危险动作变体（v0.8.6 需求 5.5：「下线」这类按钮要有一致的危险配色，
+   不许为它写一个无类的裸按钮）。与 `.settings-button.danger` 同一套色。 */
+.menu-action-button.danger {
+  border-color: #f0d2cc;
+  color: #c0392b;
+}
+
+.menu-action-button.danger:hover,
+.menu-action-button.danger:focus-visible {
+  border-color: #e6b8b0;
+  background: #fdecea;
+}
+
 .color-grid .palette-button {
   border: 1px solid #e0e0e0;
   background: conic-gradient(from 0deg, #ff6b6b, #ffd93d, #6bcb77, #4d96ff, #9b59b6, #ff6b6b);
@@ -275,9 +295,11 @@ h1 {
   align-items: center;
 }
 
-.preset-color-line input[type="color"] {
+/* 预设颜色那块色块（v0.8.6 需求 11 起是取色盘按钮，不再是原生 input） */
+.preset-color-line .ui-color-picker {
+  width: 42px;
   height: 34px;
-  padding: 2px;
+  border-radius: 10px;
 }
 
 .preset-editor-actions {
@@ -1125,6 +1147,13 @@ h1 {
 .task-date-popover {
   position: fixed;
   z-index: 2200;
+  /* 落位之前藏着：量尺寸要等双 rAF（首帧日历格子还没定宽），
+     不藏的话会先在错位置闪一帧 */
+  visibility: hidden;
+}
+
+.task-date-popover.placed {
+  visibility: visible;
 }
 
 .markdown-body h1 {
@@ -2198,7 +2227,10 @@ h1 {
 /* ---------- 年月选择器（各处「‹ 2026年9月 ›」点开来就是它） ---------- */
 
 .month-picker {
-  width: 240px;
+  /* 宽度**按字号自适应**（v0.8.6 需求 7）：写死 240px 时，大字号下四个格平均
+     五十来像素，「10月 / 11月 / 12月」的「月」字被挤到第二行。下限 240 保证
+     默认字号下与从前一模一样，字号越大面板越宽。 */
+  width: max(240px, calc(var(--font-control) * 13));
   padding: 10px;
   border: 1px solid #ececec;
   border-radius: 12px;
@@ -2240,6 +2272,7 @@ h1 {
 }
 
 .month-picker-grid .mp-cell {
+  width: 100%;
   padding: 8px 0;
   border: 0;
   border-radius: 8px;
@@ -2247,6 +2280,8 @@ h1 {
   color: #333333;
   font-size: calc(var(--font-control) - 5px);
   font-variant-numeric: tabular-nums;
+  /* 「12月」是一个整体：数字与「月」字之间绝不允许换行（v0.8.6 需求 7 的主修） */
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -2284,6 +2319,10 @@ h1 {
 /* 内联进日历时不要第二层壳（与 .task-menu-date .date-picker 同一条思路） */
 .date-picker .month-picker {
   width: auto;
+  /* 内联进日历时**与日历同宽**（228 = .date-picker-grid 的定宽口径，v0.8.6 需求 9 的
+     适配结论）：切到年月面板再切回来时面板宽度不变；年月格子靠 `white-space: nowrap`
+     保证「10月 / 11月 / 12月」不换行，而不是靠把面板撑宽。 */
+  min-width: 228px;
   border: 0;
   padding: 0;
   background: transparent;
@@ -2580,17 +2619,10 @@ h1 {
 }
 
 /* 色盘：<input type=color> 铺满整颗胶囊，点哪儿都出系统调色板 */
-.tag-color-custom input[type="color"] {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  padding: 0;
-  border: 0;
-  border-radius: inherit;
-  background: transparent;
+/* v0.8.6 需求 11：自定义色那一枚从「藏起来的原生 input」改成取色盘按钮——
+   它是 button 了，样式由 .tag-color-pill 自己承担，这里只剩「怎么被点」的语义 */
+.tag-color-pill.tag-color-custom {
   cursor: pointer;
-  opacity: 0;
 }
 
 /* 色盘那枚胶囊：没选过色时是炫彩渐变（一眼看出「这里是自选色」），

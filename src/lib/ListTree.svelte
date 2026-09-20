@@ -6,7 +6,13 @@
   import { longpress, isLongPressSuppressed } from "./longpress";
   import type { AppNode } from "./types";
   import type { TreeDropPosition, TreeHover } from "./nodes";
-  import { clearTreeDropTarget, setTreeDropRootEnd, setTreeDropTarget, treeDropState } from "./listTreeDrag";
+  import {
+    contiguousZones, DRAG_BAND_PX, keepsPreviousDecision, positionInRow, scaleOf, settledTop, zoneAt,
+    type DragPosition, type DragZone
+  } from "./dragHit";
+  import {
+    clearTreeDropTarget, registerTreeRow, setTreeDropRootEnd, setTreeDropTarget, treeDropState, treeRowElements
+  } from "./listTreeDrag";
   import IconGlyph from "./IconGlyph.svelte";
 
   type DropPosition = TreeDropPosition;
@@ -58,6 +64,14 @@
   let hoverExpandTarget = "";
   /** 拖动中最近一次指针位置（自动滚动时行在指针下走，得拿它重算落点） */
   let lastPointer: { x: number; y: number } | null = null;
+  /** 落点判定的 rAF 句柄（一帧最多判一次） */
+  let hoverFrame = 0;
+  /** 当前决策（迟滞判定的「上一轮」）：行 id 与该行之内的位置 */
+  let hoverTargetId: string | null = null;
+  let hoverPosition: DragPosition | null = null;
+  /** 上一次「按几何重算」时用的那一行几何与指针位置：用来分辨「布局在动」与「用户在动」 */
+  let hoverZone: { key: string; top: number; bottom: number } | null = null;
+  let hoverPointerY = 0;
   /** 最近一次派发出去的悬停状态：同样的话不重复派发 */
   let lastHoverKey = "";
 
@@ -168,15 +182,25 @@
     };
   }
 
-  function positionFromClientY(clientY: number, row: HTMLElement, target: AppNode): DropPosition {
-    const rect = row.getBoundingClientRect();
-    const ratio = (clientY - rect.top) / Math.max(1, rect.height);
-    if (target.kind === "category") {
-      if (ratio < 0.25) return "before";
-      if (ratio > 0.75) return "after";
-      return "inside";
-    }
-    return ratio < 0.5 ? "before" : "after";
+  /**
+   * 行元素登记（落点判定要跨实例取「布局位置」，见 listTreeDrag 的说明）。
+   * action 的 `update` 在 id 变化时重新登记——each 块 keyed by id，理论上不会变，
+   * 但别留一个「元素换了 id 却还挂在旧 id 下」的隐患。
+   */
+  function trackRow(element: HTMLElement, id: string): { update(next: string): void; destroy(): void } {
+    let current = id;
+    let release = registerTreeRow(current, element);
+    return {
+      update(next: string) {
+        if (next === current) return;
+        release();
+        current = next;
+        release = registerTreeRow(current, element);
+      },
+      destroy() {
+        release();
+      }
+    };
   }
 
   function handlePointerMove(event: PointerEvent): void {
@@ -194,38 +218,118 @@
     event.preventDefault();
     lastPointer = { x: event.clientX, y: event.clientY };
     autoScroll(event.clientY);
-    updateHover(event.clientX, event.clientY);
+    scheduleHover();
   }
 
   /** 自动滚动会把行从指针底下挪走：滚动一次就按最后指针位置重算落点 */
   function handleDragScroll(): void {
     if (!pointerDrag?.active || !lastPointer) return;
-    updateHover(lastPointer.x, lastPointer.y);
+    scheduleHover();
+  }
+
+  /**
+   * 一帧最多判定一次（v0.8.6 需求 2「预览排序 rAF 合并」）：pointermove 在部分设备上
+   * 一帧能来好几条，而每次判定都会读一圈 rect（强制布局）并可能触发预览重排。
+   */
+  function scheduleHover(): void {
+    if (hoverFrame !== 0 || !lastPointer) return;
+    hoverFrame = requestAnimationFrame(() => {
+      hoverFrame = 0;
+      if (!pointerDrag?.active || !lastPointer) return;
+      updateHover(lastPointer.x, lastPointer.y);
+    });
+  }
+
+  function cancelHoverFrame(): void {
+    if (hoverFrame === 0) return;
+    cancelAnimationFrame(hoverFrame);
+    hoverFrame = 0;
+  }
+  /**
+   * 落点判定（v0.8.6 需求 2）：
+   * - 位置一律取**布局位置**（`settledTop` 把 flip 的半路 transform 减掉）——实时矩形
+   *   在行让位动画期间互相不自洽，用它判定会 hover 振荡、整棵树反复 flip；
+   * - 与上一轮决策之间走迟滞带（`zoneAt` / `positionInRow`）：越过边界 `band/2` 才换；
+   * - 整个判定合并到 rAF：指针事件与自动滚动都只记录位置，一帧最多判一次、派发一次。
+   */
+  function buildZones(): { zones: DragZone[]; byId: Map<string, AppNode>; scale: number } {
+    const scale = scaleOf(scrollContainer ?? document.documentElement);
+    const zones: DragZone[] = [];
+    const byId = new Map<string, AppNode>();
+    for (const [id, element] of treeRowElements()) {
+      // 收起态子树是**挂载但被裁到 0 高**的（高度动画的代价）：它们的行有布局位置、
+      // 会和后面的行重叠，落点判定必须把它们排除，否则会命中看不见的行。
+      if (element.closest(".tree-children:not(.open)")) continue;
+      const target = nodes.find((node) => node.id === id);
+      if (!target || target.kind === "system") continue;
+      const top = settledTop(element, scale);
+      // **被拖的那一行要留在 zones 里**（v0.8.5 需求 29 的纪律，别改成排除）：
+      // 行实时让位之后它就在指针下方，排除掉就出现一个「没有 zone 的空档」，
+      // 指针落在空档里会被当成空白区清掉落点——行弹回原位、下一帧又命中，来回抖。
+      // 命中自己时保持现落点，在 updateHover 里判。
+      zones.push({ key: id, top, bottom: top + element.offsetHeight * scale });
+      byId.set(id, target);
+    }
+    zones.sort((a, b) => a.top - b.top);
+    return { zones, byId, scale };
   }
 
   function updateHover(clientX: number, clientY: number): void {
     if (!pointerDrag) return;
-    const targetElement = document.elementFromPoint(clientX, clientY);
-    const row = targetElement?.closest<HTMLElement>(".tree-row[data-node-id]");
-    const targetId = row?.dataset.nodeId ?? "";
-    const target = nodes.find((node) => node.id === targetId);
-    if (row && target && target.id === pointerDrag.id) {
-      // 指针正落在被拖的那一行身上（行实时让位之后它就在指针下方）：**保持现落点**。
-      // 若在这里按「拖到自己」清空，行会弹回原位、下一帧又命中，来回抖。
+    const { zones, byId } = buildZones();
+    const lastKey = hoverTargetId;
+    // 落点用**连成一片**的分区：行与行之间有 2px 缝隙，严格按 span 判定会掉进缝里
+    // 被当成「空白区」（落点被清掉 / 变成拖到末尾），拖动经过缝隙时整棵树乱跳。
+    const key = zoneAt(contiguousZones(zones), clientY, lastKey, DRAG_BAND_PX);
+    if (key === pointerDrag.id) {
+      // 指针正落在被拖的那一行身上（行实时让位之后它就在指针下方）：**保持现落点**
       return;
     }
-    if (!row || !target || target.kind === "system") {
-      // 落在空白区域：拖到列表末尾（root）
-      if (targetElement?.closest(".custom-nav") && !row) {
+    if (!key) {
+      // 落在空白区域：拖到列表末尾（root）；不在列表里则什么都不做
+      const element = document.elementFromPoint(clientX, clientY);
+      if (element?.closest(".custom-nav")) {
+        hoverTargetId = null;
+        hoverPosition = null;
+        hoverZone = null;
         setRootEndTarget();
       } else {
+        hoverTargetId = null;
+        hoverPosition = null;
+        hoverZone = null;
         clearDropTarget();
       }
       return;
     }
-    const position = positionFromClientY(clientY, row, target);
-    setTreeDropTarget(target.id, position);
-    reportHover({ over: "node", targetId: target.id, position });
+    // 行内位置判定用**行自己的真实边界**（连成一片的边界已经把缝隙算给了邻居）
+    const zone = zones.find((item) => item.key === key)!;
+    const target = byId.get(key)!;
+    // 行动了、指针没动 = 是我们自己的预览让位在动它（不是用户在动）：保持现判。
+    // 少了这条，瞄准分组头中部会在让位之后被判成「插到分组后面」，行来回闪。
+    if (
+      hoverZone?.key === key &&
+      hoverPosition !== null &&
+      keepsPreviousDecision({
+        pointerY: clientY,
+        lastPointerY: hoverPointerY,
+        rowTop: zone.top,
+        lastRowTop: hoverZone.top,
+        band: DRAG_BAND_PX
+      })
+    ) {
+      setTreeDropTarget(key, hoverPosition);
+      reportHover({ over: "node", targetId: key, position: hoverPosition });
+      scheduleHoverExpand(target);
+      return;
+    }
+    const last = hoverTargetId === key ? hoverPosition : null;
+    const position = positionInRow(zone, clientY, last, DRAG_BAND_PX, target.kind === "category");
+    hoverTargetId = key;
+    hoverPosition = position;
+    hoverZone = { key, top: zone.top, bottom: zone.bottom };
+    hoverPointerY = clientY;
+    setTreeDropTarget(key, position);
+    reportHover({ over: "node", targetId: key, position });
     scheduleHoverExpand(target);
   }
 
@@ -246,6 +350,9 @@
     hoverExpandTimer = window.setTimeout(() => {
       dispatch("toggleCategory", target.id);
       clearHoverExpand();
+      // 悬停自动展开改了行数与位置：上一轮的行内位置不再有意义，按新布局重判
+      hoverPosition = null;
+      lastPointer && scheduleHover();
     }, HOVER_EXPAND_MS);
   }
 
@@ -310,6 +417,10 @@
     pointerDrag = null;
     scrollContainer = null;
     lastPointer = null;
+    hoverTargetId = null;
+    hoverPosition = null;
+    hoverZone = null;
+    cancelHoverFrame();
     clearHoverExpand();
   }
 
@@ -342,6 +453,7 @@
       data-node-id={node.id}
       data-level={level}
       style={rowStyle(level)}
+      use:trackRow={node.id}
       use:longpress={handleRowLongPress(node)}
       on:pointerdown={(event) => handlePointerDown(event, node)}
       on:click={(event) => handleClick(event, node)}
@@ -389,30 +501,38 @@
         <span class="count-pill">{counts[node.id]}</span>
       {/if}
     </div>
-    {#if node.kind === "category" && !node.collapsed}
-      <svelte:self
-        {nodes}
-        parentId={node.id}
-        {selectedNodeId}
-        {counts}
-        {showCategoryCounts}
-        level={level + 1}
-        {renamingId}
-        {renameDraft}
-        {draggingId}
-        on:selectEntry={(event) => dispatch("selectEntry", event.detail)}
-        on:toggleCategory={(event) => dispatch("toggleCategory", event.detail)}
-        on:renameInput={(event) => dispatch("renameInput", event.detail)}
-        on:renameCommit={(event) => dispatch("renameCommit", event.detail)}
-        on:openMenu={(event) => dispatch("openMenu", event.detail)}
-        on:closeMenu={() => dispatch("closeMenu")}
-        on:pickIcon={(event) => dispatch("pickIcon", event.detail)}
-        on:dragStart={(event) => dispatch("dragStart", event.detail)}
-        on:dragHover={(event) => dispatch("dragHover", event.detail)}
-        on:dropNode={(event) => dispatch("dropNode", event.detail)}
-        on:dropRootEnd={(event) => dispatch("dropRootEnd", event.detail)}
-        on:dragEnd={() => dispatch("dragEnd")}
-      />
+    {#if node.kind === "category"}
+      <!-- 子树容器做**高度动画**（v0.8.6 需求 2）：早先 `{#if !collapsed}` 直接把子树
+           挂上去，新内容瞬间占满高度、兄弟行再慢慢 flip 下去——「先盖住、再挪走」。
+           现在收起态也挂载（被裁到 0 高：不占位、不可命中），展开/收起走
+           `grid-template-rows: 0fr → 1fr`，时长与缓动跟兄弟行的 flip 对齐。 -->
+      <div class="tree-children" class:open={!node.collapsed}>
+        <div class="tree-children-inner">
+          <svelte:self
+            {nodes}
+            parentId={node.id}
+            {selectedNodeId}
+            {counts}
+            {showCategoryCounts}
+            level={level + 1}
+            {renamingId}
+            {renameDraft}
+            {draggingId}
+            on:selectEntry={(event) => dispatch("selectEntry", event.detail)}
+            on:toggleCategory={(event) => dispatch("toggleCategory", event.detail)}
+            on:renameInput={(event) => dispatch("renameInput", event.detail)}
+            on:renameCommit={(event) => dispatch("renameCommit", event.detail)}
+            on:openMenu={(event) => dispatch("openMenu", event.detail)}
+            on:closeMenu={() => dispatch("closeMenu")}
+            on:pickIcon={(event) => dispatch("pickIcon", event.detail)}
+            on:dragStart={(event) => dispatch("dragStart", event.detail)}
+            on:dragHover={(event) => dispatch("dragHover", event.detail)}
+            on:dropNode={(event) => dispatch("dropNode", event.detail)}
+            on:dropRootEnd={(event) => dispatch("dropRootEnd", event.detail)}
+            on:dragEnd={() => dispatch("dragEnd")}
+          />
+        </div>
+      </div>
     {/if}
   </div>
 {/each}

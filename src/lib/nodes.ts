@@ -1,7 +1,5 @@
-import type { AppNode, AppState, CardStyle, DiaryEntry, LedgerBook, ListBackground, SearchHit, Task } from "./types";
+import type { AppNode, AppState, CardStyle, DiaryEntry, LedgerBook, ListBackground, Task } from "./types";
 import { defaultBackground, emptySchedulerState } from "./defaults";
-import { filterDiaries } from "./diary";
-import { filterLedgerEntries } from "./ledger";
 
 export function descendantEntryIds(rootId: string, nodes: AppNode[]): Set<string> {
   const ids = new Set<string>();
@@ -112,51 +110,39 @@ export function buildListCounts(state: AppState): Record<string, number> {
   return counts;
 }
 
+/**
+ * 预折叠索引（v0.8.6 需求 1）：任务正文的 lowercase 串，按对象身份缓存。
+ * 任务所属**条目名**不进这条串——条目改名只动 `state.nodes`、任务对象的身份不变，
+ * 缓进来的名字会永久过期。名字命中改走 `matchingNodeIds`（条目数量小，按查询现算）。
+ */
+const taskFolds = new WeakMap<Task, string>();
+
+export function taskFold(task: Task): string {
+  const cached = taskFolds.get(task);
+  if (cached !== undefined) return cached;
+  const folded = task.markdown.toLowerCase();
+  taskFolds.set(task, folded);
+  return folded;
+}
+
+/** 条目名命中查询的那些条目 id（任务的搜索分支与扫描器共用这一份）。 */
+export function matchingNodeIds(state: AppState, needle: string): Set<string> {
+  const ids = new Set<string>();
+  if (!needle) return ids;
+  for (const node of state.nodes) {
+    if (node.name.toLowerCase().includes(needle)) ids.add(node.id);
+  }
+  return ids;
+}
+
 export function buildVisibleTasks(state: AppState, node: AppNode | undefined, queryValue: string): Task[] {
   const query = queryValue.trim().toLowerCase();
   if (query) {
-    // 搜索时每个任务都要回查它所属条目的名字：先建一次索引，别在 filter 里线性 find
-    const nodeById = new Map(state.nodes.map((item) => [item.id, item]));
-    return state.tasks.filter((task) => {
-      const taskNode = nodeById.get(task.nodeId);
-      return task.markdown.toLowerCase().includes(query) || taskNode?.name.toLowerCase().includes(query);
-    });
+    const nameHits = matchingNodeIds(state, query);
+    return state.tasks.filter((task) => taskFold(task).includes(query) || nameHits.has(task.nodeId));
   }
   if (!node) return [];
   return tasksForNode(node, state.tasks, state.nodes);
-}
-
-/**
- * 全局搜索的混排结果：任务（含已完成）、日记与记账按「最近改动」排在一条列表里。
- * 匹配规则复用各自那条（任务的 `buildVisibleTasks`、日记的 `filterDiaries`、
- * 记账的 `filterLedgerEntries`），不另写一份。
- */
-export function buildSearchHits(state: AppState, diaries: DiaryEntry[], ledger: LedgerBook, query: string): SearchHit[] {
-  if (!query.trim()) return [];
-  const cardStyleByNode = new Map<string, CardStyle>(
-    state.nodes.filter((node) => node.cardStyle === "card").map((node) => [node.id, "card"])
-  );
-  const hits: SearchHit[] = [
-    ...buildVisibleTasks(state, undefined, query).map((task) => ({
-      kind: "task" as const,
-      key: `task-${task.id}`,
-      task,
-      cardStyle: cardStyleByNode.get(task.nodeId) ?? ("todo" as CardStyle)
-    })),
-    ...filterDiaries(diaries, query).map((entry) => ({
-      kind: "diary" as const,
-      key: `diary-${entry.id}`,
-      entry
-    })),
-    ...filterLedgerEntries(ledger, query).map((entry) => ({
-      kind: "ledger" as const,
-      key: `ledger-${entry.id}`,
-      entry
-    }))
-  ];
-  const touched = (item: { updatedAt?: string; createdAt: string }): string => item.updatedAt || item.createdAt;
-  const stampOf = (hit: SearchHit): string => (hit.kind === "task" ? touched(hit.task) : touched(hit.entry));
-  return hits.sort((a, b) => stampOf(b).localeCompare(stampOf(a)));
 }
 
 /** 拖动落点的三种语义：插到目标前 / 插到目标后 / 移入目标（目标须是分组） */

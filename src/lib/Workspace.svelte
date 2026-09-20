@@ -7,7 +7,7 @@
   } from "@lucide/svelte";
   import {
     appState, appSettings, showToast,
-    searchQuery, searchHits, selectedNode, visibleTasks, selectedBackground,
+    searchQuery, searchHits, searchScanning, selectedNode, visibleTasks, selectedBackground,
     accent, isSearching, todayIso, yesterdayIso, dateOnly,
     taskEmojiPicker, editorTaskId, editorDraftNode, diaryEditor, diaryEntries, ledgerData, ledgerEditor,
     fileToDataUrl, weekStart
@@ -49,7 +49,7 @@
   import { calendarWeekdayHeaders } from "./diary";
   import { createBackGuard, isMobile, mobileView } from "./platform";
   import { caps } from "./capabilities";
-  import type { AppNode, CardStyle, ReminderRule, TagColor, Task } from "./types";
+  import type { AppNode, CardStyle, ReminderRule, SearchHit, TagColor, Task } from "./types";
 
   // 「已完成」区显隐偏好：默认折叠，用户配置过就按视图记住（本机 UI 状态，不进同步）
   const COMPLETED_OPEN_KEY = "kxtodo-completed-open";
@@ -164,6 +164,13 @@
     showHeaderMenu = false;
     showPlannedGroups = false;
   }
+
+  /**
+   * 被整页视图盖住（v0.8.6 需求 3）：日记/记账/工具箱改成不透明覆盖之后，工作区仍在
+   * 树上（返回零闪烁的代价）——加 `inert` 摘出可访问性与交互；旧 WebKit 由 mobile.css
+   * 的 `visibility: hidden` 兜底。
+   */
+  $: coveredByFullPage = $isMobile && ($mobileView === "diary" || $mobileView === "ledger" || $mobileView === "toolbox");
 
   function handlePanelKeydown(event: KeyboardEvent): void {
     if (!showHeaderMenu && !showPlannedGroups) return;
@@ -829,7 +836,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <svelte:window on:keydown={handlePanelKeydown} />
 
-<main class="workspace" style={mainStyle}>
+<main class="workspace" style={mainStyle} inert={coveredByFullPage}>
   <section class="list-header">
     <div>
       <MobileBack />
@@ -852,6 +859,10 @@
         />
       {:else}
         <h1>{$isSearching ? `搜索结果：${$searchQuery}` : $selectedNode?.name ?? "KXToDo"}</h1>
+        {#if $isSearching && $searchScanning}
+          <!-- 扫描在后台分片跑，结果还没定稿：给个明示，别让人以为「就这几条」 -->
+          <span class="search-scanning">搜索中…</span>
+        {/if}
       {/if}
     </div>
     <div class="header-actions" on:click|stopPropagation>
@@ -1101,47 +1112,57 @@
       </div>
     {/if}
     {#if $isSearching}
-      <!-- 全局搜索：任务卡（todo / 一般）、日记卡与记账卡按「最近改动」混排在一条列表里 -->
-      {#each $searchHits as hit (hit.key)}
-        {#if hit.kind === "task"}
-          <TaskCard
-            task={hit.task}
-            nodeId={hit.task.nodeId}
-            cardStyle={hit.cardStyle}
-            selected={taskMenu?.taskId === hit.task.id}
-            on:toggle={(event) => toggleCompletion(event.detail)}
-            on:expand={(event) => toggleTaskExpansion(event.detail.id, event.detail.expanded)}
-            on:measure={handleCardMeasure}
-            on:edit={(event) => openTaskEditor(event.detail)}
-            on:context={openTaskMenu}
-            on:openLink={openTaskLink}
-            on:setSchedule={handleTaskSetSchedule}
-            on:removeTag={(e) => removeTagFromTask(e.detail.id, e.detail.tagId)}
-            on:editTag={(e) => editTagAtTask(e.detail.id, e.detail.tagId, e.detail.text)}
-            on:removeEmoji={(e) => removeEmojiFromTask(e.detail.id, e.detail.index)}
-            on:pickEmoji={(e) => openEmojiPickerAt(e.detail.id, e.detail.index)}
-          />
-        {:else if hit.kind === "diary"}
-          <DiaryCard
-            entry={hit.entry}
-            today={todayIso()}
-            selected={diaryMenu?.id === hit.entry.id}
-            on:expand={handleDiaryExpand}
-            on:edit={(event) => openDiaryEntry(event.detail)}
-            on:context={openDiaryMenu}
-            on:openLink={openTaskLink}
-          />
-        {:else}
-          <!-- 记账结果：按日期归属条目的主题色画（记账页自己的 accent） -->
-          <div class="search-hit" style={`--accent: ${ledgerAccentColor}`}>
-            <LedgerEntryCard
-              book={$ledgerData}
-              entry={hit.entry}
-              on:edit={(event) => openLedgerEntry(event.detail)}
+      <!-- 全局搜索：任务卡（todo / 一般）、日记卡与记账卡按「最近改动」混排在一条列表里。
+           结果走 VirtualStack（v0.8.6 需求 1）：命中封顶 200 条、只有视口附近的行在树上。 -->
+      <VirtualStack
+        items={$searchHits}
+        keyOf={(hit) => (hit as SearchHit).key}
+        scroller={listScrollEl}
+        estimate={84}
+        overscan={10}
+      >
+        <svelte:fragment slot="item" let:row>
+          {@const hit = row as SearchHit}
+          {#if hit.kind === "task"}
+            <TaskCard
+              task={hit.task}
+              nodeId={hit.task.nodeId}
+              cardStyle={hit.cardStyle}
+              selected={taskMenu?.taskId === hit.task.id}
+              on:toggle={(event) => toggleCompletion(event.detail)}
+              on:expand={(event) => toggleTaskExpansion(event.detail.id, event.detail.expanded)}
+              on:measure={handleCardMeasure}
+              on:edit={(event) => openTaskEditor(event.detail)}
+              on:context={openTaskMenu}
+              on:openLink={openTaskLink}
+              on:setSchedule={handleTaskSetSchedule}
+              on:removeTag={(e) => removeTagFromTask(e.detail.id, e.detail.tagId)}
+              on:editTag={(e) => editTagAtTask(e.detail.id, e.detail.tagId, e.detail.text)}
+              on:removeEmoji={(e) => removeEmojiFromTask(e.detail.id, e.detail.index)}
+              on:pickEmoji={(e) => openEmojiPickerAt(e.detail.id, e.detail.index)}
             />
-          </div>
-        {/if}
-      {/each}
+          {:else if hit.kind === "diary"}
+            <DiaryCard
+              entry={hit.entry}
+              today={todayIso()}
+              selected={diaryMenu?.id === hit.entry.id}
+              on:expand={handleDiaryExpand}
+              on:edit={(event) => openDiaryEntry(event.detail)}
+              on:context={openDiaryMenu}
+              on:openLink={openTaskLink}
+            />
+          {:else}
+            <!-- 记账结果：按日期归属条目的主题色画（记账页自己的 accent） -->
+            <div class="search-hit" style={`--accent: ${ledgerAccentColor}`}>
+              <LedgerEntryCard
+                book={$ledgerData}
+                entry={hit.entry}
+                on:edit={(event) => openLedgerEntry(event.detail)}
+              />
+            </div>
+          {/if}
+        </svelte:fragment>
+      </VirtualStack>
     {:else}
     <!-- 任务一多（>100）就窗口化（v0.8.4 需求 5）：只有视口附近那几十张卡在树上，
          公式与日记列表同一套（VirtualStack / windowing.ts）。100 以内全量直出，
@@ -1216,6 +1237,9 @@
 
     {#if $isSearching ? $searchHits.length === 0 : incompleteTasks.length === 0 && completedTasks.length === 0}
       <div class="empty-state">
+        {#if $isSearching && $searchScanning}
+          <strong class="search-progress">搜索中…</strong>
+        {:else}
         <strong>{$isSearching
           ? "没有搜索结果"
           : isMyDayHistory
@@ -1225,6 +1249,7 @@
               : "这个条目还没有内容"}</strong>
         {#if !isMyDayHistory && !(isPlanned && plannedGroup !== "all")}
           <span>在下方输入 Markdown，按 Enter 添加；Shift + Enter 换行。</span>
+        {/if}
         {/if}
       </div>
     {/if}

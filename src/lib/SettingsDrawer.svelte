@@ -5,6 +5,7 @@
     syncConnection, nextSyncAt
   } from "./stores";
   import { setConfig as setConfigAction } from "./actions";
+  import { openColorPicker } from "./colorPickerPanel";
   import {
     syncPair as syncPairAction,
     syncStatus as syncStatusAction,
@@ -189,7 +190,6 @@
   // ---- 新建分组默认外观（appearance.newNodeDefaults）----
 
   let newNodeImageInput: HTMLInputElement;
-  let newNodeColorInput: HTMLInputElement;
   /** 透明度条拖动期间用本地草稿：每格都写一次设置文件太吵，change 时才提交 */
   let newNodeOpacityLive = false;
   let newNodeOpacityValue = 28;
@@ -201,6 +201,33 @@
   $: newNodePresets = $appSettings.appearance.themePresets.length
     ? $appSettings.appearance.themePresets
     : themePresets;
+
+  /**
+   * 取色盘草稿（v0.8.6 需求 11）：拖动/手输只改这两个活值（色块跟着变 = 预览），
+   * 「确认」才写 settings——不然拖一次色盘就是几百次 settings.json 原子写。
+   */
+  let newNodeColorDraft: { accent?: string; background?: string } = {};
+  $: newNodeAccentShown = newNodeColorDraft.accent ?? (newNodeDefaults.accent || "#2564cf");
+  $: newNodeBackgroundShown = newNodeColorDraft.background ?? (newNodeDefaults.backgroundColor || "#f4f1ea");
+
+  function openNewNodeColorPanel(kind: "accent" | "background", anchor: HTMLElement): void {
+    const initial = kind === "accent" ? newNodeAccentShown : newNodeBackgroundShown;
+    openColorPicker({
+      key: `settings:new-node-${kind}`,
+      color: initial,
+      anchor,
+      onPreview: (color) => {
+        newNodeColorDraft = { ...newNodeColorDraft, [kind]: color };
+      },
+      onConfirm: (color) => {
+        newNodeColorDraft = { ...newNodeColorDraft, [kind]: undefined };
+        updateNewNode(kind === "accent" ? "accent" : "backgroundColor", color);
+      },
+      onCancel: () => {
+        newNodeColorDraft = { ...newNodeColorDraft, [kind]: undefined };
+      }
+    });
+  }
 
   function updateNewNode<K extends keyof Settings["appearance"]["newNodeDefaults"]>(
     field: K,
@@ -1107,14 +1134,15 @@
       <div class="settings-row">
         <span>主题色</span>
         <div class="new-node-color">
-          <label class="ui-color-picker" title="新建分组的标题与控件颜色">
-            <span style={`--swatch: ${newNodeDefaults.accent || "#2564cf"}`}></span>
-            <input
-              type="color"
-              value={newNodeDefaults.accent || "#2564cf"}
-              on:change={(event) => updateNewNode("accent", event.currentTarget.value)}
-            />
-          </label>
+          <button
+            class="ui-color-picker"
+            type="button"
+            title="新建分组的标题与控件颜色"
+            data-color-anchor
+            on:click={(event) => openNewNodeColorPanel("accent", event.currentTarget)}
+          >
+            <span style={`--swatch: ${newNodeAccentShown}`}></span>
+          </button>
           <span class="ui-color-value">{newNodeDefaults.accent || "默认"}</span>
           {#if newNodeDefaults.accent}
             <button class="settings-button" type="button" on:click={() => updateNewNode("accent", "")}>清除</button>
@@ -1134,20 +1162,19 @@
               on:click={() => updateNewNode("backgroundColor", preset.color)}
             ></button>
           {/each}
-          <button type="button" class="palette-button" title="自定义颜色" on:click={() => newNodeColorInput.click()}></button>
+          <button
+            type="button"
+            class="palette-button"
+            title="自定义颜色"
+            data-color-anchor
+            on:click={(event) => openNewNodeColorPanel("background", event.currentTarget)}
+          ></button>
           {#if newNodeDefaults.backgroundColor}
             <button type="button" class="reset-bg-button" title="恢复默认配色" on:click={() => updateNewNode("backgroundColor", "")}>
               <RotateCcw size={14} />
             </button>
           {/if}
         </div>
-        <input
-          bind:this={newNodeColorInput}
-          class="hidden-file"
-          type="color"
-          value={newNodeDefaults.backgroundColor || "#f4f1ea"}
-          on:change={(event) => updateNewNode("backgroundColor", event.currentTarget.value)}
-        />
       </div>
 
       <div class="settings-subblock">

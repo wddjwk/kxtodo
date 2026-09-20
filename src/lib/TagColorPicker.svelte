@@ -6,6 +6,7 @@
    */
   import { createEventDispatcher } from "svelte";
   import { TAG_COLOR_SPECS } from "./tagColors";
+  import { openColorPicker } from "./colorPickerPanel";
   import type { TagColor } from "./types";
 
   /** 当前选中的色（`custom` 时用 `hex`） */
@@ -45,19 +46,23 @@
         on:click={() => pick(spec.color)}
       ></button>
     {/each}
-    <!-- svelte-ignore a11y_label_has_associated_control -->
-    <label
+    <button
       class="tag-color-pill tag-color-custom"
       class:selected={color === "custom"}
       style={hex ? `--pill: ${hex}` : ""}
+      type="button"
       title="自定义颜色"
-    >
-      <input
-        type="color"
-        value={hex || "#8430ce"}
-        aria-label="自定义颜色"
-        on:input={(event) => pick("custom", event.currentTarget.value)}
-      />
-    </label>
+      aria-label="自定义颜色"
+      data-color-anchor
+      on:click={(event) =>
+        openColorPicker({
+          key: "tag:custom-color",
+          color: hex || "#8430ce",
+          anchor: event.currentTarget,
+          onPreview: (color) => pick("custom", color),
+          onConfirm: (color) => pick("custom", color),
+          onCancel: () => undefined
+        })}
+    ></button>
   </div>
 </div>

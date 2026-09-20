@@ -2837,11 +2837,13 @@
   cursor: pointer;
 }
 
-.ledger-color-custom input {
+/* v0.8.6 需求 11：这里从「藏起来的原生 input」变成取色盘按钮，
+   色块是内层 span（`--dot` 给出当前色，与取色前的草稿值联动） */
+.ledger-color-custom span {
   position: absolute;
-  inset: 0;
-  opacity: 0;
-  cursor: pointer;
+  inset: 3px;
+  border-radius: 50%;
+  background: var(--dot, transparent);
 }
 
 .ledger-form-preview {

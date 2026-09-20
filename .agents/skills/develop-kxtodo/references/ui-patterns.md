@@ -169,3 +169,12 @@
 **v0.8.5 起分区成卡片**（`.transfer-page` 里的 `.transfer-card`，观感与 `.ledger-panel` 同一套卡片语言）：身份 / 收发（滑块与其下所有内容合成一块）/ 传输中 / 已完成 / 历史各一块，块间 14px。工具页 ⋯ 菜单在**传输工具页**额外给一段「relay 服务」（跟随同步 / 禁用 / 自定义 URL 三单选 + 输入框），写 `settings.transfer.relay`，**保存后自动重新上线一次**（relay 在 `go_online` 时固化进端点）。子页头部的标题与按钮组用 `.toolbox-sub-bar-title` / `.toolbox-sub-bar-actions`——**不能叫 `.toolbox-sub-title` / `.toolbox-sub-actions`**（工具自己的页面里已经有这两个名字，见 `invariants.md` CSS 铁律 12）。
 
 **分组树的拖动**（v0.8.5 与固定区对齐手感）：拖动中「行实时让位 + `animate:flip` + 被拖行抬起态」；落点两套语义**不能混**——命中分组头区域显示「移入」虚框（`.drop-inside`），命中间隙/上沿下沿显示插入位线（`.drop-before`/`.drop-after`）；拖到空白区是根末尾（`.tree-root-drop-line`）。实现要点：预览与落盘共用 `nodes.ts::planTreeMove`（预览顺序即提交结果）；落点状态住 `listTreeDrag.ts` 的共享 store（递归组件跨实例）；`.tree-item` 是 `animate:` 要求的唯一子元素包裹层（行 + 子树一起平移），`display:flex; column; gap:2px` 保持行距。
+
+### v0.8.6 的界面口径（改这些地方之前先读）
+
+- **工具页标题**：四个工具页统一「左 = 返回箭头 + 图标 + 工具名，右 = ⋯ 菜单」，字号 `var(--font-title)`（= uiFontSize + 18，与 Workspace `h1` 同口径）。返回箭头**两端都显示、不受系统返回键配置影响 → 不能复用 `MobileBack`**（它按 `features.mobileBack` 在桌面隐藏）；工具箱**主界面**的返回仍按系统设置走。
+- **年月面板（统计「自定义」/ 日历）**：`mp-cell` 一律 `white-space: nowrap`（「10月/11月/12月」的月字不许换行）；独立浮层宽度 `max(240px, calc(var(--font-control) * 13))`（自适应字号），内联进 `DatePicker` 时与日历同宽（`min-width: 228px`）。**日网格仍是 228 定宽**（`max(228px, ...)`）不是疏漏：几何断言「格宽 ≥ 字号 ×1.4」在大字号下依然成立。
+- **relay 服务**：一级菜单项「relay 服务 ›」+ 二级钻取（`MenuItem` 的 `submenu` 插槽），仅传输工具页渲染该菜单项；移动端自动钻入、桌面自动贴边翻转。
+- **取色盘**：12 处取色入口统一走 `ColorPickerPanel`（拖动/输入 = 草稿 + 实时预览，「确认」才落盘，「取消」/点外/Esc = 丢弃并回退）。**预设色块仍是单击即落盘**（它是离散选择，不是取色器）。
+- **扣分按钮**：危险动作用 `.menu-action-button.danger`（或 `.settings-button.danger`），不留无类裸按钮；传输助手的「离线」已改成「**下线**」。
+- **整页视图**：记账/日记/工具箱在移动端是不透明覆盖层（不是 `display:none`），底下两栏 `visibility: hidden` + `inert`。

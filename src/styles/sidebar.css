@@ -285,6 +285,24 @@
   gap: 2px;
 }
 
+/* 子树展开/收起的高度动画（v0.8.6 需求 2）：与兄弟行的 flip（150ms）同频同缓动。
+   `0fr → 1fr` 是 grid 轨道高度的插值——内容始终挂载、由内层裁切，所以收起态
+   不占位、不可命中；展开时高度是**长出来**的，不会再「先盖住再挪走」。 */
+.tree-children {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 150ms ease;
+}
+
+.tree-children.open {
+  grid-template-rows: 1fr;
+}
+
+.tree-children-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
 .tree-row {
   position: relative;
   display: flex;

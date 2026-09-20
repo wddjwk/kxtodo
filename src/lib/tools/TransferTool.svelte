@@ -18,11 +18,13 @@
     isTauriRuntime, pickAnyFiles, pickDirectory, transferListFolder, transferOutboxPath, transferSaveText,
     transferSpoolClear, transferSpoolWrite, transferStatFiles
   } from "../backend";
+  import { filePick, folderPick, joinPath, splitPathTail, spoolPick, textPick, type PickedItem } from "../transferManifest";
+  import { historyStatusStyle } from "../transferEvents";
   import {
     addPicked, applyAutoAccept, applyDeviceName, cancelSession, clearHistory, clearPicked, decideRequest,
     dismissSession, ensureTransferRuntime, goOffline, goOnline, leaveTransferPage, refreshHistory, removePicked,
     selectDevice, setCode, setSaveDir, setTab, setTransferViewOpen, startSend, transferState,
-    type PickedItem, type SendKind, type TransferSession
+    type TransferSession
   } from "../transferStore";
 
   const CODE_MIN = 8;
@@ -35,8 +37,11 @@
   $: settings = $appSettings.transfer;
   $: deviceName = settings?.deviceName ?? "";
   $: autoAccept = Boolean(settings?.autoAccept);
+  // 中间省略（头尾可见）：目录段可截断、最后一段保留（v0.8.6 需求 5.5）
+  $: saveDirParts = state.saveDir
+    ? splitPathTail(state.saveDir)
+    : { head: "", tail: "（默认保存位置）" };
 
-  let codeVisible = false;
   let deviceNameDraft = "";
   let deviceNameFocused = false;
   let textDraft = "";
@@ -91,15 +96,8 @@
       const paths = await pickAnyFiles();
       if (paths.length === 0) return;
       const stats = await transferStatFiles(paths).catch(() => []);
-      addPicked(
-        stats.map((item) => ({
-          key: `f:${item.rel}`,
-          rel: item.rel,
-          size: item.size,
-          kind: "file" as SendKind,
-          preview: item.rel.split(/[\\/]/).pop() ?? item.rel
-        }))
-      );
+      // 清单的 rel 归一为文件名 + root（绝对路径进协议会被接收端整单拒绝，v0.8.6 需求 5.1）
+      addPicked(stats.map((item) => filePick(item.rel, item.size)));
       return;
     }
     document.getElementById("transfer-file-input")?.click();
@@ -117,15 +115,7 @@
         showToast("这个文件夹里没有文件");
         return;
       }
-      addPicked([
-        {
-          key: `d:${dir}`,
-          rel: dir,
-          size: items.reduce((sum, item) => sum + item.size, 0),
-          kind: "folder",
-          preview: dir.split(/[\\/]/).filter(Boolean).pop() ?? dir
-        }
-      ]);
+      addPicked([folderPick(dir, items.reduce((sum, item) => sum + item.size, 0))]);
     } catch (error) {
       showToast(`读取文件夹失败：${String(error)}`);
     }
@@ -142,7 +132,7 @@
       textPopOpen = false;
       return;
     }
-    addPicked([{ key: `t:${Date.now()}`, rel: text, size: text.length, kind: "text", preview: text.slice(0, 40) }]);
+    addPicked([textPick(text)]);
     textPopOpen = false;
     textDraft = "";
   }
@@ -167,7 +157,7 @@
           offset += slice.length;
         }
         const root = await transferOutboxPath();
-        addPicked([{ key: `c:${rel}`, rel: `${root}\\${rel}`, size: bytes.length, kind: "clipboard", preview: rel }]);
+        addPicked([spoolPick(root, rel, bytes.length, "clipboard")]);
         return;
       }
     } catch {
@@ -180,7 +170,7 @@
       text = "";
     }
     if (text.trim()) {
-      addPicked([{ key: `c:${Date.now()}`, rel: text, size: text.length, kind: "clipboard", preview: text.slice(0, 40) }]);
+      addPicked([textPick(text, "clipboard")]);
       return;
     }
     showToast("剪贴板里没有文本或图片");
@@ -193,13 +183,7 @@
       try {
         const listed = await transferListFolder(path);
         if (listed.length > 0) {
-          next.push({
-            key: `d:${path}`,
-            rel: path,
-            size: listed.reduce((sum, item) => sum + item.size, 0),
-            kind: "folder",
-            preview: path.split(/[\\/]/).filter(Boolean).pop() ?? path
-          });
+          next.push(folderPick(path, listed.reduce((sum, item) => sum + item.size, 0)));
           continue;
         }
       } catch {
@@ -207,15 +191,7 @@
       }
       const stats = await transferStatFiles([path]);
       const item = stats[0];
-      if (item) {
-        next.push({
-          key: `f:${path}`,
-          rel: path,
-          size: item.size,
-          kind: "file",
-          preview: path.split(/[\\/]/).pop() ?? path
-        });
-      }
+      if (item) next.push(filePick(path, item.size));
     }
     if (next.length === 0) {
       showToast("拖进来的内容为空");
@@ -238,6 +214,23 @@
     }
     const { transferOpenPath } = await import("../backend");
     await transferOpenPath(state.saveDir).catch((error: unknown) => showToast(String(error)));
+  }
+
+  /** 最后接收的那个文件的绝对路径（`done` 的 dir + `fileDone` 的 savedAs，两端各自的分隔符） */
+  function lastSavedPath(session: TransferSession): string {
+    const name = session.savedNames.at(-1);
+    return name ? joinPath(session.savedDir || state.saveDir, name) : "";
+  }
+
+  /** 移动端会话卡的「打开」：系统打开最后接收的那个文件（目录 reveal 在安卓基本不可用） */
+  async function openReceivedFile(session: TransferSession): Promise<void> {
+    const path = lastSavedPath(session);
+    if (!path) {
+      showToast("没找到刚接收的文件");
+      return;
+    }
+    const { transferOpenPath } = await import("../backend");
+    await transferOpenPath(path).catch((error: unknown) => showToast(String(error)));
   }
 
   async function copyText(text: string): Promise<void> {
@@ -303,7 +296,7 @@
           offset += bytes.length;
         }
         if (file.size === 0) await transferSpoolWrite(rel, "", false);
-        items.push({ key: `f:${root}\\${rel}`, rel: `${root}\\${rel}`, size: file.size, kind: "file", preview: rel });
+        items.push(spoolPick(root, rel, file.size));
       }
       addPicked(items);
     } catch (error) {
@@ -361,25 +354,19 @@
     </label>
     <label class="transfer-field">
       <span>配对口令</span>
-      <div class="transfer-code-row">
-        <input
-          value={state.code}
-          type={codeVisible ? "text" : "password"}
-          placeholder="输入和对方约定的密钥（至少8位）"
-          autocomplete="off"
-          on:input={(event) => setCode(event.currentTarget.value)}
-          on:keydown={(event) => { if (event.key === "Enter") void goOnline(); }}
-        />
-        <button class="transfer-eye" type="button" title={codeVisible ? "隐藏" : "显示"} on:click={() => (codeVisible = !codeVisible)}>
-          {codeVisible ? "🙈" : "👁"}
-        </button>
-      </div>
+      <input
+        value={state.code}
+        placeholder="输入和对方约定的密钥（至少8位）"
+        autocomplete="off"
+        on:input={(event) => setCode(event.currentTarget.value)}
+        on:keydown={(event) => { if (event.key === "Enter") void goOnline(); }}
+      />
     </label>
     <div class="transfer-status-line">
       <span class="transfer-dot" class:on={state.online}></span>
       <span>{state.online ? `房间在线 · ${state.devices.length} 台设备` : codeOk ? "未上线" : `口令至少 ${CODE_MIN} 位`}</span>
       {#if state.online}
-        <button class="menu-action-button" type="button" on:click={() => void goOffline()}>离线</button>
+        <button class="menu-action-button danger" type="button" on:click={() => void goOffline()}>下线</button>
       {:else}
         <button class="menu-action-button primary" type="button" disabled={!codeOk || state.busy} on:click={() => void goOnline()}>上线</button>
       {/if}
@@ -443,7 +430,7 @@
       {#if state.devices.length === 0}
         <div class="transfer-empty">
           <ShieldCheck size={18} />
-          <span>对方输完同一句口令，就会出现在这里</span>
+          <span>输入相同口令以匹配</span>
           <em>端到端加密</em>
         </div>
       {:else}
@@ -480,16 +467,24 @@
           <span>{state.online ? "待命接收中" : "还没上线"}</span>
         </div>
         <div class="transfer-save-row">
-          <span class="transfer-save-dir" title={state.saveDir}>{state.saveDir || "（默认保存位置）"}</span>
-          {#if caps.nativeFileDialogs}
-            <button class="menu-action-button" type="button" on:click={() => void chooseSaveDir()}>更改</button>
-          {/if}
-          <button class="menu-action-button" type="button" on:click={() => void openSaveDir()}>打开文件夹</button>
+          <!-- 路径中间省略（头尾都看得见）：长路径直接撑破卡片（v0.8.6 需求 5.5）。
+               按钮另起一行，桌面才给「更改」，移动端才给「打开」（打开最后接收的那个文件）。 -->
+          <span class="transfer-save-dir" title={state.saveDir}>
+            <span class="transfer-path-head">{saveDirParts.head}</span><span class="transfer-path-tail">{saveDirParts.tail}</span>
+          </span>
+          <div class="transfer-save-actions">
+            {#if caps.nativeFileDialogs}
+              <button class="menu-action-button" type="button" on:click={() => void chooseSaveDir()}>更改</button>
+              <button class="menu-action-button" type="button" on:click={() => void openSaveDir()}>打开文件夹</button>
+            {/if}
+          </div>
         </div>
         <label class="transfer-auto">
           <input type="checkbox" checked={autoAccept} on:change={() => void applyAutoAccept(!autoAccept)} />
           <span>自动接收（不再逐次确认）</span>
         </label>
+        <!-- 已知边界写清楚（v0.8.6 需求 5.4）：安卓不做前台服务保活，锁屏就是会断 -->
+        <p class="transfer-hint">传输中请保持屏幕亮着：安卓锁屏会断开连接（本版不做保活），传输完成会走系统通知。</p>
       </div>
 
       {#if state.requests.length > 0}
@@ -571,11 +566,20 @@
               {session.direction === "send" ? "发送" : "接收"}{session.state === "done" ? "完成" : session.state === "cancelled" ? "已取消" : "失败"}
             </strong>
             <em>{session.peerName || ""}{session.error ? ` · ${session.error}` : ""}</em>
+            {#if session.direction === "receive" && session.state === "error" && session.files.length > 0}
+              <!-- 失败卡也说清「已经收到了几个」（v0.8.6 需求 5.4）：不然用户无从判断要不要重传 -->
+              <em>已接收 {session.files.filter((item) => item.done).length}/{session.fileCount || session.files.length} 个文件</em>
+            {/if}
             {#if session.direction === "send" && session.retryable && session.state === "error"}
               <button class="menu-action-button" type="button" on:click={() => dismissSession(session.id)}>知道了</button>
             {/if}
             {#if session.state === "done" && session.direction === "receive"}
-              <button class="menu-action-button" type="button" on:click={() => void openSaveDir()}>打开文件夹</button>
+              {#if caps.nativeFileDialogs}
+                <button class="menu-action-button" type="button" on:click={() => void openSaveDir()}>打开文件夹</button>
+              {:else if lastSavedPath(session)}
+                <!-- 移动端「打开文件夹」基本不可用（opener reveal 目录），改开最后接收的那个文件 -->
+                <button class="menu-action-button" type="button" on:click={() => void openReceivedFile(session)}>打开</button>
+              {/if}
             {/if}
           </header>
         </article>
@@ -596,13 +600,14 @@
       {:else}
         <ul class="transfer-history-list">
           {#each state.historyEntries as entry (entry.id)}
+            {@const style = historyStatusStyle(entry.status)}
             <li>
-              <span class={entry.status === "done" ? "ok" : entry.status === "text" ? "text" : "bad"}>
-                {entry.status === "done" ? "✓" : entry.status === "text" ? "✉" : "✕"}
-              </span>
+              <!-- 三种结局各有其形（v0.8.6 需求 5.3）：完成 ✓ / 文本 ✉ / 被拒 ⊘ / 失败 ✕ -->
+              <span class={style.tone}>{style.glyph}</span>
               <strong>{entry.names?.[0] ?? (entry.status === "text" ? "文本消息" : "传输")}</strong>
               <em>{sizeText(entry.bytes)}</em>
               <em>{entry.direction === "send" ? "发给" : "来自"}{entry.peerName || "对方"}</em>
+              {#if entry.status === "rejected"}<em>已拒绝</em>{/if}
               <em>{entry.at.slice(11, 16)}</em>
             </li>
           {/each}

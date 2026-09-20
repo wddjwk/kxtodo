@@ -379,7 +379,12 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
 
   await openLedger(page);
   check("移动端记账整页", await page.$eval(".app-shell", (el) => el.classList.contains("view-ledger")));
-  check("移动端侧栏隐藏", await page.$eval(".sidebar", (el) => getComputedStyle(el).display === "none"));
+  // v0.8.6 需求 3：整页层改成不透明覆盖——侧栏不再 display:none（返回零闪烁），
+  // 而是 visibility:hidden + inert 摘出交互与可访问性
+  check(
+    "移动端侧栏被整页层盖住（visibility:hidden，不是 display:none）",
+    await page.$eval(".sidebar", (el) => getComputedStyle(el).visibility === "hidden" && getComputedStyle(el).display !== "none")
+  );
 
   await page.click(".ledger-fab");
   await page.waitForSelector(".ledger-sheet", { timeout: 8000 });

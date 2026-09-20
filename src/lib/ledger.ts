@@ -119,39 +119,66 @@ export function ledgerLookup(book: LedgerBook): LedgerLookup {
 export function filterLedgerEntries(book: LedgerBook, query: string): LedgerEntry[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return sortEntries(book.entries);
-  const lookup = ledgerLookup(book);
-  const amountNeedle = needle.replaceAll(",", "").replace(/\s+/g, "");
   // **先筛后排**：早先对全部流水做一次 sortEntries 再 filter，命中 5 条也要把 3000 笔
   // 拷贝 + 排序一遍（O(n log n)），而这一步每敲一个键就跑一次。
-  const hits = book.entries.filter((entry) => {
-    const category = entry.categoryId ? lookup.categoryById.get(entry.categoryId) : undefined;
-    const parent = category?.parentId ? lookup.categoryById.get(category.parentId) : undefined;
-    const haystack = [
-      entry.kind === "transfer" ? "转账" : "",
-      category?.name ?? "",
-      parent?.name ?? ""
-    ]
-      .join(" ")
-      .toLowerCase();
-    if (haystack.includes(needle)) return true;
-    if (entry.note.toLowerCase().includes(needle)) return true;
-    // 查询只由逗号/空格组成时 amountNeedle 是空串，而 `x.includes("")` 恒真——
-    // 不加这道门的话搜一个「,」会把整本账都列出来。
-    if (!amountNeedle) return false;
-    const amount = entry.amountCents / 100;
-    const forms = [
-      amount.toFixed(2),
-      formatCents(entry.amountCents),
-      String(amount),
-      Math.round(amount).toString()
-    ];
-    // 界面上支出画的是 `-12.34`、收入 `+12.34`（转账不带符号）：用户照着屏幕敲
-    // 带符号的查询也得能命中，而 amountCents 恒为正，光靠上面四种形态永远匹配不上。
-    const sign = entry.kind === "income" ? "+" : entry.kind === "expense" ? "-" : "";
-    if (sign) forms.push(...forms.map((form) => `${sign}${form}`));
-    return forms.some((form) => form.includes(amountNeedle));
-  });
+  const hits = book.entries.filter((entry) => ledgerMatches(book, entry, needle));
   return sortEntries(hits);
+}
+
+/**
+ * 预折叠索引（v0.8.6 需求 1）：一笔流水的「文字串」与「金额形态串」。
+ * - `text` = 转账字样 + 分类名 + 大类名 + 备注（lowercase）；
+ * - `amounts` = 金额的几种形态（12.34 / 1,234.56 / 1234 / 带符号），`\n` 分隔。
+ *
+ * 两者分开缓存是有意的：金额串里带逗号（`formatCents` 的千分位），若与文字串合并，
+ * 搜一个「,」会把所有四位数的账都列出来（正是 `amountNeedle` 那道门要挡的东西）。
+ *
+ * 外层按 `book` 身份索引：分类名住在 `book` 里，只有整本换新（任何一次账本写入）
+ * 才需要重算；同一本账下每一笔的身份是稳定的。
+ */
+export type LedgerFold = { text: string; amounts: string };
+
+const foldCache = new WeakMap<LedgerBook, WeakMap<LedgerEntry, LedgerFold>>();
+
+export function ledgerFold(book: LedgerBook, entry: LedgerEntry): LedgerFold {
+  let byEntry = foldCache.get(book);
+  if (!byEntry) {
+    byEntry = new WeakMap();
+    foldCache.set(book, byEntry);
+  }
+  const cached = byEntry.get(entry);
+  if (cached !== undefined) return cached;
+  const lookup = ledgerLookup(book);
+  const category = entry.categoryId ? lookup.categoryById.get(entry.categoryId) : undefined;
+  const parent = category?.parentId ? lookup.categoryById.get(category.parentId) : undefined;
+  const text = [entry.kind === "transfer" ? "转账" : "", category?.name ?? "", parent?.name ?? "", entry.note]
+    .join("\n")
+    .toLowerCase();
+  const amount = entry.amountCents / 100;
+  const forms = [
+    amount.toFixed(2),
+    formatCents(entry.amountCents),
+    String(amount),
+    Math.round(amount).toString()
+  ];
+  // 界面上支出画的是 `-12.34`、收入 `+12.34`（转账不带符号）：用户照着屏幕敲
+  // 带符号的查询也得能命中，而 amountCents 恒为正，光靠上面四种形态永远匹配不上。
+  const sign = entry.kind === "income" ? "+" : entry.kind === "expense" ? "-" : "";
+  if (sign) forms.push(...forms.map((form) => `${sign}${form}`));
+  const fold: LedgerFold = { text, amounts: forms.join("\n") };
+  byEntry.set(entry, fold);
+  return fold;
+}
+
+/** 搜索匹配的单一来源：`filterLedgerEntries` 与全局搜索的扫描器共用这一份。 */
+export function ledgerMatches(book: LedgerBook, entry: LedgerEntry, needle: string): boolean {
+  const fold = ledgerFold(book, entry);
+  if (fold.text.includes(needle)) return true;
+  // 查询只由逗号/空格组成时 amountNeedle 是空串，而 `x.includes("")` 恒真——
+  // 不加这道门的话搜一个「,」会把整本账都列出来。
+  const amountNeedle = needle.replaceAll(",", "").replace(/\s+/g, "");
+  if (!amountNeedle) return false;
+  return fold.amounts.includes(amountNeedle);
 }
 
 /** 一组流水（搜索结果）的收/支/结余合计——转账不计入，与统计口径一致。 */

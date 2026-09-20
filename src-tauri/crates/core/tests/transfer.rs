@@ -164,9 +164,9 @@ fn send_rejects_missing_files_and_bad_paths() {
         &offline_layout,
         "target",
         TransferPayload::Files {
-            root: None,
+            root: Some(dir.path().to_string_lossy().to_string()),
             items: vec![TransferItem {
-                rel: dir.path().join("nope.txt").to_string_lossy().to_string(),
+                rel: "nope.txt".to_string(),
                 size: 1,
             }],
         },
@@ -174,6 +174,24 @@ fn send_rejects_missing_files_and_bad_paths() {
     .err()
     .unwrap();
     assert_eq!(error.code, "TRANSFER_FILE_MISSING");
+    // 绝对路径的 rel + 没有 root：清单组装错误，连接之前就拦下（v0.8.6 需求 5.1）
+    // ——这条口径在 Windows 上曾经让桌面「选文件发送」永远失败（接收端 PATH_UNSAFE）
+    for rel in [r"C:\tmp\a.txt", r"\\server\share\a.txt", "/home/user/a.txt"] {
+        let error = transfer::send(
+            &offline_layout,
+            "target",
+            TransferPayload::Files {
+                root: None,
+                items: vec![TransferItem {
+                    rel: rel.to_string(),
+                    size: 1,
+                }],
+            },
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.code, "TRANSFER_MANIFEST_ABSOLUTE_PATH", "rel = {rel}");
+    }
     // 越界路径
     let error = transfer::send(
         &offline_layout,
@@ -550,6 +568,279 @@ fn text_message_roundtrip() {
     transfer::go_offline(&sender_layout).unwrap();
 }
 
+/// 需求 5.2：改名之后要真的重发名字记录（老实现里 `name` 一个槽既当当前名又当已发布名，
+/// `current != published` 恒假，republish 是死代码）。这里用一个**新来的观察者**验证——
+/// 它没有名字缓存，看到的就是房间里真正发布着的名字。
+#[test]
+fn renamed_device_republishes_its_name() {
+    let directory_url = start_mock_pkarr();
+    let save = tempfile::tempdir().unwrap();
+
+    let device = Recorder::default();
+    let device_root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(device_root.path().join("runtime")).unwrap();
+    let device_layout = Layout::new(device_root.path().to_path_buf());
+    let info = transfer::go_online(
+        device.sink(),
+        &device_layout,
+        CODE,
+        save.path(),
+        "旧名字",
+        false,
+        net(&directory_url),
+    )
+    .expect("设备上线");
+    let device_id = info["deviceId"].as_str().unwrap().to_string();
+    // 改名（界面上的「设备名」输入框走的就是这条）
+    transfer::set_name(&device_layout, "新名字");
+    // 等一轮轮询把名字重发出去（PEER_POLL = 2 秒）
+    std::thread::sleep(Duration::from_secs(4));
+
+    // 观察者上线：设备列表里那台设备的名字应该是新的
+    let watcher = Recorder::default();
+    let watcher_root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(watcher_root.path().join("runtime")).unwrap();
+    let watcher_layout = Layout::new(watcher_root.path().to_path_buf());
+    transfer::go_online(
+        watcher.sink(),
+        &watcher_layout,
+        CODE,
+        save.path(),
+        "观察者",
+        false,
+        net(&directory_url),
+    )
+    .expect("观察者上线");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut seen_name = String::new();
+    while Instant::now() < deadline {
+        let devices = transfer::devices(&watcher_layout);
+        if let Some(found) = devices["devices"]
+            .as_array()
+            .and_then(|list| list.iter().find(|item| item["id"] == Value::String(device_id.clone())))
+        {
+            seen_name = found["name"].as_str().unwrap_or_default().to_string();
+            if seen_name == "新名字" {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert_eq!(seen_name, "新名字", "改名后对端应看到新名字");
+    transfer::go_offline(&watcher_layout).unwrap();
+    transfer::go_offline(&device_layout).unwrap();
+}
+
+/// 需求 5.2：名字为空（前端还没水合出设置就自动上线）时必须有个可读的兜底名，
+/// 否则对端卡片上只剩「未命名的设备」。
+#[test]
+fn empty_device_name_falls_back_to_default() {
+    let directory_url = start_mock_pkarr();
+    let save = tempfile::tempdir().unwrap();
+    let device = Recorder::default();
+    let device_root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(device_root.path().join("runtime")).unwrap();
+    let device_layout = Layout::new(device_root.path().to_path_buf());
+    let info = transfer::go_online(
+        device.sink(),
+        &device_layout,
+        CODE,
+        save.path(),
+        "   ",
+        false,
+        net(&directory_url),
+    )
+    .expect("空名字也要能上线");
+    let device_id = info["deviceId"].as_str().unwrap().to_string();
+
+    let watcher = Recorder::default();
+    let watcher_root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(watcher_root.path().join("runtime")).unwrap();
+    let watcher_layout = Layout::new(watcher_root.path().to_path_buf());
+    transfer::go_online(
+        watcher.sink(),
+        &watcher_layout,
+        CODE,
+        save.path(),
+        "观察者",
+        false,
+        net(&directory_url),
+    )
+    .expect("观察者上线");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut seen_name = String::new();
+    while Instant::now() < deadline {
+        let devices = transfer::devices(&watcher_layout);
+        if let Some(found) = devices["devices"]
+            .as_array()
+            .and_then(|list| list.iter().find(|item| item["id"] == Value::String(device_id.clone())))
+        {
+            seen_name = found["name"].as_str().unwrap_or_default().to_string();
+            if !seen_name.is_empty() {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(
+        seen_name.starts_with("KXToDo·"),
+        "空名字应有兜底名，实际是 {seen_name:?}"
+    );
+    transfer::go_offline(&watcher_layout).unwrap();
+    transfer::go_offline(&device_layout).unwrap();
+}
+
+/// 需求 5.3/5.4：拒绝是用户主动决定，不是错误——本端**不许**冒出
+/// `TRANSFER_REJECTED` 的 error 事件（界面就是照它凭空建出一张「接收失败」卡的），
+/// 历史记 `rejected`（与 cancelled / failed 区分），发送侧也记 `rejected`。
+#[test]
+fn rejected_request_records_rejected_without_error_event() {
+    let directory_url = start_mock_pkarr();
+    let save = tempfile::tempdir().unwrap();
+
+    // 接收侧：**关掉自动接收**，等界面（这里是测试）回话
+    let receiver = Recorder::default();
+    let receiver_root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(receiver_root.path().join("runtime")).unwrap();
+    let receiver_layout = Layout::new(receiver_root.path().to_path_buf());
+    let info = transfer::go_online(
+        receiver.sink(),
+        &receiver_layout,
+        CODE,
+        save.path(),
+        "接收机",
+        false,
+        net(&directory_url),
+    )
+    .expect("接收侧上线");
+    let receiver_id = info["deviceId"].as_str().unwrap().to_string();
+
+    let sender = Recorder::default();
+    let sender_root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(sender_root.path().join("runtime")).unwrap();
+    let sender_layout = Layout::new(sender_root.path().to_path_buf());
+    let sender_info = transfer::go_online(
+        sender.sink(),
+        &sender_layout,
+        CODE,
+        save.path(),
+        "发送机",
+        false,
+        net(&directory_url),
+    )
+    .expect("发送侧上线");
+    let _sender_id = sender_info["deviceId"].as_str().unwrap().to_string();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        let seen = transfer::devices(&sender_layout)["devices"]
+            .as_array()
+            .map(|list| list.iter().any(|item| item["id"] == Value::String(receiver_id.clone())))
+            .unwrap_or(false);
+        if seen {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    let source = tempfile::tempdir().unwrap();
+    std::fs::write(source.path().join("a.txt"), b"hello").unwrap();
+    let send_id = transfer::send(
+        &sender_layout,
+        &receiver_id,
+        TransferPayload::Files {
+            root: Some(source.path().to_string_lossy().to_string()),
+            items: vec![TransferItem {
+                rel: "a.txt".to_string(),
+                size: 5,
+            }],
+        },
+    )
+    .expect("发送应能建会话");
+
+    // 接收侧等确认卡，然后拒绝
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut request_id = String::new();
+    while Instant::now() < deadline {
+        if let Some(found) = receiver
+            .events()
+            .into_iter()
+            .find(|event| event["kind"] == "request")
+        {
+            request_id = found["sessionId"].as_str().unwrap_or_default().to_string();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(!request_id.is_empty(), "接收侧应收到 request 事件");
+    transfer::decide(&receiver_layout, &request_id, false).expect("拒绝应被受理");
+
+    // 等接收侧收尾
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < deadline {
+        if receiver
+            .events()
+            .iter()
+            .any(|event| event["kind"] == "rejected")
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let receiver_events = receiver.events();
+    assert!(
+        receiver_events.iter().any(|event| event["kind"] == "rejected"),
+        "接收侧应发一条信息性的 rejected 事件：{:?}",
+        receiver_events
+            .iter()
+            .map(|event| format!("{}/{}", event["kind"], event["code"]))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !receiver_events.iter().any(|event| {
+            event["kind"] == "error" && event["code"] == Value::String("TRANSFER_REJECTED".to_string())
+        }),
+        "拒绝不该再发 error 事件（界面会凭空建卡）：{receiver_events:?}"
+    );
+    // 接收侧历史记 rejected
+    let log = transfer::history(&receiver_layout);
+    assert_eq!(
+        log["entries"][0]["status"], "rejected",
+        "接收侧历史应记 rejected：{}",
+        log["entries"][0]
+    );
+    // 发送侧：等到失败收尾，历史同样记 rejected（不是 failed）
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        let log = transfer::history(&sender_layout);
+        if log["entries"].as_array().map(|list| !list.is_empty()).unwrap_or(false) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    let sender_log = transfer::history(&sender_layout);
+    assert_eq!(
+        sender_log["entries"][0]["status"], "rejected",
+        "发送侧历史应记 rejected：{}",
+        sender_log["entries"][0]
+    );
+    // 发送侧仍然在线（拒绝不该把会话搞下线）
+    assert_eq!(
+        transfer::status(&sender_layout)["online"],
+        Value::Bool(true)
+    );
+    // 发送侧**要**收到一条错误（它得在卡片上显示「接收方拒绝了」）
+    assert!(
+        sender.events().iter().any(|event| {
+            event["kind"] == "error" && event["code"] == Value::String("TRANSFER_REJECTED".to_string())
+        }),
+        "发送侧应当知道这次被拒了"
+    );
+    let _ = send_id;
+    transfer::go_offline(&receiver_layout).unwrap();
+    transfer::go_offline(&sender_layout).unwrap();
+}
+
+/// 服务端拒绝（口令不匹配）走的是另一条路：那是真的握手失败，仍然报错。
 #[test]
 fn rendezvous_zone_is_the_code_itself() {
     // 同一句口令在任意设备派生出同一把 rendezvous 密钥（pkarr 的 zone 就是它的公钥），
@@ -564,4 +855,106 @@ fn rendezvous_zone_is_the_code_itself() {
         transfer::room_secret(&transfer::validate_code("  kxtodo-x  ").unwrap()).public(),
         transfer::room_secret("kxtodo-x").public()
     );
+}
+
+/// 需求 5.1 的端到端验收：桌面「选文件」走的是「root = 所在目录 + rel = 文件名」，
+/// 接收端必须把文件落在**保存目录根下**，而不是把绝对路径镜像成一棵目录树。
+/// （回归前 rel 是绝对路径：Windows 端整单被 `safe_join` 拒，Linux 端镜像目录树。）
+#[test]
+fn desktop_pick_single_file_lands_flat_in_save_root() {
+    let directory_url = start_mock_pkarr();
+    let save = tempfile::tempdir().unwrap();
+
+    let receiver = Recorder::default();
+    let receiver_root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(receiver_root.path().join("runtime")).unwrap();
+    let receiver_layout = Layout::new(receiver_root.path().to_path_buf());
+    let info = transfer::go_online(
+        receiver.sink(),
+        &receiver_layout,
+        CODE,
+        save.path(),
+        "接收机",
+        true,
+        net(&directory_url),
+    )
+    .expect("接收侧上线");
+    let receiver_id = info["deviceId"].as_str().unwrap().to_string();
+
+    let sender = Recorder::default();
+    let sender_root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(sender_root.path().join("runtime")).unwrap();
+    let sender_layout = Layout::new(sender_root.path().to_path_buf());
+    transfer::go_online(
+        sender.sink(),
+        &sender_layout,
+        CODE,
+        save.path(),
+        "发送机",
+        false,
+        net(&directory_url),
+    )
+    .expect("发送侧上线");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        let seen = transfer::devices(&sender_layout)["devices"]
+            .as_array()
+            .map(|list| list.iter().any(|item| item["id"] == Value::String(receiver_id.clone())))
+            .unwrap_or(false);
+        if seen {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    // 用户从桌面选了一个位于多级目录里的文件
+    let desktop = tempfile::tempdir().unwrap();
+    let picked_dir = desktop.path().join("Users").join("me").join("Pictures");
+    std::fs::create_dir_all(&picked_dir).unwrap();
+    let photo = picked_dir.join("照片.jpg");
+    std::fs::write(&photo, b"fake-jpeg-bytes").unwrap();
+
+    let send_id = transfer::send(
+        &sender_layout,
+        &receiver_id,
+        TransferPayload::Files {
+            root: Some(picked_dir.to_string_lossy().to_string()),
+            items: vec![TransferItem {
+                rel: "照片.jpg".to_string(),
+                size: 0,
+            }],
+        },
+    )
+    .expect("发送应能建会话");
+    assert!(
+        sender.wait_for(&send_id, "done", Duration::from_secs(60)).is_some(),
+        "发送侧没等到 done：{:?}",
+        sender
+            .events()
+            .iter()
+            .map(|event| format!("{}/{}", event["kind"], event["message"]))
+            .collect::<Vec<_>>()
+    );
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        if save.path().join("照片.jpg").exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(
+        std::fs::read(save.path().join("照片.jpg")).unwrap(),
+        b"fake-jpeg-bytes",
+        "文件应落在保存目录根下"
+    );
+    // 保存目录里只能有这一个条目：绝对路径被镜像成目录树时这里会多出 Users/ 等中间层
+    let entries: Vec<String> = std::fs::read_dir(save.path())
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(entries, vec!["照片.jpg".to_string()], "不该出现镜像目录树：{entries:?}");
+
+    transfer::go_offline(&receiver_layout).unwrap();
+    transfer::go_offline(&sender_layout).unwrap();
 }

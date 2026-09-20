@@ -8,6 +8,8 @@ todo-note-data/
 release/
 src-tauri/gen/android/keystore/
 PixPin*.png
+# 视觉回归截图：本地人工辅助，不入库（权威口径是套件里的几何断言）
+test-data/*.png
 npm-debug.log*
 *.log
 .pi-subagents/

@@ -56,10 +56,15 @@
   color: var(--accent, #2564cf);
 }
 
+/* 与 Workspace 的 h1 同一口径（v0.8.6 需求 6）：工具箱与工具页的标题都跟 uiFontSize 走 */
 .toolbox-header-title {
-  font-size: calc(var(--font-control) + 4px);
+  overflow: hidden;
+  min-width: 0;
+  font-size: var(--font-title);
   font-weight: 800;
   color: #1f1f1f;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .toolbox-list {
@@ -140,9 +145,9 @@
   margin-bottom: -8px;
 }
 
-/* 子页头部里的标题与按钮组。**名字带 bar**：工具自己的页面里也有
-   `.toolbox-sub-title` / `.toolbox-sub-actions`（RandomTool / RmbTool 的操作行），
-   同名会让两边的声明互相渗透（v0.8.5 踩过一次：随机数工具的按钮被顶到「数量」行上面）。 */
+/* 子页头部里的标题与按钮组。**名字带 bar**：工具自己的页面里也有同名的操作行样式，
+   同名会让两边的声明互相渗透（v0.8.5 踩过一次：随机数工具的按钮被顶到「数量」行上面；
+   v0.8.6 需求 6 把工具内部那两行标题整个删了，这里的名字保持 bar 后缀不再有撞车风险）。 */
 .toolbox-sub-bar-title {
   display: flex;
   min-width: 0;
@@ -157,23 +162,10 @@
   gap: 4px;
 }
 
-/* relay 服务（v0.8.5 需求 31，只在传输工具页的 ⋯ 菜单里出现） */
-.relay-options {
-  display: grid;
-  gap: 6px;
-}
-
-.relay-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #4b5563;
-  font-size: calc(var(--font-control) - 4px);
-  cursor: pointer;
-}
-
-.relay-row input {
-  accent-color: var(--accent, #2564cf);
+/* relay 服务（v0.8.5 需求 31；v0.8.6 需求 10 改成二级菜单：
+   三单选 + 输入框住在子菜单里，这里是子菜单内部的排版） */
+.relay-custom {
+  padding: 2px 0 4px;
 }
 
 .relay-input {
@@ -257,15 +249,6 @@
   font-size: calc(var(--font-control) + 1px);
   font-weight: 700;
   letter-spacing: 0.02em;
-}
-
-.toolbox-sub-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: #1f2937;
-  font-size: calc(var(--font-control) - 1px);
-  font-weight: 700;
 }
 
 .toolbox-field-row {
@@ -433,34 +416,6 @@
 
 .transfer-field input:focus {
   border-color: var(--accent, #2564cf);
-}
-
-.transfer-code-row {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
-.transfer-code-row input {
-  padding-right: 38px;
-}
-
-.transfer-eye {
-  position: absolute;
-  right: 6px;
-  display: grid;
-  width: 26px;
-  height: 26px;
-  place-items: center;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  cursor: pointer;
-  line-height: 1;
-}
-
-.transfer-eye:hover {
-  background: rgb(0 0 0 / 6%);
 }
 
 .transfer-status-line {
@@ -688,8 +643,11 @@
 .transfer-empty {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 16px;
+  gap: 10px;
+  /* 空态卡片要放得下「输入相同口令以匹配 + 端到端加密」两段文案：
+     早先文案一长，绿色徽标就被挤到第二行（v0.8.6 需求 5.5） */
+  flex-wrap: wrap;
+  padding: 16px 18px;
   border: 1px dashed #dfe3e8;
   border-radius: 12px;
   color: #8a919c;
@@ -699,6 +657,7 @@
 .transfer-empty em {
   margin-left: auto;
   font-style: normal;
+  white-space: nowrap;
   color: #2f9e6e;
 }
 
@@ -745,18 +704,36 @@
 }
 
 .transfer-save-row {
-  display: flex;
-  align-items: center;
+  display: grid;
   gap: 8px;
 }
 
+/* 路径**中间省略**（头尾都可见，v0.8.6 需求 5.5）：目录段可截断、文件名段保留。
+   两端都用同一套 `calc(var(--font-*))` 口径。 */
 .transfer-save-dir {
-  overflow: hidden;
-  flex: 1;
+  display: flex;
+  min-width: 0;
   color: #6b7280;
   font-size: calc(var(--font-control) - 4px);
+}
+
+.transfer-save-dir .transfer-path-head {
+  overflow: hidden;
+  min-width: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.transfer-save-dir .transfer-path-tail {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* 「更改 / 打开文件夹」另起一行 */
+.transfer-save-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .transfer-auto {
@@ -765,6 +742,14 @@
   gap: 8px;
   color: #6b7280;
   font-size: calc(var(--font-control) - 4px);
+}
+
+/* 已知边界提示（锁定 / 保活），比正文再小一档、不抢视线 */
+.transfer-hint {
+  margin: 0;
+  color: #8a919c;
+  font-size: calc(var(--font-control) - 5px);
+  line-height: 1.5;
 }
 
 .transfer-request {
@@ -991,6 +976,8 @@
 .transfer-history-list li .ok { color: #2f9e6e; }
 .transfer-history-list li .bad { color: #d93025; }
 .transfer-history-list li .text { color: #2564cf; }
+/* 被拒绝：与「失败」分开（琥珀色），它是用户的决定而不是错误（v0.8.6 需求 5.3） */
+.transfer-history-list li .rejected { color: #b26a00; }
 
 .transfer-history-actions {
   display: flex;

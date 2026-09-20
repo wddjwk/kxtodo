@@ -16,6 +16,8 @@
   let itemEl: HTMLElement;
   let flipX = false;
   let flipY = false;
+  /** 子菜单离视口边缘至少留这么多（视觉像素） */
+  const MENU_EDGE_MARGIN = 8;
   /** 计数幂等：收起会被 onDestroy、点击别处、移动端「返回」多条路径触发，不能重复减 */
   let counted = false;
 
@@ -48,17 +50,33 @@
     closeSubmenu();
   }
 
-  /** 子菜单贴右缘展开；超出视口右/下缘时翻转。
-   * 移动端不翻转——那里是钻入式（一级隐藏，二级占据菜单位置），见 mobile.css。 */
+  /**
+   * 子菜单贴右缘展开；超出视口右/下缘时翻转。
+   * 移动端不翻转——那里是钻入式（一级隐藏，二级占据菜单位置），见 mobile.css。
+   *
+   * 翻转口径与 `popover.ts` 的四边钳制同一套纪律（v0.8.6 需求 4 顺带收口）：
+   * 翻转只能解决「右缘放不下」，窄视口下翻到左侧仍可能越左缘——再用 margin 补回来。
+   * 量到的 rect 是视觉像素（壳上有 `transform: scale`），margin 要除回逻辑像素。
+   */
   async function adjustSubmenu(): Promise<void> {
     await tick();
     if (!submenuEl) return;
     flipX = false;
     flipY = false;
+    submenuEl.style.marginLeft = "";
     await tick();
     const rect = submenuEl.getBoundingClientRect();
     flipX = rect.right > window.innerWidth - 4;
     flipY = rect.bottom > window.innerHeight - 4;
+    await tick();
+    // 限高菜单里子菜单改行内手风琴（静态定位），没有越界问题，别去动它的 margin
+    if (getComputedStyle(submenuEl).position !== "absolute") return;
+    const shifted = submenuEl.getBoundingClientRect();
+    const overflowLeft = MENU_EDGE_MARGIN - shifted.left;
+    if (overflowLeft <= 0) return;
+    const logicalWidth = submenuEl.offsetWidth;
+    const scale = logicalWidth > 0 ? shifted.width / logicalWidth : 1;
+    submenuEl.style.marginLeft = `${Math.round(overflowLeft / scale)}px`;
   }
 
   function handleClick(): void {

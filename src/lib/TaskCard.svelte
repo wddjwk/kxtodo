@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher, onDestroy } from "svelte";
+  import { createEventDispatcher, onDestroy, tick } from "svelte";
   import { Check, ChevronUp, PenLine, Plus, X } from "@lucide/svelte";
   import { collapsedMarkdownLine, hasMultipleMarkdownLines, renderInlineMarkdown, setRenderedTaskBox } from "./markdown";
   import { markdownTaskChecked, taskToggleIndex, toggleMarkdownTask } from "./markdownTasks";
@@ -14,6 +14,10 @@
   import { saveTaskMarkdown } from "./actions";
   import { isMobile as isMobileStore, touchOnly } from "./platform";
   import { uiScaleValue } from "./styles";
+  import { placePopover } from "./popover";
+  import {
+    closeDatePopover, datePopoverTaskId, hideReveals, revealEmoji, revealTag, revealedEmoji, revealedTag, toggleDatePopover
+  } from "./cardOverlays";
   import { longpress, isLongPressSuppressed } from "./longpress";
   import { markdownWire } from "./markdownControls";
   import { observeResize } from "./measureBus";
@@ -48,19 +52,29 @@
    * 220ms 是实测折中：单击几乎无感延迟，正常双击（100~250ms 间隔）仍稳。 */
   const DOUBLE_TAP_MS = 220;
 
-  let showPicker = false;
   let editingTagId = "";
   let editingTagText = "";
   let tagEditEl: HTMLInputElement;
   let dueButtonEl: HTMLButtonElement;
+  let datePanelEl: HTMLElement;
   let datePopoverStyle = "";
+  /** 落位完成前先藏起来（量尺寸要等双 rAF，见 placeDatePanel） */
+  let datePanelReady = false;
   let tapTimer: number | undefined;
   let lastTapAt = 0;
   /** 折叠态标题是否显示不全（单行但很长）——是的话这张卡片也可以展开 */
   let titleOverflow = false;
-  /** 触屏上被点了一下、露出删除叉的标签/表情（桌面靠 hover，不用它） */
-  let revealedTagId = "";
-  let revealedEmojiIndex = -1;
+  /**
+   * 「日期与提醒」浮层是**全应用单例**（v0.8.6 需求 4）：宿主 id 住在模块级 store，
+   * 同一时刻只有一张卡开着。卡片自己不再挂 window 监听——几千张卡就是几千份监听，
+   * 关闭语义统一由 `cardOverlays.ts` 的一份 document pointerdown 负责（点面板外不保存关闭）。
+   */
+  $: showPicker = $datePopoverTaskId === task.id;
+  // 关了就把「已落位」清掉：下次打开要重新走一遍量尺寸 + 落位
+  $: if (!showPicker) datePanelReady = false;
+  /** 触屏露出的删除叉同样住在模块级 store（同款理由），这里只是它的视图 */
+  $: revealedTagId = $revealedTag?.taskId === task.id ? $revealedTag.tagId : "";
+  $: revealedEmojiIndex = $revealedEmoji?.taskId === task.id ? $revealedEmoji.index : -1;
   // isMobile 是 store：当布尔直接用会永远为真，桌面端就会误走移动端手势
   $: mobile = $isMobileStore;
   // 展开态只认存储值：canExpand 是量出来的易失值（列表增减导致滚动条出现/消失、
@@ -194,30 +208,70 @@
     };
   }
 
-  /** 「日期与提醒」浮层用 fixed 定位：absolute 会被卡片/任务列表的 overflow 裁剪。
-   * fixed 在 transform 缩放的 app-shell 内相对其左上角定位，按钮的屏幕坐标
-   * 除以 scale 换算回逻辑坐标；贴近视口底部时向上翻转。 */
-  function toggleSchedulePanel(): void {
-    showPicker = !showPicker;
-    if (!showPicker || !dueButtonEl) return;
+  /**
+   * 「日期与提醒」浮层用 fixed 定位：absolute 会被卡片/任务列表的 overflow 裁剪。
+   * 定位走 `popover.ts::placePopover`（与右键菜单、三点菜单同一份几何）：优先向下、
+   * 放不下翻到锚点上方且下边缘对齐、四边钳制（v0.8.6 需求 4）。
+   * 面板还跟着滚动/缩放重新落位——fixed 浮层不会自己跟着锚点走。
+   *
+   * 量尺寸要等**双 rAF**：首帧的日历格子还没定宽（`date-picker-grid` 是定宽 228），
+   * 量早了宽度偏小、钳制算错（实测面板会从视口右边探出去 20px）。
+   * 落位之前先 `visibility: hidden`，免得在错误位置闪一帧。
+   */
+  async function placeDatePanel(): Promise<void> {
+    if (!dueButtonEl) return;
+    await tick();
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    if (!dueButtonEl || !datePanelEl) return;
     const scale = uiScaleValue($appSettings.appearance.uiScale);
     const rect = dueButtonEl.getBoundingClientRect();
-    // 面板 = 日历 + 时刻行 + 提醒行 + 页脚，比纯日历高一截；估高了只是提前向上翻转
-    const estVisualHeight = 470;
-    const openBelow = rect.bottom + estVisualHeight <= window.innerHeight;
-    const anchorEdge = openBelow ? rect.bottom + 6 : rect.top - estVisualHeight - 6;
-    const topLogical = anchorEdge / scale;
-    const rightLogical = (window.innerWidth - rect.right) / scale;
-    datePopoverStyle = `top: ${topLogical}px; right: ${rightLogical}px;`;
+    const panelRect = datePanelEl.getBoundingClientRect();
+    const placed = placePopover(
+      { x: rect.right / scale, y: rect.bottom / scale },
+      { width: panelRect.width / scale, height: Math.max(panelRect.height, datePanelEl.scrollHeight) / scale },
+      { width: window.innerWidth / scale, height: window.innerHeight / scale },
+      { xAlign: "right", gap: 6 }
+    );
+    datePopoverStyle = `top: ${placed.top}px; left: ${placed.left}px;${
+      placed.maxHeight ? ` max-height: ${placed.maxHeight}px; overflow-y: auto;` : ""
+    }`;
+    datePanelReady = true;
   }
 
+  function toggleSchedulePanel(): void {
+    // `showPicker` 是 store 派生值，这一拍还没刷新——要开就别读它，直接问 store
+    const willOpen = $datePopoverTaskId !== task.id;
+    toggleDatePopover(task.id);
+    if (willOpen) void placeDatePanel();
+  }
+
+  const followDatePanel = (): void => void placeDatePanel();
+
+  // 开着的时候才跟随（滚动/窗口变化都会让锚点挪位置）；关掉即摘，卡片上不留常驻监听
+  let following = false;
+  $: if (showPicker !== following) {
+    following = showPicker;
+    if (showPicker) {
+      window.addEventListener("scroll", followDatePanel, true);
+      window.addEventListener("resize", followDatePanel);
+    } else {
+      window.removeEventListener("scroll", followDatePanel, true);
+      window.removeEventListener("resize", followDatePanel);
+    }
+  }
+
+  onDestroy(() => {
+    window.removeEventListener("scroll", followDatePanel, true);
+    window.removeEventListener("resize", followDatePanel);
+  });
+
   function handleSchedule(patch: { dueDate: string; dueTime: string; reminders: ReminderRule[] }): void {
-    showPicker = false;
+    closeDatePopover();
     dispatch("setSchedule", { id: task.id, ...patch });
   }
 
   function handleScheduleClear(): void {
-    showPicker = false;
+    closeDatePopover();
     dispatch("setSchedule", { id: task.id, dueDate: "", dueTime: "", reminders: [] });
   }
 
@@ -355,32 +409,21 @@
    */
   function handleTagTap(tagId: string, currentText: string): void {
     if (touchOnly && revealedTagId !== tagId) {
-      revealedTagId = tagId;
-      revealedEmojiIndex = -1;
+      revealTag(task.id, tagId);
       return;
     }
-    revealedTagId = "";
+    hideReveals();
     startTagEdit(tagId, currentText);
   }
 
   /** 表情同标签：触屏第一下露叉，第二下才换表情。 */
   function handleEmojiTap(index: number): void {
     if (touchOnly && revealedEmojiIndex !== index) {
-      revealedEmojiIndex = index;
-      revealedTagId = "";
+      revealEmoji(task.id, index);
       return;
     }
-    revealedEmojiIndex = -1;
+    hideReveals();
     dispatch("pickEmoji", { id: task.id, index });
-  }
-
-  /** 点到别处收回露出的删除叉 */
-  function handleWindowPointerDown(event: PointerEvent): void {
-    if (!revealedTagId && revealedEmojiIndex < 0) return;
-    const target = event.target as HTMLElement | null;
-    if (target?.closest(".task-tag, .task-emoji-badge")) return;
-    revealedTagId = "";
-    revealedEmojiIndex = -1;
   }
 
   function commitTagEdit(): void {
@@ -395,8 +438,8 @@
   }
 </script>
 
-<svelte:window on:click={() => (showPicker = false)} on:pointerdown={handleWindowPointerDown} />
-
+<!-- 卡片级浮层与「点别处收回」都归 cardOverlays 的一份 document 监听（v0.8.6 需求 4）：
+     几千张卡不再各自挂 window 监听 -->
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <article
@@ -482,16 +525,29 @@
 
       {#if !isExpanded && task.dueDate}
         <div class="task-due-wrap">
-          <button bind:this={dueButtonEl} class="task-due-date" type="button" title="日期与提醒" on:click|stopPropagation={toggleSchedulePanel}>{formattedDate}</button>
+          <button
+            bind:this={dueButtonEl}
+            class="task-due-date"
+            type="button"
+            title="日期与提醒"
+            data-date-anchor
+            on:click|stopPropagation={toggleSchedulePanel}
+          >{formattedDate}</button>
           {#if showPicker}
-            <div class="task-date-popover" style={datePopoverStyle}>
+            <div
+              class="task-date-popover"
+              class:placed={datePanelReady}
+              bind:this={datePanelEl}
+              data-date-popover
+              style={datePopoverStyle}
+            >
               <TaskDateReminderPanel
                 dueDate={task.dueDate?.slice(0, 10) ?? ""}
                 dueTime={task.dueTime ?? ""}
                 reminders={task.reminders ?? []}
                 onSave={handleSchedule}
                 onClear={handleScheduleClear}
-                onClose={() => (showPicker = false)}
+                onClose={closeDatePopover}
               />
             </div>
           {/if}

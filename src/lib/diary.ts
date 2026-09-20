@@ -307,11 +307,25 @@ export function diaryStats(entries: DiaryEntry[], today: string): DiaryStats {
 export function filterDiaries(entries: DiaryEntry[], query: string): DiaryEntry[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return entries;
-  return entries.filter((entry) => {
-    if (entry.title.toLowerCase().includes(needle)) return true;
-    if (entry.markdown.toLowerCase().includes(needle)) return true;
-    return entry.tags.some((tag) => (tag.text ?? "").toLowerCase().includes(needle));
-  });
+  return entries.filter((entry) => diaryFold(entry).includes(needle));
+}
+
+/**
+ * 预折叠索引（v0.8.6 需求 1）：标题 + 正文 + 标签的 lowercase 拼接串。
+ * **按对象身份缓存**——日记是逐条不可变更新，改一条只产生一个新对象，
+ * 其余的折叠串在后续每次搜索里直接复用，不再对全文重新 `toLowerCase()`。
+ * 字段之间用 `\n` 分隔（用户查询里几乎没有换行，跨字段命中只在这种离谱输入下才可能）。
+ */
+const diaryFolds = new WeakMap<DiaryEntry, string>();
+
+export function diaryFold(entry: DiaryEntry): string {
+  const cached = diaryFolds.get(entry);
+  if (cached !== undefined) return cached;
+  const folded = [entry.title, entry.markdown, ...(entry.tags ?? []).map((tag) => tag.text ?? "")]
+    .join("\n")
+    .toLowerCase();
+  diaryFolds.set(entry, folded);
+  return folded;
 }
 
 /** 去掉正文的第一行非空行（没有标题时它已经被当作标题显示了，摘要不该再重复一遍）。 */

@@ -206,7 +206,21 @@ const hitKinds = await page.evaluate(() => ({
   diaries: document.querySelectorAll(".workspace .diary-card").length
 }));
 check("全局搜索同时命中任务与日记", hitKinds.tasks >= 1 && hitKinds.diaries >= 1, JSON.stringify(hitKinds));
-check("搜索结果里两种卡片混排在同一个列表", (await page.locator(".workspace .task-list > *").count()) >= 2);
+// v0.8.6 需求 1：搜索结果在同一个 VirtualStack 里混排（行是 .virtual-item）
+const mixedStack = await page.evaluate(() => {
+  const stack = document.querySelector(".workspace .virtual-stack");
+  if (!stack) return null;
+  return {
+    items: stack.querySelectorAll(":scope > .virtual-item").length,
+    tasks: stack.querySelectorAll(".task-card").length,
+    diaries: stack.querySelectorAll(".diary-card").length
+  };
+});
+check(
+  "搜索结果里两种卡片混排在同一个列表",
+  Boolean(mixedStack) && mixedStack.items >= 2 && mixedStack.tasks >= 1 && mixedStack.diaries >= 1,
+  JSON.stringify(mixedStack)
+);
 await page.locator(".search-box input").fill("");
 await page.waitForTimeout(400);
 

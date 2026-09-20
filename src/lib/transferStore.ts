@@ -14,8 +14,10 @@
  *   回前台看见还有活跃会话就重新申请。
  */
 import { get, writable } from "svelte/store";
-import { appSettings, showNotification, showToast } from "./stores";
+import { appSettings, isHydrated, showNotification, showToast } from "./stores";
 import { setConfig } from "./actions";
+import { transferErrorText } from "./transferEvents";
+import { groupByRoot, isFileItem, isTextItem, type PickedItem, type SendKind } from "./transferManifest";
 import {
   isTauriRuntime, listenTransfer, transferCancel, transferClearHistory, transferDecide, transferDefaultSaveDir,
   transferHistory, transferListFolder, transferLoadCode, transferOffline, transferOnline, transferSaveCode,
@@ -26,9 +28,6 @@ import {
 const CODE_MIN = 8;
 /** 完成后的会话卡自动收起（LocalSend 同款） */
 const AUTO_COLLAPSE_MS = 5000;
-
-export type SendKind = "file" | "folder" | "text" | "clipboard";
-export type PickedItem = { key: string; rel: string; size: number; kind: SendKind; preview: string };
 
 export type FileBar = { index: number; rel: string; sent: number; total: number; done: boolean };
 export type TransferSession = {
@@ -47,6 +46,10 @@ export type TransferSession = {
   collapsed: boolean;
   /** 出错时保留重试所需的信息 */
   retryable: boolean;
+  /** 接收侧：保存目录（`done` 事件的 `dir`）与落盘名（`fileDone` 的 `savedAs`），
+   *  拼起来就是「打开最后接收的那个文件」要的绝对路径（v0.8.6 需求 5.4） */
+  savedDir: string;
+  savedNames: string[];
 };
 
 export type ReceivedText = { id: string; peer: string; text: string; at: string; mine: boolean };
@@ -154,7 +157,9 @@ function sessionOf(id: string, direction: "send" | "receive"): TransferSession {
     state: "waiting",
     error: "",
     collapsed: false,
-    retryable: false
+    retryable: false,
+    savedDir: "",
+    savedNames: []
   };
   transferState.update((current) => ({ ...current, sessions: [...current.sessions, created] }));
   return created;
@@ -180,7 +185,13 @@ function upsertBar(id: string, direction: "send" | "receive", event: TransferEve
   const files = session.files.some((item) => item.index === index)
     ? session.files.map((item) => (item.index === index ? bar : item))
     : [...session.files, bar];
-  updateSession(id, { files, state: "connected" });
+  // 接收侧记下落盘名（`savedAs`，同名冲突时是重命名后的名字）：`done` 再给保存目录，
+  // 拼起来就是「打开最后接收的那个文件」要的绝对路径（v0.8.6 需求 5.4）
+  const savedNames =
+    direction === "receive" && bar.done && event.savedAs
+      ? [...session.savedNames.filter((name) => name !== event.savedAs), event.savedAs as string]
+      : session.savedNames;
+  updateSession(id, { files, state: "connected", savedNames });
   updateSpeed(id);
 }
 
@@ -317,7 +328,8 @@ export function handleTransferEvent(event: TransferEvent): void {
       const session = sessionOf(event.sessionId, directionOf(event));
       updateSession(event.sessionId, {
         state: "done",
-        totalBytes: event.totalBytes ?? session.totalBytes
+        totalBytes: event.totalBytes ?? session.totalBytes,
+        savedDir: event.dir ?? session.savedDir
       });
       scheduleCollapse(event.sessionId);
       void refreshHistory();
@@ -338,6 +350,18 @@ export function handleTransferEvent(event: TransferEvent): void {
       releaseWakeLockIfIdle();
       return;
     }
+    case "rejected": {
+      // 拒绝是信息性事件（v0.8.6 需求 5.3/5.4）：**只更新已存在的会话卡，绝不新建**。
+      // 老实现在这里走 sessionOf（会被拒绝的会话从没建过卡，于是一张「接收失败」凭空出现）
+      const existing = get(transferState).sessions.find((item) => item.id === event.sessionId);
+      if (existing) {
+        updateSession(event.sessionId, { state: "cancelled", error: "已拒绝这次传输" });
+        scheduleCollapse(event.sessionId);
+      }
+      void refreshHistory();
+      releaseWakeLockIfIdle();
+      return;
+    }
     case "error": {
       if (event.role === "online") {
         // 在线会话整个断了：设备列表与待确认请求都失效
@@ -346,10 +370,11 @@ export function handleTransferEvent(event: TransferEvent): void {
         return;
       }
       const session = sessionOf(event.sessionId, directionOf(event));
-      const finished = session.state === "connected";
+      // 只有真正的连接断开才说「对方离线」；本地错误（路径越界、写盘失败、同名耗尽……）
+      // 必须把 core 的真实原因透出来——早先一刀切「对方离线了」把它们全吞了（需求 5.4）
       updateSession(event.sessionId, {
         state: "error",
-        error: finished ? "对方离线了" : event.message ?? "传输失败",
+        error: transferErrorText(event.code, event.message),
         retryable: session.direction === "send"
       });
       scheduleCollapse(event.sessionId);
@@ -495,34 +520,36 @@ export function selectDevice(id: string): void {
   patch({ selectedDevice: id });
 }
 
+/**
+ * 发送已选清单。清单里的 `rel` 一律是相对 `root` 的路径（需求 5.1）：
+ * 文件按 `root` 分组拆成多次 `transferSend`（跨目录多选 / 桌面文件 + 剪贴板图片），
+ * 文件夹各自列一次清单；打字与剪贴板文本走文本通道。
+ */
 export async function startSend(): Promise<void> {
   const state = get(transferState);
   if (!state.online || !state.selectedDevice || state.picked.length === 0 || state.busy) return;
   const target = state.selectedDevice;
-  const picked = state.picked;
+  const picked = [...state.picked];
   patch({ busy: true });
   try {
-    const single = picked.length === 1 ? picked[0] : null;
-    // 单条文本/剪贴板走文本通道；文件夹走 root；多选文件 rel 就是绝对路径
-    if (single && (single.kind === "text" || single.kind === "clipboard")) {
-      // 正文在 rel 里（preview 只是截断过的展示值，别拿它发送）
-      await transferSend(target, { mode: "text", text: single.rel });
-    } else if (single && single.kind === "folder") {
-      const items = await transferListFolder(single.rel);
-      await transferSend(target, { mode: "files", root: single.rel, items });
-    } else {
-      const files = picked.filter((item) => item.kind === "file");
-      const texts = picked.filter((item) => item.kind === "text" || item.kind === "clipboard");
-      if (files.length > 0) {
-        await transferSend(target, {
-          mode: "files",
-          root: null,
-          items: files.map((item) => ({ rel: item.rel, size: item.size }))
-        });
-      }
-      for (const text of texts) {
-        await transferSend(target, { mode: "text", text: text.rel });
-      }
+    const folders = picked.filter((item) => item.kind === "folder");
+    const files = picked.filter(isFileItem);
+    const texts = picked.filter(isTextItem);
+    for (const folder of folders) {
+      const items = await transferListFolder(folder.rel);
+      if (items.length === 0) continue;
+      await transferSend(target, { mode: "files", root: folder.rel, items });
+    }
+    for (const [root, group] of groupByRoot(files)) {
+      await transferSend(target, {
+        mode: "files",
+        root,
+        items: group.map((item) => ({ rel: item.rel, size: item.size }))
+      });
+    }
+    for (const text of texts) {
+      // 正文住在 rel 里（preview 只是截断过的展示值，别拿它发送）
+      await transferSend(target, { mode: "text", text: text.rel });
     }
     patch({ picked: [] });
   } catch (error) {
@@ -532,11 +559,11 @@ export async function startSend(): Promise<void> {
   }
 }
 
-export async function decideRequest(requestId: string, accept: boolean): Promise<void> {
-  await transferDecide(requestId, accept).catch((error) => showToast(String(error)));
+export async function decideRequest(sessionId: string, accept: boolean): Promise<void> {
+  await transferDecide(sessionId, accept).catch((error) => showToast(String(error)));
   transferState.update((state) => ({
     ...state,
-    requests: state.requests.filter((item) => item.sessionId !== requestId)
+    requests: state.requests.filter((item) => item.sessionId !== sessionId)
   }));
 }
 export async function cancelSession(id: string): Promise<void> {
@@ -611,4 +638,12 @@ export function ensureTransferRuntime(): void {
       void goOnline();
     })
     .catch(() => undefined);
+  // 水合完成后补发设备名（v0.8.6 需求 5.2）：自动恢复上线时设置可能还没水合，
+  // 那一刻发出去的是 core 的兜底名；等真实名字出来再补一次（core 的 republish 已修好）
+  isHydrated.subscribe((ready) => {
+    if (!ready) return;
+    const name = get(appSettings).transfer?.deviceName?.trim() ?? "";
+    if (!name || !get(transferState).online) return;
+    void transferSetName(name).catch(() => undefined);
+  });
 }

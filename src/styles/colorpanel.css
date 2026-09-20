@@ -1,0 +1,111 @@
+/* 全应用统一的取色盘（v0.8.6 需求 11/12）。
+   外壳样式：iro 色盘本体 + RGB/HEX 输入 + 取消/确认。
+   尺寸一律走 calc(var(--font-*))，小屏不超屏、横屏可用。 */
+
+.kx-color-panel {
+  position: fixed;
+  z-index: 3600;
+  display: grid;
+  width: calc(var(--font-control) * 12.5);
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #e5e5e5;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 16px 50px rgb(0 0 0 / 16%);
+  animation: menu-fade-in 0.1s ease-out;
+  /* 落位前藏着（量尺寸算钳制要等一帧），避免在错位置闪一下 */
+  visibility: hidden;
+}
+
+.kx-color-panel.placed {
+  visibility: visible;
+}
+
+/* 色盘本体：iro 自己往这里画 svg；触屏拖动要**独占手势**，
+   不加 touch-action: none 的话安卓上拖动选色会把页面一起滚走。 */
+.kx-color-canvas {
+  display: grid;
+  place-items: center;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  /* 夹行只写 -webkit- 三件套，别两个都写 */
+}
+
+.kx-color-fields {
+  display: grid;
+  gap: 6px;
+}
+
+.kx-color-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #6b7280;
+  font-size: calc(var(--font-control) - 5px);
+}
+
+.kx-color-hex {
+  flex: 1;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid #dedede;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #1f2937;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: calc(var(--font-control) - 5px);
+  outline: none;
+  text-transform: lowercase;
+}
+
+.kx-color-hex:focus {
+  border-color: var(--accent, #2564cf);
+}
+
+.kx-color-rgb {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.kx-color-rgb label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #6b7280;
+  font-size: calc(var(--font-control) - 6px);
+}
+
+.kx-color-rgb input {
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid #dedede;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #1f2937;
+  font-size: calc(var(--font-control) - 5px);
+  outline: none;
+  text-align: center;
+}
+
+.kx-color-rgb input:focus {
+  border-color: var(--accent, #2564cf);
+}
+
+.kx-color-hint {
+  margin: 0;
+  color: #c0392b;
+  font-size: calc(var(--font-control) - 6px);
+  line-height: 1.4;
+}
+
+.kx-color-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

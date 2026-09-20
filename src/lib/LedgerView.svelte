@@ -183,7 +183,16 @@
   }
 
   /** 齿轮按钮直接弹「记账菜单」（v0.8.4 需求 14）：省掉中间那层只有四项的面板。 */
+  /**
+   * 齿轮按钮直接弹「记账菜单」（v0.8.4 需求 14）。v0.8.6 需求 8 两件一起做：
+   * 已开着再点 = 关闭；并把齿轮按钮作为 `anchor` 传下去（ContextMenu 只对 anchor
+   * 豁免「点外部关闭」，不然 pointerdown 先关、click 再开，等于关不掉）。
+   */
   function openListMenuFromGear(): void {
+    if (listMenuAt) {
+      listMenuAt = null;
+      return;
+    }
     const rect = gearButtonEl?.getBoundingClientRect();
     if (!rect) return;
     listMenuAt = { x: rect.right, y: rect.bottom + 6 };
@@ -539,6 +548,7 @@
       x={listMenuAt.x}
       y={listMenuAt.y}
       xAlign="right"
+      anchor={gearButtonEl}
       ledgerMode
       background={ledgerBg}
       accentColor={ledgerAccent($appSettings.ledger)}

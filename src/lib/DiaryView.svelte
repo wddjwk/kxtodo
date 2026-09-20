@@ -190,8 +190,18 @@
     resetScroll();
   }
 
-  /** 齿轮按钮直接弹「日记菜单」（需求 14）：省掉中间那层只有两项的面板 */
+  /**
+   * 齿轮按钮直接弹「日记菜单」（需求 14）：省掉中间那层只有两项的面板。
+   * v0.8.6 需求 8 两件一起做：**已开着再点 = 关闭**；并且把齿轮按钮作为 `anchor`
+   * 传给 ListMenu→ContextMenu——ContextMenu 的 capture 阶段 pointerdown 会先关掉
+   * 「点菜单外」的菜单，只有 anchor 豁免；不传的话 pointerdown 先关、click 再开，
+   * 看起来就是「点一下闪一下、永远关不掉」。
+   */
   function openListMenuFromGear(): void {
+    if (listMenuAt) {
+      listMenuAt = null;
+      return;
+    }
     const rect = gearButtonEl?.getBoundingClientRect();
     if (!rect) return;
     listMenuAt = { x: rect.right, y: rect.bottom + 6 };
@@ -463,6 +473,7 @@
       x={listMenuAt.x}
       y={listMenuAt.y}
       xAlign="right"
+      anchor={gearButtonEl}
       diaryMode
       background={diaryBg}
       accentColor={diaryAccent($appSettings.diary)}
