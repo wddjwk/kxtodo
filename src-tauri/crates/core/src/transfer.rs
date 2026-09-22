@@ -236,40 +236,50 @@ fn emit(sink: &TransferSink, session: &Session, mut payload: Value) {
     sink(payload);
 }
 
-/// 事件轨迹（v0.8.6 需求 5.4）：每行一条 JSON 落在 `<data>/runtime/transfer-events.log`。
+/// 事件轨迹（v0.8.6 需求 5.4；v0.8.7 需求 5 改成后台异步写）。
+/// 每行一条 JSON 落在 `<data>/runtime/transfer-events.log`。
 /// 「同一会话出现两张卡」这类问题只有拿到 core 实际发过的事件序列才能定案。
-/// 只记**会话生命周期**事件（progress 每 256KB 一条，写进来既没信息量又会阻塞运行时线程）。
+///
+/// **必须是异步的**：运行时 `worker_threads(2)`，同步写盘会卡住 accept / 心跳 /
+/// 其它传输（同文件里文件读写走 `tokio::fs`/`spawn_blocking` 的同一条纪律）。
+/// `Handle::try_current` 兜底：runtime 外（个别单测直呼 emit）静默跳过，**不能 panic**
+/// （直接 `tokio::spawn` 在 runtime 外就是 panic）。
+/// 只记**会话生命周期**事件（progress 每 256KB 一条，写进来既没信息量又白占 IO）。
 fn trace_event(payload: &Value) {
     const MAX_TRACE_BYTES: u64 = 2 * 1024 * 1024;
     if payload["kind"] == json!("progress") {
         return;
     }
     let Some(dir) = trace_dir() else { return };
-    let path = dir.join("transfer-events.log");
-    if let Ok(meta) = std::fs::metadata(&path) {
-        if meta.len() > MAX_TRACE_BYTES {
-            // 超限就砍掉前一半（保留最近的），从行边界切，别留半行
-            if let Ok(content) = std::fs::read(&path) {
-                let start = content.len() / 2;
-                let cut = content[start..]
-                    .iter()
-                    .position(|&byte| byte == b'\n')
-                    .map(|offset| start + offset + 1)
-                    .unwrap_or(start);
-                let _ = std::fs::write(&path, &content[cut..]);
-            }
-        }
-    }
+    let Ok(handle) = tokio::runtime::Handle::try_current() else { return };
     let mut line = serde_json::to_string(payload).unwrap_or_default();
     line.push('\n');
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .and_then(|mut file| {
-            use std::io::Write;
-            file.write_all(line.as_bytes())
-        });
+    handle.spawn(async move {
+        let path = dir.join("transfer-events.log");
+        if let Ok(meta) = tokio::fs::metadata(&path).await {
+            if meta.len() > MAX_TRACE_BYTES {
+                // 超限就砍掉前一半（保留最近的），从行边界切，别留半行
+                if let Ok(content) = tokio::fs::read(&path).await {
+                    let start = content.len() / 2;
+                    let cut = content[start..]
+                        .iter()
+                        .position(|&byte| byte == b'\n')
+                        .map(|offset| start + offset + 1)
+                        .unwrap_or(start);
+                    let _ = tokio::fs::write(&path, &content[cut..]).await;
+                }
+            }
+        }
+        if let Ok(mut file) = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .await
+        {
+            use tokio::io::AsyncWriteExt;
+            let _ = file.write_all(line.as_bytes()).await;
+        }
+    });
 }
 
 /// 事件轨迹的落点（在线会话建立时设，离线清掉）。诊断用途：多份 Layout 并存时
@@ -372,7 +382,9 @@ async fn bind(net_config: &TransferNet, secret: &SecretKey) -> CoreResult<Endpoi
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        None => {}
+        // `default` = n0 公共 relay（Endpoint::builder 的 presets::N0 默认就是它，什么都不用改）；
+        // 空值在壳层就已经解析成「复用同步的 relay」了，到不了这里
+        None | Some("default") => {}
         Some("disabled") => builder = builder.relay_mode(RelayMode::Disabled),
         Some(url) => builder = builder.relay_mode(RelayMode::custom([net::parse_relay_url(url)?])),
     }

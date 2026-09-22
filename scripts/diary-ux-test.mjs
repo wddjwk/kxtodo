@@ -59,15 +59,17 @@ for (const absent of ["重命名", "排序方式", "删除当前条目", "导出
   check(`日记菜单不含「${absent}」`, !menuText.includes(absent), menuText.replace(/\n/g, " | "));
 }
 
-// 主题色与背景真的作用到界面上
+// 主题色与背景真的作用到界面上（v0.8.6 起走全应用统一的取色盘：拖动/输入 = 预览，确认才落盘）
 const accentBefore = await page.locator(".diary-view").evaluate((el) => getComputedStyle(el).getPropertyValue("--accent").trim());
-await page.locator(".ui-color-picker input").fill("#b64a30");
-await page.locator(".ui-color-picker input").dispatchEvent("input");
+await page.locator(".context-menu .ui-color-row .ui-color-picker").click({ force: true });
+await page.waitForSelector(".kx-color-panel", { timeout: 8000 });
+await page.waitForTimeout(350);
+await page.locator(".kx-color-hex").fill("#b64a30");
+await page.locator(".kx-color-hex").press("Enter");
 await page.waitForTimeout(400);
 const accentAfter = await page.locator(".diary-view").evaluate((el) => getComputedStyle(el).getPropertyValue("--accent").trim());
 check("改 UI 颜色会换日记主题色（取色即预览）", accentAfter === "#b64a30", `${accentBefore} -> ${accentAfter}`);
-// v0.8.4 需求 9：取色器只预览，点保存才落盘
-await page.locator(".color-draft-actions .menu-action-button.primary").click();
+await page.locator("[data-color-confirm]").click();
 await page.waitForTimeout(500);
 
 // 预设色块：v0.8.5 需求 5 起单击即落盘（不进草稿）

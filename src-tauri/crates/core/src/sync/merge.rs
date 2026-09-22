@@ -329,10 +329,12 @@ pub fn settings_payload(settings: &SettingsFile) -> Value {
             "backgroundImage": settings.ledger.background_image,
             "backgroundOpacity": settings.ledger.background_opacity,
         },
-        // 工具箱同日记/记账（v0.8.4）：两件外观跟着走
+        // 工具箱同日记/记账（v0.8.4）：外观跟着走；v0.8.7 起每个工具子页自己那两份也在
         "toolbox": {
             "accent": settings.toolbox.accent,
             "backgroundColor": settings.toolbox.background_color,
+            "toolAccents": settings.toolbox.tool_accents,
+            "toolBackgrounds": settings.toolbox.tool_backgrounds,
         },
     })
 }
@@ -868,6 +870,13 @@ fn apply_settings_record(record: &EntityRecord, settings: &mut SettingsFile) -> 
             }
             if let Some(value) = map.get("backgroundColor").and_then(Value::as_str) {
                 settings.toolbox.background_color = value.to_string();
+            }
+            // 每个工具子页自己那份颜色（v0.8.7）：整份对象覆盖，缺键 = 这条记录没提它
+            if let Some(value) = map.get("toolAccents").and_then(Value::as_object) {
+                settings.toolbox.tool_accents = value.clone();
+            }
+            if let Some(value) = map.get("toolBackgrounds").and_then(Value::as_object) {
+                settings.toolbox.tool_backgrounds = value.clone();
             }
         }
     }
@@ -1676,5 +1685,37 @@ mod tests {
             .unwrap();
         assert_eq!(local.entries[0].images, vec!["md-legacy.png".to_string()]);
         assert!(local.entries[0].legacy_image.is_none());
+    }
+
+    /// v0.8.7：工具箱的「每个工具子页自己的颜色」也要**发得出去、收得回来**。
+    /// 只把路径加进 `is_shared_settings_path`（刷 LWW 戳）而漏了 payload/apply 两侧，
+    /// 症状与 v0.8.3 的「预置标签只发不收」一模一样：本机改了、刷了时间戳，别的设备永远收不到。
+    #[test]
+    fn toolbox_tool_colors_round_trip() {
+        let mut source = SettingsFile::default();
+        source
+            .toolbox
+            .tool_accents
+            .insert("transfer".to_string(), json!("#336699"));
+        source
+            .toolbox
+            .tool_backgrounds
+            .insert("rmb".to_string(), json!("#884422"));
+        let payload = settings_payload(&source);
+        assert_eq!(payload["toolbox"]["toolAccents"]["transfer"], json!("#336699"));
+        assert_eq!(payload["toolbox"]["toolBackgrounds"]["rmb"], json!("#884422"));
+
+        let mut target = SettingsFile::default();
+        apply_settings_record(&settings_record(payload, 9), &mut target).unwrap();
+        assert_eq!(target.toolbox.tool_accents["transfer"], json!("#336699"));
+        assert_eq!(target.toolbox.tool_backgrounds["rmb"], json!("#884422"));
+
+        // 老设备的载荷没有这两个键：本机那两份不动
+        let mut legacy = SettingsFile::default();
+        legacy.toolbox.tool_accents.insert("scratchpad".to_string(), json!("#123456"));
+        let legacy_payload = json!({ "toolbox": { "accent": "#2564cf" } });
+        apply_settings_record(&settings_record(legacy_payload, 10), &mut legacy).unwrap();
+        assert_eq!(legacy.toolbox.tool_accents["scratchpad"], json!("#123456"));
+        assert_eq!(legacy.toolbox.accent, "#2564cf");
     }
 }

@@ -8,7 +8,7 @@
   import { appSettings, diaryEditor, diaryEntries, weekStart } from "./stores";
   import { createBackGuard } from "./platform";
   import { setConfig, setDiaryUi } from "./actions";
-  import { buildMainStyle, diaryAccent, diaryBackground } from "./styles";
+  import { buildMainStyle, diaryAccent, diaryBackground, PAGE_HEADER_ICON_SIZE } from "./styles";
   import { accentWithPreview, backgroundWithPreview, colorPreview } from "./colorPreview";
   import { imageCache, resolveImageSrc } from "./images";
   import {
@@ -264,7 +264,7 @@
   <section class="list-header">
     <div>
       <MobileBack />
-      <span class="header-icon"><NotebookPen size={34} /></span>
+      <span class="header-icon"><NotebookPen size={PAGE_HEADER_ICON_SIZE} /></span>
       <h1>日记</h1>
     </div>
     <div class="header-actions" on:click|stopPropagation>

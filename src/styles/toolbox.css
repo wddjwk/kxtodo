@@ -50,8 +50,24 @@
   gap: 6px;
 }
 
+/* 主界面头部右侧的操作区（⋯ 外观菜单，v0.8.7 追加需求）——与子页的
+   `.toolbox-sub-bar-actions` 同一套按钮与间距，靠 margin-left 顶到最右。 */
+.toolbox-header-actions {
+  display: flex;
+  margin-left: auto;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 页面头部图标（v0.8.7 追加需求 1）：盒子与 `.header-icon` 同一口径（38×38），
+   图标本体走 PAGE_HEADER_ICON_SIZE——工具箱与工具子页不再自成一套。 */
 .toolbox-header-icon {
   display: grid;
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
   place-items: center;
   color: var(--accent, #2564cf);
 }
@@ -162,21 +178,31 @@
   gap: 4px;
 }
 
-/* relay 服务（v0.8.5 需求 31；v0.8.6 需求 10 改成二级菜单：
-   三单选 + 输入框住在子菜单里，这里是子菜单内部的排版） */
+/* relay 服务（v0.8.5 需求 31；v0.8.7 追加需求改成三选一 + 定宽子菜单：
+   勾选槽位在 MenuItem 里（菜单项等宽），子菜单宽度由这里定死，点哪个都不变宽） */
+
+/* 定宽：三个选项都是 5 个汉字，宽度本应一致；输入框用 100% 撑满、不参与「谁最宽」，
+   于是整个子菜单在任何选中状态下同宽。 */
+.relay-submenu {
+  width: calc(var(--font-control) * 13);
+}
+
+.relay-submenu input {
+  box-sizing: border-box;
+}
+
 .relay-custom {
   padding: 2px 0 4px;
 }
 
+/* 与菜单里其它文本输入（背景图片链接那种）同一套观感：字号继承菜单的 --font-control */
 .relay-input {
   width: 100%;
-  height: 32px;
-  padding: 0 10px;
+  padding: 7px 9px;
   border: 1px solid #dedede;
-  border-radius: 8px;
+  border-radius: 7px;
   background: #ffffff;
   color: #1f2937;
-  font-size: calc(var(--font-control) - 4px);
   outline: none;
 }
 
@@ -184,9 +210,11 @@
   border-color: var(--accent, #2564cf);
 }
 
+/* 子菜单里的说明行：与 `.menu-empty` 同一种静音小字 */
 .relay-hint {
-  color: #8a919c;
-  font-size: calc(var(--font-control) - 6px);
+  padding: 2px 10px 4px;
+  color: #94a3b8;
+  font-size: 0.88em;
 }
 
 .toolbox-icon-button {

@@ -167,6 +167,37 @@ describe("分块扫描器", () => {
     expect(hits.map((hit) => hit.kind)).toEqual(["diary", "ledger", "task"]);
   });
 
+  it("时间戳跨格式也按真实先后排（v0.8.7 需求 3.1：Z 串 vs 本地偏移串）", () => {
+    // 真实时间：02:00+08:00 = 前一天 18:00Z，所以 Z 串（20:00Z）更晚。
+    // 按**字面**比较降序时 "+08:00" 串会排在 "Z" 前面（反着来）——必须走 Date.parse。
+    const { state, diaries, ledger } = fixture(
+      { diaries: [diary("d-offset", "关键词", "", "2026-09-01T02:00:00+08:00")] },
+      { tasks: [task("t-z", "关键词", "2026-08-31T20:00:00.000Z")] }
+    );
+    const batches = collect("关键词", () => ({ state, diaries, ledger }));
+    expect(batches.at(-1)!.hits.map((hit) => hit.key)).toEqual(["task-t-z", "diary-d-offset"]);
+  });
+
+  it("脏时间戳退 0 沉底，不把整轮排序带崩", () => {
+    const { state, diaries, ledger } = fixture(
+      { tasks: [task("t-bad", "关键词", "不是时间"), task("t-ok", "关键词", "2026-09-02T00:00:00Z")] }
+    );
+    const batches = collect("关键词", () => ({ state, diaries, ledger }));
+    expect(batches.at(-1)!.hits.map((hit) => hit.key)).toEqual(["task-t-ok", "task-t-bad"]);
+  });
+
+  it("中间批封顶 200（宽词命中上万条时不让界面每批重算全量）", () => {
+    const total = SEARCH_CHUNK * 2 + 37;
+    const tasks = Array.from({ length: total }, (_, index) => task(`t${index}`, "命中", "2026-09-01T00:00:00Z"));
+    const { state, diaries, ledger } = fixture({ tasks });
+    const batches = collect("命中", () => ({ state, diaries, ledger }));
+    // 中间批只给前 200 条（渐进上屏），最终批仍是排序后的前 200 条
+    for (const batch of batches.slice(0, -1)) {
+      expect(batch.hits.length).toBe(SEARCH_HIT_LIMIT);
+    }
+    expect(batches.at(-1)?.hits.length).toBe(SEARCH_HIT_LIMIT);
+  });
+
   it("cancel 之后不再有批次落地（防抖词变化作废上一轮）", () => {
     const tasks = Array.from({ length: SEARCH_CHUNK * 3 }, (_, index) => task(`t${index}`, "命中", "2026-09-01T00:00:00Z"));
     const { state, diaries, ledger } = fixture({ tasks });

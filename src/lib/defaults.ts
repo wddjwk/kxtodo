@@ -154,7 +154,9 @@ export const defaultSettings: Settings = {
     reconnectSeconds: 300
   },
   transfer: {
-    relay: "",
+    // 三态与 core 的 TransferSettings 同一口径（v0.8.7）：
+    // "default" = n0 公共 relay（出厂默认）；"" = 复用同步的 p2pRelay；其它 = 自部署地址
+    relay: "default",
     deviceName: "",
     autoAccept: false
   },
@@ -188,7 +190,10 @@ export const defaultSettings: Settings = {
   toolbox: {
     accent: "",
     // 与 .toolbox-view 一直以来的底色一致（桌面与移动端同一份）
-    backgroundColor: "#f0f0f0"
+    backgroundColor: "#f0f0f0",
+    // 工具子页各自的颜色：空 = 跟工具箱主界面（v0.8.7）
+    toolAccents: {},
+    toolBackgrounds: {}
   }
 };
 
@@ -1086,14 +1091,15 @@ export function normalizeSettings(raw: unknown): Settings {
       };
     });
   };
-  const normalizeUiColors = (value: unknown): Record<string, string> => {
+  /** `{键: #rrggbb}` 的整份对象（条目自定义色 / 每个工具子页自己的颜色共用一份归一）。 */
+  const normalizeHexColorMap = (value: unknown): Record<string, string> => {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       return {};
     }
     const colors: Record<string, string> = {};
-    for (const [nodeId, color] of Object.entries(value)) {
-      if (typeof nodeId === "string" && nodeId && typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color.trim())) {
-        colors[nodeId] = color.trim();
+    for (const [key, color] of Object.entries(value)) {
+      if (typeof key === "string" && key && typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color.trim())) {
+        colors[key] = color.trim();
       }
     }
     return colors;
@@ -1153,7 +1159,7 @@ export function normalizeSettings(raw: unknown): Settings {
       tagPresets: normalizeTags(source?.appearance?.tagPresets).slice(0, 64),
       diaryTagPresets: normalizeTags(source?.appearance?.diaryTagPresets).slice(0, 64),
       dueColors: normalizeDueColors(source?.appearance?.dueColors),
-      uiColors: normalizeUiColors(source?.appearance?.uiColors),
+      uiColors: normalizeHexColorMap(source?.appearance?.uiColors),
       navItems: normalizeNavItems(source?.appearance?.navItems),
       navLayout: normalizeNavLayout(source?.appearance?.navLayout),
       newNodeDefaults: normalizeNewNodeDefaults(source?.appearance?.newNodeDefaults)
@@ -1228,7 +1234,7 @@ export function normalizeSettings(raw: unknown): Settings {
           : 300
     },
     transfer: {
-      relay: typeof source?.transfer?.relay === "string" ? source.transfer.relay : "",
+      relay: typeof source?.transfer?.relay === "string" ? source.transfer.relay : "default",
       deviceName: typeof source?.transfer?.deviceName === "string" ? source.transfer.deviceName : "",
       autoAccept: typeof source?.transfer?.autoAccept === "boolean" ? source.transfer.autoAccept : false,
     },
@@ -1275,7 +1281,9 @@ export function normalizeSettings(raw: unknown): Settings {
     },
     toolbox: {
       accent: normalizeHexColor(source?.toolbox?.accent ?? "", ""),
-      backgroundColor: normalizeHexColor(source?.toolbox?.backgroundColor, defaultSettings.toolbox.backgroundColor)
+      backgroundColor: normalizeHexColor(source?.toolbox?.backgroundColor, defaultSettings.toolbox.backgroundColor),
+      toolAccents: normalizeHexColorMap(source?.toolbox?.toolAccents),
+      toolBackgrounds: normalizeHexColorMap(source?.toolbox?.toolBackgrounds)
     }
   };
 }

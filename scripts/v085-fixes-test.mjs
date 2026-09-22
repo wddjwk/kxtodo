@@ -295,7 +295,8 @@ const mobile = await browser.newContext({
   check("30 传输页分了卡片区（至少三块）且滑块在收发卡内", transfer.cards >= 3 && transfer.workCard && transfer.tabsInCard, J(transfer));
 
   // 31 relay：v0.8.6 需求 10 改成「一级菜单项 + 二级钻取」——
-  // 一级项叫「relay 服务」，展开后才看得见三单选（文案与写盘语义都没变）
+  // 一级项叫「relay 服务」，展开后才看得见三单选（v0.8.7 起文案改成
+  // 复用同步配置 / 使用默认服务 / 自定义服务，出厂默认「使用默认服务」）
   await page.locator(".toolbox-sub-bar button[title='外观']").click();
   await page.waitForSelector(".context-menu .menu-item-button", { timeout: 5000 });
   const relayEntry = await page.evaluate(() =>
@@ -309,20 +310,23 @@ const mobile = await browser.newContext({
     hint: document.querySelector(".submenu-panel .relay-hint")?.textContent?.trim() ?? ""
   }));
   check(
-    "31 展开子菜单后三单选可见：跟随同步 / 禁用 / 自定义",
-    relay.rows.length >= 3 && relay.rows[0].includes("跟随同步") && relay.rows[1].includes("禁用") && relay.rows[2].includes("自定义"),
+    "31 展开子菜单后三单选可见：复用同步配置 / 使用默认服务 / 自定义服务",
+    relay.rows.length >= 3 &&
+      relay.rows[0].includes("复用同步配置") &&
+      relay.rows[1].includes("使用默认服务") &&
+      relay.rows[2].includes("自定义服务"),
     J(relay)
   );
-  // 选「自定义」出输入框；选「禁用」写进设置（浏览器预览也走 settings 持久化）
+  // 选「自定义」出输入框；选「使用默认服务」写进设置（浏览器预览也走 settings 持久化）
   await page.locator(".submenu-panel .menu-item-button", { hasText: "自定义" }).click();
   await page.waitForSelector(".submenu-panel .relay-input", { timeout: 3000 });
-  await page.locator(".submenu-panel .menu-item-button", { hasText: "禁用" }).click();
+  await page.locator(".submenu-panel .menu-item-button", { hasText: "使用默认服务" }).click();
   await page.waitForTimeout(500);
   const relayValue = await page.evaluate(
     ({ key }) => JSON.parse(localStorage.getItem(key) ?? "{}").transfer?.relay ?? "",
     { key: SETTINGS_KEY }
   );
-  check("31 选禁用写进 settings.transfer.relay", relayValue === "disabled", relayValue);
+  check("31 选「使用默认服务」写进 settings.transfer.relay = default", relayValue === "default", relayValue);
 
   // 移动端也看一眼（四图标 2×2 仍成立、卡片不超屏）
   await page.close();

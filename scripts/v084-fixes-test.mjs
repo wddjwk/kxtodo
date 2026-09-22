@@ -526,7 +526,7 @@ const mobile = await browser.newContext({
   await page.waitForSelector(".context-menu", { timeout: 5000 });
   await page.waitForTimeout(300);
   const menuText = ((await page.locator(".context-menu").textContent()) ?? "").replace(/\s+/g, " ");
-  check("7 ⋯ 菜单提供主题颜色与背景颜色", menuText.includes("主题颜色") && menuText.includes("背景颜色"), menuText.slice(0, 40));
+  check("7 ⋯ 菜单提供 UI颜色与背景颜色", menuText.includes("UI颜色") && menuText.includes("背景颜色"), menuText.slice(0, 60));
 
   const readSettings = () => page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "{}"), SETTINGS_KEY);
   const toolboxBg = () =>
@@ -561,8 +561,7 @@ const mobile = await browser.newContext({
   const previewBg = await toolboxBg();
   check(
     "7 自定义取色只预览不落盘",
-    (await page.locator(".context-menu .color-draft-actions").count()) > 0 &&
-      JSON.stringify((await readSettings()).toolbox ?? null) === JSON.stringify(afterPreset) &&
+    JSON.stringify((await readSettings()).toolbox ?? null) === JSON.stringify(afterPreset) &&
       previewBg !== "rgb(240, 240, 240)",
     `preview=${previewBg}`
   );
@@ -570,7 +569,8 @@ const mobile = await browser.newContext({
   await page.locator("[data-color-confirm]").click();
   await page.waitForTimeout(600);
   const saved = (await readSettings()).toolbox ?? null;
-  check("7 保存后落盘", saved?.backgroundColor === "#123456", J(saved));
+  // v0.8.7 起工具子页调的是**它自己那一份**（toolbox.toolBackgrounds[工具id]），主界面那层不动
+  check("7 保存后落盘到该工具自己那一份", saved?.toolBackgrounds?.random === "#123456", J(saved));
 
   // 取消：预览回退、盘里不动
   const savedBg = await toolboxBg();
@@ -599,7 +599,7 @@ const mobile = await browser.newContext({
   );
   await page.locator("[data-color-confirm]").click();
   await page.waitForTimeout(600);
-  check("7 主题色保存后落盘", ((await readSettings()).toolbox?.accent ?? "") === "#b64a30");
+  check("7 主题色保存后落盘到该工具自己那一份", ((await readSettings()).toolbox?.toolAccents?.random ?? "") === "#b64a30");
 
   await page.keyboard.press("Escape");
   await page.waitForTimeout(400);

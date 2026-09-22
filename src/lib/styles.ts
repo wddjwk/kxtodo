@@ -66,15 +66,22 @@ export function ledgerBackground(ledger: Settings["ledger"]): ListBackground {
   };
 }
 
-/** 工具箱的主题色（v0.8.4）：设置里空着就用默认主题色。 */
-export function toolboxAccent(toolbox: Settings["toolbox"]): string {
+/**
+ * 工具箱的主题色（v0.8.4；v0.8.7 加每工具一层）：传工具 id 就取那个工具自己的，
+ * 没配过（或没传）回落到工具箱主界面。两层的「空」都回应用默认主题色。
+ */
+export function toolboxAccent(toolbox: Settings["toolbox"], toolId?: string): string {
+  const own = toolId ? toolbox.toolAccents?.[toolId] : "";
+  if (isHexColor(own ?? "")) return own as string;
   return isHexColor(toolbox.accent) ? toolbox.accent : DEFAULT_ACCENT;
 }
 
-/** 工具箱的背景色（v0.8.4）：只有颜色，没有图（工具页三点菜单就这一个入口）。 */
-export function toolboxBackground(toolbox: Settings["toolbox"]): ListBackground {
+/** 工具箱的背景色（v0.8.4；v0.8.7 加每工具一层）：只有颜色，没有图（三点菜单就这两个入口）。 */
+export function toolboxBackground(toolbox: Settings["toolbox"], toolId?: string): ListBackground {
+  const own = toolId ? toolbox.toolBackgrounds?.[toolId] : "";
+  const color = isHexColor(own ?? "") ? own : toolbox.backgroundColor;
   return {
-    color: isHexColor(toolbox.backgroundColor) ? toolbox.backgroundColor : defaultBackground.color
+    color: isHexColor(color ?? "") ? (color as string) : defaultBackground.color
   };
 }
 
@@ -89,6 +96,13 @@ export function avatarInitial(displayName: string): string {
 export function uiScaleValue(scaleValue = defaultSettings.appearance.uiScale): number {
   return Math.min(1.5, Math.max(0.5, scaleValue || defaultSettings.appearance.uiScale));
 }
+
+/**
+ * 页面头部（我的一天 / 日记 / 记账 / 工具箱 / 工具子页）的图标尺寸。
+ * v0.8.7 追加需求 1：从前工具箱写 26、其余页面写 34，两处口径各写各的；
+ * 现在统一从这一处取——改口径只改这里。
+ */
+export const PAGE_HEADER_ICON_SIZE = 34;
 
 export function scalePercentValue(scaleValue = defaultSettings.appearance.uiScale): number {
   return Math.round(uiScaleValue(scaleValue) * 100);

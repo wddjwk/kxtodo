@@ -23,8 +23,8 @@
   } from "./actions";
   import { pullToRefresh } from "./pullrefresh";
   import { taskMoveTargets } from "./nodes";
-  import { buildMainStyle, ledgerAccent } from "./styles";
-  import { accentWithPreview, backgroundWithPreview, colorPreview, dueColorsWithPreview } from "./colorPreview";
+  import { buildMainStyle, ledgerAccent, PAGE_HEADER_ICON_SIZE } from "./styles";
+  import { accentWithPreview, backgroundWithPreview, colorPreview } from "./colorPreview";
   import { hasMultipleMarkdownLines } from "./markdown";
   import { openExternalUrl, isTauriRuntime, saveMdImageFromDataUrl, mdImageUrl } from "./backend";
   import { imageCache, resolveImageSrc, mdImageCache, primeMdImageCache } from "./images";
@@ -842,9 +842,9 @@
       <MobileBack />
       <span class="header-icon">
         {#if $isSearching}
-          <Search size={34} />
+          <Search size={PAGE_HEADER_ICON_SIZE} />
         {:else}
-          <IconGlyph icon={$selectedNode?.icon ?? "notebook"} size={34} />
+          <IconGlyph icon={$selectedNode?.icon ?? "notebook"} size={PAGE_HEADER_ICON_SIZE} />
         {/if}
       </span>
       {#if headerRenaming}
@@ -1077,6 +1077,7 @@
           {#each plannedOptions as option (option.key)}
             <MenuItem
               label={option.label}
+              checkable
               active={option.key === plannedGroup}
               onSelect={() => { plannedGroup = option.key; showPlannedGroups = false; }}
             />

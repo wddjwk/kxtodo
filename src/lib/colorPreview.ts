@@ -72,3 +72,36 @@ export function dueColorsWithPreview(
   }
   return base;
 }
+
+/**
+ * 系统视图的四个 id（聚合多个条目，自己不是任何卡片的「条目」）。
+ * 编辑端（三点菜单）在这些视图里写的是 `dueColors[视图id]`，
+ * 所以消费端（TaskCard）必须能在卡片自己的配置缺席时回退到它。
+ */
+export const SYSTEM_VIEW_IDS = ["my-day", "planned", "important", "scheduled"] as const;
+
+/**
+ * 一张卡片的临期配色（v0.8.7 需求 2.6）——**双回退**：
+ *
+ * ① 自己条目的配置优先（条目页里编辑端/消费端天然同键，行为与从前一致）；
+ * ② 自己没配过、且当前正看系统视图时，跟**这个视图**的配置走（含视图草稿）。
+ *
+ * 修的是「编辑端写视图键、消费端读条目键」两头顶牛：在「我的一天」里改「今天」档，
+ * 预览不染卡片、保存后卡片也不变（条目页两头键一致所以完全正常，别被它骗过去）。
+ */
+export function dueColorsForCard(
+  preview: ColorPreview | null,
+  nodeId: string,
+  viewId: string,
+  stored: Record<string, string[]> | undefined,
+  defaults: string[]
+): string[] {
+  const own = stored?.[nodeId];
+  if (own) return dueColorsWithPreview(preview, nodeId, own, defaults);
+  if ((SYSTEM_VIEW_IDS as readonly string[]).includes(viewId)) {
+    // 兜底基数是**视图键**的落盘值；再叠自己条目的草稿、最后叠视图草稿（同一条链）
+    const base = dueColorsWithPreview(preview, nodeId, stored?.[viewId], defaults);
+    return dueColorsWithPreview(preview, viewId, base, defaults);
+  }
+  return dueColorsWithPreview(preview, nodeId, undefined, defaults);
+}

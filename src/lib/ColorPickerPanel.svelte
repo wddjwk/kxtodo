@@ -39,15 +39,27 @@
     color: IroColorLike;
     on: (event: string | string[], callback: () => void) => void;
     off: (event: string | string[], callback: () => void) => void;
-    base?: Element | null;
+    resize: (width: number) => void;
+    base?: HTMLElement | null;
   };
 
+  type EyeDropperConstructor = new () => { open: () => Promise<{ sRGBHex: string }> };
+  // 吸管：只有 Chromium 系（Windows WebView2）有，Linux WebKitGTK / 安卓不渲染按钮——
+  // v0.8.5 的吸管是原生 input[type=color] 的系统选色器**自带**的，v0.8.6 换 iro 时静默丢了。
+  const EyeDropperApi =
+    typeof window === "undefined"
+      ? undefined
+      : (window as unknown as { EyeDropper?: EyeDropperConstructor }).EyeDropper;
+
   let host: HTMLElement;
+  /** 反缩放层（见 applyPickerSize 的说明）：iro 挂在这一层里，不是直接挂宿主 */
+  let canvasHost: HTMLElement;
   let panelEl: HTMLElement;
   let style = "";
   let placed = false;
   let ready = false;
   let picker: IroPickerLike | null = null;
+  let eyedropperBusy = false;
 
   let hexDraft = "";
   let redDraft = "";
@@ -138,7 +150,8 @@
       : { x: 8, y: 8 };
     const placedBox = placePopover(
       point,
-      { width: panelRect.width / scale, height: Math.max(panelRect.height, panelEl.scrollHeight) / scale },
+      // 高度口径：rect 是视觉像素要 ÷scale，scrollHeight 本就是布局像素（不能再除）
+      { width: panelRect.width / scale, height: Math.max(panelRect.height / scale, panelEl.scrollHeight) },
       { width: window.innerWidth / scale, height: window.innerHeight / scale },
       { xAlign: anchor ? "right" : "left", gap: 6 }
     );
@@ -148,7 +161,10 @@
     placed = true;
   }
 
-  const follow = (): void => void layout();
+  const follow = (): void => {
+    applyPickerSize();
+    void layout();
+  };
 
   /**
    * 当前正在挂载 / 已挂载的请求 key。**不能用 `picker` 是否为真当判据**：
@@ -201,17 +217,40 @@
     if (!picker) return;
     syncDrafts(picker.color);
     ready = true;
+    applyPickerSize();
     await layout();
+  }
+
+  /**
+   * 色盘尺寸（v0.8.7 需求 2.2）。两个口径必须分清：
+   *
+   * - iro 的指针数学是「光标**视觉**坐标 ÷ svg **布局**宽」——外壳 `transform: scale(uiScale)`
+   *   让两个数在缩放下差一个 uiScale，拖动时把手指脱靶（实测偏移 × (1−uiScale)，44px）。
+   *   修法三件套：① 反缩放层 `.kx-color-canvas-scale`（scale(1/uiScale)，iro 挂它里面，
+   *   让 svg 的视觉尺寸 == 布局尺寸）；② 宽度传**视觉口径**（宿主布局宽 × uiScale）；
+   *   ③ 宿主高度显式补偿（svg 布局盒 ≠ 视觉盒，不补会把面板下方的字段区压住）。
+   *
+   * - 宽度不能写死（写死 196 在小字号下溢出 41px），也不能只读 clientWidth（那是布局宽）。
+   * - 比较一律「布局对布局」：offsetWidth 是布局像素，拿 getBoundingClientRect（视觉）
+   *   跟 clientWidth（布局）比，scale ≠ 1 时每次都会误判「宽了」白 resize。
+   */
+  function applyPickerSize(): void {
+    if (!picker || !host) return;
+    const scale = uiScaleValue($appSettings.appearance.uiScale) || 1;
+    const width = Math.max(120, Math.floor(host.clientWidth * scale));
+    if (width !== picker.base?.offsetWidth) picker.resize(width);
+    if (picker.base) host.style.height = `${Math.round(picker.base.offsetHeight / scale)}px`;
   }
 
   async function mountPicker(color: string): Promise<void> {
     releasePicker();
-    if (!host) return;
+    if (!host || !canvasHost) return;
     const { default: iro } = await import("@jaames/iro");
     // import 期间用户可能已经点了别处（面板收起）：那时别再建实例
     if (!$colorPickRequest) return;
-    const instance = iro.ColorPicker(host, {
-      width: 196,
+    const scale = uiScaleValue($appSettings.appearance.uiScale) || 1;
+    const instance = iro.ColorPicker(canvasHost, {
+      width: Math.max(120, Math.floor(host.clientWidth * scale)),
       color,
       borderWidth: 1,
       borderColor: "#e5e7eb",
@@ -253,9 +292,62 @@
     }
   }
 
+  /** 把输入框里还没提交的编辑并进 picker（写属性会走 color:change 同一条链路）。 */
+  function flushDraftsIntoPicker(): void {
+    if (!picker) return;
+    const hex = normalizeHexInput(hexDraft);
+    if (hex && hex !== picker.color.hexString) {
+      picker.color.set(hex);
+      return;
+    }
+    const r = parseChannelInput(redDraft);
+    const g = parseChannelInput(greenDraft);
+    const b = parseChannelInput(blueDraft);
+    if (r === null || g === null || b === null) return;
+    const current = picker.color.rgb;
+    if (current.r !== r || current.g !== g || current.b !== b) {
+      picker.color.set(`rgb(${r}, ${g}, ${b})`);
+    }
+  }
+
+  /**
+   * 确认前把还没跑的合帧预览**同步**落地（v0.8.7 需求 2.3，治本的一处）：
+   * `confirmColorPicker` 会把 store 置 null，飞行中的 rAF 醒来就被守卫丢弃——而 HEX/RGB
+   * 的提交挂在 blur 上，**确认点击自己的 mousedown 就是那次 blur**：rAF 是确认点击自己
+   * 排进去、又被它自己的 click 作废的，等再久也没用。消费端（尤其多档位的临期色）
+   * 单靠 `onConfirm` 的实参接不上档位，靠这里的冲刷拿到最后一笔草稿。
+   */
+  function flushPendingPreview(): void {
+    if (previewFrame === 0) return;
+    cancelAnimationFrame(previewFrame);
+    previewFrame = 0;
+    const current = $colorPickRequest;
+    if (!current) return;
+    colorPickerDebug.previewWrites += 1;
+    publishColorPickerDebug();
+    current.onPreview(pendingColor);
+  }
+
   function confirm(): void {
-    const hex = normalizeHexInput(hexDraft) ?? pendingColor;
+    flushDraftsIntoPicker();
+    const hex = picker ? picker.color.hexString : (normalizeHexInput(hexDraft) ?? pendingColor);
+    flushPendingPreview();
     confirmColorPicker(hex);
+  }
+
+  /** 吸管（v0.8.7 需求 2.5）：取到的色走既有 color:change 链路（同步输入框 + 预览），确认才落盘。 */
+  async function pickFromScreen(): Promise<void> {
+    if (!EyeDropperApi || !picker || eyedropperBusy) return;
+    eyedropperBusy = true;
+    try {
+      const result = await new EyeDropperApi().open();
+      const hex = normalizeHexInput(result.sRGBHex);
+      if (hex && picker) picker.color.set(hex);
+    } catch {
+      // 用户取消（AbortError）：静默
+    } finally {
+      eyedropperBusy = false;
+    }
   }
 </script>
 
@@ -275,7 +367,10 @@
     on:pointerdown|stopPropagation
   >
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="kx-color-canvas" bind:this={host}></div>
+    <div class="kx-color-canvas" bind:this={host}>
+      <!-- 反缩放层：iro 挂这一层里，让 svg 的视觉尺寸 == 布局尺寸（见 applyPickerSize） -->
+      <div class="kx-color-canvas-scale" bind:this={canvasHost}></div>
+    </div>
     <div class="kx-color-fields">
       <label class="kx-color-field">
         <span>HEX</span>
@@ -322,6 +417,14 @@
       <p class="kx-color-hint">{hint}</p>
     {/if}
     <div class="kx-color-actions">
+      {#if EyeDropperApi}
+        <button
+          class="menu-action-button kx-color-eyedropper"
+          type="button"
+          title="从屏幕上取色"
+          on:click={() => void pickFromScreen()}
+        >吸管</button>
+      {/if}
       <button class="menu-action-button" type="button" on:click={cancelColorPicker}>取消</button>
       <button class="menu-action-button primary" type="button" on:click={confirm} data-color-confirm>确认</button>
     </div>

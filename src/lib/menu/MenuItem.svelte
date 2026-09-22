@@ -9,6 +9,12 @@
   export let danger = false;
   export let disabled = false;
   export let active = false;
+  /**
+   * 选择类菜单项（勾选住在**最左侧的定宽槽位**里，v0.8.7 追加需求 2）。
+   * 槽位对每一项都常驻（未选中只留空格）：勾在行尾时，选中项一换、最宽的那一项跟着换，
+   * 菜单宽度就会跳一下；定宽槽位让所有项等宽，勾选怎么换都不动宽度。
+   */
+  export let checkable = false;
   export let onSelect: () => void = () => {};
 
   let submenuOpen = false;
@@ -134,8 +140,8 @@
     {disabled}
     on:click={handleClick}
   >
+    {#if checkable}<span class="menu-item-check" class:on={active}>✓</span>{/if}
     {#if icon}<svelte:component this={icon} size={15} />{/if}
     <span class="menu-item-label">{label}</span>
-    {#if active}<span class="menu-item-check">✓</span>{/if}
   </button>
 {/if}

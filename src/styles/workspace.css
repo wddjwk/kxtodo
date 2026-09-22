@@ -105,7 +105,8 @@ h1 {
   right: 0;
   display: flex;
   flex: 0 0 auto;
-  gap: 16px;  z-index: 1001;
+  gap: 16px;
+  z-index: 1001;
 }
 
 .header-actions > button {
@@ -137,6 +138,8 @@ h1 {
   display: grid;
   width: 38px;
   height: 30px;
+  /* UA 给 button 的默认 1px 6px 内边距会把内层 span 挤成小方块（999px 圆角裁不掉） */
+  padding: 0;
   place-items: center;
   border: 1px solid #dedede;
   border-radius: 999px;
@@ -148,14 +151,9 @@ h1 {
 .ui-color-picker span {
   width: 100%;
   height: 100%;
+  /* 圆角跟着按钮走：span 铺满时不会在两端露出直角 */
+  border-radius: inherit;
   background: var(--swatch);
-}
-
-.ui-color-picker input {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  cursor: pointer;
 }
 
 .ui-color-value {
@@ -165,7 +163,9 @@ h1 {
   text-overflow: ellipsis;
 }
 
-.ui-color-row > button {
+/* 「默认」按钮：**限定 .menu-action-button**——早先写成 `.ui-color-row > button`，
+   特异性压过 `.ui-color-picker { padding: 0 }`，色块又被撑成方块（真机打回的那次）。 */
+.ui-color-row > .menu-action-button {
   min-height: 30px;
   padding: 5px 9px;
 }
@@ -214,20 +214,6 @@ h1 {
 /* 当前落盘背景色（或草稿色）：与「正在编辑预设」区分开，只画一圈细描边 */
 .color-grid button.active {
   box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px rgb(0 0 0 / 32%);
-}
-
-/* 取色草稿的「取消 / 保存」行（需求 9）：三种颜色配置共用，保存才落盘 */
-.color-draft-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-  margin: -2px 0 2px;
-}
-
-.color-draft-actions .menu-action-button {
-  min-height: 28px;
-  padding: 4px 9px;
-  font-size: calc(var(--font-control) - 4px);
 }
 
 .menu-action-button.primary {
@@ -300,12 +286,6 @@ h1 {
   width: 42px;
   height: 34px;
   border-radius: 10px;
-}
-
-.preset-editor-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
 }
 
 .background-link {
@@ -2166,6 +2146,10 @@ h1 {
 .time-picker {
   position: relative;
   display: grid;
+  /* 定宽（v0.8.7 需求 4）：flex 容器里的 shrink-to-fit 会把两列摊成 44px（单列只剩 17px），
+     宽度写死到 6 个字宽后两列各约 3 个字宽。灰带（.time-band）就挂在这个盒子里、按它取宽，
+     轨道变宽后自动对齐，不用另外动它。 */
+  width: calc(var(--font-control) * 6);
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   height: var(--time-height);
@@ -2190,6 +2174,9 @@ h1 {
   scroll-snap-type: y mandatory;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
+  /* 滑到顶/底后滚动链不再冒泡（v0.8.7 需求 4）：否则外层列表接手 touchmove，
+     触发下拉刷新而时间轮不动——「滑动触发下拉同步，但时间滚轮不动」的根因。 */
+  overscroll-behavior: contain;
 }
 
 .time-col::-webkit-scrollbar {

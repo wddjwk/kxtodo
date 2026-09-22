@@ -740,6 +740,7 @@
             {#each treeMoveTargets as target (target.id)}
               <MenuItem
                 label={target.name}
+                checkable
                 active={(treeMenuNode.parentId ?? "") === target.id}
                 onSelect={() => moveNodeToGroup(treeMenuNode.id, target.id || null)}
               />

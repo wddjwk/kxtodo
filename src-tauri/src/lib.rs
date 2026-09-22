@@ -2918,7 +2918,8 @@ async fn cards_import_folder(
 // 壳层只做两件接线的事——把进度事件推给前端、把设置里的 relay/目录地址喂给引擎。
 // ---------------------------------------------------------------------------
 
-/// 传输的网络配置。relay 空 = 跟 p2p 同步用同一个（再空 = n0 公共服务）；
+/// 传输的网络配置。relay 三态（v0.8.7）：`default` = n0 公共 relay（出厂默认）；
+/// 空 = 跟 p2p 同步用同一个；其它 = 自部署地址（`disabled` = 只走直连）。
 /// 目录地址与 p2p 同步共用——传输与同步**账户**无关，但 pkarr 是同一个公共设施。
 fn transfer_net(host: &Arc<domain::host::HostCore>) -> domain::transfer::TransferNet {
     let settings = host.repo.load_settings().unwrap_or_default();

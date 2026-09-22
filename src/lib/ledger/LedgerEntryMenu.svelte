@@ -85,6 +85,7 @@
         {#each book.accounts as account (account.id)}
           <MenuItem
             label={account.name}
+            checkable
             active={account.id === entry.accountId}
             onSelect={() => setAccount(account.id)}
           />

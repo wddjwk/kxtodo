@@ -36,11 +36,16 @@ export function isColorPickerOpen(): boolean {
   return get(colorPickRequest) !== null;
 }
 
+/** 会话序号：key 只是面板与消费端之间的不透明身份串，没人解析它。 */
+let sessionNonce = 0;
+
 export function openColorPicker(request: ColorPickRequest): void {
-  // 换一个入口取色：先把上一份草稿作废（与「点别的日期先关旧再开新」同一条纪律）
-  const current = get(colorPickRequest);
-  if (current && current.key !== request.key) current.onCancel();
-  colorPickRequest.set(request);
+  // 任何旧会话都先作废：不只是「换了不同 key」——**同一入口重开**时，
+  // 旧的草稿与预览也会被带进新会话（v0.8.7 需求 2.4）。
+  get(colorPickRequest)?.onCancel();
+  // key 追加序号：面板的重挂判据是 key 串比对，不加 nonce 的话同 key 重开
+  // 面板不重挂，输入框还停在已作废的旧草稿上。
+  colorPickRequest.set({ ...request, key: `${request.key}#${++sessionNonce}` });
 }
 
 /** 取消：作废草稿并把面板收起来（确认路径由面板自己调 confirmColorPicker）。 */

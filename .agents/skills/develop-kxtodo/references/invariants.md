@@ -144,7 +144,7 @@ v0.8.0 起的几条补充（来龙去脉在 `history/v0.8.md` 批次 1）：
 - 「**首帧缓存是四件套**：appearance / profile / **features** / **state**」：v0.8.1 只缓存了外观与资料，v0.8.2 补上特性开关（`kxtodo-features-cache`）与界面状态（`kxtodo-state-cache-v1`：节点树 + 任务 + 选中节点 + 背景）。**凡是参与首帧渲染的设置都必须进缓存**，否则第一帧按默认值画、水合后再改回来就是用户眼里的「闪一下」；状态缓存让卡片第一帧就画出来，开关没缓存反而**放大**了闪烁面（`linkRender` 默认 card → 第一帧就把链接建成卡片）。写入规则：防抖 800ms、**先 stringify 比对，值不变一个字节都不写**、剥掉 scheduler、超配额三档降级（全量 → 去掉已完成任务 → 只留节点）、`visibilitychange`/`pagehide` flush、`isHydrated` 门控 **+ 水合完成补写一次**（`appState.set` 发生在 `isHydrated` 翻真之前会被门控挡掉）——`history/v0.8.2.md` 一.3 + 四.2
 - 「**写命令回来必须记信封 revision**」：`actions.ts` 里 `noteEnvelopeRevision(envelope.meta)`（读 `meta.revisionDomain`/`revision` 写 `appliedRevisions` 水位），`applySnapshot` 再按域比较、没前进就跳过 `set`。漏记 = **一次写入让 store 换两次身份**（乐观更新一遍、域事件回来又应用一遍快照）→ 所有 `$:` 重算、饼图出场动画重启（v0.8.2 的掉帧与「日历→统计闪一下」）。`gui.*` 不发域事件不用记；带 `expectedUpdatedAt` 冲突检测的（`task.modify`）**刻意不记**，否则自己的下一次写入被误判成冲突。**挡掉那一轮快照就撤掉了「快照兜一致性」**，所以 `setConfig` 改用信封带回的落盘后权威值兜（`config.set` 的 `data.value` 是写完从文件读回的），与乐观值 `sameValue`（键序无关的深比较）不同才再 set 一次——core 会 clamp 的字段目前前端夹的是同一道界，但两边各夹一次早晚漂——`history/v0.8.2.md` 一.2 + 四.1
 - 「**命令式 DOM 增强必须可逆，且落地前重读当前设置**」：`linkPreview.ts` 的两种增强都是破坏性的（卡片换掉整个 anchor、标题档覆写 textContent），不留退路就出现「设置拨了、画面一动不动」——markdown 有记忆化，`{@html}` 拿到同一个字符串根本不动 DOM，靠重渲纠正等于永远不纠正。修法：两张 WeakMap 存**原节点**与原文，`revertUnwanted` 在收集 anchor 之前先退（退完还要重新增强：标题档下刚从卡片退回来的裸链接得再变标题），`applyTo` 在 await 之后**重读档位**，不匹配就不落地（否则用户刚关掉的卡片会在抓取回来那一刻又画上去）——`history/v0.8.2.md` 二
-- 「**长文档两阶段渲染，短文档一条老路**」：`renderMarkdownFast`（跳过 hljs；公式用 `restoreMathSource` 摆回转义源码）同步上屏，双 rAF 后完整版升级；`fastCache` 与 `blockCache` 分开，缓存键是 `nodeId markdown`（**图片解析进度不进键**——插图是占位符 + `data-md-img`，由 `markdownWire` 从缓存异步填 src）。两版 HTML 逐字节相同时跳过第二次 `apply`。门槛 `TWO_PHASE_MIN_CHARS = 1000`：短文档（绝大多数）不许为长文档付任何代价。插图预热走 `preloadMarkdownImages(markdown, nodeId)`——`history/v0.8.2.md` 一.1
+- 「**长文档两阶段渲染，短文档一条老路**」：`renderMarkdownFast`（跳过 hljs；公式用 `restoreMathSource` 摆回转义源码）同步上屏，双 rAF 后完整版升级；`fastCache` 与 `blockCache` 分开，缓存键是 `nodeId\u0000markdown`（**图片解析进度不进键**——插图是占位符 + `data-md-img`，由 `markdownWire` 从缓存异步填 src）。两版 HTML 逐字节相同时跳过第二次 `apply`。门槛 `TWO_PHASE_MIN_CHARS = 1000`：短文档（绝大多数）不许为长文档付任何代价。插图预热走 `preloadMarkdownImages(markdown, nodeId)`——`history/v0.8.2.md` 一.1
 - 「**`normalizeTask`/`normalizeNode` 是逐字段白名单：core 加字段前端必须同步加**」，漏一个等于「每次快照刷新都把用户的值抹掉」。`dueTime` 与 `order` 从 v0.7.3 漏到 v0.8.2——症状是日期浮层的「精确到分钟」勾选框**勾不上**（勾上 → 写盘 → 域事件 → 快照 → normalize 抹掉 → 勾选框弹回、浮层重渲，看着像「日历缩小闪烁」），以及指定过的时刻被 now 覆盖——`history/v0.8.2.md` 一.4 + 四.5
 - 「**`text-decoration` 会传播进嵌套子列表，且子级无法取消**（不是继承属性）」：勾选任务的删除线必须打在 `span.md-task-label` 上，不能打在 `li` 上。标记由渲染期的 DOM pass `markCheckedTaskItems` 生成：tight 列表打 `li.md-task-done` 并把「勾选框之后到嵌套 `ul/ol` 之前」的兄弟包进 span；loose 列表给 `p` 加同一个类。（v0.8.1 的「`<input>` 是原子行内盒不会被划穿，所以不必包 span」只对**当前行**成立，子列表照样被划掉）——`history/v0.8.2.md` 一.9
 - 「**测返回键走 `window.kxtodoBackHandler()`**」：安卓硬件返回键的真实链路是 MainActivity → evaluateJavascript → 它（true = 前端吃掉，false 才让 WebView 退历史/finish）。测试里 `page.goBack()` 量的是历史栈，**问不到浮层拦截器**。多层浮层要逐级退（`AccountManager` 三层 + `startedOutsideList` 语义）；懒加载浮层要 **store 级兜底 guard**（chunk 在途时组件自己的 guard 还没注册）；`goBackLevel()`（左上角箭头）也必须先 `consumeBackInterceptors()`——`history/v0.8.2.md` 一.6 + 四.4
@@ -240,6 +240,7 @@ v0.8.0 起的几条补充（来龙去脉在 `history/v0.8.md` 批次 1）：
 - 「**APK 只构建 aarch64 + armv7 两个 ABI**，别为了「万一有人用模拟器」把 x86/x86_64 加回来（纯为模拟器服务却占掉 APK 一半体积；移动端回归验证走 Playwright + 系统 Edge，不依赖 x86 APK）」——`build-and-release.md`
 - 「**前端单测 `npm run test:unit`**（vitest 5，node 环境，独立 `vitest.config.ts` 刻意不复用 vite.config.ts）；**断言必须时区无关**（CI 的 ubuntu 是 UTC、开发机是 UTC+8）；ci.yml 的 frontend job 插在 `npm run check` 之后、`npm run build` 之前」——`frontend.md`「前端单测」
 - 「**改 `skills/kxtodo/SKILL.md` 必须重跑 `kxtodo-cli skills validate`**（正则把任何 `task|diary|schedule|config|skills` 后跟的小写英文词当命令名、任何 `--xxx` 当参数名去比对目录，引用不存在的子命令或参数直接挂测试）」——`cli.md`「Agent 技能文档」
+- 「**探针先于定稿**：传输/路径语义/交互时序层的修复方案，静态推演会被实测推翻（v0.8.6 有三个静态方案被探针一次性证伪；v0.8.7 的「把手指脱靶 44px」「二级菜单宽度随选中项跳」也都是先量出来才定案的）。**断言要比对真实观感**——把手指落点、滚动条有无、菜单底边与光标差几像素——只数事件次数或只看最终值的断言，实现歪了照样全绿」——`history/v0.8.6.md` 八 + `history/v0.8.7.md` 九/十
 - 「**文档真身住在 `.agents/`**（`.agents/AGENTS.md` + `.agents/skills/`），`.qoder/AGENTS.md` 与 `.qoder/skills` 是指向它们的软链接，仓库根目录只留面向用户的 `README.md`——改文档一律改 `.agents/` 下的真身。`.gitignore` 里 `.qoder/` 必须写成 `.qoder/*` + `!.qoder/AGENTS.md` + `!.qoder/skills`（**整目录被排除时 gitignore 的 negation 对子路径无效**，否则这两个软链接进不了仓库；`skills` 那条不能带尾斜杠——它现在是软链接不是目录）。`core.symlinks=false` 的 Windows 克隆会把软链接落成一个内容为目标路径的文本文件，那份不可用」——`history/v0.8.md` 批次 7
 
 ### 平台与窗口
@@ -257,6 +258,7 @@ v0.8.0 起的几条补充（来龙去脉在 `history/v0.8.md` 批次 1）：
 - 「tauri-plugin-window-state 默认管所有窗口」；「`reveal_main_window` 在 show 之前跑 `sanitize_main_window_geometry`」——`pitfalls-windows.md` 第 5 条
 - 「全局快捷键受插件平台能力限制（X11 可用，纯 Wayland 抓不到），不做会话嗅探特判」；「Linux 首跑默认退出……用户设置后以用户值为准」——`ui-patterns.md`「Linux 桌面」
 - 「改成 `is_focused`：已在前台就收起，隐藏/最小化/被挡住一律 show + unminimize + set_focus」——`history/v0.7.5-v0.7.8.md` v0.7.8 ⑪
+- 「**未验证清单点名**：「交给 CI」只覆盖**编译与构建**；凡涉及路径语义 / 平台 API / 交互时序，未验证清单必须点名到「**哪一端、哪条路径、由谁手测**」——清单写成免责声明而不是待办，就是 v0.8.6 那个「桌面选文件发送」的 bug 跨三个版本存活的土壤」——`SKILL.md` 3.2 + `history/v0.8.6.md` 八
 
 ### v0.8.4 新增
 
@@ -297,16 +299,8 @@ v0.8.0 起的几条补充（来龙去脉在 `history/v0.8.md` 批次 1）：
 - 「**导入设置按 core 的字段目录（`config.list`）摊**，命中已知路径整份写下并停止下钻、map 型按 mapKey 逐键写、命不中的跳过；逐条 try/catch，单条失败不中断整轮」——`frontend.md`「actions.ts」
 - 「CLI 长选项一律 kebab-case、core 的 params 与 JSON 输出一律 camelCase，转换靠每个 `*Args` 上的 `rename_all = "camelCase"`（漏写 = 参数静默失效）；钉子 `cli_long_options_are_all_kebab_case`」——`cli.md`「命令名口径」
 - 「`ledger categories` 是**平铺数组但按树的先序**（大类后面紧跟它的子分类），每项带 `depth`；`ledger stats` 不带 `--side` 时两侧混排、`percent` 是**该侧内部**占比（别相加）」——`ledger.md`「CLI 子命令名与 core 命令名的映射」
-- **搜索的三条口径**（v0.8.6）：① 折叠串按**对象身份**缓存（日记/记账各自一份；记账那层还要按 `book` 身份索引——分类名住在 book 里）；② **任务的折叠串里不许进条目名**（改名只动 `state.nodes`、任务对象身份不变，缓进来就永久过期），名字命中走 `matchingNodeIds` 现算；③ 记账的**金额串与文字串必须分开缓存**（金额带千分位逗号，混进去会让「搜一个逗号」列出所有四位数的账）。出处：`diary.ts::diaryFold` / `ledger.ts::ledgerFold` / `nodes.ts::taskFold` + `history/v0.8.6.md` 一。
-- **搜索不再用 derived**：`searchHits` 是**可写 store + 扫描控制器**（`searchScan.ts`）——derived 同步求值会让分块失效；每批 1000 条、完成后才按 `updatedAt` 全局排序并截前 200、防抖词一变取消上一轮、**清空同步生效不走 idle**。出处：`history/v0.8.6.md` 一.2。
-- **拖动落点的两条护栏不能少**（v0.8.6）：`dragHit.ts::contiguousZones` 把行间 2px 缝隙按中点判给邻近行（否则指针掉进缝里被当空白区、落点被清、整棵树跳）；`dragHit.ts::keepsPreviousDecision` 在「行的几何变了而指针位移 ≤ band/2」时保持现判（我们的预览让位会把目标行整体挪走，用新几何重算会把「瞄准分组头中部」判成「插到后面」，行来回闪）。判定一律用**布局位置**（`settledTop` 把 flip 的 transform 减掉、还要乘壳缩放比），绝不用动画中途的 rect。出处：`history/v0.8.6.md` 二.2。
-- **子树的展开动画用 `grid-template-rows: 0fr → 1fr`，收起态保持挂载**：`{#if}` 挂载 = 新内容瞬间占位 + 兄弟行慢慢 flip（「先盖住再挪走」）。代价：收起态的行仍在树上，**落点判定必须用 `closest(".tree-children:not(.open)")` 排除**。出处：`history/v0.8.6.md` 二.1。
-- **移动端整页视图用不透明覆盖，不用 `display:none`**（记账/日记/工具箱三组）：`display:none` 让返回主界面整块重排+重绘（闪）；改覆盖后底下两栏 `visibility: hidden` + `inert`（旧 WebKit 不认 inert 时 CSS 兜底）。`.view-list`/`.view-content`/`.view-settings` 三组保持不变。出处：`history/v0.8.6.md` 三。
-- **点锚定浮层的几何只有一份**（`popover.ts::placePopover`）：优先向下 / 放不下翻到锚点上方且**下边缘对齐** / **四边一律钳制**；量尺寸等**双 rAF**（首帧内容未定宽会算错钳制），落位前 `visibility: hidden`。出处：`history/v0.8.6.md` 四。
-- **传输清单的 `rel` 恒为相对路径**：所有取文件入口走 `transferManifest.ts` 的四个构造器，`startSend` 按 `root` 分组拆成多次发送；core 的 `TRANSFER_MANIFEST_ABSOLUTE_PATH` 只是兜底 tripwire（绝对路径在 Windows 会被接收端整单拒、在 Linux 会镜像成一棵目录树）。出处：`history/v0.8.6.md` 五.1。
-- **「拒绝」是用户决定，不是错误**：core 拒绝记 `rejected` 历史、发信息性事件、**不发 error**；错误文案只在 `TRANSFER_CONNECTION_LOST` 时才是「对方离线了」，本地错误原样透出（`transferEvents.ts::transferErrorText`，有单测）。出处：`history/v0.8.6.md` 五.3/5.4。
-- **懒加载组件的响应式挂载判据不能是「实例是否为真」**：`await import()` 在途时实例仍是 null，重跑就再挂一次，而每次 `await tick()` 都是微任务、永远不给 fetch 让路——主线程被这个循环饿死。用「当前请求 key」记账（`ColorPickerPanel` 的 `activeKey`）。出处：`history/v0.8.6.md` 六.1。
-- **挂在 App 层（宿主之外）的浮层要自己 `stopPropagation`**（否则点击冒到 `.app-shell` 的 `closeOverlays` 把宿主菜单关掉）；**Esc 注册在 `window` 捕获**（菜单的 Escape 也在 window 捕获且会 stopPropagation，同级管不住；挂 document 会被它拦住）。出处：`history/v0.8.6.md` 六.2/6.3。
+### v0.8.6 新增
+
 - **搜索的三条口径**（v0.8.6）：① 折叠串按**对象身份**缓存（日记/记账各自一份；记账那层还要按 `book` 身份索引——分类名住在 book 里）；② **任务的折叠串里不许进条目名**（改名只动 `state.nodes`、任务对象身份不变，缓进来就永久过期），名字命中走 `matchingNodeIds` 现算；③ 记账的**金额串与文字串必须分开缓存**（金额带千分位逗号，混进去会让「搜一个逗号」列出所有四位数的账）。出处：`diary.ts::diaryFold` / `ledger.ts::ledgerFold` / `nodes.ts::taskFold` + `history/v0.8.6.md` 一。
 - **搜索不再用 derived**：`searchHits` 是**可写 store + 扫描控制器**（`searchScan.ts`）——derived 同步求值会让分块失效；每批 1000 条、完成后才按 `updatedAt` 全局排序并截前 200、防抖词一变取消上一轮、**清空同步生效不走 idle**。出处：`history/v0.8.6.md` 一.2。
 - **拖动落点的两条护栏不能少**（v0.8.6）：`dragHit.ts::contiguousZones` 把行间 2px 缝隙按中点判给邻近行（否则指针掉进缝里被当空白区、落点被清、整棵树跳）；`dragHit.ts::keepsPreviousDecision` 在「行的几何变了而指针位移 ≤ band/2」时保持现判（我们的预览让位会把目标行整体挪走，用新几何重算会把「瞄准分组头中部」判成「插到后面」，行来回闪）。判定一律用**布局位置**（`settledTop` 把 flip 的 transform 减掉、还要乘壳缩放比），绝不用动画中途的 rect。出处：`history/v0.8.6.md` 二.2。
@@ -318,3 +312,22 @@ v0.8.0 起的几条补充（来龙去脉在 `history/v0.8.md` 批次 1）：
 - **懒加载组件的响应式挂载判据不能是「实例是否为真」**：`await import()` 在途时实例仍是 null，重跑就再挂一次，而每次 `await tick()` 都是微任务、永远不给 fetch 让路——主线程被这个循环饿死。用「当前请求 key」记账（`ColorPickerPanel` 的 `activeKey`）。出处：`history/v0.8.6.md` 六.1。
 - **挂在 App 层（宿主之外）的浮层要自己 `stopPropagation`**（否则点击冒到 `.app-shell` 的 `closeOverlays` 把宿主菜单关掉）；**Esc 注册在 `window` 捕获**（菜单的 Escape 也在 window 捕获且会 stopPropagation，同级管不住；挂 document 会被它拦住）。出处：`history/v0.8.6.md` 六.2/6.3。
 - 「**本地安卓交叉检查必须覆盖壳 crate**（`cargo check --target aarch64-linux-android -p kxtodo --lib --features tauri/custom-protocol`）：只查 `-p kxtodo-core -p kxtodo-server` 时 `src-tauri/src/lib.rs` 里 `#[cfg(not(desktop))]` 的分支一行都没编译过，而 `ci.yml` 也只编桌面目标——错会一路绿到 `release.yml` 的安卓栏（那是**打了 tag 之后**才跑的，红的代价是一版发不出去）。**写平台专有 API 之前先去读那一份实现**：Tauri v2 的 Android `PathResolver` 没有 `external_app_data_dir()`，而它的 `download_dir()` 本来就是 `getExternalFilesDir(DIRECTORY_DOWNLOADS)`——所以「桌面一份、移动端一份」的 cfg 分支根本不必存在」——`pitfalls-android.md`「构建环境与入口」+ `history/v0.8.3.md` 七（7）
+
+### v0.8.7 新增
+
+- 「**新增组件先问「现有样式能不能复用」，不要自己造一套**：工具箱与工具子页的三点菜单就是反例——手里已经有 `ContextMenu` + `MenuItem` + 点锚定定位（`x = rect.right / y = rect.bottom + 6` + `xAlign="right"` + `anchor={按钮}`，菜单贴按钮正下方、右缘对齐）这一整套路子，却把菜单开在鼠标位置上、还给取色各写一份状态。**除非需求明确要求特殊样式，新增 UI 一律先找同类的既有组件/样式/调用约定**——用户的复用要求是验收项，不是建议」——`history/v0.8.7.md` 八
+- 「**点锚定浮层只有两条分支**（`popover.ts::placePopover` 终裁）：下方放得下 → 左上角贴锚点；放不下 → 整个翻上、下边缘贴锚点（`mirrorXOnFlip` 时右下角贴锚点）。**没有「下方限高 + 内部滚动」这一档**（真机打回「这太蠢了」），唯一滚动兜底是「上下都放不下」的 maxHeight 钳制。量高一律 `Math.max(rect.height / scale, scrollHeight)`——`scrollHeight` 是布局像素**不能再除**，多除一次把菜单量高 33%、翻上后底边落不到锚点」——`history/v0.8.7.md` 一
+- 「**缩放壳里挂第三方指针组件：让它「视觉尺寸 == 布局尺寸」**（iro 的拖动数学是「光标视觉坐标 ÷ 布局宽」）。三件套缺一不可：反缩放层（`transform: scale(1/--ui-scale)`、origin top left）+ 宽度传**视觉口径**（宿主布局宽 × uiScale）+ 宿主高度显式补偿（`base.offsetHeight / uiScale`）；宽度比较用 `offsetWidth`（布局对布局）。改了它必配**几何断言**（把手指与光标差 < 3px），只数事件次数测不出来」——`history/v0.8.7.md` 二.2
+- 「**挂在 blur 上的提交 + 同步收尾 = 结构性丢改动**：确认按钮自己的 mousedown 就是输入框的 blur，而确认路径会把浮层 store 置 null、把飞行中的 rAF 作废——**确认前必须先冲刷 pending 草稿**（`ColorPickerPanel::flushDraftsIntoPicker` + `flushPendingPreview`），消费端同时改用「面板传回的实参」落盘」——`history/v0.8.7.md` 二.3
+- 「**同一入口重开要作废旧会话 + key 加会话序号**：面板的重挂判据是 key 串比对，同 key 重开不重挂、输入框会停在已作废的草稿上；key 只是不透明身份串」——`history/v0.8.7.md` 二.4
+- 「**原生控件换自绘之前，先盘「这个能力是不是系统给的」**：吸管（`EyeDropper`）就是原生 `input[type=color]` 的系统选色器自带的，v0.8.6 换 iro 时静默丢了。按 `'EyeDropper' in window` 渲染，没有的平台不硬上」——`history/v0.8.7.md` 二.5
+- 「**配置键的作用域要对齐**：编辑端写什么键，消费端必须读同一个键。系统视图（我的一天/计划内/收藏/定时任务）是聚合视图，编辑端写**视图键**、卡片读**条目键**——`colorPreview.ts::dueColorsForCard` 双回退（自己条目优先、没配过才跟视图），预览同一条链」——`history/v0.8.7.md` 二.6
+- 「**「即输即生效」的输入框一律停输 300ms 再落盘**（逐键 `setConfigAction` 会把 settings.json 的原子写打爆）；**菜单/弹层关掉时必须 flush 一次**，别把最后一笔改动静默丢掉」——`history/v0.8.7.md` 二.7
+- 「**改 CSS 特异性问题必须整页真实渲染量**：`.ui-color-row > button`（0,1,1）盖掉 `.ui-color-picker { padding: 0 }`（0,1,0）——单元素复刻测试全绿、真机还是方块。收窄成 `.ui-color-row > .menu-action-button`；button 化新元素前先扫容器里所有裸 `> button` 选择器」——`history/v0.8.7.md` 二.8
+- 「**时间戳比较一律 `Date.parse`**：core 写入的两种格式（`…Z` 与 `…+08:00`）混存，按字面比较跨格式必错位——不只是排序难看，**封顶 200 会截掉真正最新的**」——`history/v0.8.7.md` 三.1
+- 「**时刻双轨要 `overscroll-behavior: contain`**（否则滑到顶/底后滚动链冒泡到外层列表、被 pullrefresh 接管）+ **定宽** `calc(var(--font-control) * 6)`（flex 里 shrink-to-fit 会把两列摊成 44px）」——`history/v0.8.7.md` 四
+- 「**诊断用的事件日志也要异步写**：运行时 `worker_threads(2)`，同步文件 IO 会卡住 accept/心跳/其它传输。`Handle::try_current()` 兜底（runtime 外静默跳过，直接 `tokio::spawn` 会 panic）」——`history/v0.8.7.md` 五
+- 「**页面头部图标只有一个口径**（`styles.ts::PAGE_HEADER_ICON_SIZE`）：工具箱 / 工具子页 / 我的一天 / 日记 / 记账都从它取——同一种东西写两个数字迟早被点名」——`history/v0.8.7.md` 七
+- 「**工具箱的外观分两层**：主界面（`toolbox.accent` / `toolbox.backgroundColor`）+ 每个工具子页自己的（`toolbox.toolAccents` / `toolbox.toolBackgrounds`，键按 `NAV_TOOL_IDS` 白名单校验）。工具没配过就跟主界面——「单独调」与「一次调好」两种用法都成立；取色预览的作用域按路由分（`toolbox` / `toolbox:<工具id>`）」——`history/v0.8.7.md` 八.2
+- 「**菜单里的勾选要住最左侧的定宽槽位**（`MenuItem` 的 `checkable`）：勾在行尾时「选中项一换、最宽的那一项跟着换」，菜单宽度会跳（用户明确要求「点不同项宽度不变」）。同类菜单一起挂（排序方式/移动到分组/卡片类型/改账户/计划内分组/relay）」——`history/v0.8.7.md` 八.3
+- 「**菜单「配置在上 → 分割线 → UI颜色 / 背景颜色在下」是全应用统一结构**（ListMenu 与工具箱 ⋯ 菜单逐字一致）；段落标题就叫「UI颜色」，别再出现「主题颜色」这种第二种叫法」——`history/v0.8.7.md` 八.1

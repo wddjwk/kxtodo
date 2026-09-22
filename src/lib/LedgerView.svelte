@@ -12,7 +12,7 @@
   } from "@lucide/svelte";
   import { appSettings, ledgerData, ledgerEditor, ledgerCategoryDraft } from "./stores";
   import { setConfig } from "./actions";
-  import { buildMainStyle, ledgerAccent, ledgerBackground } from "./styles";
+  import { buildMainStyle, ledgerAccent, ledgerBackground, PAGE_HEADER_ICON_SIZE } from "./styles";
   import { accentWithPreview, backgroundWithPreview, colorPreview } from "./colorPreview";
   import { imageCache, resolveImageSrc } from "./images";
   import { monthOf, shiftMonth, todayDate, type MonthCursor } from "./diary";
@@ -365,7 +365,7 @@
   <section class="list-header">
     <div>
       <MobileBack />
-      <span class="header-icon"><Wallet size={34} /></span>
+      <span class="header-icon"><Wallet size={PAGE_HEADER_ICON_SIZE} /></span>
       <h1>记账</h1>
     </div>
     <div class="header-actions" on:click|stopPropagation>

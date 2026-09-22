@@ -125,6 +125,13 @@ export function monthOf(date: string): MonthCursor {
 // 排序与分组
 // ---------------------------------------------------------------------------
 
+/** `createdAt` → 毫秒（v0.8.7 需求 3.1：两种时间戳格式混存——`…Z` 与 `…+08:00`，
+    按字面比较跨格式必错位；解析不出来退 0 沉底）。 */
+function createdStamp(entry: DiaryEntry): number {
+  const parsed = Date.parse(entry.createdAt);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
 /** date → 当天的日记（天内按写作先后）。 */
 export function diaryByDate(entries: DiaryEntry[]): Map<string, DiaryEntry[]> {
   const map = new Map<string, DiaryEntry[]>();
@@ -137,7 +144,10 @@ export function diaryByDate(entries: DiaryEntry[]): Map<string, DiaryEntry[]> {
     }
   }
   for (const bucket of map.values()) {
-    bucket.sort((a, b) => (a.createdAt === b.createdAt ? a.id.localeCompare(b.id) : a.createdAt < b.createdAt ? -1 : 1));
+    bucket.sort((a, b) => {
+      const delta = createdStamp(a) - createdStamp(b);
+      return delta !== 0 ? delta : a.id.localeCompare(b.id);
+    });
   }
   return map;
 }

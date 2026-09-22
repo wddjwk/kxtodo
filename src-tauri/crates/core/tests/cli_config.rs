@@ -387,3 +387,54 @@ fn due_colors_whole_map_write() {
     );
 }
 
+
+#[test]
+fn transfer_relay_accepts_default_sentinel() {
+    let env = TestEnv::fresh();
+    // 出厂默认就是「使用默认服务」（v0.8.7）
+    let got = env.ok(&["config", "get", "transfer.relay"]);
+    assert_eq!(got["value"], "default");
+    // 三态都合法：default / 空（复用同步）/ 自部署地址；乱写的地址当场拒
+    env.ok(&["config", "set", "transfer.relay", "default"]);
+    env.ok(&["config", "set", "transfer.relay", ""]);
+    env.ok(&["config", "set", "transfer.relay", "https://relay.example.com"]);
+    env.err(&["config", "set", "transfer.relay", "不是地址"], 2);
+}
+
+#[test]
+fn toolbox_tool_colors_are_validated_against_tool_catalog() {
+    let env = TestEnv::fresh();
+    let got = env.ok(&["config", "get", "toolbox.toolAccents"]);
+    assert_eq!(got["value"], json!({}));
+
+    // 整份对象写；键必须是工具目录里的 id（与 appearance.navItems 同一条纪律）
+    let set = env.ok(&[
+        "config",
+        "set",
+        "toolbox.toolAccents",
+        "{\"rmb\":\"#123456\",\"transfer\":\"#654321\"}",
+    ]);
+    assert_eq!(set["value"]["rmb"], "#123456");
+    env.ok(&[
+        "config",
+        "set",
+        "toolbox.toolBackgrounds",
+        "{\"scratchpad\":\"#abcdef\"}",
+    ]);
+    let got = env.ok(&["config", "get", "toolbox.toolAccents"]);
+    assert_eq!(got["value"]["transfer"], "#654321");
+
+    env.err(&[
+        "config",
+        "set",
+        "toolbox.toolAccents",
+        "{\"nope\":\"#123456\"}",
+    ], 2);
+    env.err(&[
+        "config",
+        "set",
+        "toolbox.toolAccents",
+        "{\"rmb\":\"blue\"}",
+    ], 2);
+    env.err(&["config", "set", "toolbox.toolBackgrounds", "#123456"], 2);
+}

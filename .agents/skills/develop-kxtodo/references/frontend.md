@@ -128,8 +128,19 @@ v9 ScheduleEntry（spec/state/ui 三段）↔ UI 编辑模型双向适配，patc
 - `src/lib/transferEvents.ts` —— 传输事件 → 文案的纯映射（`transferErrorText` / `historyStatusStyle`）；单独成模块的理由是 `transferStore.ts` 静态 import 了 Tauri，node 单测 import 不进来。
 - `src/lib/dragHit.ts` —— 拖动落点几何（`settledTop` / `schmitt` / `zoneAt` / `contiguousZones` / `positionInRow` / `keepsPreviousDecision` / `scaleOf`），纯函数 + 单测。
 - `src/lib/cardOverlays.ts` —— 卡片级浮层与露出态的**全局单例**（`datePopoverTaskId` / `revealedTag` / `revealedEmoji`）+ **唯一一份** document pointerdown；App 启动调 `ensureCardOverlayRuntime()`。TaskCard 不再自带 `svelte:window`。
-- `src/lib/colorPickerPanel.ts` + `src/lib/ColorPickerPanel.svelte` + `src/styles/colorpanel.css` —— 全应用统一取色盘（单例请求 store + iro 懒加载 + RGB/HEX 校验纯函数 `normalizeHexInput`/`parseChannelInput`）。12 处入口只调 `openColorPicker({key,color,anchor,onPreview,onConfirm,onCancel})`。
-- `src/lib/popover.ts::placePopover` —— 点锚定浮层的唯一几何（逻辑像素进/出），ContextMenu 与日期浮层共用。
+- `src/lib/colorPickerPanel.ts` + `src/lib/ColorPickerPanel.svelte` + `src/styles/colorpanel.css` —— 全应用统一取色盘（单例请求 store + iro 懒加载 + RGB/HEX 校验纯函数 `normalizeHexInput`/`parseChannelInput`）。12 处入口只调 `openColorPicker({key,color,anchor,onPreview,onConfirm,onCancel})`。**v0.8.7 补**：`openColorPicker` 先作废旧会话并给 key 追加会话序号（`${key}#${++nonce}`）；`confirm()` 前 `flushDraftsIntoPicker()` + `flushPendingPreview()`；面板操作行有「吸管」（`'EyeDropper' in window` 才渲染）；面板挂进 `.kx-color-canvas > .kx-color-canvas-scale`（反缩放层）+ 宿主高度 `base.offsetHeight / uiScale`。
+- `src/lib/popover.ts::placePopover` —— 点锚定浮层的唯一几何（逻辑像素进/出），ContextMenu 与日期浮层共用。**v0.8.7 终裁**：下方放得下 → 左上角贴锚点；放不下 → 翻上、下边缘贴锚点（`mirrorXOnFlip` 时右下角贴锚点）；**没有「下方限高」这一档**；量高 `Math.max(rect.height / scale, scrollHeight)`。
+
+### v0.8.7 新增/改动的前端点
+
+- `src/lib/colorPreview.ts`：新增 `SYSTEM_VIEW_IDS` 与 `dueColorsForCard(preview, nodeId, viewId, stored, defaults)` —— 系统视图的**双回退**（自己条目优先、没配过才跟视图键），`TaskCard` 用它取值（单测 5 条）。
+- `src/lib/searchScan.ts`：`stampOf` 改 `Date.parse` 数值（脏数据退 0）；中间批 `hits.slice(0, SEARCH_HIT_LIMIT)` 封顶。
+- `src/lib/diary.ts::diaryByDate`：天内排序同样走 `Date.parse`（`createdStamp`）。
+- `src/lib/styles.ts`：新增 `PAGE_HEADER_ICON_SIZE = 34`（页面头部图标唯一口径）；`toolboxAccent` / `toolboxBackground` 多一个可选 `toolId` 参数（两层回退：工具 → 主界面 → 默认）。
+- `src/lib/defaults.ts`：`toolbox.toolAccents` / `toolbox.toolBackgrounds` 默认 `{}` 并归一（`normalizeHexColorMap`，与 `appearance.uiColors` 共用一份）；`transfer.relay` 的默认值从 `""` 改成 `"default"`（n0 公共 relay）。
+- `src/lib/ColorDraftActions.svelte` **已删除**（确认统一进色盘面板）；`.color-draft-actions` 的 CSS 一并清掉。
+- `src/lib/menu/MenuItem.svelte`：`checkable` prop —— 勾选标记住在**最左侧的定宽槽位**（未选中 `visibility: hidden`，仍占位），菜单宽度不随选中项变化。
+- `src/lib/menu/ContextMenu.svelte`：`mirrorXOnFlip`（默认 `true`）。
 
 ## CSS
 

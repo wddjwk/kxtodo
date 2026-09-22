@@ -53,8 +53,16 @@ export function idleSchedule(task: () => void): void {
 
 const touched = (item: { updatedAt?: string; createdAt: string }): string => item.updatedAt || item.createdAt;
 
-function stampOf(hit: SearchHit): string {
-  return hit.kind === "task" ? touched(hit.task) : touched(hit.entry);
+/**
+ * 排序用的时间戳（v0.8.7 需求 3.1）：**必须走 `Date.parse`**。
+ * core 写入的时间戳两种格式混存——手写路径是 `…Z`（UTC），日记导入 / `diary add --time`
+ * 是 `…+08:00`（本地偏移）。按**字面**比较时跨格式必错位（真实更晚的 Z 串会排在
+ * 真实更早的偏移串前面），而这不只是顺序好看不好看：封顶 200 的时候会截掉真正最新的。
+ * 解析不出来的脏数据退 0（沉底），不让它把整轮排序带崩。
+ */
+function stampOf(hit: SearchHit): number {
+  const parsed = Date.parse(touched(hit.kind === "task" ? hit.task : hit.entry));
+  return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 export function createSearchScanner(options: SearchScannerOptions): SearchScanner {
@@ -113,14 +121,14 @@ export function createSearchScanner(options: SearchScannerOptions): SearchScanne
           if (hit) hits.push(hit);
         }
         if (cursor < total) {
-          options.onBatch(hits.slice(), false);
+          // 中间批**封顶**（v0.8.7 需求 3.2）：宽词命中上万条时，每批都把全量命中交给
+          // store 会让 VirtualStack 的两个 O(命中数) 重算跟着批数一起爆（16 批 ≈ 24 万次
+          // 数组回调）。封顶不影响最终结果——最终批排序用的是局部完整的 `hits`。
+          options.onBatch(hits.slice(0, SEARCH_HIT_LIMIT), false);
           schedule(step);
           return;
         }
-        options.onBatch(
-          [...hits].sort((a, b) => stampOf(b).localeCompare(stampOf(a))).slice(0, SEARCH_HIT_LIMIT),
-          true
-        );
+        options.onBatch([...hits].sort((a, b) => stampOf(b) - stampOf(a)).slice(0, SEARCH_HIT_LIMIT), true);
       };
 
       schedule(step);

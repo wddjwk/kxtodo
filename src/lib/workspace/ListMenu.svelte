@@ -36,7 +36,6 @@
   import { isLocalImageRef, localImageFilename, localImageRef, primeImageCache, compressBackgroundImage } from "../images";
   import { DEFAULT_DUE_COLORS } from "../dueHighlight";
   import { clearColorPreview, colorPreview, setColorPreview } from "../colorPreview";
-  import ColorDraftActions from "../ColorDraftActions.svelte";
   import { openColorPicker } from "../colorPickerPanel";
   import { onDestroy } from "svelte";
   import { showMobileList } from "../platform";
@@ -73,7 +72,7 @@
   let editingPresetIndex: number | null = null;
   let presetNameDraft = "";
   let presetColorDraft = "";
-  let presetEditOriginalColor = "";
+  let presetNameTimer: number | undefined;
   let syncing = false;
 
   /**
@@ -104,11 +103,6 @@
   $: colorScope = diaryMode ? "diary" : ledgerMode ? "ledger" : (node?.id ?? "");
   $: accentShown = colorDraft.accent ?? accentValue;
   $: backgroundShown = colorDraft.background ?? bg.color;
-  $: accentDirty = colorDraft.accent !== undefined && colorDraft.accent !== accentValue;
-  $: backgroundDirty = colorDraft.background !== undefined && colorDraft.background !== bg.color;
-  $: dueDirty = Object.entries(colorDraft.due ?? {}).some(
-    ([index, color]) => color !== dueColorValue(Number(index))
-  );
 
   /** 把草稿推给界面（预览）。没在草稿里的槽位一律 null，落盘值由消费端兜底。 */
   function pushColorPreview(): void {
@@ -122,6 +116,8 @@
 
   /** 丢掉草稿并回退预览（取消 / 菜单关闭）。只清自己那一份作用域，别误伤别的页。 */
   function discardColorDrafts(): void {
+    // 预设名称草稿是「停输即生效」的防抖提交：菜单直接关掉时补提最后一次
+    flushPresetName();
     colorDraft = {};
     if (get(colorPreview)?.scope === colorScope) clearColorPreview();
   }
@@ -356,11 +352,13 @@
     openColorPanel("accent", accentShown, anchor, pickUiColor, saveUiColor, cancelUiColor);
   }
 
-  /** 保存主题色：这一步才写 settings / uiColors */
-  function saveUiColor(): void {
-    const value = colorDraft.accent;
-    if (value === undefined) return;
-    setUiColor(value);
+  /** 保存主题色：这一步才写 settings / uiColors。
+   *  实参 = 面板确认那一刻的颜色（面板调 onConfirm 前会冲刷掉还没跑的合帧预览，
+   *  只靠草稿会踩「确认点击自己的 blur 把 rAF 作废」那个结构性缺陷，见需求 2.3）。 */
+  function saveUiColor(color: string): void {
+    colorDraft = { ...colorDraft, accent: color };
+    pushColorPreview();
+    setUiColor(color);
   }
 
   function cancelUiColor(): void {
@@ -414,7 +412,7 @@
       dueColorDisplay(index),
       anchor,
       (color) => pickDueColor(index, color),
-      saveDueColors,
+      (color) => saveDueColors(index, color),
       cancelDueColors
     );
   }
@@ -422,13 +420,16 @@
   /** 保存临期配色（v0.8.5 需求 21）：四档一次写完（逐档写会互相覆盖——后一档读到的
       还是旧数组），但**没改过的档从已存值/默认值补**，别把草稿里没有的槽位也钉成显式值；
       保存后草稿保留（与主题色 / 背景色两条路径同一口径，脏标记靠落盘值自然清零）。 */
-  function saveDueColors(): void {
+  function saveDueColors(index: number, color: string): void {
     const key = dueColorKey();
-    if (!key || !dueDirty) return;
+    if (!key) return;
+    colorDraft = { ...colorDraft, due: { ...(colorDraft.due ?? {}), [index]: color } };
+    pushColorPreview();
     const stored = $appSettings.appearance.dueColors[key];
     const next = [0, 1, 2, 3].map(
       (slot) => colorDraft.due?.[slot] ?? stored?.[slot] ?? DEFAULT_DUE_COLORS[slot]
     );
+    if (next.every((value, slot) => value === (stored?.[slot] ?? DEFAULT_DUE_COLORS[slot]))) return;
     void setConfigAction("appearance.dueColors", {
       ...$appSettings.appearance.dueColors,
       [key]: next
@@ -451,6 +452,8 @@
   }
 
   function resetBackgroundToDefault(): void {
+    // 恢复默认配色会把 themePresets 整份换掉：先把开着的预设编辑器收掉（名称草稿补提）
+    if (editingPresetIndex !== null) endPresetEdit();
     colorDraft = { ...colorDraft, background: undefined };
     pushColorPreview();
     void setConfigAction("appearance.themePresets", themePresets.map((preset) => ({ ...preset })));
@@ -465,16 +468,19 @@
   }
 
   /** 预设色块：本身就是一次明确的离散选择，单击即落盘（没有「拖动过程」可预览）。
-      顺手丢掉本区草稿与预览——不然刚落的盘会被残留的旧活值顶回去。 */
+      顺手丢掉本区草稿与预览——不然刚落的盘会被残留的旧活值顶回去。
+      正在编辑预设时点色块 = 选它作背景并结束编辑（名称草稿先补提）。 */
   function applyPresetBackground(color: string): void {
+    if (editingPresetIndex !== null) endPresetEdit();
     colorDraft = { ...colorDraft, background: undefined };
     if (get(colorPreview)?.scope === colorScope) clearColorPreview();
     setBackground({ color });
   }
 
-  function saveBackgroundColor(): void {
-    const color = colorDraft.background;
-    if (color === undefined) return;
+  function saveBackgroundColor(color: string): void {
+    // 与主题色同一条纪律：实参来自面板确认（面板已冲刷掉没跑的预览）
+    colorDraft = { ...colorDraft, background: color };
+    pushColorPreview();
     setBackground({ color });
   }
 
@@ -483,23 +489,27 @@
     pushColorPreview();
   }
 
+  // ---- 预设色块编辑器（v0.8.7 需求 2.7）：**没有保存/取消按钮**，
+  // 名称停输 300ms 自动提交、颜色框合法即写、色盘确认才落盘、色盘取消还原。----
+
+  /** 名称提交的防抖窗口：逐键写盘会打爆 settings.json 的原子写（与色盘 input 同一纪律）。 */
+  const PRESET_NAME_COMMIT_MS = 300;
+
   function beginPresetEdit(index: number): void {
     const preset = presets[index];
     if (!preset) return;
+    flushPresetName();
     editingPresetIndex = index;
     presetNameDraft = preset.name;
     presetColorDraft = preset.color;
-    presetEditOriginalColor = bg.color;
   }
 
-  function cancelPresetEdit(): void {
-    if (editingPresetIndex !== null && presetEditOriginalColor) {
-      setBackground({ color: presetEditOriginalColor });
-    }
+  /** 结束编辑（点别的色块 / 菜单关闭）：名称草稿先补提一次。 */
+  function endPresetEdit(): void {
+    flushPresetName();
     editingPresetIndex = null;
     presetNameDraft = "";
     presetColorDraft = "";
-    presetEditOriginalColor = "";
   }
 
   function normalizeHexColor(value: string, fallback: string): string {
@@ -507,44 +517,81 @@
     return /^#[0-9a-f]{6}$/i.test(color) ? color : fallback;
   }
 
+  /** 把名称草稿写进当前编辑的预设（= 已存名称就不写，避免无意义落盘）。 */
+  function commitPresetName(): void {
+    const index = editingPresetIndex;
+    if (index === null) return;
+    const current = presets[index];
+    if (!current) return;
+    const name = presetNameDraft.trim().slice(0, 24) || current.name;
+    if (name === current.name) return;
+    const next = presets.map((preset) => ({ ...preset }));
+    next[index] = { ...next[index], name };
+    void setConfigAction("appearance.themePresets", next);
+  }
+
+  function flushPresetName(): void {
+    window.clearTimeout(presetNameTimer);
+    presetNameTimer = undefined;
+    commitPresetName();
+  }
+
+  /** 名称输入：即输即进草稿，**停输 300ms 才落盘**（失焦 / 菜单关闭再兜底提一次）。 */
   function updatePresetName(event: Event): void {
     const target = event.currentTarget;
-    if (target instanceof HTMLInputElement) {
-      presetNameDraft = target.value;
-    }
+    if (!(target instanceof HTMLInputElement)) return;
+    presetNameDraft = target.value;
+    window.clearTimeout(presetNameTimer);
+    presetNameTimer = window.setTimeout(() => {
+      presetNameTimer = undefined;
+      commitPresetName();
+    }, PRESET_NAME_COMMIT_MS);
   }
 
+  /** 颜色框输入：合法 HEX 即写进 themePresets 并应用为当前背景（名称草稿一并带上）。 */
   function updatePresetColor(event: Event): void {
     const target = event.currentTarget;
-    if (target instanceof HTMLInputElement) {
-      presetColorDraft = target.value;
-      const validColor = normalizeHexColor(target.value, "");
-      if (validColor) {
-        setBackground({ color: validColor });
-      }
-    }
+    if (!(target instanceof HTMLInputElement)) return;
+    presetColorDraft = target.value;
+    const color = normalizeHexColor(target.value, "");
+    if (color) writePresetColor(color);
   }
 
-  function savePresetEdit(): void {
-    if (editingPresetIndex === null) return;
-    const nextPresets = presets.map((preset) => ({ ...preset }));
-    const current = nextPresets[editingPresetIndex];
+  function writePresetColor(color: string): void {
+    const index = editingPresetIndex;
+    if (index === null) return;
+    const current = presets[index];
     if (!current) return;
-    const finalColor = normalizeHexColor(presetColorDraft, current.color);
-    nextPresets[editingPresetIndex] = {
-      name: presetNameDraft.trim().slice(0, 24) || current.name,
-      color: finalColor
-    };
-    void setConfigAction("appearance.themePresets", nextPresets);
-    setBackground({ color: finalColor });
-    cancelPresetEditOnly();
+    const next = presets.map((preset) => ({ ...preset }));
+    next[index] = { name: presetNameDraft.trim().slice(0, 24) || current.name, color };
+    void setConfigAction("appearance.themePresets", next);
+    setBackground({ color });
   }
 
-  function cancelPresetEditOnly(): void {
-    editingPresetIndex = null;
-    presetNameDraft = "";
-    presetColorDraft = "";
-    presetEditOriginalColor = "";
+  /** 编辑器色块 → 统一取色盘：预览双写（编辑器草稿 + 背景草稿），确认写 themePresets、取消还原。 */
+  function openPresetColorPanel(anchor: HTMLElement): void {
+    const index = editingPresetIndex;
+    if (index === null) return;
+    openColorPanel(
+      `preset-${index}`,
+      presetColorDraft,
+      anchor,
+      (color) => {
+        presetColorDraft = color;
+        pickBackgroundColor(color);
+      },
+      (color) => {
+        presetColorDraft = color;
+        writePresetColor(color);
+      },
+      () => {
+        // 取消 = 还原：编辑器草稿回**已存值**（即输即生效的那份 themePresets），
+        // 背景预览清掉、工作区回到落盘值
+        const current = presets[index];
+        if (current) presetColorDraft = current.color;
+        cancelBackgroundColor();
+      }
+    );
   }
 
   function deleteCurrentNode(): void {
@@ -800,6 +847,7 @@
         {#each moveTargets as target (target.id)}
           <MenuItem
             label={target.name}
+            checkable
             active={(node.parentId ?? "") === target.id}
             onSelect={() => moveNodeToGroup(node.id, target.id || null)}
           />
@@ -815,6 +863,7 @@
         {#each Object.entries(sortLabels) as [mode, label]}
           <MenuItem
             label={label as string}
+            checkable
             active={sortMode === mode}
             onSelect={() => { onSortMode(mode as SortMode); onClose(); }}
           />
@@ -828,12 +877,14 @@
         <MenuItem
           icon={ListTodo}
           label="Todo卡片"
+          checkable
           active={(node.cardStyle ?? "todo") === "todo"}
           onSelect={() => { void setNodeCardStyleAction(node.id, "todo"); onClose(); }}
         />
         <MenuItem
           icon={LayoutGrid}
           label="一般卡片"
+          checkable
           active={node.cardStyle === "card"}
           onSelect={() => { void setNodeCardStyleAction(node.id, "card"); onClose(); }}
         />
@@ -918,9 +969,6 @@
     <span class="ui-color-value">{accentShown}</span>
     <button class="menu-action-button" type="button" on:click={resetUiColor}>默认</button>
   </div>
-  {#if accentDirty}
-    <ColorDraftActions onSave={saveUiColor} onCancel={cancelUiColor} />
-  {/if}
 
   {#if $appSettings.features.dueHighlight !== "off" && !settingsPrefix}
     <div class="menu-section-title">临期高亮色</div>
@@ -940,9 +988,6 @@
       {/each}
       <button class="menu-action-button" type="button" title="恢复默认配色（过期灰 / 今天红 / 明天黄 / 后天蓝）" on:click={resetDueColors}>默认</button>
     </div>
-    {#if dueDirty}
-      <ColorDraftActions onSave={saveDueColors} onCancel={cancelDueColors} />
-    {/if}
   {/if}
 
   <div class="menu-section-title">背景颜色</div>
@@ -969,36 +1014,27 @@
       <RotateCcw size={14} />
     </button>
   </div>
-  {#if backgroundDirty}
-    <ColorDraftActions onSave={saveBackgroundColor} onCancel={cancelBackgroundColor} />
-  {/if}
   {#if editingPresetIndex !== null}
     <div class="preset-editor">
       <div class="preset-editor-title">编辑预设颜色</div>
-      <input value={presetNameDraft} maxlength="24" placeholder="颜色名称" on:input={updatePresetName} />
+      <input
+        value={presetNameDraft}
+        maxlength="24"
+        placeholder="颜色名称"
+        on:input={updatePresetName}
+        on:blur={flushPresetName}
+      />
       <div class="preset-color-line">
         <button
           class="ui-color-picker"
           type="button"
           title="选择预设颜色"
           data-color-anchor
-          on:click|stopPropagation={(event) =>
-            openColorPanel(
-              `preset-${editingPresetIndex}`,
-              presetColorDraft,
-              event.currentTarget,
-              (color) => (presetColorDraft = color),
-              (color) => (presetColorDraft = color),
-              null
-            )}
+          on:click|stopPropagation={(event) => openPresetColorPanel(event.currentTarget)}
         >
           <span style={`--swatch: ${presetColorDraft}`}></span>
         </button>
         <input value={presetColorDraft} placeholder="#dfe8df" on:input={updatePresetColor} />
-      </div>
-      <div class="preset-editor-actions">
-        <button type="button" on:click={savePresetEdit}>保存</button>
-        <button type="button" on:click={cancelPresetEdit}>取消</button>
       </div>
     </div>
   {/if}

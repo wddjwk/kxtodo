@@ -45,9 +45,12 @@ pub fn is_shared_settings_path(path: &str) -> bool {
             | "ledger.backgroundColor"
             | "ledger.backgroundImage"
             | "ledger.backgroundOpacity"
-            // 工具箱外观同日记/记账（v0.8.4）：工具页换台设备该是同一副样子
+            // 工具箱外观同日记/记账（v0.8.4）：工具页换台设备该是同一副样子；
+            // 每个工具子页自己的颜色（v0.8.7）同理
             | "toolbox.accent"
             | "toolbox.backgroundColor"
+            | "toolbox.toolAccents"
+            | "toolbox.toolBackgrounds"
     )
 }
 
@@ -341,7 +344,7 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
     FieldMeta {
         path: "transfer.relay",
         kind: "string",
-        description: "文件传输助手：自选 iroh relay（空 = 跟 p2p 同步同一个；disabled = 不用 relay）",
+        description: "文件传输助手：自选 iroh relay（default = n0 公共 relay；空 = 复用同步的 p2pRelay；disabled = 不用 relay）",
         is_map: false,
     },
     FieldMeta {
@@ -538,6 +541,21 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         description: "工具箱界面背景色",
         is_map: false,
     },
+    FieldMeta {
+        path: "toolbox.toolAccents",
+        // kind 是 `object` 不是 `map<...>`（与 appearance.dueColors 同一条纪律）：
+        // 前端「导入设置」按 kind 决定摊不摊叶子——带 `map<` 前缀会被逐键拆成
+        // mapKey 写入，而这几个路径不收 --map-key，整份导入会静默失败。
+        kind: "object",
+        description: "每个工具子页自己的主题色（整份对象写：{ 工具id: #rrggbb }；键是 random/rmb/scratchpad/transfer，缺省跟工具箱主界面）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "toolbox.toolBackgrounds",
+        kind: "object",
+        description: "每个工具子页自己的背景色（整份对象写：{ 工具id: #rrggbb }；键同上，缺省跟工具箱主界面）",
+        is_map: false,
+    },
 ];
 
 pub fn field_meta(path: &str) -> Option<&'static FieldMeta> {
@@ -662,6 +680,8 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "ledger.backgroundOpacity" => json!(settings.ledger.background_opacity),
         "toolbox.accent" => json!(settings.toolbox.accent),
         "toolbox.backgroundColor" => json!(settings.toolbox.background_color),
+        "toolbox.toolAccents" => json!(settings.toolbox.tool_accents),
+        "toolbox.toolBackgrounds" => json!(settings.toolbox.tool_backgrounds),
         _ => return Err(unknown_field(path)),
     };
     Ok(value)
@@ -830,6 +850,36 @@ fn expect_color(path: &str, value: &Value) -> CoreResult<String> {
     } else {
         Err(invalid_value(path, "应为 #rrggbb 颜色"))
     }
+}
+
+/// 每个工具子页自己的一套颜色（v0.8.7）：`{工具id: #rrggbb}` 的整份对象。
+/// 键必须是工具目录里的 id（写进去一个不存在的 id 只会让那份配置永远没有消费者，
+/// CLI/Agent 的笔误要当场拒绝——与 `expect_nav_items` 同一条纪律）。
+fn expect_tool_colors(path: &str, value: &Value) -> CoreResult<Map<String, Value>> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| invalid_value(path, "应为 {工具id: #rrggbb} 的整份对象"))?;
+    let mut out = Map::new();
+    for (key, raw) in object {
+        let tool = key.trim();
+        if !crate::model::NAV_TOOL_IDS.contains(&tool) {
+            return Err(invalid_value(
+                path,
+                format!(
+                    "未知工具 `{key}`，可选 {}",
+                    crate::model::NAV_TOOL_IDS.join("/")
+                ),
+            ));
+        }
+        let color = raw
+            .as_str()
+            .ok_or_else(|| invalid_value(path, "颜色应为字符串"))?;
+        if !is_hex_color(color) {
+            return Err(invalid_value(path, format!("`{key}` 的颜色应为 #rrggbb")));
+        }
+        out.insert(tool.to_string(), json!(color.trim()));
+    }
+    Ok(out)
 }
 
 /// 固定导航行清单：必须全是已知 id（写进去一个不存在的 id 只会让那一行凭空消失，
@@ -1203,7 +1253,7 @@ pub fn set_value(
         }
         "transfer.relay" => {
             let raw = expect_string(path, &value)?.trim().to_string();
-            if !raw.is_empty() && raw != "disabled" {
+            if !raw.is_empty() && raw != "disabled" && raw != "default" {
                 crate::sync::p2p::net::parse_relay_url(&raw)?;
             }
             settings.transfer.relay = raw;
@@ -1354,6 +1404,12 @@ pub fn set_value(
         }
         "toolbox.backgroundColor" => {
             settings.toolbox.background_color = expect_color(path, &value)?;
+        }
+        "toolbox.toolAccents" => {
+            settings.toolbox.tool_accents = expect_tool_colors(path, &value)?;
+        }
+        "toolbox.toolBackgrounds" => {
+            settings.toolbox.tool_backgrounds = expect_tool_colors(path, &value)?;
         }
         _ => return Err(unknown_field(path)),
     }
@@ -1599,6 +1655,8 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "toolbox.backgroundColor" => {
             target.toolbox.background_color = defaults.toolbox.background_color.clone()
         }
+        "toolbox.toolAccents" => target.toolbox.tool_accents = Map::new(),
+        "toolbox.toolBackgrounds" => target.toolbox.tool_backgrounds = Map::new(),
         _ => return Err(unknown_field(path)),
     }
     Ok(())

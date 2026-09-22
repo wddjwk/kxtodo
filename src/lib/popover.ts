@@ -55,8 +55,6 @@ export function anchoredPopoverStyle(
 
 /** 视口边缘保留的逻辑像素边距 */
 export const POPOVER_MARGIN_PX = 8;
-/** 浮层的最小可用高度：比这还矮就不好用，宁可翻到锚点上方 */
-export const POPOVER_MIN_HEIGHT_PX = 120;
 
 export type PopoverSize = { width: number; height: number };
 export type PopoverView = { width: number; height: number };
@@ -64,50 +62,47 @@ export type PopoverPlacement = {
   /** 逻辑像素（调用方把 rect 除以 uiScale 之后再进、再原样写进样式） */
   left: number;
   top: number;
-  /** > 0 时给浮层 `max-height` 并让它内部滚动 */
+  /** > 0 时给浮层 `max-height` 并让它内部滚动（只在上、下都放不下时出现） */
   maxHeight: number;
 };
 
 /**
  * 点锚定的浮层定位（右键/长按菜单、三点菜单、日期浮层共用这一份）。
  *
- * 三条语义：
- * ① **优先向下展开**（盖住唤起它的按钮会让「点按钮」变成「点菜单」）；
- * ② 下方连最小高度都放不下（或上方明显更宽松）才翻到锚点上方，且**下边缘与锚点对齐**
- *    ——右键菜单在屏幕下半部的常规行为；
- * ③ 四边一律钳制在视口内：宁可限高内部滚动，也绝不溢出（此前竖向第三分支用
- *    `max(120, spaceBelow)`，底部空间不足 120px 时菜单就是从这里溢出视口的）。
+ * v0.8.7 需求 1 的终裁语义（两轮改判后定案，**两条分支，没有中间态**）：
+ * ① **下方放得下 → 开在下方，左上角顶点贴鼠标**（盖住唤起按钮会让「点按钮」变「点菜单」）；
+ * ② **下方放不下 → 整个翻到上方，下边缘贴锚点**；右键/长按菜单再横向镜像成
+ *    **右下角顶点贴鼠标**（`mirrorXOnFlip`）——按钮锚定的浮层不开镜像，
+ *    否则锚点对不上（`xAlign:"right"` 时镜像与不镜像结构性恒等，开了也无害）；
+ * ③ **不做「下方限高 + 内部滚动」**：菜单/面板里出现滚动条被真机打回（原话「这太蠢了」）。
+ *    唯一滚动兜底是「上下都放不下」——翻上 + maxHeight 钳制，上下都不越界；
+ * ④ 四边一律钳制在视口内。
  *
  * 入参与返回都是**逻辑像素**：`app-shell` 有 `transform: scale(uiScale)`，rect 是
  * 视觉像素，调用方负责除一次 scale（与 `anchoredPopoverStyle` 同一约定）。
+ * 前提：**锚点须在视口内**（界外锚点没有夹回语义，也不该有）。
  */
 export function placePopover(
   anchor: { x: number; y: number },
   size: PopoverSize,
   view: PopoverView,
-  options: { xAlign?: "left" | "right"; gap?: number; margin?: number; minHeight?: number } = {}
+  options: { xAlign?: "left" | "right"; gap?: number; margin?: number; mirrorXOnFlip?: boolean } = {}
 ): PopoverPlacement {
   const margin = options.margin ?? POPOVER_MARGIN_PX;
   const gap = options.gap ?? 0;
-  const minHeight = options.minHeight ?? POPOVER_MIN_HEIGHT_PX;
   const xAlign = options.xAlign ?? "left";
+  const mirrorXOnFlip = options.mirrorXOnFlip ?? false;
   const width = Math.min(size.width, Math.max(0, view.width - margin * 2));
-  const left = Math.max(
-    margin,
-    Math.min(xAlign === "right" ? anchor.x - width : anchor.x, view.width - margin - width)
-  );
+  const clampLeft = (value: number): number =>
+    Math.max(margin, Math.min(value, view.width - margin - width));
+  const xLeft = clampLeft(xAlign === "right" ? anchor.x - width : anchor.x);
   const spaceBelow = view.height - margin - anchor.y - gap;
-  const spaceAbove = anchor.y - gap - margin;
-  if (size.height <= spaceBelow) return { left, top: anchor.y + gap, maxHeight: 0 };
-  if (spaceBelow >= minHeight && spaceBelow >= spaceAbove) {
-    // 放不下但下方还留得出可用高度、且不比上方差：原地展开、**贴视口下边界**限高滚动
-    return { left, top: anchor.y + gap, maxHeight: Math.round(spaceBelow) };
-  }
-  // 翻到锚点上方：下边缘与锚点对齐，上边缘同样不许越过视口顶
-  const available = Math.max(0, Math.round(spaceAbove));
+  if (size.height <= spaceBelow) return { left: xLeft, top: anchor.y + gap, maxHeight: 0 };
+  // 翻上：下边缘贴锚点。`used` 只在「上方也放不下」时才小于内容高（滚动兜底）。
+  const available = Math.max(0, anchor.y - gap - margin);
   const used = Math.min(size.height, available);
   return {
-    left,
+    left: mirrorXOnFlip ? clampLeft(anchor.x - width) : xLeft,
     top: Math.max(margin, anchor.y - gap - used),
     maxHeight: used < size.height ? available : 0
   };

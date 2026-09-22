@@ -344,9 +344,13 @@ export type Settings = {
   };
   /** 工具箱外观（v0.8.4）。工具页三点菜单就两件事，字段也只有这两个。 */
   toolbox: {
-    /** 主题色 #rrggbb；空 = 用默认主题色 */
+    /** 主题色 #rrggbb；空 = 用默认主题色（工具箱主界面） */
     accent: string;
     backgroundColor: string;
+    /** 每个工具子页自己的主题色（工具 id → #rrggbb）；缺省跟主界面（v0.8.7） */
+    toolAccents: Record<string, string>;
+    /** 每个工具子页自己的背景色（工具 id → #rrggbb）；缺省跟主界面 */
+    toolBackgrounds: Record<string, string>;
   };
 };
 

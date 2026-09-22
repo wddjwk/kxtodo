@@ -351,7 +351,15 @@ if (capped) {
   const subVisible = (await sub.count()) === 1 && (await sub.isVisible());
   check("capped menu submenu renders", subVisible);
   if (subVisible) {
+    // 限高菜单是滚动容器：子菜单必须是**行内手风琴**（position: static）而不是绝对定位
+    // 浮出面板——后者会被 overflow 裁掉点不到（v0.6.9 的老坑）
+    const inline = await sub.evaluate((el) => getComputedStyle(el).position === "static");
+    check("capped menu submenu is inline accordion", inline);
     const item = sub.locator(".menu-item-button, .menu-item").first();
+    // v0.8.7 起「上下都放不下」时的 maxHeight 只给到锚点上方那段（本例里很短）：
+    // 条目得先滚进可视区再点，这与真机行为一致
+    await item.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(200);
     const box = await item.boundingBox();
     const hit = box
       ? await page.evaluate(([cx, cy]) => {

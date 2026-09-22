@@ -7,6 +7,8 @@
   z-index: 3600;
   display: grid;
   width: calc(var(--font-control) * 12.5);
+  /* 窄屏兜底：面板比视口还宽时把宽度收回来 */
+  max-width: calc(100vw - 24px);
   gap: 8px;
   padding: 10px;
   border: 1px solid #e5e5e5;
@@ -23,15 +25,26 @@
 }
 
 /* 色盘本体：iro 自己往这里画 svg；触屏拖动要**独占手势**，
-   不加 touch-action: none 的话安卓上拖动选色会把页面一起滚走。 */
+   不加 touch-action: none 的话安卓上拖动选色会把页面一起滚走。
+   `place-items: start stretch` 而不是 center：uiScale > 1 时 svg 的布局宽大于宿主，
+   center 会把溢出均到左边、裁剪边与 svg 视觉边错开（start 让两条边在任意缩放下重合）。 */
 .kx-color-canvas {
   display: grid;
-  place-items: center;
+  place-items: start stretch;
+  overflow: hidden;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
   /* 夹行只写 -webkit- 三件套，别两个都写 */
+}
+
+/* 反缩放层（v0.8.7 需求 2.2）：外壳有 transform: scale(--ui-scale)，而 iro 的指针
+   数学是「视觉坐标 ÷ 布局宽」——这一层把缩放抵消掉，让 svg 视觉尺寸 == 布局尺寸。
+   高度不需要设：iro 的 svg 撑开它，宿主高度由 applyPickerSize 显式补偿。 */
+.kx-color-canvas-scale {
+  transform: scale(calc(1 / var(--ui-scale, 1)));
+  transform-origin: top left;
 }
 
 .kx-color-fields {
@@ -108,4 +121,9 @@
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* 吸管靠左、取消/确认留在右边 */
+.kx-color-eyedropper {
+  margin-right: auto;
 }

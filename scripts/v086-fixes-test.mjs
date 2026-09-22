@@ -700,6 +700,25 @@ async function colorPickerChecks(page, label) {
   });
   check("11 确认才落盘（背景色入口）", persisted.background === "#123456" && !persisted.panel, J(persisted));
 
+  // U13（v0.8.7 需求 2.3）：输入完**不按 Enter**、直接点确认——颜色必须生效。
+  // 此前所有用例都先按了 Enter（同步提交），恰好绕开「确认点击自己的 mousedown
+  // 就是那个 blur、rAF 被自己作废」这条结构性缺陷。
+  await openListMenu(page);
+  await page.locator(".palette-button").first().click({ force: true });
+  await page.waitForSelector(".kx-color-panel", { timeout: 8000 });
+  await page.waitForTimeout(300);
+  await page.locator(".kx-color-hex").fill("#654321");
+  await page.locator("[data-color-confirm]").click();
+  await page.waitForTimeout(600);
+  const flushedConfirm = await page.evaluate(() => {
+    const state = JSON.parse(localStorage.getItem("todo-note-state-v3") ?? "{}");
+    return {
+      background: state.backgrounds?.["entry-a"]?.color ?? "(none)",
+      panel: Boolean(document.querySelector(".kx-color-panel"))
+    };
+  });
+  check("U13 输入完不按 Enter 直接确认：颜色生效", flushedConfirm.background === "#654321" && !flushedConfirm.panel, J(flushedConfirm));
+
   // 工具页外观菜单里的两处入口也能开面板（别只换了一处）
   await page.locator(".system-nav .nav-row", { hasText: "工具箱" }).click();
   await page.waitForTimeout(500);

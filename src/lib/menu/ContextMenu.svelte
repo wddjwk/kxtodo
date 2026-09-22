@@ -12,6 +12,12 @@
   export let y = 0;
   /** x 锚点对齐方式：left = 菜单左缘贴 x；right = 菜单右缘贴 x。 */
   export let xAlign: "left" | "right" = "left";
+  /**
+   * 翻到锚点上方时横向镜像（右下角顶点贴鼠标）——右键/长按菜单的常规行为，默认开。
+   * 按钮锚定的菜单调用方传 false：它们的锚点是按钮边缘，镜像后对不上。
+   * （`xAlign:"right"` 时镜像与否结构性恒等，所以默认开对它们也无害。）
+   */
+  export let mirrorXOnFlip = true;
   export let minWidth = 232;
   /** 唤起菜单的那个按钮（可选）：点到它身上时不由「点外面」来关，
    *  交给按钮自己的 toggle 逻辑——否则点击先关后开，永远关不掉。 */
@@ -58,8 +64,8 @@
   /**
    * 跟手定位：调用方传视口像素（clientX/Y 或长按触点），这里统一除以 uiScale
    * 换算成缩放 shell 内的逻辑坐标（只除一次，调用方不做换算）。
-   * 几何规则全在 `popover.ts::placePopover`：优先向下、放不下翻到锚点上方且下边缘对齐、
-   * 四边钳制（v0.8.6 需求 4 把它抽成了三处浮层共用的一份）。
+   * 几何规则全在 `popover.ts::placePopover`：下方放得下就左上角贴鼠标、放不下整个翻上
+   * （下边缘贴锚点 + 镜像）——v0.8.7 需求 1 定案，不再有「原地限高滚动」那一条分支。
    */
   async function layout(): Promise<void> {
     await tick();
@@ -68,16 +74,18 @@
     const viewWidth = window.innerWidth / scale;
     const viewHeight = window.innerHeight / scale;
     const rect = menuEl.getBoundingClientRect();
-    // 内容高度取 rect 与 scrollHeight 的较大者：菜单自己带着 inline max-height 时，
-    // rect 量到的只是被夹住的高度，重新收敛（子菜单开合）时就发现不了溢出。
-    const height = Math.max(rect.height / scale, menuEl.scrollHeight / scale);
+    // 内容高度取 rect（÷scale 换算成逻辑像素）与 scrollHeight（本就是布局像素）的较大者：
+    // 菜单自己带着 inline max-height 时 rect 量到的只是被夹住的高度，重新收敛
+    // （子菜单开合）时就发现不了溢出。**scrollHeight 不能再除 scale**——它已经逻辑像素，
+    // 多除一次会把菜单量高 33%，翻上后底边落不到锚点（v0.8.7 需求 1 踩过的坑）。
+    const height = Math.max(rect.height / scale, menuEl.scrollHeight);
     // 逻辑视口可能比固定 minWidth 还窄（移动端高缩放），先收敛宽度再定位。
     minWidthPx = Math.min(minWidth, Math.max(160, viewWidth - MENU_MARGIN_PX * 2));
     const placed = placePopover(
       { x: x / scale, y: y / scale },
       { width: Math.max(rect.width / scale, minWidthPx), height },
       { width: viewWidth, height: viewHeight },
-      { xAlign, margin: MENU_MARGIN_PX }
+      { xAlign, margin: MENU_MARGIN_PX, mirrorXOnFlip }
     );
     left = placed.left;
     top = placed.top;

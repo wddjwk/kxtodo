@@ -14,7 +14,7 @@
    * 子视图的头部（v0.8.4 需求 7）：不再有「返回工具箱」那一行——工具该拿到一块干净的
    * 画布；改成右上角两个按钮：左 = 回到工具箱，右 = ⋯ 菜单（只提供更换背景色 / 主题色）。
    */
-  import { ArrowLeft, MoreHorizontal, Palette, Pin, PinOff, Radio, RotateCcw, Toolbox } from "@lucide/svelte";
+  import { ArrowLeft, MoreHorizontal, Pin, PinOff, Radio, RotateCcw, Toolbox } from "@lucide/svelte";
   import MobileBack from "./MobileBack.svelte";
   import { appSettings } from "./stores";
   import { setConfig } from "./actions";
@@ -27,33 +27,44 @@
   import { longpress, isLongPressSuppressed } from "./longpress";
   import ContextMenu from "./menu/ContextMenu.svelte";
   import MenuItem from "./menu/MenuItem.svelte";
-  import ColorDraftActions from "./ColorDraftActions.svelte";
+  import MenuSeparator from "./menu/MenuSeparator.svelte";
   import { clearColorPreview, accentWithPreview, backgroundWithPreview, colorPreview, setColorPreview } from "./colorPreview";
-  import { toolboxAccent } from "./styles";
-  import { defaultBackground, themePresets } from "./defaults";
-  import { applyRelay, transferState } from "./transferStore";
+  import { PAGE_HEADER_ICON_SIZE, toolboxAccent, toolboxBackground } from "./styles";
+  import { defaultSettings, themePresets } from "./defaults";
+  import { applyRelay } from "./transferStore";
 
   let cardMenu: { tool: ToolDefinition; x: number; y: number } | null = null;
 
   $: tools = availableTools();
   $: activeTool = $toolRoute === null ? null : (tools.find((tool) => tool.id === $toolRoute) ?? null);
 
-  // ---- relay 服务（v0.8.5 需求 31）：跟着传输工具页的 ⋯ 菜单走 ----
-  // core 的 transfer.relay 语义：空 = 跟 p2p 同步；`disabled` = 不用 relay；其它 = 自部署地址
-  let relayMode: "follow" | "disabled" | "custom" = "follow";
+  // ---- relay 服务（v0.8.5 需求 31；v0.8.7 追加需求改成三选一 + 勾选在左）----
+  // core 的 transfer.relay 语义：空 = 复用同步的 p2p relay；`default` = n0 公共 relay；
+  // 其它 = 自部署地址（`disabled` 只走直连，CLI 仍支持，GUI 不再提供这一项）。
+  type RelayChoice = "follow" | "default" | "custom";
+
+  let relayChoice: RelayChoice = "default";
   let relayCustom = "";
 
-  function relayModeOf(value: string): "follow" | "disabled" | "custom" {
-    if (value === "") return "follow";
-    if (value === "disabled") return "disabled";
+  function relayChoiceOf(value: string): RelayChoice {
+    const raw = value.trim();
+    if (raw === "") return "follow";
+    if (raw === "default") return "default";
     return "custom";
   }
 
-  function pickRelayMode(mode: "follow" | "disabled" | "custom"): void {
-    relayMode = mode;
-    if (mode === "follow") void applyRelay("");
-    else if (mode === "disabled") void applyRelay("disabled");
-    // 「自定义」等用户把地址填完再保存（下面那个输入框失焦 / 回车）
+  /** 「复用同步配置」的前提：同步功能开着且已经配对（与设置页同一口径的简化版）。 */
+  $: syncConfigured =
+    $appSettings.features?.sync !== false &&
+    Boolean(($appSettings.sync?.username ?? "").trim()) &&
+    Boolean(($appSettings.sync?.secret ?? "").trim());
+
+  function pickRelayChoice(choice: RelayChoice): void {
+    if (choice === "follow" && !syncConfigured) return;
+    relayChoice = choice;
+    if (choice === "follow") void applyRelay("");
+    else if (choice === "default") void applyRelay("default");
+    // 「自定义服务」等用户把地址填完再保存（下面那个输入框失焦 / 回车）
   }
 
   function commitRelayCustom(): void {
@@ -80,44 +91,98 @@
     resetToolRoute();
   }
 
-  // ---- 子视图的 ⋯ 菜单：工具页的外观（背景色 / 主题色，走需求 9 的「草稿 → 保存」）----
+  // ---- 三点菜单的外观（主题色 / 背景色）：**工具箱主界面与每个工具子页各调各的**（v0.8.7）----
+  // 菜单与其它页面完全同一份：点锚定的 ContextMenu——贴在按钮正下方 + 右缘对齐按钮右缘
+  // （x=rect.right / y=rect.bottom，与「我的一天」那些页面的列表菜单同一套调用约定），
+  // 取色走全应用统一的取色盘 + 草稿预览。
   const TOOLBOX_SCOPE = "toolbox";
-  let appearanceMenu: { x: number; y: number } | null = null;
+  let appearanceMenu: { x: number; y: number; anchor: HTMLElement } | null = null;
   let draft: { accent?: string; background?: string } = {};
-  $: toolboxAccentValue = toolboxAccent($appSettings.toolbox);
-  $: toolboxBackgroundValue = $appSettings.toolbox.backgroundColor || defaultBackground.color;
-  $: accentShown = draft.accent ?? toolboxAccentValue;
-  $: backgroundShown = draft.background ?? toolboxBackgroundValue;
-  $: accentDirty = draft.accent !== undefined && draft.accent !== toolboxAccentValue;
-  $: backgroundDirty = draft.background !== undefined && draft.background !== toolboxBackgroundValue;
+
+  /** 当前路由的取色作用域：主界面 = toolbox，工具子页 = toolbox:<工具id>（预览只染当前页） */
+  $: activeToolId = activeTool?.id ?? "";
+  $: colorScope = activeToolId ? `${TOOLBOX_SCOPE}:${activeToolId}` : TOOLBOX_SCOPE;
+  /** 两层配置：工具子页没配过就跟主界面（toolboxAccent/toolboxBackground 的 toolId 参数） */
+  $: baseAccent = toolboxAccent($appSettings.toolbox, activeToolId || undefined);
+  $: baseBackground = toolboxBackground($appSettings.toolbox, activeToolId || undefined).color;
+  $: accentShown = draft.accent ?? baseAccent;
+  $: backgroundShown = draft.background ?? baseBackground;
   $: presets = $appSettings.appearance.themePresets.length ? $appSettings.appearance.themePresets : themePresets;
   // 预览（需求 9）：拖色盘时整页立刻跟着变，保存才落盘；菜单一关就回退
-  $: previewAccent = accentWithPreview($colorPreview, TOOLBOX_SCOPE, toolboxAccentValue);
-  $: previewBackground = backgroundWithPreview($colorPreview, TOOLBOX_SCOPE, { color: toolboxBackgroundValue });
+  $: previewAccent = accentWithPreview($colorPreview, colorScope, baseAccent);
+  $: previewBackground = backgroundWithPreview($colorPreview, colorScope, { color: baseBackground });
   $: toolboxStyle = `--accent: ${previewAccent}; background: ${previewBackground.color};`;
 
   function pushPreview(): void {
-    setColorPreview(TOOLBOX_SCOPE, { accent: draft.accent, background: draft.background });
+    setColorPreview(colorScope, { accent: draft.accent, background: draft.background });
   }
 
   function closeAppearanceMenu(): void {
     appearanceMenu = null;
     draft = {};
-    if ($colorPreview?.scope === TOOLBOX_SCOPE) clearColorPreview();
+    if ($colorPreview?.scope === colorScope) clearColorPreview();
   }
 
-  /** 打开 ⋯ 菜单：顺手把 relay 三态与自定义地址按当前设置填好 */
-  function openAppearanceMenu(event: MouseEvent): void {
+  /** 打开 ⋯ 菜单：锚在按钮右下角（视口像素，ContextMenu 内部除以缩放）。
+   *  同一个按钮再点一次 = 收起（与记账/日记的齿轮同一条 toggle 语义）。 */
+  function openAppearanceMenu(button: HTMLElement): void {
+    if (appearanceMenu?.anchor === button) {
+      closeAppearanceMenu();
+      return;
+    }
+    const rect = button.getBoundingClientRect();
     const value = $appSettings.transfer?.relay ?? "";
-    relayMode = relayModeOf(value);
-    relayCustom = relayMode === "custom" ? value : "";
-    appearanceMenu = { x: event.clientX, y: event.clientY };
+    relayChoice = relayChoiceOf(value);
+    relayCustom = relayChoice === "custom" ? value : "";
+    appearanceMenu = { x: rect.right, y: rect.bottom + 6, anchor: button };
   }
 
-  /** 工具页主题色：走全应用统一的取色盘（v0.8.6 需求 11），拖动 = 草稿 + 预览 */
+  /** 主界面写 toolbox.accent / backgroundColor；工具子页写各自的 map（整份对象写） */
+  function writeAccent(color: string): void {
+    if (!activeToolId) {
+      void setConfig("toolbox.accent", color);
+      return;
+    }
+    void setConfig("toolbox.toolAccents", { ...($appSettings.toolbox.toolAccents ?? {}), [activeToolId]: color });
+  }
+
+  function writeBackground(color: string): void {
+    if (!activeToolId) {
+      void setConfig("toolbox.backgroundColor", color);
+      return;
+    }
+    void setConfig("toolbox.toolBackgrounds", { ...($appSettings.toolbox.toolBackgrounds ?? {}), [activeToolId]: color });
+  }
+
+  /** 「默认」：主界面回应用默认；工具子页删掉自己这一键 → 跟主界面 */
+  function resetAccent(): void {
+    draft = { ...draft, accent: undefined };
+    pushPreview();
+    if (!activeToolId) {
+      void setConfig("toolbox.accent", "");
+      return;
+    }
+    const next = { ...($appSettings.toolbox.toolAccents ?? {}) };
+    delete next[activeToolId];
+    void setConfig("toolbox.toolAccents", next);
+  }
+
+  function resetBackground(): void {
+    draft = { ...draft, background: undefined };
+    pushPreview();
+    if (!activeToolId) {
+      void setConfig("toolbox.backgroundColor", defaultSettings.toolbox.backgroundColor);
+      return;
+    }
+    const next = { ...($appSettings.toolbox.toolBackgrounds ?? {}) };
+    delete next[activeToolId];
+    void setConfig("toolbox.toolBackgrounds", next);
+  }
+
+  /** 主题色：走全应用统一的取色盘（v0.8.6 需求 11），拖动 = 草稿 + 预览 */
   function openAccentPanel(anchor: HTMLElement): void {
     openColorPicker({
-      key: "toolbox:accent",
+      key: `${colorScope}:accent`,
       color: accentShown,
       anchor,
       onPreview: (color) => {
@@ -127,7 +192,7 @@
       onConfirm: (color) => {
         draft = { ...draft, accent: color };
         pushPreview();
-        void setConfig("toolbox.accent", color);
+        writeAccent(color);
       },
       onCancel: cancelAccent
     });
@@ -135,13 +200,13 @@
 
   function openBackgroundPanel(anchor: HTMLElement): void {
     openColorPicker({
-      key: "toolbox:background",
+      key: `${colorScope}:background`,
       color: backgroundShown,
       anchor,
       onPreview: (color) => pickBackground(color),
       onConfirm: (color) => {
         pickBackground(color);
-        void setConfig("toolbox.backgroundColor", color);
+        writeBackground(color);
       },
       onCancel: cancelBackground
     });
@@ -155,8 +220,8 @@
   /** 预设色块：离散选择，单击即落盘（只有取色器走「草稿 → 保存」） */
   function applyPresetBackground(color: string): void {
     draft = { ...draft, background: undefined };
-    if ($colorPreview?.scope === TOOLBOX_SCOPE) clearColorPreview();
-    void setConfig("toolbox.backgroundColor", color);
+    if ($colorPreview?.scope === colorScope) clearColorPreview();
+    writeBackground(color);
   }
 
   function cancelAccent(): void {
@@ -206,7 +271,8 @@
         <button class="toolbox-icon-button" type="button" title="返回工具箱" aria-label="返回工具箱" on:click={backFromTool}>
           <ArrowLeft size={20} />
         </button>
-        <span class="toolbox-header-icon"><svelte:component this={activeTool.icon} size={26} /></span>
+        <!-- 图标口径与我的一天 / 日记同一处（PAGE_HEADER_ICON_SIZE，v0.8.7 追加需求 1） -->
+        <span class="toolbox-header-icon"><svelte:component this={activeTool.icon} size={PAGE_HEADER_ICON_SIZE} /></span>
         <strong class="toolbox-header-title">{activeTool.name}</strong>
       </span>
       <span class="toolbox-sub-bar-actions">
@@ -215,7 +281,7 @@
           type="button"
           title="外观"
           aria-label="外观"
-          on:click={openAppearanceMenu}
+          on:click={(event) => openAppearanceMenu(event.currentTarget)}
         >
           <MoreHorizontal size={19} />
         </button>
@@ -233,8 +299,21 @@
   {:else}
     <header class="toolbox-header">
       <MobileBack />
-      <span class="toolbox-header-icon"><Toolbox size={26} /></span>
+      <span class="toolbox-header-icon"><Toolbox size={PAGE_HEADER_ICON_SIZE} /></span>
       <strong class="toolbox-header-title">工具箱</strong>
+      <!-- 主界面同样有 ⋯ 菜单（v0.8.7 追加需求）：调工具箱自己的主题色 / 背景色，
+           与工具子页各自独立 -->
+      <span class="toolbox-header-actions">
+        <button
+          class="toolbox-icon-button"
+          type="button"
+          title="外观"
+          aria-label="外观"
+          on:click={(event) => openAppearanceMenu(event.currentTarget)}
+        >
+          <MoreHorizontal size={19} />
+        </button>
+      </span>
     </header>
     <div class="toolbox-list">
       {#each tools as tool (tool.id)}
@@ -265,8 +344,64 @@
 
 {#if appearanceMenu}
   {@const menu = appearanceMenu}
-  <ContextMenu x={menu.x} y={menu.y} minWidth={228} onClose={closeAppearanceMenu}>
-    <div class="menu-section-title">主题颜色</div>
+  <!-- ⋯ 菜单与普通页面（ListMenu）同一套结构与同一套定位：**点锚定**——贴在按钮正下方、
+       右缘对齐按钮右缘（x=rect.right / y=rect.bottom，ContextMenu 内部除缩放）。
+       结构也照抄那边：配置在上 → 分割线 → UI颜色 / 背景颜色在下。 -->
+  <ContextMenu
+    x={menu.x}
+    y={menu.y}
+    xAlign="right"
+    anchor={menu.anchor}
+    minWidth={228}
+    onClose={closeAppearanceMenu}
+  >
+    {#if activeTool?.id === "transfer"}
+      <!-- relay 服务（v0.8.5 需求 31）：独立一级菜单项 + 二级钻取，与「移动到分组」同一套机制——
+           MenuItem 的 submenu 插槽，移动端自动钻入、桌面自动贴边翻转。
+           relay 在 go_online 时固化进端点，保存后 store 自己重新上线；提示只说「下次上线时生效」。 -->
+      <MenuItem icon={Radio} label="relay 服务" active={relayChoice !== "default"}>
+        <div slot="submenu" class="submenu-list relay-submenu">
+          <MenuItem
+            label="复用同步配置"
+            checkable
+            disabled={!syncConfigured}
+            active={relayChoice === "follow"}
+            onSelect={() => pickRelayChoice("follow")}
+          />
+          <MenuItem
+            label="使用默认服务"
+            checkable
+            active={relayChoice === "default"}
+            onSelect={() => pickRelayChoice("default")}
+          />
+          <MenuItem
+            label="自定义服务"
+            checkable
+            active={relayChoice === "custom"}
+            onSelect={() => pickRelayChoice("custom")}
+          />
+          {#if relayChoice === "custom"}
+            <!-- 输入框自己 stopPropagation：否则点在它上面会被菜单的「点外部关闭」收掉 -->
+            <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+            <div class="relay-custom" on:click|stopPropagation>
+              <input
+                class="relay-input"
+                value={relayCustom}
+                placeholder="https://relay.example.com"
+                spellcheck="false"
+                on:input={(event) => (relayCustom = event.currentTarget.value)}
+                on:blur={commitRelayCustom}
+                on:keydown={(event) => { if (event.key === "Enter") (event.target as HTMLInputElement).blur(); }}
+              />
+            </div>
+          {/if}
+          <div class="relay-hint">下次上线时生效</div>
+        </div>
+      </MenuItem>
+      <MenuSeparator />
+    {/if}
+
+    <div class="menu-section-title">UI颜色</div>
     <div class="ui-color-row">
       <button
         class="ui-color-picker"
@@ -278,18 +413,8 @@
         <span style={`--swatch: ${accentShown}`}></span>
       </button>
       <span class="ui-color-value">{accentShown}</span>
-      <button
-        class="menu-action-button"
-        type="button"
-        on:click={() => { draft = { ...draft, accent: undefined }; pushPreview(); void setConfig("toolbox.accent", ""); }}
-      >默认</button>
+      <button class="menu-action-button" type="button" on:click={resetAccent}>默认</button>
     </div>
-    {#if accentDirty}
-      <ColorDraftActions
-        onSave={() => { const value = draft.accent; if (value !== undefined) void setConfig("toolbox.accent", value); }}
-        onCancel={cancelAccent}
-      />
-    {/if}
 
     <div class="menu-section-title">背景颜色</div>
     <div class="color-grid">
@@ -313,48 +438,11 @@
         type="button"
         class="reset-bg-button"
         title="恢复默认背景色"
-        on:click={() => { draft = { ...draft, background: undefined }; pushPreview(); void setConfig("toolbox.backgroundColor", defaultBackground.color); }}
+        on:click={resetBackground}
       >
         <RotateCcw size={14} />
       </button>
     </div>
-    {#if backgroundDirty}
-      <ColorDraftActions
-        onSave={() => { const color = draft.background; if (color !== undefined) void setConfig("toolbox.backgroundColor", color); }}
-        onCancel={cancelBackground}
-      />
-    {/if}
-    {#if activeTool?.id === "transfer"}
-      <!-- relay 服务（v0.8.5 需求 31）从平铺改成**独立一级菜单项 + 二级钻取**（v0.8.6 需求 10）：
-           与「移动到分组」同一套机制——MenuItem 的 submenu 插槽，移动端自动钻入
-           （openSubmenus + mobile.css .sub-open）、桌面自动贴边翻转（MenuItem::adjustSubmenu）。
-           仍然只在传输工具页出现。relay 在 go_online 时固化进端点，保存后 store 会自己重新上线。 -->
-      <MenuItem icon={Radio} label="relay 服务" active={relayMode !== "follow"}>
-        <div slot="submenu" class="submenu-list">
-          <MenuItem label="跟随同步设置" active={relayMode === "follow"} onSelect={() => pickRelayMode("follow")} />
-          <MenuItem label="禁用（只走直连）" active={relayMode === "disabled"} onSelect={() => pickRelayMode("disabled")} />
-          <MenuItem label="自定义地址" active={relayMode === "custom"} onSelect={() => pickRelayMode("custom")} />
-          {#if relayMode === "custom"}
-            <!-- 输入框自己 stopPropagation：否则点在它上面会被菜单的「点外部关闭」收掉 -->
-            <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-            <div class="relay-custom" on:click|stopPropagation>
-              <input
-                class="relay-input"
-                value={relayCustom}
-                placeholder="https://relay.example.com"
-                spellcheck="false"
-                on:input={(event) => (relayCustom = event.currentTarget.value)}
-                on:blur={commitRelayCustom}
-                on:keydown={(event) => { if (event.key === "Enter") (event.target as HTMLInputElement).blur(); }}
-              />
-            </div>
-          {/if}
-          <div class="relay-hint">
-            {$transferState.online ? "传输助手在线：保存后自动重新上线" : "传输助手未上线：下次上线时生效"}
-          </div>
-        </div>
-      </MenuItem>
-    {/if}
   </ContextMenu>
 {/if}
 

@@ -1476,11 +1476,16 @@ pub struct SyncSettings {
 ///
 /// **不参与设置同步**：传输与同步账户完全无关（口令配对），每台设备自己的 relay
 /// 偏好被别的设备改掉只会莫名其妙连不上。
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TransferSettings {
-    /// 自选 iroh relay 地址。空 = 跟 p2p 同步用同一个（`sync.p2pRelay`，再空 = n0 公共服务）；
-    /// `disabled` = 不用 relay（只直连/局域网）
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    /// 自选 iroh relay 地址。三态（v0.8.7 起 GUI 的三选一与这里一一对应）：
+    /// `default`（**出厂默认**）= n0 公共 relay；空 = 复用同步的 `sync.p2pRelay`
+    /// （再空也落到 n0 公共）；其它 = 自部署地址（`disabled` = 不用 relay，只走直连）。
+    #[serde(
+        rename = "relay",
+        default = "default_transfer_relay",
+        skip_serializing_if = "String::is_empty"
+    )]
     pub relay: String,
     /// 本机在传输房间里展示的设备名（v0.8.4）。**本机偏好**：不同设备本来就该有
     /// 不同的名字，不进同步共享子集（`is_shared_settings_path` 不含 transfer.*）。
@@ -1489,6 +1494,21 @@ pub struct TransferSettings {
     /// 自动接收（默认关）：收到传输请求不再弹确认卡，直接收。
     #[serde(rename = "autoAccept", default)]
     pub auto_accept: bool,
+}
+
+/// 传输 relay 的出厂默认：n0 公共 relay（「使用默认服务」那一档，v0.8.7 追加需求）。
+fn default_transfer_relay() -> String {
+    "default".to_string()
+}
+
+impl Default for TransferSettings {
+    fn default() -> Self {
+        Self {
+            relay: default_transfer_relay(),
+            device_name: String::new(),
+            auto_accept: false,
+        }
+    }
 }
 
 fn default_lan_port() -> u16 {
@@ -1824,7 +1844,9 @@ impl Default for LedgerSettings {
 /// 工具箱外观（v0.8.4）。与日记/记账同一口径：主题色与背景色是**外观**，
 /// 跟着同步的共享子集走——换台设备打开工具箱该是同一副样子。
 ///
-/// 只有两个字段：需求里工具页三点菜单就只提供「更换背景颜色 / 主题颜色」，
+/// 字段分两层（v0.8.7）：`accent` / `backgroundColor` 是**工具箱主界面**的，
+/// `toolAccents` / `toolBackgrounds` 是**每个工具子页各自的**（工具 id → #rrggbb）。
+/// 工具子页没配过就跟主界面走——「每个工具单独调」与「一次调好全部」两种用法都成立。
 /// 背景图与透明度还没有入口，不加没有消费者的字段。
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ToolboxSettings {
@@ -1834,6 +1856,12 @@ pub struct ToolboxSettings {
     /// 背景色（#rrggbb）
     #[serde(rename = "backgroundColor", default = "default_toolbox_background_color")]
     pub background_color: String,
+    /// 每个工具子页自己的主题色（工具 id → #rrggbb）；缺省 / 没配过的键跟主界面
+    #[serde(rename = "toolAccents", default, skip_serializing_if = "Map::is_empty")]
+    pub tool_accents: Map<String, Value>,
+    /// 每个工具子页自己的背景色（工具 id → #rrggbb）
+    #[serde(rename = "toolBackgrounds", default, skip_serializing_if = "Map::is_empty")]
+    pub tool_backgrounds: Map<String, Value>,
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
@@ -1848,6 +1876,8 @@ impl Default for ToolboxSettings {
         Self {
             accent: String::new(),
             background_color: default_toolbox_background_color(),
+            tool_accents: Map::new(),
+            tool_backgrounds: Map::new(),
             extra: Map::new(),
         }
     }

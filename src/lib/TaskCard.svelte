@@ -5,12 +5,12 @@
   import { markdownTaskChecked, taskToggleIndex, toggleMarkdownTask } from "./markdownTasks";
   import { tagChipStyle } from "./tagColors";
   import { dueHighlightOf, dueHighlightStyle, DEFAULT_DUE_COLORS } from "./dueHighlight";
-  import { colorPreview, dueColorsWithPreview } from "./colorPreview";
+  import { colorPreview, dueColorsForCard } from "./colorPreview";
   import { currentMinute } from "./currentTime";
   import { fullDayLabel } from "./diary";
   import { createDeferredMarkdown } from "./deferredMarkdown";
   import { preloadMarkdownImages } from "./images";
-  import { appSettings } from "./stores";
+  import { appSettings, selectedNode } from "./stores";
   import { saveTaskMarkdown } from "./actions";
   import { isMobile as isMobileStore, touchOnly } from "./platform";
   import { uiScaleValue } from "./styles";
@@ -137,7 +137,15 @@
   // 只依赖任务与设置的话得等下一次无关重渲才换。
   // 取色预览（需求 9）：三点菜单里拖自己那一档的色块时，本页卡片立刻换色；
   // 菜单一关（没保存）预览就清掉，卡片回到落盘值。
-  $: dueColors = dueColorsWithPreview($colorPreview, nodeId, $appSettings.appearance.dueColors[nodeId], DEFAULT_DUE_COLORS);
+  // 系统视图（我的一天等）里编辑端写的是**视图键**：自己没配过就跟视图的配置走
+  // （v0.8.7 需求 2.6 的双回退，预览同一条链）——否则预览不染卡片、保存后也不变。
+  $: dueColors = dueColorsForCard(
+    $colorPreview,
+    nodeId,
+    $selectedNode?.id ?? "",
+    $appSettings.appearance.dueColors,
+    DEFAULT_DUE_COLORS
+  );
   $: dueHighlight =
     task.completed || !task.dueDate
       ? null
@@ -228,7 +236,8 @@
     const panelRect = datePanelEl.getBoundingClientRect();
     const placed = placePopover(
       { x: rect.right / scale, y: rect.bottom / scale },
-      { width: panelRect.width / scale, height: Math.max(panelRect.height, datePanelEl.scrollHeight) / scale },
+      // 高度口径：rect 是视觉像素要 ÷scale，scrollHeight 本就是布局像素（不能再除）
+      { width: panelRect.width / scale, height: Math.max(panelRect.height / scale, datePanelEl.scrollHeight) },
       { width: window.innerWidth / scale, height: window.innerHeight / scale },
       { xAlign: "right", gap: 6 }
     );

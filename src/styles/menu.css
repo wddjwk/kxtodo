@@ -72,9 +72,20 @@
   text-overflow: ellipsis;
 }
 
+/* 勾选槽位（v0.8.7 追加需求 2）：住在**最左侧**、对每一项定宽常驻——
+   未选中只留空格（visibility 而非 display：要参与等宽布局）。
+   勾在行尾时「谁最宽」会随选中项换人，菜单宽度跟着跳；定宽槽位把它钉住。 */
 .menu-item-check {
+  width: 14px;
+  flex: 0 0 14px;
   color: var(--accent, #2564cf);
   font-weight: 700;
+  text-align: center;
+  visibility: hidden;
+}
+
+.menu-item-check.on {
+  visibility: visible;
 }
 
 .menu-separator {
