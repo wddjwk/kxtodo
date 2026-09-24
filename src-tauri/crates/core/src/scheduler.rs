@@ -277,6 +277,7 @@ pub fn start(core: Arc<crate::host::HostCore>) -> SchedulerHandle {
 impl Scheduler {
     fn run(&mut self) {
         if reconcile_stale_running(&self.core, "host-crash/interrupted").is_ok() {
+            let _ = expire_schedules(&self.core);
             self.handle_missed_on_start();
             self.recompute_all_next();
         }
@@ -392,6 +393,8 @@ impl Scheduler {
     }
 
     fn tick(&self) {
+        // Expiry is independent of nextRunAt (including absent or missed timers).
+        if expire_schedules(&self.core).is_err() { return; }
         let Ok(file) = self.core.repo.load_schedule() else {
             return;
         };
@@ -529,6 +532,27 @@ impl Scheduler {
     }
 }
 
+fn expire_schedules(core: &Arc<crate::host::HostCore>) -> CoreResult<()> {
+    let now = Utc::now();
+    let snapshot = core.repo.load_schedule()?;
+    let ids: Vec<String> = snapshot.tasks.iter()
+        .filter(|entry| entry.spec.enabled && crate::plan::is_expired(&entry.spec, now).unwrap_or(false))
+        .map(|entry| entry.id.clone()).collect();
+    if ids.is_empty() { return Ok(()); }
+    let (_file, outcome) = core.repo.write_schedule_internal("scheduler.expire", |file| {
+        for entry in &mut file.tasks {
+            if ids.contains(&entry.id) && crate::plan::is_expired(&entry.spec, now)? {
+                entry.spec.enabled = false;
+                entry.state.next_run_at = None;
+                entry.updated_at = format_instant(now);
+            }
+        }
+        Ok(json!({ "ids": ids }))
+    })?;
+    core.emit_domain_event(Domain::Schedule, outcome.revision, ids);
+    Ok(())
+}
+
 fn planned_next(entry: &ScheduleEntry) -> (Option<String>, Option<Value>) {
     if !entry.spec.enabled {
         return (None, None);
@@ -637,6 +661,55 @@ fn execute_entry(
     reason: RunReason,
     cancelled: Arc<AtomicBool>,
 ) -> CoreResult<Value> {
+    let manual = matches!(reason, RunReason::Manual);
+    let snapshot = core.repo.load_schedule()?;
+    let before = crate::ops_schedule::require_entry(&snapshot, id)?.clone();
+    crate::ops_schedule::ensure_platform_supported(&before.spec)?;
+    if !manual {
+        if !before.spec.enabled || crate::plan::is_expired(&before.spec, Utc::now())? {
+            expire_schedules(core)?;
+            return Ok(json!({ "id": id, "skipped": "disabled-or-expired" }));
+        }
+        // Reserve the worker slot, but do not publish Running while a gate is probing.
+        let mut allowed = crate::plan::gate_window_allows(&before.spec, Utc::now())?;
+        if allowed {
+            if let Some(gate) = &before.spec.gate {
+                if let (Some(probe), Some(when)) = (&gate.probe, &gate.when) {
+                    let result = crate::exec::build_probe_spec(probe, &snapshot.runtimes)
+                        .and_then(|spec| core.processes.run_with_cancel(
+                            &format!("{id}:probe"), spec, cancelled.clone()));
+                    allowed = result.map(|output| !output.timed_out && !output.cancelled
+                        && output.exit_code == Some(0)
+                        && match_stream(when, &output.stdout, &output.stderr)).unwrap_or(false);
+                }
+            }
+        }
+        if cancelled.load(Ordering::SeqCst) { allowed = false; }
+        // Re-check after a slow probe: edits, disables, window end and midnight win.
+        let latest = core.repo.load_schedule()?;
+        let current = crate::ops_schedule::require_entry(&latest, id)?;
+        if serde_json::to_value(&current.spec)? != serde_json::to_value(&before.spec)? {
+            return Ok(json!({ "id": id, "skipped": "changed-during-gate" }));
+        }
+        if crate::plan::is_expired(&current.spec, Utc::now())? {
+            expire_schedules(core)?;
+            return Ok(json!({ "id": id, "skipped": "expired" }));
+        }
+        allowed = allowed && crate::plan::gate_window_allows(&current.spec, Utc::now())?;
+        if !allowed {
+            let (_file, outcome) = core.repo.write_schedule_internal("scheduler.gate-skip", |file| {
+                if let Some(entry) = file.tasks.iter_mut().find(|entry| entry.id == id) {
+                    if serde_json::to_value(&entry.spec)? == serde_json::to_value(&before.spec)? {
+                        crate::plan::advance_skipped_gate(entry, Utc::now())?;
+                    }
+                }
+                Ok(json!({ "id": id, "skipped": "gate" }))
+            })?;
+            core.emit_domain_event(Domain::Schedule, outcome.revision, vec![id.to_string()]);
+            return Ok(json!({ "id": id, "skipped": "gate" }));
+        }
+    }
+    let expected_spec = serde_json::to_value(&before.spec)?;
     let id_owned = id.to_string();
     let (file, start_outcome) =
         core.repo
@@ -651,13 +724,16 @@ fn execute_entry(
                             format!("未找到定时任务 {id_owned}"),
                         )
                     })?;
+                if !manual && (serde_json::to_value(&entry.spec)? != expected_spec
+                    || !entry.spec.enabled || crate::plan::is_expired(&entry.spec, Utc::now())?) {
+                    return Err(CoreError::execution("SCHEDULE_CHANGED", "执行前定时任务已更改或过期"));
+                }
                 entry.state.running = true;
                 entry.state.last_status = ScheduleStatus::Running;
                 if matches!(reason, RunReason::Missed) {
                     entry.state.missed_count += 1;
                     entry.state.last_missed_at = Some(now_iso());
                 }
-                entry.updated_at = now_iso();
                 Ok(json!({ "id": id_owned }))
             })?;
     core.emit_domain_event(
@@ -698,6 +774,8 @@ fn execute_entry(
             .unwrap_or(false);
         let probe_status = if probe_cancelled {
             ScheduleStatus::Stopped
+        } else if probe_error.as_ref().map(|e| e.code.as_str()) == Some("PROBE_NO_MATCH") {
+            before.state.last_status
         } else {
             ScheduleStatus::Failed
         };
@@ -718,9 +796,10 @@ fn execute_entry(
                         })?;
                     entry.state.running = false;
                     entry.state.last_status = probe_status;
-                    entry.state.last_probe = probe;
-                    apply_next_plan(entry);
-                    entry.updated_at = now_iso();
+                    if !manual {
+                        entry.state.last_probe = probe;
+                        apply_next_plan(entry);
+                    }
                     Ok(json!({ "id": id_owned }))
                 })?;
         core.emit_domain_event(Domain::Schedule, outcome.revision, vec![id.to_string()]);
@@ -747,7 +826,6 @@ fn execute_entry(
             stderr_truncated: false,
         },
     };
-    let manual = matches!(reason, RunReason::Manual);
     let mut disable = false;
     let mut stopped_by_rule = false;
     let mut stop_reason: Option<String> = None;
@@ -781,8 +859,8 @@ fn execute_entry(
                     }
                 }
             }
-            Trigger::Condition { .. } => {
-                if flow.main_action_started && flow.result.is_ok() {
+            Trigger::Condition { cooldown, .. } => {
+                if cooldown.is_none() && flow.main_action_started && flow.result.is_ok() {
                     disable = true;
                     stop_reason = Some("condition 命中并已执行".to_string());
                 }
@@ -834,21 +912,23 @@ fn execute_entry(
                     })?;
                 entry.state.running = false;
                 entry.state.run_count = run_count;
-                entry.state.last_run_at = Some(finished_for_write.clone());
+                // Manual trials live in history/output only, never in planning anchors.
+                if !manual { entry.state.last_run_at = Some(finished_for_write.clone()); }
                 entry.state.last_status = status;
                 entry.state.last_exit_code = output.exit_code;
                 entry.state.last_stdout = Some(stdout_for_write.clone());
                 entry.state.last_stderr = Some(stderr_for_write.clone());
-                if let Some(probe) = probe {
-                    entry.state.last_probe = Some(probe);
+                if !manual {
+                    if let Some(probe) = probe { entry.state.last_probe = Some(probe); }
+                    // A rule from an old spec must not disable a task edited during execution.
+                    if disable && serde_json::to_value(&entry.spec)? == serde_json::to_value(&before.spec)? {
+                        entry.spec.enabled = false;
+                        entry.state.next_run_at = None;
+                        entry.updated_at = now_iso();
+                    } else {
+                        apply_next_plan(entry);
+                    }
                 }
-                if disable {
-                    entry.spec.enabled = false;
-                    entry.state.next_run_at = None;
-                } else {
-                    apply_next_plan(entry);
-                }
-                entry.updated_at = now_iso();
                 Ok(json!({ "id": id_owned }))
             })?;
     core.emit_domain_event(Domain::Schedule, outcome.revision, vec![id.to_string()]);
@@ -1031,6 +1111,8 @@ fn execute_action_flow(
             stderr: Some(probe_stderr),
         });
         if !matched {
+            // Ordinary nonmatches are expected polling, not failed execution history.
+            if probe_failed {
             let now = now_iso();
             let record = schedule_run_record(
                 &entry.id,
@@ -1047,7 +1129,7 @@ fn execute_action_flow(
                 Some(if probe_output.cancelled {
                     "probe 被取消"
                 } else {
-                    "probe 未命中"
+                    "probe 执行失败"
                 }),
                 entry.state.missed_count,
             );
@@ -1057,6 +1139,7 @@ fn execute_action_flow(
                 crate::repo::SCHEDULE_HISTORY_MAX_BYTES,
                 Some(crate::repo::SCHEDULE_HISTORY_PER_TASK),
             );
+            }
             if probe_output.cancelled || cancelled.load(Ordering::SeqCst) {
                 return FlowResult {
                     result: Ok(cancelled_output()),
@@ -1067,8 +1150,8 @@ fn execute_action_flow(
             }
             return FlowResult {
                 result: Err(CoreError::execution(
-                    "PROBE_NO_MATCH",
-                    "condition probe 未命中，本次不执行主动作",
+                    if probe_failed { "PROBE_FAILED" } else { "PROBE_NO_MATCH" },
+                    if probe_failed { "condition probe 执行失败" } else { "condition probe 未命中，本次不执行主动作" },
                 )),
                 probe: probe_state,
                 probe_no_match: true,

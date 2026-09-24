@@ -1,18 +1,53 @@
 package com.wddjwk.kxtodo
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.webkit.JavascriptInterface
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.content.FileProvider
 import java.io.File
+import java.net.URI
+import java.util.Locale
 
 /**
- * JS 桥（window.kxtodoAndroid）：APK 安装与系统分享面板。
- * 两个方法均为同步返回字符串："" 表示成功，非空为错误信息。
+ * JS 桥（window.kxtodoAndroid）：APK 安装、系统分享与 Custom Tabs。
+ * 方法均为同步返回字符串："" 表示成功，非空为错误信息。
  * FileProvider authority 与 AndroidManifest 中声明的 `${applicationId}.fileprovider` 一致，
  * res/xml/file_paths.xml 已含 cache-path "."。
  */
 class ApkBridge(private val context: Context) {
+
+  /** Browser-owned activity: remote pages never receive this JS bridge or replace the main WebView. */
+  @JavascriptInterface
+  fun openCustomTab(url: String): String {
+    return try {
+      if (url.length > 4096 || url.any { it <= ' ' || it == '\u007f' }) return "非法链接"
+      val parsed = URI(url)
+      val scheme = parsed.scheme?.lowercase(Locale.ROOT)
+      val host = parsed.host?.lowercase(Locale.ROOT)?.trimEnd('.') ?: return "非法链接"
+      if (scheme !in listOf("http", "https") || parsed.rawUserInfo != null
+        || host == "localhost" || host.endsWith(".localhost")
+        || host in listOf("::1", "[::1]", "::", "[::]")
+        || host.startsWith("127.") || host.startsWith("0.")
+      ) return "只支持外部 http/https 链接"
+      val uri = Uri.parse(parsed.toASCIIString())
+      val tab = CustomTabsIntent.Builder().setShowTitle(true).build()
+      // ApkBridge holds applicationContext, not an Activity.
+      tab.intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      try {
+        tab.launchUrl(context, uri)
+      } catch (_: ActivityNotFoundException) {
+        context.startActivity(Intent(Intent.ACTION_VIEW, uri).apply {
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        })
+      }
+      ""
+    } catch (error: Exception) {
+      error.message ?: error.toString()
+    }
+  }
 
   @JavascriptInterface
   fun installApk(path: String): String {

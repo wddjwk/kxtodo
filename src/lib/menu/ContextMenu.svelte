@@ -4,7 +4,7 @@
   import { appSettings } from "../stores";
   import { createBackGuard, isMobile as isMobileStore } from "../platform";
   import { uiScaleValue } from "../styles";
-  import { placePopover } from "../popover";
+  import { placePopover, popoverFrame } from "../popover";
   import { openSubmenus, requestSubmenuClose } from "./submenu";
 
   /** 触发点坐标（clientX/clientY，屏幕像素）。 */
@@ -29,6 +29,7 @@
   let top = -9999;
   let maxHeight = 0;
   let minWidthPx = minWidth;
+  let maxWidthPx = 0;
   let ready = false;
   let lastSubOpen = false;
 
@@ -71,18 +72,21 @@
     await tick();
     if (!menuEl) return;
     const scale = uiScaleValue($appSettings.appearance.uiScale);
-    const viewWidth = window.innerWidth / scale;
-    const viewHeight = window.innerHeight / scale;
+    const frame = popoverFrame(menuEl, scale);
+    const viewWidth = frame.width;
+    const viewHeight = frame.height;
+    maxWidthPx = Math.max(0, viewWidth - MENU_MARGIN_PX * 2);
+    minWidthPx = Math.min(minWidth, maxWidthPx);
+    await tick();
+    if (!menuEl) return;
     const rect = menuEl.getBoundingClientRect();
     // 内容高度取 rect（÷scale 换算成逻辑像素）与 scrollHeight（本就是布局像素）的较大者：
     // 菜单自己带着 inline max-height 时 rect 量到的只是被夹住的高度，重新收敛
     // （子菜单开合）时就发现不了溢出。**scrollHeight 不能再除 scale**——它已经逻辑像素，
     // 多除一次会把菜单量高 33%，翻上后底边落不到锚点（v0.8.7 需求 1 踩过的坑）。
     const height = Math.max(rect.height / scale, menuEl.scrollHeight);
-    // 逻辑视口可能比固定 minWidth 还窄（移动端高缩放），先收敛宽度再定位。
-    minWidthPx = Math.min(minWidth, Math.max(160, viewWidth - MENU_MARGIN_PX * 2));
     const placed = placePopover(
-      { x: x / scale, y: y / scale },
+      { x: (x - frame.x) / scale, y: (y - frame.y) / scale },
       { width: Math.max(rect.width / scale, minWidthPx), height },
       { width: viewWidth, height: viewHeight },
       { xAlign, margin: MENU_MARGIN_PX, mirrorXOnFlip }
@@ -175,7 +179,7 @@
    */
   function editingInsideMenu(): boolean {
     const active = document.activeElement;
-    if (!(active instanceof HTMLElement) || !menuEl?.contains(active)) return false;
+    if (!(active instanceof HTMLElement) || !isInside(active)) return false;
     return Boolean(active.closest("input, textarea, select, [contenteditable='true']"));
   }
 
@@ -217,6 +221,8 @@
     window.addEventListener("blur", handleWindowBlur);
     window.addEventListener("focus", handleWindowFocus);
     window.addEventListener("resize", handleResize);
+    window.visualViewport?.addEventListener("resize", layout);
+    window.visualViewport?.addEventListener("scroll", layout);
     window.addEventListener("scroll", handleScroll, true);
     return () => {
       window.removeEventListener("pointerdown", handlePointerDown, true);
@@ -224,6 +230,8 @@
       window.removeEventListener("blur", handleWindowBlur);
       window.removeEventListener("focus", handleWindowFocus);
       window.removeEventListener("resize", handleResize);
+      window.visualViewport?.removeEventListener("resize", layout);
+      window.visualViewport?.removeEventListener("scroll", layout);
       window.removeEventListener("scroll", handleScroll, true);
       window.clearTimeout(blurCloseTimer);
     };
@@ -239,7 +247,7 @@
   class:sub-open={subOpen && mobile}
   role="menu"
   tabindex="-1"
-  style={`left: ${left}px; top: ${top}px; min-width: ${minWidthPx}px;${maxHeight ? ` max-height: ${maxHeight}px; overflow-y: auto;` : ""} visibility: ${ready ? "visible" : "hidden"};`}
+  style={`left: ${left}px; top: ${top}px; min-width: ${minWidthPx}px;${maxWidthPx ? ` max-width: ${maxWidthPx}px;` : ""}${maxHeight ? ` max-height: ${maxHeight}px; overflow-y: auto;` : ""} visibility: ${ready ? "visible" : "hidden"};`}
   on:mousedown={handleMenuMouseDown}
   on:click|stopPropagation={handleMenuClick}
   on:focusin={markInputActivity}

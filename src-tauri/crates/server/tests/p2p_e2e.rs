@@ -236,6 +236,7 @@ fn add_task(repo: &Repository, markdown: &str) {
             markdown: markdown.to_string(),
             completed: false,
             important: false,
+            pinned: false,
             my_day: false,
             planned_date: None,
             due_date: None,

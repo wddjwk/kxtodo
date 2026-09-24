@@ -19,6 +19,8 @@ use tauri::{AppHandle, Manager, State};
 
 use kxtodo_core as domain;
 
+mod link_preview;
+
 #[cfg(desktop)]
 use tauri::{
     image::Image,
@@ -2326,6 +2328,9 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
     let host_data_dir = domain::ipc::normalize_data_dir(&host_data_dir);
     let default_host = domain::ipc::same_data_dir(&host_data_dir, &default_data_dir());
     let builder = tauri::Builder::default()
+        .register_uri_scheme_protocol("asset", |context, request| {
+            link_preview::local_asset_response(context.app_handle(), context.webview_label(), request)
+        })
         .manage(LifecycleState::default())
         // 通知窗标签按进程内计数器复用（notification-0/1/…），window-state 会把
         // 历史"不可见/旧位置"状态恢复到新通知窗上，导致通知建了却看不见，必须排除。
@@ -2333,7 +2338,7 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
         // 否则恢复可见会让 WebView2 初始化的黑帧直接可见。
         .plugin(
             tauri_plugin_window_state::Builder::default()
-                .with_filter(|label| !label.starts_with("notification-"))
+                .with_filter(|label| label == "main")
                 .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
                 .build(),
         )
@@ -2373,7 +2378,7 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
     }
 
     let builder = builder
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(link_preview::without_remote_link_ipc(tauri::generate_handler![
             resolve_executor_paths,
             resolve_executable_path,
             export_data,
@@ -2404,6 +2409,8 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
             app_version,
             update_download_and_apply,
             open_url,
+            link_preview::open_link_preview,
+            link_preview::extract_link_meta,
             core_dispatch,
             core_snapshot,
             core_ping,
@@ -2434,7 +2441,7 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
             transfer_spool_write,
             transfer_spool_clear,
             transfer_default_save_dir
-        ])
+        ]))
         .setup(move |app| {
             let core =
                 init_host_core(app.handle(), mode, host_data_dir.clone()).map_err(|error| {
@@ -3423,6 +3430,8 @@ pub fn run() {
                 transfer_default_save_dir,
                 app_version,
                 open_url,
+                link_preview::open_link_preview,
+                link_preview::extract_link_meta,
                 save_background_image,
                 load_background_image,
                 delete_background_image,

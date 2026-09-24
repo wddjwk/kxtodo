@@ -58,6 +58,27 @@
   scrollbar-gutter: auto;
 }
 
+/* Scheduler editor stays in the page flow; no extra overlay or horizontal scroll. */
+.app-shell.mobile .scheduler-panel .scheduled-card { padding: 14px; }
+.app-shell.mobile .scheduler-panel .scheduled-card-head { grid-template-columns: minmax(0, 1fr) 32px 32px 32px; gap: 6px; }
+.app-shell.mobile .scheduler-panel .scheduled-clock,
+.app-shell.mobile .scheduler-panel .scheduler-status { display: none; }
+.app-shell.mobile .scheduler-step-content { padding-left: 0; }
+.app-shell.mobile .scheduler-panel .scheduler-step-heading { gap: 8px; grid-template-columns: 24px minmax(0, 1fr) 16px; }
+.app-shell.mobile .scheduler-step-summary { display: none; }
+.app-shell.mobile .scheduler-trigger-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.app-shell.mobile .scheduler-panel .scheduler-trigger-tile { padding: 12px 8px; }
+.app-shell.mobile .scheduler-trigger-tile span { display: none; }
+.app-shell.mobile .scheduler-panel .scheduler-form-grid,
+.app-shell.mobile .scheduler-panel .notification-fields,
+.app-shell.mobile .scheduler-panel .condition-match-row { grid-template-columns: minmax(0, 1fr); }
+.app-shell.mobile .scheduler-weekdays { gap: 3px; }
+.app-shell.mobile .scheduler-editor-footer { gap: 10px; }
+.app-shell.mobile .scheduler-footer-name { flex-basis: 100%; }
+.app-shell.mobile .scheduler-footer-actions { flex: 1; justify-content: flex-end; }
+.app-shell.mobile .scheduler-history-run > summary { flex-wrap: wrap; }
+.app-shell.mobile .scheduler-panel .scheduler-floating-add { bottom: calc(6px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1)); }
+
 /* 移动端一律不画滚动条：触屏本来就是覆盖式滚动条，露出来只是噪音
    （桌面不动，那边滚动条是给鼠标用的）。顺带把横向滑动一并禁掉——
    横向能滑通常意味着有东西宽出了屏幕，该修的是宽度，不是加一条滚动条。 */
@@ -342,6 +363,14 @@
 /* 一般卡片（卡片类型 = 一般卡片）：没有勾选框列，正文一列占满 */
 .app-shell.mobile .task-card.plain.compact .task-title-grid {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.app-shell.mobile .task-card.compact.task-pinned-icon .task-title-grid {
+  grid-template-columns: 34px auto minmax(0, 1fr);
+}
+
+.app-shell.mobile .task-card.plain.compact.task-pinned-icon .task-title-grid {
+  grid-template-columns: auto minmax(0, 1fr);
 }
 
 /* 折叠态标题：折行显示。夹行与省略号由 .clamped 控制——只有「两行放不下」才夹成两行

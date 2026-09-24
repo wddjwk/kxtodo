@@ -211,6 +211,11 @@ $: backGuard(open, onClose);
 - **工具箱的外观是两层**：主界面（`toolbox.accent` / `toolbox.backgroundColor`）+ **每个工具子页自己的**（`toolbox.toolAccents` / `toolbox.toolBackgrounds`，键按 `NAV_TOOL_IDS` 白名单校验）。工具没配过就跟主界面——「单独调」与「一次调好」两种用法都成立；预览作用域按路由分（`toolbox` / `toolbox:<工具id>`）。主界面与工具子页**各有一个 ⋯ 菜单**（同一个按钮再点一次收起）。
 - **菜单的勾选住最左侧的定宽槽位**（`MenuItem` 的 `checkable`）：勾在行尾时「选中项一换、最宽的那一项跟着换」，菜单宽度会跳。菜单结构也是全应用统一的一套：**配置在上 → 分割线 → UI颜色 / 背景颜色在下**（段落标题就叫「UI颜色」，别再造第二种叫法）。
 
+### 3.17 包含块与持久化
+
+- **缩放壳内 fixed 浮层测 shell，不测 window**：输入法会把 shell 收矮并平移，锚点必须减 shell 左上角后再除 scale，限宽/限高也用 shell 的 rect。`popoverFrame` 是共用入口；回归模拟 IME 要发 visualViewport.resize，window.resize 可能关菜单而造成假绿。
+- **置顶是数据，图标/分区是外观**：`Item.pinned` 不随两个样式开关清除；图钉用标题网格独立列，不注入 markdown DOM；排序偏好走 `appearance.listSortMode` 的设置与同步链。
+
 ### 3.12 还有一大批（去 invariants.md 查）
 
 数据与写路径 / 同步 / 前端 Svelte 与渲染 / 记账 / 图片与导入导出与清理 / 构建发布 CI / 平台与窗口——七组共 100+ 条硬约束速查（每条原文照引 + 出处），全在 **`references/invariants.md` 第九节**。

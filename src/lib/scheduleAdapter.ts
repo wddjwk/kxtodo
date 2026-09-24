@@ -1,443 +1,204 @@
-// ---------------------------------------------------------------------------
-// v9 ScheduleEntry（spec/state/ui）↔ v8 UI 编辑模型 适配层。
-// GUI 编辑器继续工作在熟悉的扁平模型上；保存时生成 SchedulePatch，
-// 未映射字段（timeout、missedPolicy、timezone 等 CLI 专属）通过 partial patch 保留。
-// ---------------------------------------------------------------------------
-
-import type {
-  AppNotification,
-  ScheduledTask,
-  ScheduledTaskAction,
-  ScheduledTaskTrigger,
-  SchedulerCondition,
-} from "./types";
+// ScheduleEntry (spec/state/ui) ↔ editor. Diff the two UI projections, never
+// rewrite untouched source fields (timezone, subsecond durations, ISO precision, etc.).
+import type { AppNotification, ScheduledTask, ScheduledTaskAction, ScheduledTaskTrigger, SchedulerCondition } from "./types";
 import { defaultScheduledTaskAction, defaultScheduledTaskTrigger } from "./defaults";
 
 export type ScheduleEntryV9 = {
   id: string;
   spec: any;
   state: {
-    runCount: number;
-    running?: boolean;
-    lastRunAt?: string;
-    nextRunAt?: string;
-    lastStatus: ScheduledTask["lastStatus"];
-    lastExitCode?: number | null;
-    lastStdout?: string;
-    lastStderr?: string;
+    runCount: number; running?: boolean; lastRunAt?: string; nextRunAt?: string;
+    lastStatus: ScheduledTask["lastStatus"]; lastExitCode?: number | null;
+    lastStdout?: string; lastStderr?: string;
   };
   ui: { expanded?: boolean; editing?: boolean };
   createdAt: string;
   updatedAt: string;
 };
 
-// ----------------------------- duration ---------------------------------
-
-export function parseDurationSeconds(raw: unknown, fallback = 300): number {
-  if (typeof raw !== "string") return fallback;
-  const match = raw.trim().match(/^(\d+)(ms|s|m|h|d)$/);
-  if (!match) return fallback;
-  const amount = Number(match[1]);
-  const factor = { ms: 0.001, s: 1, m: 60, h: 3600, d: 86400 }[match[2] as "ms" | "s" | "m" | "h" | "d"];
-  return Math.max(1, Math.round(amount * factor));
-}
-
-export function secondsToDuration(seconds: number): string {
-  const safe = Math.max(1, Math.round(seconds));
-  if (safe % 86400 === 0) return `${safe / 86400}d`;
-  if (safe % 3600 === 0) return `${safe / 3600}h`;
-  if (safe % 60 === 0) return `${safe / 60}m`;
-  return `${safe}s`;
-}
-
 export function durationToMs(raw: unknown, fallback = 3000): number {
   if (typeof raw !== "string") return fallback;
   const match = raw.trim().match(/^(\d+)(ms|s|m|h|d)$/);
   if (!match) return fallback;
-  const amount = Number(match[1]);
-  const factor = { ms: 1, s: 1000, m: 60000, h: 3600000, d: 86400000 }[match[2] as "ms" | "s" | "m" | "h" | "d"];
-  return amount * factor;
+  const factors: Record<string, number> = { ms: 1, s: 1000, m: 60000, h: 3600000, d: 86400000 };
+  const value = Number(match[1]) * factors[match[2]];
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+export function parseDurationSeconds(raw: unknown, fallback = 300): number {
+  return durationToMs(raw, fallback * 1000) / 1000;
+}
+export function secondsToDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0 || !Number.isSafeInteger(seconds * 1000)) throw new Error("间隔必须为有效正数");
+  for (const [factor, unit] of [[86400, "d"], [3600, "h"], [60, "m"], [1, "s"]] as const) {
+    if (seconds % factor === 0) return `${seconds / factor}${unit}`;
+  }
+  return `${seconds * 1000}ms`;
 }
 
-// ----------------------------- arguments ---------------------------------
-
+/** Shell-style quoted arguments, preserving empty arguments and Windows paths. */
 export function splitArguments(raw: string): string[] {
   const args: string[] = [];
-  let current = "";
-  let inSingle = false;
-  let inDouble = false;
-  let escaped = false;
-  for (const ch of raw) {
-    if (escaped) {
-      current += ch;
-      escaped = false;
-      continue;
-    }
-    if (ch === "\\" && !inSingle) {
-      escaped = true;
-    } else if (ch === "'" && !inDouble) {
-      inSingle = !inSingle;
-    } else if (ch === '"' && !inSingle) {
-      inDouble = !inDouble;
-    } else if (/\s/.test(ch) && !inSingle && !inDouble) {
-      if (current) {
-        args.push(current);
-        current = "";
-      }
-    } else {
-      current += ch;
-    }
+  let current = "", quote = "", started = false;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (ch === "\\" && quote !== "'" && i + 1 < raw.length && /[\\"\s]/.test(raw[i + 1])) {
+      current += raw[++i]; started = true;
+    } else if ((ch === '"' || ch === "'") && (!quote || quote === ch)) {
+      quote = quote ? "" : ch; started = true;
+    } else if (/\s/.test(ch) && !quote) {
+      if (started) args.push(current);
+      current = ""; started = false;
+    } else { current += ch; started = true; }
   }
-  if (escaped) current += "\\";
-  if (current) args.push(current);
+  if (quote) throw new Error("参数的引号尚未闭合");
+  if (started) args.push(current);
   return args;
 }
-
 export function joinArguments(args: unknown): string {
   if (!Array.isArray(args)) return "";
-  return args
-    .map((arg) => String(arg))
-    .map((arg) => (/\s/.test(arg) ? `"${arg.replaceAll('"', '\\"')}"` : arg))
-    .join(" ");
+  return args.map(String).map((arg) => !arg || /[\s\\"']/.test(arg)
+    ? `"${arg.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"` : arg).join(" ");
 }
-
-// ----------------------------- time ---------------------------------
-
-/** "2026-07-31T17:30"（本地墙钟）→ 带时区 ISO。 */
 export function localInputToIso(raw: string): string {
-  if (!raw) return new Date().toISOString();
-  const withSeconds = raw.length === 16 ? `${raw}:00` : raw;
-  const date = new Date(withSeconds);
-  if (Number.isNaN(date.getTime())) return new Date().toISOString();
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?$/.test(raw)) throw new Error("请选择有效的触发时间");
+  const date = new Date(raw);
+  if (!Number.isFinite(date.getTime()) || isoToLocalInput(date.toISOString()) !== raw.slice(0, 16)) throw new Error("触发时间不存在或无效");
   return date.toISOString();
 }
-
-/** 带时区 ISO → datetime-local 输入格式。 */
 export function isoToLocalInput(iso: unknown): string {
-  if (typeof iso !== "string" || !iso) {
-    return new Date(Date.now() + 5 * 60_000).toISOString().slice(0, 16);
-  }
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso.slice(0, 16);
-  const offset = date.getTimezoneOffset();
-  return new Date(date.getTime() - offset * 60_000).toISOString().slice(0, 16);
+  const date = typeof iso === "string" && iso ? new Date(iso) : new Date(Date.now() + 300000);
+  if (!Number.isFinite(date.getTime())) return typeof iso === "string" ? iso : "";
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 }
 
-// ----------------------------- notifications ---------------------------------
-
-function notificationToUi(raw: any, fallbackMessage: string): AppNotification {
-  return {
-    title: typeof raw?.title === "string" && raw.title.trim() ? raw.title : "KXToDo",
-    message: typeof raw?.message === "string" && raw.message ? raw.message : fallbackMessage,
-    durationMs: durationToMs(raw?.duration, 3000),
-    tone: raw?.tone ?? "info",
-    position: raw?.position,
+function notificationToUi(raw: any, fallback: string): AppNotification {
+  return { title: raw?.title ?? "KXToDo", message: raw?.message ?? fallback,
+    durationMs: durationToMs(raw?.duration, 3000), tone: raw?.tone ?? "info", position: raw?.position };
+}
+function notificationToSpec(ui: AppNotification): Record<string, unknown> {
+  return { title: ui.title, message: ui.message, tone: ui.tone, duration: `${ui.durationMs}ms`,
+    ...(ui.position ? { position: ui.position } : {}) };
+}
+function conditionToMatch(ui: SchedulerCondition): Record<string, unknown> | undefined {
+  return ui.enabled ? { stream: ui.stream ?? "stdout", mode: ui.mode, pattern: ui.pattern } : undefined;
+}
+function matchToCondition(raw: any): SchedulerCondition {
+  return { enabled: Boolean(raw), mode: raw?.mode === "regex" ? "regex" : "contains",
+    pattern: raw?.pattern ?? "", stream: raw?.stream === "stderr" ? "stderr" : "stdout" };
+}
+function actionToUi(raw: any, probe = false): ScheduledTaskAction {
+  const ui = defaultScheduledTaskAction(raw?.language ?? "python");
+  if (!raw) return ui;
+  ui.type = raw.type;
+  ui.timeout = raw.timeout;
+  ui.arguments = joinArguments(raw.args);
+  ui.workingDirectory = raw.workingDirectory ?? "";
+  ui.interpreter = raw.interpreter ?? "";
+  ui.executablePath = raw.program ?? "";
+  if (raw.type === "notification") ui.notification = notificationToUi(raw.notification, "定时任务已触发");
+  if (raw.source?.type === "file") { ui.scriptMode = "path"; ui.filePath = raw.source.path; ui.code = ""; }
+  else if (raw.source) { ui.scriptMode = "inline"; ui.code = raw.source.code; ui.filePath = ""; }
+  ui.notifyOnComplete = !probe && Boolean(raw.notifications?.onComplete);
+  if (ui.notifyOnComplete) ui.completionNotification = notificationToUi(raw.notifications.onComplete, "任务执行完成");
+  if (!probe && raw.notifications?.onOutput) ui.stdoutNotification = {
+    enabled: true, condition: matchToCondition(raw.notifications.onOutput.when),
+    notification: notificationToUi(raw.notifications.onOutput.notification, "输出匹配成功")
   };
+  return ui;
 }
-
-function notificationToV9(ui: AppNotification): Record<string, unknown> {
-  const out: Record<string, unknown> = {
-    title: ui.title,
-    message: ui.message,
-    tone: ui.tone,
-    duration: `${Math.max(1200, Math.min(60000, Math.round(ui.durationMs)))}ms`,
-  };
-  if (ui.position) {
-    out.position = ui.position;
-  }
-  return out;
-}
-
-function conditionToMatch(condition: SchedulerCondition): Record<string, unknown> | null {
-  if (!condition.enabled || !condition.pattern.trim()) {
-    return null;
-  }
-  return { stream: "stdout", mode: condition.mode, pattern: condition.pattern };
-}
-
-function matchToCondition(match: any): SchedulerCondition {
-  return {
-    enabled: Boolean(match && match.pattern),
-    mode: match?.mode === "regex" ? "regex" : "contains",
-    pattern: typeof match?.pattern === "string" ? match.pattern : "",
-  };
-}
-
-// ----------------------------- entry → ui ---------------------------------
-
 export function entryToUi(entry: ScheduleEntryV9): ScheduledTask {
   const spec = entry.spec ?? {};
   const trigger = spec.trigger ?? { type: "once" };
-  const action = spec.action ?? { type: "script" };
-  const uiTrigger = defaultScheduledTaskTrigger(trigger.type);
-  switch (trigger.type) {
-    case "once":
-      uiTrigger.runAt = isoToLocalInput(trigger.at);
-      break;
-    case "interval":
-      uiTrigger.everySeconds = parseDurationSeconds(trigger.every, 300);
-      uiTrigger.repeatCount = typeof trigger.maxRuns === "number" ? trigger.maxRuns : 0;
-      uiTrigger.stopCondition = matchToCondition(trigger.stopWhen);
-      break;
-    case "calendar":
-      uiTrigger.cron = trigger.cron ?? "0 9 * * *";
-      break;
-    case "condition":
-      uiTrigger.everySeconds = parseDurationSeconds(trigger.every, 60);
-      uiTrigger.probeCondition = matchToCondition(trigger.when);
-      uiTrigger.probeAction = probeToUi(trigger.probe);
-      break;
+  const ui = defaultScheduledTaskTrigger(trigger.type);
+  ui.missedPolicy = trigger.missedPolicy;
+  if (trigger.type === "once") ui.runAt = isoToLocalInput(trigger.at);
+  if (trigger.type === "interval" || trigger.type === "condition") ui.everySeconds = parseDurationSeconds(trigger.every);
+  if (trigger.type === "interval") { ui.repeatCount = trigger.maxRuns ?? 0; ui.stopCondition = matchToCondition(trigger.stopWhen); }
+  if (trigger.type === "calendar") { ui.cron = trigger.cron; ui.timezone = trigger.timezone; }
+  if (trigger.type === "condition") {
+    ui.probeCondition = matchToCondition(trigger.when); ui.probeAction = actionToUi(trigger.probe, true); ui.cooldown = trigger.cooldown;
   }
   return {
-    id: entry.id,
-    name: spec.name ?? "未命名定时任务",
-    enabled: Boolean(spec.enabled),
-    expanded: entry.ui?.expanded ?? false,
-    editing: entry.ui?.editing ?? false,
-    trigger: uiTrigger,
-    action: actionToUi(action),
-    runCount: entry.state?.runCount ?? 0,
-    lastRunAt: entry.state?.lastRunAt,
-    nextRunAt: entry.state?.nextRunAt,
-    lastStatus: entry.state?.lastStatus ?? "idle",
-    lastExitCode: entry.state?.lastExitCode ?? undefined,
-    lastStdout: entry.state?.lastStdout ?? "",
-    lastStderr: entry.state?.lastStderr ?? "",
-    createdAt: entry.createdAt,
-    updatedAt: entry.updatedAt,
+    id: entry.id, name: spec.name ?? "未命名定时任务", enabled: Boolean(spec.enabled),
+    expanded: entry.ui?.expanded ?? false, editing: entry.ui?.editing ?? false,
+    trigger: ui, action: actionToUi(spec.action), until: spec.until,
+    gate: spec.gate ? {
+      windows: (spec.gate.windows ?? []).map((w: any) => ({ ...w, ...(w.weekdays ? { weekdays: [...w.weekdays] } : {}) })),
+      probeAction: spec.gate.probe ? actionToUi(spec.gate.probe, true) : undefined,
+      condition: spec.gate.when ? matchToCondition(spec.gate.when) : undefined
+    } : undefined,
+    runCount: entry.state?.runCount ?? 0, lastRunAt: entry.state?.lastRunAt, nextRunAt: entry.state?.nextRunAt,
+    lastStatus: entry.state?.lastStatus ?? "idle", lastExitCode: entry.state?.lastExitCode,
+    lastStdout: entry.state?.lastStdout ?? "", lastStderr: entry.state?.lastStderr ?? "",
+    createdAt: entry.createdAt, updatedAt: entry.updatedAt
   };
 }
-
-function probeToUi(probe: any): ScheduledTaskAction {
-  const ui = defaultScheduledTaskAction("python");
-  if (!probe) return ui;
-  if (probe.type === "script") {
-    ui.type = "script";
-    ui.language = probe.language ?? "python";
-    if (probe.source?.type === "file") {
-      ui.scriptMode = "path";
-      ui.filePath = probe.source.path ?? "";
-      ui.code = "";
-    } else {
-      ui.scriptMode = "inline";
-      ui.code = probe.source?.code ?? "";
-      ui.filePath = "";
-    }
-    ui.interpreter = probe.interpreter ?? "";
-    ui.arguments = joinArguments(probe.args);
-    ui.workingDirectory = probe.workingDirectory ?? "";
-  } else if (probe.type === "executable") {
-    ui.type = "executable";
-    ui.executablePath = probe.program ?? "";
-    ui.arguments = joinArguments(probe.args);
-    ui.workingDirectory = probe.workingDirectory ?? "";
-  }
-  ui.notifyOnComplete = false;
-  ui.stdoutNotification.enabled = false;
-  return ui;
-}
-
-function actionToUi(action: any): ScheduledTaskAction {
-  const ui = defaultScheduledTaskAction(action?.language ?? "python");
-  if (!action) return ui;
-  if (action.type === "notification") {
-    ui.type = "notification";
-    ui.notification = notificationToUi(action.notification, "定时任务已触发");
-  } else if (action.type === "executable") {
-    ui.type = "executable";
-    ui.executablePath = action.program ?? "";
-    ui.arguments = joinArguments(action.args);
-    ui.workingDirectory = action.workingDirectory ?? "";
-  } else {
-    ui.type = "script";
-    ui.language = action.language ?? "python";
-    if (action.source?.type === "file") {
-      ui.scriptMode = "path";
-      ui.filePath = action.source.path ?? "";
-      ui.code = "";
-    } else {
-      ui.scriptMode = "inline";
-      ui.code = action.source?.code ?? "";
-      ui.filePath = "";
-    }
-    ui.interpreter = action.interpreter ?? "";
-    ui.arguments = joinArguments(action.args);
-    ui.workingDirectory = action.workingDirectory ?? "";
-  }
-  const notifications = action.notifications;
-  ui.notifyOnComplete = Boolean(notifications?.onComplete);
-  if (notifications?.onComplete) {
-    ui.completionNotification = notificationToUi(notifications.onComplete, "任务 {taskName} 执行完成\n{stdout}");
-  }
-  if (notifications?.onOutput) {
-    ui.stdoutNotification = {
-      enabled: true,
-      condition: matchToCondition(notifications.onOutput.when),
-      notification: notificationToUi(notifications.onOutput.notification, "stdout 匹配成功：\n{stdout}"),
-    };
-  } else {
-    ui.stdoutNotification.enabled = false;
-  }
-  return ui;
-}
-
-// ----------------------------- ui → spec/patch ---------------------------------
-
-function buildSource(ui: ScheduledTaskAction): Record<string, unknown> {
-  if (ui.scriptMode === "path") {
-    return { type: "file", path: ui.filePath };
-  }
-  return { type: "inline", code: ui.code };
-}
-
-function buildActionNotifications(ui: ScheduledTaskAction): Record<string, unknown> | undefined {
-  const notifications: Record<string, unknown> = {};
-  if (ui.notifyOnComplete) {
-    notifications.onComplete = notificationToV9(ui.completionNotification);
-  }
-  if (ui.stdoutNotification.enabled) {
-    const when = conditionToMatch(ui.stdoutNotification.condition);
-    if (when) {
-      notifications.onOutput = { when, notification: notificationToV9(ui.stdoutNotification.notification) };
-    }
-  }
-  return Object.keys(notifications).length > 0 ? notifications : undefined;
-}
-
-function buildActionSpec(ui: ScheduledTaskAction): Record<string, unknown> {
-  if (ui.type === "notification") {
-    return { type: "notification", notification: notificationToV9(ui.notification) };
-  }
-  if (ui.type === "executable") {
-    const action: Record<string, unknown> = {
-      type: "executable",
-      program: ui.executablePath,
-    };
-    const args = splitArguments(ui.arguments);
-    if (args.length > 0) action.args = args;
-    if (ui.workingDirectory.trim()) action.workingDirectory = ui.workingDirectory;
-    const notifications = buildActionNotifications(ui);
-    if (notifications) action.notifications = notifications;
-    return action;
-  }
-  const action: Record<string, unknown> = {
-    type: "script",
-    language: ui.language === "custom" ? "python" : ui.language,
-    source: buildSource(ui),
-  };
+function buildAction(ui: ScheduledTaskAction, probe = false): Record<string, unknown> {
+  if (ui.type === "notification") return { type: "notification", notification: notificationToSpec(ui.notification) };
+  const action: Record<string, unknown> = ui.type === "executable"
+    ? { type: "executable", program: ui.executablePath }
+    : { type: "script", language: ui.language === "custom" ? "python" : ui.language,
+        source: ui.scriptMode === "path" ? { type: "file", path: ui.filePath } : { type: "inline", code: ui.code },
+        ...(ui.interpreter.trim() ? { interpreter: ui.interpreter } : {}) };
   const args = splitArguments(ui.arguments);
-  if (args.length > 0) action.args = args;
-  if (ui.interpreter.trim()) action.interpreter = ui.interpreter;
+  if (args.length) action.args = args;
   if (ui.workingDirectory.trim()) action.workingDirectory = ui.workingDirectory;
-  const notifications = buildActionNotifications(ui);
-  if (notifications) action.notifications = notifications;
+  if (ui.timeout?.trim()) action.timeout = ui.timeout.trim();
+  const notifications: Record<string, unknown> = {};
+  if (!probe && ui.notifyOnComplete) notifications.onComplete = notificationToSpec(ui.completionNotification);
+  if (!probe && ui.stdoutNotification.enabled) notifications.onOutput = {
+    when: conditionToMatch({ ...ui.stdoutNotification.condition, enabled: true }),
+    notification: notificationToSpec(ui.stdoutNotification.notification)
+  };
+  if (Object.keys(notifications).length) action.notifications = notifications;
   return action;
 }
-
-function buildProbeSpec(ui: ScheduledTaskAction): Record<string, unknown> {
-  const action = buildActionSpec(ui);
-  delete action.notifications;
-  return action;
-}
-
-function buildTriggerSpec(ui: ScheduledTaskTrigger): Record<string, unknown> {
+function buildTrigger(ui: ScheduledTaskTrigger): Record<string, unknown> {
+  const trigger: Record<string, unknown> = { type: ui.type };
+  if (ui.missedPolicy) trigger.missedPolicy = ui.missedPolicy;
   switch (ui.type) {
-    case "once":
-      return { type: "once", at: localInputToIso(ui.runAt) };
-    case "interval": {
-      const trigger: Record<string, unknown> = {
-        type: "interval",
-        every: secondsToDuration(ui.everySeconds),
-      };
+    case "once": trigger.at = localInputToIso(ui.runAt); break;
+    case "interval":
+      trigger.every = secondsToDuration(ui.everySeconds);
       if (ui.repeatCount > 0) trigger.maxRuns = ui.repeatCount;
-      const stopWhen = conditionToMatch(ui.stopCondition);
-      if (stopWhen) trigger.stopWhen = stopWhen;
-      return trigger;
-    }
+      if (ui.stopCondition.enabled) trigger.stopWhen = conditionToMatch(ui.stopCondition);
+      break;
     case "calendar":
-      return {
-        type: "calendar",
-        cron: ui.cron,
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
-      };
-    case "condition": {
-      const when = conditionToMatch({ ...ui.probeCondition, enabled: true });
-      return {
-        type: "condition",
-        every: secondsToDuration(ui.everySeconds),
-        probe: buildProbeSpec(ui.probeAction),
-        when: when ?? { stream: "stdout", mode: ui.probeCondition.mode, pattern: ui.probeCondition.pattern || "READY" },
-      };
-    }
+      trigger.cron = ui.cron;
+      trigger.timezone = ui.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC";
+      break;
+    case "condition":
+      trigger.every = secondsToDuration(ui.everySeconds);
+      trigger.probe = buildAction(ui.probeAction, true);
+      trigger.when = conditionToMatch({ ...ui.probeCondition, enabled: true });
+      if (ui.cooldown !== undefined) trigger.cooldown = ui.cooldown;
+      break;
   }
+  return trigger;
 }
-
-/** 编辑保存：以 entry.spec 当前类型为准生成 partial patch（保留未映射字段）。 */
-export function uiToPatch(ui: ScheduledTask, entry: ScheduleEntryV9): Record<string, unknown> {
+export function uiToSpec(ui: ScheduledTask): Record<string, unknown> {
+  return {
+    name: ui.name, enabled: ui.enabled, trigger: buildTrigger(ui.trigger), action: buildAction(ui.action),
+    ...(ui.until ? { until: ui.until } : {}),
+    ...(ui.gate ? { gate: {
+      windows: ui.gate.windows,
+      ...(ui.gate.probeAction ? { probe: buildAction(ui.gate.probeAction, true),
+        when: ui.gate.condition ? conditionToMatch({ ...ui.gate.condition, enabled: true }) : undefined } : {})
+    } } : {})
+  };
+}
+function diffSpec(before: any, after: any): any {
+  if (JSON.stringify(before) === JSON.stringify(after)) return undefined;
+  if (after === undefined) return null;
+  if (!before || !after || typeof before !== "object" || typeof after !== "object"
+    || Array.isArray(before) || Array.isArray(after) || before.type !== after.type) return after;
   const patch: Record<string, unknown> = {};
-  const spec = entry.spec ?? {};
-  if (ui.name !== spec.name) {
-    patch.name = ui.name;
-  }
-  if (ui.trigger.type !== spec.trigger?.type) {
-    patch.trigger = buildTriggerSpec(ui.trigger);
-  } else {
-    const trigger: Record<string, unknown> = {};
-    switch (ui.trigger.type) {
-      case "once":
-        trigger.at = localInputToIso(ui.trigger.runAt);
-        break;
-      case "interval": {
-        trigger.every = secondsToDuration(ui.trigger.everySeconds);
-        trigger.maxRuns = ui.trigger.repeatCount > 0 ? ui.trigger.repeatCount : null;
-        trigger.stopWhen = conditionToMatch(ui.trigger.stopCondition);
-        break;
-      }
-      case "calendar":
-        trigger.cron = ui.trigger.cron;
-        break;
-      case "condition": {
-        trigger.every = secondsToDuration(ui.trigger.everySeconds);
-        trigger.probe = buildProbeSpec(ui.trigger.probeAction);
-        const when = conditionToMatch({ ...ui.trigger.probeCondition, enabled: true });
-        trigger.when = when ?? { stream: "stdout", mode: ui.trigger.probeCondition.mode, pattern: ui.trigger.probeCondition.pattern || "READY" };
-        break;
-      }
-    }
-    if (Object.keys(trigger).length > 0) {
-      patch.trigger = trigger;
-    }
-  }
-  if (ui.action.type !== spec.action?.type) {
-    patch.action = buildActionSpec(ui.action);
-  } else {
-    const action: Record<string, unknown> = {};
-    if (ui.action.type === "notification") {
-      action.notification = notificationToV9(ui.action.notification);
-    } else if (ui.action.type === "executable") {
-      action.program = ui.action.executablePath;
-      action.args = splitArguments(ui.action.arguments);
-      action.workingDirectory = ui.action.workingDirectory.trim() || null;
-      action.notifications = buildActionNotifications(ui.action) ?? null;
-    } else {
-      action.language = ui.action.language === "custom" ? "python" : ui.action.language;
-      action.source = buildSource(ui.action);
-      action.args = splitArguments(ui.action.arguments);
-      action.interpreter = ui.action.interpreter.trim() || null;
-      action.workingDirectory = ui.action.workingDirectory.trim() || null;
-      action.notifications = buildActionNotifications(ui.action) ?? null;
-    }
-    patch.action = action;
+  for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    const value = diffSpec(before[key], after[key]);
+    if (value !== undefined) patch[key] = value;
   }
   return patch;
 }
-
-/** 新建：由 UI 模型生成完整 spec。 */
-export function uiToSpec(ui: ScheduledTask): Record<string, unknown> {
-  return {
-    name: ui.name,
-    enabled: ui.enabled,
-    trigger: buildTriggerSpec(ui.trigger),
-    action: buildActionSpec(ui.action),
-  };
+export function uiToPatch(ui: ScheduledTask, entry: ScheduleEntryV9): Record<string, unknown> {
+  return diffSpec(uiToSpec(entryToUi(entry)), uiToSpec(ui)) ?? {};
 }

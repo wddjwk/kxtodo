@@ -3212,6 +3212,7 @@ dependencies = [
  "image",
  "kxtodo-core",
  "kxtodo-server",
+ "percent-encoding",
  "serde",
  "serde_json",
  "tauri",

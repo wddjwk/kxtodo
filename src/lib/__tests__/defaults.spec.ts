@@ -263,6 +263,21 @@ describe("seedLedgerBook（浏览器预览首跑的种子账本）", () => {
 // ---------------------------------------------------------------------------
 
 describe("normalizeSettings（字号与缩放的夹取）", () => {
+  it("排序及两个置顶样式在快照往返中保留，旧值补默认", () => {
+    const normalized = normalizeSettings({
+      appearance: { listSortMode: "alpha-asc" },
+      features: { pinnedIcon: false, pinnedSection: true }
+    });
+    const restored = normalizeSettings(JSON.parse(JSON.stringify(normalized)));
+    expect(restored.appearance.listSortMode).toBe("alpha-asc");
+    expect(restored.features.pinnedIcon).toBe(false);
+    expect(restored.features.pinnedSection).toBe(true);
+    expect(normalizeSettings({ appearance: { listSortMode: "unknown" } }).appearance.listSortMode).toBe("created-desc");
+    expect(normalizeSettings({}).features).toMatchObject({ pinnedIcon: true, pinnedSection: false });
+    expect(normalizeSettings({ features: { pinnedIcon: true, pinnedSection: true } }).features)
+      .toMatchObject({ pinnedIcon: true, pinnedSection: true });
+  });
+
   it("正常路径：缺省值 = defaultSettings", () => {
     const settings = normalizeSettings(undefined);
     expect(settings.appearance.uiScale).toBe(defaultSettings.appearance.uiScale);
@@ -388,6 +403,7 @@ describe("normalizeState（core 快照往返）", () => {
     markdown: "正文",
     completed: true,
     important: true,
+    pinned: true,
     myDay: true,
     plannedDate: "2026-09-03",
     dueDate: "2026-09-03",
@@ -431,6 +447,7 @@ describe("normalizeState（core 快照往返）", () => {
     expect(node.order).toBe(3.5);
     expect(node.cardStyle).toBe("card");
     const task = normalized.tasks[0];
+    expect(task.pinned).toBe(true);
     expect(task.dueTime).toBe("18:30");
     expect(task.dueDate).toBe("2026-09-03");
     expect(task.reminders).toEqual([{ kind: "beforeDue", minutes: 60 }]);

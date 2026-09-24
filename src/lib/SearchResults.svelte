@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ExternalLink, NotebookPen, PenLine, Trash2 } from "@lucide/svelte";
+  import { ExternalLink, NotebookPen, PenLine, Pin, PinOff, Trash2 } from "@lucide/svelte";
   import {
     appState, appSettings, diaryEditor, editorTaskId, ledgerData, ledgerEditor, searchHits, searchQuery, searchScanning,
     showToast,
@@ -11,7 +11,7 @@
     setDiaryUi as setDiaryUiAction, setItemUi as setItemUiAction,
     updateTask as updateTaskAction, setTaskSchedule as setTaskScheduleAction
   } from "./actions";
-  import { openExternalUrl } from "./backend";
+  import { openLink as openLinkWithPreference } from "./backend";
   import { showMobileContent, showMobileDiary } from "./platform";
   import { accentForNode, diaryAccent, ledgerAccent } from "./styles";
   import TaskCard from "./TaskCard.svelte";
@@ -41,6 +41,7 @@
     ? $searchHits.find((hit) => hit.kind === "diary" && hit.entry.id === diaryMenu?.id)
     : null;
   $: diaryEntry = diaryHit && diaryHit.kind === "diary" ? diaryHit.entry : null;
+  $: taskMenuTask = taskMenu ? $appState.tasks.find((task) => task.id === taskMenu?.id) : null;
 
   /** 结果面板挂在侧栏里，拿不到工作区内联的 --accent：勾选圆圈、日期栏这些靠
       var(--accent) 画的控件会整个消失。每条结果自带所属条目的主题色。 */
@@ -164,12 +165,10 @@
     void deleteDiaryEntry(id);
   }
 
-  /**
-   * 结果面板里的链接直接交给系统浏览器：应用内那个预览浮层长在工作区里，
-   * 而移动端列表视图下工作区根本不渲染。想在应用内读，先「打开所在列表」。
-   */
+  /** 原生预览独立于工作区：搜索结果也遵守应用内/系统浏览器偏好。 */
   function openLink(href: string): void {
-    openExternalUrl(href).catch((error) => showToast(`打开链接失败：${String(error)}`));
+    openLinkWithPreference(href, $appSettings.appearance.linkOpenMode)
+      .catch((error) => showToast(`打开链接失败：${String(error)}`));
   }
 
   /** 供 Sidebar 的「点空白处收起浮层」调用。 */
@@ -249,6 +248,13 @@
   <ContextMenu x={taskMenu.x} y={taskMenu.y} minWidth={208} onClose={closeMenus}>
     <MenuItem icon={PenLine} label="编辑" onSelect={() => openTaskEditor(taskMenu?.id ?? "")} />
     <MenuItem icon={ExternalLink} label="打开所在列表" onSelect={() => goToTask(taskMenu?.nodeId ?? "")} />
+    {#if taskMenuTask}
+      <MenuItem
+        icon={taskMenuTask.pinned ? PinOff : Pin}
+        label={taskMenuTask.pinned ? "取消置顶" : "置顶"}
+        onSelect={() => { if (taskMenuTask) void updateTaskAction(taskMenuTask.id, { pinned: !taskMenuTask.pinned }); closeMenus(); }}
+      />
+    {/if}
     <MenuSeparator />
     <MenuItem icon={Trash2} danger label="删除" onSelect={() => removeTask(taskMenu?.id ?? "")} />
   </ContextMenu>

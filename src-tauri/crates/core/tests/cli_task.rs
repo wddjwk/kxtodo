@@ -23,6 +23,72 @@ fn setup_entry(env: &TestEnv) -> (String, String) {
 }
 
 #[test]
+fn pin_modify_round_trips_without_changing_other_task_flags() {
+    let env = TestEnv::fresh();
+    let (_, entry_id) = setup_entry(&env);
+    let item = env.ok(&[
+        "task", "add", "--type", "item", "--entry-id", &entry_id,
+        "--markdown", "pin roundtrip", "--important", "true", "--my-day", "true",
+    ]);
+    let id = item["id"].as_str().unwrap();
+    assert_eq!(item["pinned"], false);
+    let original_order = env.read_file("data.json")["tasks"][0]["order"].clone();
+
+    // A pin-only write must refresh the task's LWW timestamp.
+    let mut data = env.read_file("data.json");
+    data["tasks"][0]["updatedAt"] = serde_json::json!("2020-01-01T00:00:00.000Z");
+    env.write_file("data.json", &data);
+    let pinned = env.ok(&[
+        "task", "modify", "--type", "item", "--id", id, "--pinned", "true",
+    ]);
+    assert_eq!(pinned["pinned"], true);
+    assert_eq!(pinned["important"], true);
+    assert_eq!(pinned["myDay"], true);
+    assert_eq!(pinned["completed"], false);
+    assert_ne!(pinned["updatedAt"], "2020-01-01T00:00:00.000Z");
+    assert_eq!(env.read_file("data.json")["tasks"][0]["pinned"], true);
+    assert_eq!(env.read_file("data.json")["tasks"][0]["order"], original_order);
+
+    // Omitting --pinned leaves it alone, including when marking the task complete.
+    let changed = env.ok(&[
+        "task", "modify", "--type", "item", "--id", id,
+        "--markdown", "still pinned", "--completed", "true",
+    ]);
+    assert_eq!(changed["pinned"], true);
+    assert_eq!(env.ok(&["task", "get", "--type", "item", "--id", id])["pinned"], true);
+    let listed = env.ok(&["task", "list", "--type", "item", "--entry-id", &entry_id]);
+    assert_eq!(listed["items"][0]["pinned"], true);
+    let found = env.ok(&["task", "find", "--type", "item", "--query", "still pinned"]);
+    assert_eq!(found["items"][0]["pinned"], true);
+
+    let dry = env.ok(&[
+        "task", "modify", "--type", "item", "--id", id,
+        "--pinned", "false", "--dry-run",
+    ]);
+    assert_eq!(dry["resource"]["pinned"], false);
+    assert_eq!(env.read_file("data.json")["tasks"][0]["pinned"], true);
+    for args in [
+        vec!["task", "modify", "--type", "item", "--id", id, "--pinned", "yes"],
+        vec!["task", "modify", "--type", "item", "--id", id, "--pinned"],
+    ] {
+        env.err(&args, 2);
+    }
+    assert_eq!(env.read_file("data.json")["tasks"][0]["pinned"], true);
+
+    // Both display switches may be off without clearing the task's pin.
+    env.ok(&["config", "set", "features.pinnedIcon", "false"]);
+    env.ok(&["config", "set", "features.pinnedSection", "false"]);
+    assert_eq!(env.ok(&["task", "get", "--type", "item", "--id", id])["pinned"], true);
+    let unpinned = env.ok(&[
+        "task", "modify", "--type", "item", "--id", id, "--pinned", "false",
+    ]);
+    assert_eq!(unpinned["pinned"], false);
+    assert_eq!(unpinned["important"], true);
+    assert_eq!(unpinned["completed"], true);
+    assert_eq!(env.read_file("data.json")["tasks"][0]["pinned"], false);
+}
+
+#[test]
 fn fresh_dir_has_default_inbox() {
     let env = TestEnv::fresh();
     let tree = env.ok(&["task", "tree"]);

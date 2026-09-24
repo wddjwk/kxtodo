@@ -545,6 +545,9 @@ pub struct TaskModifyArgs {
     /// 重要标记
     #[arg(long, value_name = "true|false")]
     pub important: Option<bool>,
+    /// 置顶状态（item，独立于重要标记）
+    #[arg(long, value_name = "true|false")]
+    pub pinned: Option<bool>,
     /// 我的一天
     #[arg(long, value_name = "true|false")]
     pub my_day: Option<bool>,

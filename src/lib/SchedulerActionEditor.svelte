@@ -4,12 +4,14 @@
   import { FolderOpen, Search } from "@lucide/svelte";
   import { pickExecutableFile, resolveExecutablePath } from "./backend";
   import { caps, executablePathPlaceholder } from "./capabilities";
+  import { showToast } from "./stores";
   import type { AppNotification, ScheduledTaskAction, SchedulerCondition } from "./types";
 
   export let title = "执行动作";
   export let action: ScheduledTaskAction;
   export let placeholder = "";
   export let allowNotification = false;
+  export let probe = false;
   export let onPatch: (patch: Partial<ScheduledTaskAction>) => void = () => undefined;
   export let onType: (type: ScheduledTaskAction["type"]) => void = (type) => onPatch({ type });
   export let onLanguage: (language: ScheduledTaskAction["language"]) => void = (language) => onPatch({ language });
@@ -104,25 +106,20 @@
     });
   }
 
-  async function browseExecutable(): Promise<void> {
-    const p = await pickExecutableFile();
-    if (p) onPatch({ executablePath: p });
+  async function browse(key: "executablePath" | "filePath" | "interpreter"): Promise<void> {
+    try { const path = await pickExecutableFile(); if (path) onPatch({ [key]: path }); }
+    catch (error) { showToast(`选择文件失败：${String(error)}`); }
   }
-
   async function resolveExecutable(): Promise<void> {
-    const p = await resolveExecutablePath(action.executablePath);
-    if (p) onPatch({ executablePath: p });
+    try {
+      const path = await resolveExecutablePath(action.executablePath);
+      if (path) onPatch({ executablePath: path });
+      else showToast("未在 PATH 中找到该程序");
+    } catch (error) { showToast(`解析程序失败：${String(error)}`); }
   }
-
-  async function browseScriptFile(): Promise<void> {
-    const p = await pickExecutableFile();
-    if (p) onPatch({ filePath: p });
-  }
-
-  async function browseInterpreter(): Promise<void> {
-    const p = await pickExecutableFile();
-    if (p) onPatch({ interpreter: p });
-  }
+  function browseExecutable(): Promise<void> { return browse("executablePath"); }
+  function browseScriptFile(): Promise<void> { return browse("filePath"); }
+  function browseInterpreter(): Promise<void> { return browse("interpreter"); }
 </script>
 
 <section class="action-editor">
@@ -186,12 +183,12 @@
     {#if action.type === "executable"}
       <label class="wide">
         <span>可执行文件路径</span>
-        <div class="path-input-row">
+        <div class="scheduler-path-row">
           <input value={action.executablePath} placeholder={executablePathPlaceholder} on:input={(event) => onPatch({ executablePath: textValue(event) })} />
-          <button type="button" title="选择文件" on:click={browseExecutable}>
+          <button class="settings-button" type="button" title="选择文件" on:click={browseExecutable}>
             <FolderOpen size={15} />
           </button>
-          <button type="button" title="从 PATH 解析" on:click={resolveExecutable}>
+          <button class="settings-button" type="button" title="从 PATH 解析" on:click={resolveExecutable}>
             <Search size={15} />
           </button>
         </div>
@@ -209,9 +206,9 @@
         </label>
         <label>
           <span>解释器（可覆盖默认值）</span>
-          <div class="path-input-row">
+          <div class="scheduler-path-row">
             <input value={action.interpreter} placeholder={placeholder} on:input={(event) => onPatch({ interpreter: textValue(event) })} />
-            <button type="button" title="选择文件" on:click={browseInterpreter}>
+            <button class="settings-button" type="button" title="选择文件" on:click={browseInterpreter}>
               <FolderOpen size={15} />
             </button>
           </div>
@@ -220,9 +217,9 @@
       {#if action.scriptMode === "path"}
         <label class="wide">
           <span>脚本文件路径</span>
-          <div class="path-input-row">
+          <div class="scheduler-path-row">
             <input value={action.filePath} placeholder="D:\scripts\task.py" on:input={(event) => onPatch({ filePath: textValue(event) })} />
-            <button type="button" title="选择文件" on:click={browseScriptFile}>
+            <button class="settings-button" type="button" title="选择文件" on:click={browseScriptFile}>
               <FolderOpen size={15} />
             </button>
           </div>
@@ -235,6 +232,8 @@
       {/if}
     {/if}
 
+    <details class="scheduler-disclosure">
+      <summary>{probe ? "参数、工作目录与超时" : "参数、工作目录、超时与通知"}</summary>
     <div class="scheduler-form-grid">
       <label>
         <span>参数</span>
@@ -246,6 +245,12 @@
       </label>
     </div>
 
+    <label>
+      <span>执行超时</span>
+      <input value={action.timeout ?? ""} placeholder="可选，例如 30s、5m" on:input={(event) => onPatch({ timeout: textValue(event) || undefined })} />
+      <small>到达超时会终止子进程。探针建议设置有限超时。</small>
+    </label>
+    {#if !probe}
     <div class="notification-followups">
       <label class="checkbox-line">
         <input type="checkbox" checked={action.notifyOnComplete} on:change={(event) => onPatch({ notifyOnComplete: checkedValue(event) })} />
@@ -289,6 +294,10 @@
         stdout 满足条件时发送通知
       </label>
       {#if action.stdoutNotification.enabled}
+        <Dropdown value={action.stdoutNotification.condition.stream ?? "stdout"}
+          options={[{ value: "stdout", label: "stdout" }, { value: "stderr", label: "stderr" }]}
+          ariaLabel="输出通知检测流"
+          on:change={(event) => patchStdoutCondition({ stream: event.detail as SchedulerCondition["stream"] })} />
         <div class="condition-match-row wide">
           <div class="condition-mode-select">
             <Dropdown
@@ -333,32 +342,27 @@
       {/if}
       <small>通知消息支持 {"{stdout}"}、{"{stderr}"}、{"{exitCode}"}、{"{taskName}"} 变量。</small>
     </div>
+    {/if}
+    </details>
   {/if}
 </section>
 
 <style>
-  .path-input-row {
+  .scheduler-path-row {
     display: flex;
     gap: 6px;
     align-items: center;
   }
-  .path-input-row input {
+  .scheduler-path-row input {
     flex: 1;
     min-width: 0;
   }
-  .path-input-row button {
+  .scheduler-path-row button {
     display: grid;
     place-items: center;
     flex-shrink: 0;
-    width: 32px;
-    height: 32px;
-    border: 1px solid #e0e0e0;
-    border-radius: 7px;
-    background: #f7f7f7;
-    color: #5f6368;
-    cursor: pointer;
-  }
-  .path-input-row button:hover {
-    background: #eee;
+    width: 36px;
+    min-height: 36px;
+    padding: 0;
   }
 </style>

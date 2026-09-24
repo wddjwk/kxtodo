@@ -120,6 +120,7 @@
     count: item.count,
     color: colorOf(item.categoryId, index)
   }));
+  $: donutKey = donutItems.map((item) => `${item.id}:${item.cents}`).join("|") + `#${statsTotal}`;
 
   // --- 曲线几何（纵轴按可见曲线自适应：结余可以是负的） ---
   const W = 680;
@@ -529,7 +530,9 @@
     {:else}
       <div class="ledger-proportion">
         <div class="ledger-donut-wrap">
-          <LedgerDonut items={donutItems} total={statsTotal} totalLabel={catSide === "expense" ? "总支出" : "总收入"} />
+          {#key donutKey}
+            <LedgerDonut items={donutItems} total={statsTotal} totalLabel={catSide === "expense" ? "总支出" : "总收入"} />
+          {/key}
         </div>
 
         <ul class="ledger-rank">

@@ -56,11 +56,14 @@ class MainActivity : TauriActivity() {
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
     webViewRef = webView
+    // openCustomTab launches a browser-owned Activity; never load its remote URL into this
+    // bridge-bearing application WebView. Existing ProGuard rules keep all ApkBridge methods.
     webView.addJavascriptInterface(ApkBridge(applicationContext), "kxtodoAndroid")
   }
 
   override fun onDestroy() {
     // 销毁链里再进返回回调也不许碰一个正在死的 WebView
+    webViewRef?.removeJavascriptInterface("kxtodoAndroid")
     webViewRef = null
     super.onDestroy()
   }

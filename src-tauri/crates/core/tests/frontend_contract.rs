@@ -50,6 +50,22 @@ const RUST_TAG_COLORS: [&str; 10] = [
 ];
 
 #[test]
+fn list_sort_modes_match_frontend() {
+    let sort_ts = include_str!("../../../../src/lib/sort.ts");
+    let modes = quoted(between(sort_ts, "export type SortMode =", ";"));
+    assert_eq!(modes, kxtodo_core::model::LIST_SORT_MODES);
+    let defaults = kxtodo_core::model::AppearanceSettings::default();
+    assert_eq!(defaults.list_sort_mode, "created-desc");
+    assert!(modes.contains(&defaults.list_sort_mode));
+
+    let field = kxtodo_core::ops_config::KNOWN_FIELDS
+        .iter()
+        .find(|field| field.path == "appearance.listSortMode")
+        .unwrap();
+    assert_eq!(field.kind, format!("enum({})", modes.join("|")));
+}
+
+#[test]
 fn tag_color_names_match_across_languages() {
     // 先确认这份名单确实等于 Rust 的枚举（parse 与 as_str 互逆，没有别名与漏项）
     for name in RUST_TAG_COLORS {

@@ -7,6 +7,103 @@ use common::TestEnv;
 use serde_json::json;
 
 #[test]
+fn list_sort_mode_validates_all_modes_and_resets() {
+    let env = TestEnv::fresh();
+    let path = "appearance.listSortMode";
+    let got = env.ok(&["config", "get", path]);
+    assert_eq!(got["value"], "created-desc");
+    assert_eq!(got["source"], "default");
+    assert!(kxtodo_core::ops_config::is_shared_settings_path(path));
+
+    for mode in kxtodo_core::model::LIST_SORT_MODES {
+        assert_eq!(env.ok(&["config", "set", path, mode])["value"], mode);
+        assert_eq!(env.ok(&["config", "get", path])["value"], mode);
+        assert_eq!(env.read_file("settings.json")["appearance"]["listSortMode"], mode);
+    }
+    assert!(env.read_file("settings.json")["syncUpdatedAt"].is_string());
+    for invalid in ["manual", "createdAt", "CREATED-DESC", "", "null", "true", "1", "[]"] {
+        let before = env.read_file("settings.json");
+        let error = env.err(&["config", "set", path, invalid], 2);
+        assert_eq!(error["code"], "INVALID_CONFIG_VALUE");
+        assert_eq!(env.read_file("settings.json"), before, "invalid: {invalid}");
+    }
+    let listed = env.ok(&["config", "list", "--prefix", path]);
+    assert_eq!(listed["items"][0]["path"], path);
+    assert_eq!(listed["items"][0]["value"], "importance");
+    env.ok(&["config", "reset", path, "--yes"]);
+    assert_eq!(env.ok(&["config", "get", path])["value"], "created-desc");
+    assert_eq!(env.read_file("settings.json")["appearance"]["listSortMode"], "created-desc");
+}
+
+#[test]
+fn shared_sort_and_pin_setting_changes_and_resets_bump_lww() {
+    use kxtodo_core::model::SettingsFile;
+    use kxtodo_core::ops_config::{reset_values, set_value};
+
+    let old_stamp = "2020-01-01T00:00:00.000Z";
+    for (path, value) in [
+        ("appearance.listSortMode", json!("due-desc")),
+        ("features.pinnedIcon", json!(false)),
+        ("features.pinnedSection", json!(true)),
+    ] {
+        let mut settings = SettingsFile::default();
+        settings.sync_updated_at = Some(old_stamp.to_string());
+        set_value(&mut settings, path, value.clone(), None).unwrap();
+        assert_ne!(settings.sync_updated_at.as_deref(), Some(old_stamp), "{path}");
+        let written = settings.sync_updated_at.clone();
+        set_value(&mut settings, path, value, None).unwrap();
+        assert_eq!(settings.sync_updated_at, written, "unchanged values keep their LWW stamp");
+        settings.sync_updated_at = Some(old_stamp.to_string());
+        let reset = reset_values(&mut settings, Some(path)).unwrap();
+        assert_eq!(reset.len(), 1);
+        assert_eq!(reset[0]["path"], path);
+        assert_ne!(settings.sync_updated_at.as_deref(), Some(old_stamp), "reset {path}");
+    }
+}
+
+#[test]
+fn pinned_display_features_are_independent_booleans() {
+    let env = TestEnv::fresh();
+    let icon = "features.pinnedIcon";
+    let section = "features.pinnedSection";
+    for (path, default) in [(icon, true), (section, false)] {
+        let got = env.ok(&["config", "get", path]);
+        assert_eq!(got["value"], default);
+        assert_eq!(got["source"], "default");
+        assert!(kxtodo_core::ops_config::is_shared_settings_path(path));
+        let listed = env.ok(&["config", "list", "--prefix", path]);
+        assert_eq!(listed["items"][0]["path"], path);
+        assert_eq!(listed["items"][0]["kind"], "boolean");
+    }
+    for (icon_value, section_value) in [(true, true), (false, true), (false, false), (true, false)] {
+        env.ok(&["config", "set", icon, if icon_value { "true" } else { "false" }]);
+        env.ok(&["config", "set", section, if section_value { "true" } else { "false" }]);
+        assert_eq!(env.ok(&["config", "get", icon])["value"], icon_value);
+        assert_eq!(env.ok(&["config", "get", section])["value"], section_value);
+        let saved = env.read_file("settings.json");
+        assert_eq!(saved["features"]["pinnedIcon"], icon_value);
+        assert_eq!(saved["features"]["pinnedSection"], section_value);
+        assert!(saved["syncUpdatedAt"].is_string());
+    }
+    for path in [icon, section] {
+        for invalid in ["1", "null", "\"false\"", "{}"] {
+            let before = env.read_file("settings.json");
+            let error = env.err(&["config", "set", path, "--json-value", invalid], 2);
+            assert_eq!(error["code"], "INVALID_CONFIG_VALUE");
+            assert_eq!(env.read_file("settings.json"), before);
+        }
+    }
+    env.ok(&["config", "set", icon, "false"]);
+    env.ok(&["config", "set", section, "true"]);
+    env.ok(&["config", "reset", icon, "--yes"]);
+    assert_eq!(env.ok(&["config", "get", icon])["value"], true);
+    assert_eq!(env.ok(&["config", "get", section])["value"], true);
+    env.ok(&["config", "reset", "features", "--yes"]);
+    assert_eq!(env.ok(&["config", "get", icon])["value"], true);
+    assert_eq!(env.ok(&["config", "get", section])["value"], false);
+}
+
+#[test]
 fn get_set_roundtrip_and_source() {
     let env = TestEnv::fresh();
     let got = env.ok(&["config", "get", "appearance.uiScale"]);

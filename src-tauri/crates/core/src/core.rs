@@ -869,6 +869,7 @@ fn task_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResu
                 markdown: param_str(params, "markdown"),
                 completed: param_bool(params, "completed"),
                 important: param_bool(params, "important"),
+                pinned: param_bool(params, "pinned"),
                 my_day: param_bool(params, "myDay"),
                 planned_date: None,
                 due_date: None,

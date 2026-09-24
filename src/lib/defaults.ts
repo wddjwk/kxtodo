@@ -34,6 +34,7 @@ import type {
 import { NAV_ITEM_IDS, normalizeNavItems, normalizeNavLayout } from "./nav";
 import { normalizeReminders } from "./reminders";
 import { DEFAULT_DUE_COLORS } from "./dueHighlight";
+import { normalizeSortMode } from "./sort";
 
 const now = () => new Date().toISOString();
 
@@ -91,6 +92,7 @@ export const defaultSettings: Settings = {
   },
   appearance: {
     linkOpenMode: "app",
+    listSortMode: "created-desc",
     uiScale: 0.75,
     uiFontSize: 18,
     markdownFontSize: 20,
@@ -165,6 +167,8 @@ export const defaultSettings: Settings = {
   },
   features: {
     showCategoryBadges: true,
+    pinnedIcon: true,
+    pinnedSection: false,
     sync: true,
     editorToolbar: true,
     mobileBack: false,
@@ -211,6 +215,7 @@ export function defaultSchedulerCondition(enabled = false): SchedulerCondition {
   return {
     enabled,
     mode: "contains",
+    stream: "stdout",
     pattern: ""
   };
 }
@@ -247,7 +252,8 @@ export function defaultScheduledTaskAction(language: ScheduledTaskAction["langua
 }
 
 export function defaultScheduledTaskTrigger(type: ScheduledTaskTrigger["type"] = "once"): ScheduledTaskTrigger {
-  const runAt = new Date(Date.now() + 5 * 60_000).toISOString().slice(0, 16);
+  const date = new Date(Date.now() + 5 * 60_000);
+  const runAt = new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
   return {
     type,
     runAt,
@@ -475,6 +481,7 @@ function normalizeTask(raw: unknown, fallbackNodeId: string): Task | null {
     markdown,
     completed: Boolean(source.completed),
     important: Boolean(source.important),
+    pinned: source.pinned === true,
     myDay: Boolean(source.myDay),
     plannedDate: typeof source.plannedDate === "string" ? source.plannedDate : undefined,
     dueDate: typeof source.dueDate === "string" ? source.dueDate : undefined,
@@ -534,7 +541,8 @@ function normalizeSchedulerCondition(raw: unknown, fallbackEnabled = false): Sch
   return {
     enabled: typeof source?.enabled === "boolean" ? source.enabled : fallbackEnabled,
     mode: source?.mode === "regex" ? "regex" : "contains",
-    pattern: typeof source?.pattern === "string" ? source.pattern : ""
+    pattern: typeof source?.pattern === "string" ? source.pattern : "",
+    stream: source?.stream === "stderr" ? "stderr" : "stdout"
   };
 }
 
@@ -585,6 +593,7 @@ function normalizeScheduledAction(raw: unknown, fallbackLanguage: ScheduledTaskA
     executablePath: typeof source?.executablePath === "string" ? source.executablePath : "",
     arguments: typeof source?.arguments === "string" ? source.arguments : "",
     workingDirectory: typeof source?.workingDirectory === "string" ? source.workingDirectory : "",
+    timeout: typeof source?.timeout === "string" ? source.timeout : undefined,
     notification: normalizeAppNotification(source?.notification, defaultAction.notification),
     notifyOnComplete: Boolean(source?.notifyOnComplete),
     completionNotification: normalizeAppNotification(source?.completionNotification, defaultAction.completionNotification),
@@ -636,9 +645,13 @@ function normalizeScheduledTrigger(raw: unknown): ScheduledTaskTrigger {
   return {
     type,
     runAt: typeof source?.runAt === "string" && source.runAt ? source.runAt : fallback.runAt,
-    everySeconds: normalizePositiveInteger(source?.everySeconds, fallback.everySeconds, 1, 31_536_000),
+    everySeconds: typeof source?.everySeconds === "number" && source.everySeconds > 0 && Number.isSafeInteger(source.everySeconds * 1000)
+      ? source.everySeconds : fallback.everySeconds,
     repeatCount: normalizeNonNegativeInteger(source?.repeatCount, fallback.repeatCount, 1_000_000),
     cron: typeof source?.cron === "string" && source.cron.trim() ? source.cron.trim() : fallback.cron,
+    timezone: typeof source?.timezone === "string" ? source.timezone : undefined,
+    missedPolicy: source?.missedPolicy === "skip" || source?.missedPolicy === "run-once" ? source.missedPolicy : undefined,
+    cooldown: typeof source?.cooldown === "string" ? source.cooldown : undefined,
     stopCondition: normalizeSchedulerCondition(source?.stopCondition, false),
     probeAction: normalizeScheduledAction(source?.probeAction, "python"),
     probeCondition: normalizeSchedulerCondition(source?.probeCondition, true)
@@ -659,6 +672,16 @@ function normalizeScheduledTask(raw: unknown): ScheduledTask | null {
     editing: Boolean(source.editing),
     trigger: normalizeScheduledTrigger(source.trigger),
     action: normalizeScheduledAction(source.action, "python"),
+    until: typeof source.until === "string" ? source.until : undefined,
+    gate: source.gate && typeof source.gate === "object" ? {
+      windows: Array.isArray(source.gate.windows) ? source.gate.windows.map((window) => ({
+        start: typeof window.start === "string" ? window.start : "",
+        end: typeof window.end === "string" ? window.end : "",
+        weekdays: Array.isArray(window.weekdays) ? window.weekdays.filter((day) => Number.isInteger(day) && day >= 0 && day <= 6) : undefined
+      })) : [],
+      probeAction: source.gate.probeAction ? normalizeScheduledAction(source.gate.probeAction) : undefined,
+      condition: source.gate.condition ? normalizeSchedulerCondition(source.gate.condition, true) : undefined
+    } : undefined,
     runCount: normalizeNonNegativeInteger(source.runCount, 0, 1_000_000),
     lastRunAt: typeof source.lastRunAt === "string" ? source.lastRunAt : undefined,
     nextRunAt: typeof source.nextRunAt === "string" ? source.nextRunAt : undefined,
@@ -1134,6 +1157,7 @@ export function normalizeSettings(raw: unknown): Settings {
         source?.appearance?.linkOpenMode === "system" || source?.behavior?.linkOpenMode === "system"
           ? "system"
           : defaultSettings.appearance.linkOpenMode,
+      listSortMode: normalizeSortMode(source?.appearance?.listSortMode),
       uiScale:
         storedUiScale ?? defaultSettings.appearance.uiScale,
       uiFontSize: normalizeFontSize(source?.appearance?.uiFontSize, defaultSettings.appearance.uiFontSize, 14, 22),
@@ -1255,6 +1279,8 @@ export function normalizeSettings(raw: unknown): Settings {
         typeof source?.features?.mobileBack === "boolean"
           ? source.features.mobileBack
           : defaultSettings.features.mobileBack,
+      pinnedIcon: typeof source?.features?.pinnedIcon === "boolean" ? source.features.pinnedIcon : defaultSettings.features.pinnedIcon,
+      pinnedSection: typeof source?.features?.pinnedSection === "boolean" ? source.features.pinnedSection : defaultSettings.features.pinnedSection,
       weekStart: source?.features?.weekStart === "sunday" ? "sunday" : "monday",
       dueHighlight: normalizeDueHighlight(source?.features?.dueHighlight),
       linkRender: normalizeLinkRender(source?.features?.linkRender),

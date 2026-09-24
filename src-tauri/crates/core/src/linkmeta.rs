@@ -27,11 +27,12 @@ const USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) KXToDo/1.0";
 /// 缓存落盘文件名（runtime/ 下）
 const CACHE_FILE: &str = "linkmeta.json";
-/// 缓存条数上限：超了丢最早写入的那一半（重新抓一次而已）
+/// 缓存条数上限：超了淘汰一半（纯缓存，不承诺 LRU）。
 const CACHE_CAP: usize = 500;
-/// 缓存格式版本：v2 起带网页图标。旧条目没有 icon，命中也没有图标可用——
-/// 直接当缓存作废，让它们重新抓一次（缓存本来就是纯缓存，丢了重抓即可）
-const CACHE_VERSION: u32 = 2;
+/// v3 统一 HTTP/渲染结果的 URL、文本与图标安全边界，旧缓存重新抓取。
+const CACHE_VERSION: u32 = 3;
+pub const META_MAX_BYTES: usize = 16 * 1024;
+const URL_MAX: usize = 4096;
 const TITLE_MAX: usize = 200;
 const DESC_MAX: usize = 400;
 
@@ -82,9 +83,12 @@ fn load_cache(state: &mut CacheState, dir: &Path) {
         return;
     };
     if let Ok(file) = serde_json::from_str::<CacheFile>(&raw) {
-        // 旧版本缓存（没有 icon）整份作废：不然升级上来的用户永远拿不到网页图标
-        if file.version >= CACHE_VERSION {
-            state.entries = file.entries;
+        if file.version == CACHE_VERSION {
+            for (key, meta) in file.entries.into_iter().take(CACHE_CAP) {
+                if let Ok(meta) = normalize_metadata(&key, meta) {
+                    state.entries.insert(meta.url.clone(), meta);
+                }
+            }
         }
     }
 }
@@ -110,11 +114,35 @@ fn save_cache(state: &CacheState) {
     }
 }
 
-/// 规范化：去 fragment（`#a` 与 `#b` 是同一个页面），其余原样。
-fn normalize(url: &Url) -> String {
-    let mut copy = url.clone();
-    copy.set_fragment(None);
-    copy.to_string()
+/// Shared by HTTP, cache writes and the native webviews. Keep fragments for navigation.
+pub fn external_url(raw: &str) -> CoreResult<Url> {
+    let invalid = || CoreError::validation("LINK_URL_INVALID", "只支持外部 http/https 链接");
+    let raw = raw.trim();
+    if raw.len() > URL_MAX || raw.bytes().any(|b| b <= 0x20 || b == 0x7f) {
+        return Err(invalid());
+    }
+    let url = Url::parse(raw).map_err(|_| invalid())?;
+    let host = url.host_str().unwrap_or("").trim_end_matches('.');
+    if !matches!(url.scheme(), "http" | "https")
+        || host.is_empty()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || host == "localhost"
+        || host.ends_with(".localhost")
+        || matches!(host, "[::1]" | "[::]")
+        || host.starts_with("127.")
+        || host.starts_with("0.")
+        || url.as_str().len() > URL_MAX
+    {
+        return Err(invalid());
+    }
+    Ok(url)
+}
+
+pub fn normalize_url(raw: &str) -> CoreResult<String> {
+    let mut url = external_url(raw)?;
+    url.set_fragment(None);
+    Ok(url.to_string())
 }
 
 fn host_of(url: &Url) -> String {
@@ -124,18 +152,100 @@ fn host_of(url: &Url) -> String {
         .to_string()
 }
 
-/// 取一个链接的元数据（命中缓存直接回）。`runtime_dir` 是缓存落盘位置。
-pub fn link_meta(runtime_dir: &Path, url: &str) -> CoreResult<LinkMeta> {
-    let parsed = Url::parse(url).map_err(|_| {
-        CoreError::validation("LINK_URL_INVALID", format!("不是合法的链接：{url}"))
-    })?;
-    if !matches!(parsed.scheme(), "http" | "https") {
+/// Text from a rendered DOM is already entity-decoded; never decode it twice.
+fn bounded_text(raw: &str, max: usize) -> String {
+    let cleaned: String = raw
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    truncate(
+        &cleaned.split_whitespace().collect::<Vec<_>>().join(" "),
+        max,
+    )
+}
+
+pub fn normalize_metadata(request_url: &str, mut meta: LinkMeta) -> CoreResult<LinkMeta> {
+    let key = normalize_url(request_url)?;
+    if [
+        &meta.url,
+        &meta.site,
+        &meta.title,
+        &meta.description,
+        &meta.icon,
+    ]
+    .iter()
+    .map(|s| s.len())
+    .sum::<usize>()
+        > META_MAX_BYTES
+    {
         return Err(CoreError::validation(
-            "LINK_URL_INVALID",
-            format!("只解析 http/https 链接：{url}"),
+            "LINK_META_TOO_LARGE",
+            "链接元数据过大",
         ));
     }
-    let key = normalize(&parsed);
+    // Only the explicit request identifies the cache entry. A remote page cannot write another key.
+    let page = external_url(&meta.url).unwrap_or(external_url(&key)?);
+    meta.url = key;
+    meta.site = bounded_text(&meta.site, 100);
+    if meta.site.is_empty() {
+        meta.site = host_of(&external_url(&meta.url)?);
+    }
+    meta.title = bounded_text(&meta.title, TITLE_MAX);
+    meta.description = bounded_text(&meta.description, DESC_MAX);
+    let challenge = meta.title.to_ascii_lowercase();
+    if (meta.title.is_empty() && meta.description.is_empty())
+        || matches!(
+            challenge.trim_end_matches(['.', '…', '!']),
+            "just a moment" | "checking your browser" | "verify you are human" | "loading"
+        )
+        || challenge == "attention required! | cloudflare"
+    {
+        return Err(CoreError::execution(
+            "LINK_META_EMPTY",
+            "页面没有可用的标题或摘要（可能需要验证）",
+        ));
+    }
+    meta.icon = if meta.icon.trim().is_empty() {
+        page.join("/favicon.ico")
+            .map(|u| u.to_string())
+            .unwrap_or_default()
+    } else {
+        page.join(meta.icon.trim())
+            .ok()
+            .and_then(|u| external_url(u.as_str()).ok())
+            .map(|u| u.to_string())
+            .unwrap_or_default()
+    };
+    Ok(meta)
+}
+
+fn insert_cache(state: &mut CacheState, meta: LinkMeta) {
+    if !state.entries.contains_key(&meta.url) && state.entries.len() >= CACHE_CAP {
+        let drop_keys: Vec<String> = state.entries.keys().take(CACHE_CAP / 2).cloned().collect();
+        for key in drop_keys {
+            state.entries.remove(&key);
+        }
+    }
+    state.entries.insert(meta.url.clone(), meta);
+}
+
+/// Both HTTP and rendered-page writes use exactly the same validation, key and eviction path.
+pub fn put_link_meta(
+    runtime_dir: &Path,
+    request_url: &str,
+    meta: LinkMeta,
+) -> CoreResult<LinkMeta> {
+    let meta = normalize_metadata(request_url, meta)?;
+    let mut state = cache().lock().unwrap_or_else(|poison| poison.into_inner());
+    load_cache(&mut state, runtime_dir);
+    insert_cache(&mut state, meta.clone());
+    save_cache(&state);
+    Ok(meta)
+}
+
+/// 取一个链接的元数据（命中缓存直接回）。`runtime_dir` 是缓存落盘位置。
+pub fn link_meta(runtime_dir: &Path, url: &str) -> CoreResult<LinkMeta> {
+    let key = normalize_url(url)?;
     {
         let mut state = cache().lock().unwrap_or_else(|poison| poison.into_inner());
         load_cache(&mut state, runtime_dir);
@@ -143,33 +253,7 @@ pub fn link_meta(runtime_dir: &Path, url: &str) -> CoreResult<LinkMeta> {
             return Ok(hit.clone());
         }
     }
-
-    let mut meta = fetch(&parsed)?;
-    if meta.title.is_empty() && meta.description.is_empty() {
-        return Err(CoreError::execution(
-            "LINK_META_EMPTY",
-            "页面里没有可用的标题或摘要",
-        ));
-    }
-    meta.url = key.clone();
-
-    let mut state = cache().lock().unwrap_or_else(|poison| poison.into_inner());
-    load_cache(&mut state, runtime_dir);
-    if state.entries.len() >= CACHE_CAP {
-        // 简单淘汰：清掉最早的一半（HashMap 无序，够用——这只是一层缓存）
-        let drop_keys: Vec<String> = state
-            .entries
-            .keys()
-            .take(CACHE_CAP / 2)
-            .cloned()
-            .collect();
-        for key in drop_keys {
-            state.entries.remove(&key);
-        }
-    }
-    state.entries.insert(key, meta.clone());
-    save_cache(&state);
-    Ok(meta)
+    put_link_meta(runtime_dir, &key, fetch(&external_url(&key)?)?)
 }
 
 fn fetch(url: &Url) -> CoreResult<LinkMeta> {
@@ -177,31 +261,35 @@ fn fetch(url: &Url) -> CoreResult<LinkMeta> {
         .timeout_connect(CONNECT_TIMEOUT)
         .timeout_read(READ_TIMEOUT)
         .timeout_write(READ_TIMEOUT)
+        .timeout(READ_TIMEOUT)
+        .redirects(0)
         .user_agent(USER_AGENT)
         .build();
-    let response = match agent.get(url.as_str()).call() {
-        Ok(response) => response,
-        Err(ureq::Error::Status(code, _)) => {
-            return Err(CoreError::execution(
-                "LINK_FETCH_FAILED",
-                format!("页面返回 {code}"),
-            ))
+    let mut page = url.clone();
+    let mut redirects = 0;
+    let response = loop {
+        let response = agent.get(page.as_str()).call().map_err(|error| {
+            CoreError::execution("LINK_FETCH_FAILED", format!("抓取失败：{error}"))
+        })?;
+        if !(300..400).contains(&response.status()) {
+            break response;
         }
-        Err(error) => {
-            return Err(CoreError::execution(
-                "LINK_FETCH_FAILED",
-                format!("抓取失败：{error}"),
-            ))
+        if redirects >= 5 {
+            return Err(CoreError::execution("LINK_FETCH_FAILED", "页面重定向过多"));
         }
+        let next = response
+            .header("location")
+            .and_then(|s| page.join(s).ok())
+            .ok_or_else(|| CoreError::execution("LINK_FETCH_FAILED", "无效的重定向"))?;
+        page = external_url(next.as_str())?;
+        redirects += 1;
     };
     let content_type = response
         .header("content-type")
         .unwrap_or("")
         .to_ascii_lowercase();
     // 图片 / PDF / 二进制抓来也没有标题可读，直接当失败
-    if !content_type.is_empty()
-        && !content_type.contains("html")
-        && !content_type.contains("text/")
+    if !content_type.is_empty() && !content_type.contains("html") && !content_type.contains("text/")
     {
         return Err(CoreError::execution(
             "LINK_FETCH_FAILED",
@@ -217,23 +305,27 @@ fn fetch(url: &Url) -> CoreResult<LinkMeta> {
         .map_err(|error| CoreError::execution("LINK_FETCH_FAILED", format!("读取失败：{error}")))?;
 
     let charset = sniff_charset(&buffer, &content_type);
-    let encoding = encoding_rs::Encoding::for_label(charset.as_bytes()).unwrap_or(encoding_rs::UTF_8);
+    let encoding =
+        encoding_rs::Encoding::for_label(charset.as_bytes()).unwrap_or(encoding_rs::UTF_8);
     let (html, _, _) = encoding.decode(&buffer);
     let html = html.into_owned();
 
     let title = extract_meta_content(&html, &["og:title", "twitter:title"])
         .or_else(|| extract_title(&html))
         .unwrap_or_default();
-    let description = extract_meta_content(&html, &["og:description", "description", "twitter:description"])
-        .unwrap_or_default();
+    let description = extract_meta_content(
+        &html,
+        &["og:description", "description", "twitter:description"],
+    )
+    .unwrap_or_default();
     let site = extract_meta_content(&html, &["og:site_name"])
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| host_of(url));
-    let icon = extract_icon(&html, url);
+        .unwrap_or_else(|| host_of(&page));
+    let icon = extract_icon(&html, &page);
 
     Ok(LinkMeta {
-        url: url.to_string(),
-        site,
+        url: page.to_string(),
+        site: truncate(&site, 100),
         title: truncate(&title, TITLE_MAX),
         description: truncate(&description, DESC_MAX),
         icon,
@@ -245,7 +337,11 @@ fn fetch(url: &Url) -> CoreResult<LinkMeta> {
 fn sniff_charset(buffer: &[u8], content_type: &str) -> String {
     if let Some(index) = content_type.find("charset=") {
         let value = &content_type[index + "charset=".len()..];
-        let value = value.split([';', ' ']).next().unwrap_or("").trim_matches('"');
+        let value = value
+            .split([';', ' '])
+            .next()
+            .unwrap_or("")
+            .trim_matches('"');
         if !value.is_empty() {
             return value.to_string();
         }
@@ -279,8 +375,14 @@ fn extract_icon(html: &str, page: &Url) -> String {
         };
         cursor = tag_end + 1;
         let attrs = parse_attrs(&html[start..tag_end]);
-        let rel = attrs.get("rel").map(|value| value.to_ascii_lowercase()).unwrap_or_default();
-        if !rel.split_whitespace().any(|token| token == "icon" || token == "apple-touch-icon") {
+        let rel = attrs
+            .get("rel")
+            .map(|value| value.to_ascii_lowercase())
+            .unwrap_or_default();
+        if !rel
+            .split_whitespace()
+            .any(|token| token == "icon" || token == "apple-touch-icon")
+        {
             continue;
         }
         let Some(href) = attrs.get("href").filter(|value| !value.trim().is_empty()) else {
@@ -305,11 +407,9 @@ fn extract_icon(html: &str, page: &Url) -> String {
     if !fallback.is_empty() {
         return fallback;
     }
-    format!(
-        "{}://{}/favicon.ico",
-        page.scheme(),
-        page.host_str().unwrap_or("")
-    )
+    page.join("/favicon.ico")
+        .map(|u| u.to_string())
+        .unwrap_or_default()
 }
 
 /// `<title>…</title>`
@@ -368,7 +468,10 @@ fn parse_attrs(tag: &str) -> HashMap<String, String> {
         }
         let key_start = index;
         while index < bytes.len()
-            && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_' || bytes[index] == b'-' || bytes[index] == b':')
+            && (bytes[index].is_ascii_alphanumeric()
+                || bytes[index] == b'_'
+                || bytes[index] == b'-'
+                || bytes[index] == b':')
         {
             index += 1;
         }
@@ -506,6 +609,152 @@ fn truncate(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_cache_keys_and_icons_are_untrusted() {
+        let meta = normalize_metadata(
+            "https://www.example.com:8443/a#section",
+            LinkMeta {
+                url: "https://victim.example/posts/final".into(),
+                title: "  Page\n title  ".into(),
+                icon: "../favicon.png".into(),
+                ..LinkMeta::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(meta.url, "https://www.example.com:8443/a");
+        assert_eq!(meta.title, "Page title");
+        assert_eq!(meta.site, "example.com");
+        assert_eq!(meta.icon, "https://victim.example/favicon.png");
+        for icon in [
+            "javascript:alert(1)",
+            "data:image/svg+xml,test",
+            "file:///private",
+            "http://asset.localhost/a",
+        ] {
+            let meta = normalize_metadata(
+                "https://example.com",
+                LinkMeta {
+                    title: "Title".into(),
+                    icon: icon.into(),
+                    ..LinkMeta::default()
+                },
+            )
+            .unwrap();
+            assert!(meta.icon.is_empty());
+        }
+        assert_eq!(
+            normalize_metadata(
+                "https://example.com:8443/a",
+                LinkMeta {
+                    title: "Title".into(),
+                    ..LinkMeta::default()
+                }
+            )
+            .unwrap()
+            .icon,
+            "https://example.com:8443/favicon.ico"
+        );
+    }
+
+    #[test]
+    fn rejects_native_urls_oversized_payloads_and_challenges() {
+        for url in [
+            "file:///secret",
+            "tauri://localhost",
+            "http://tauri.localhost/",
+            "http://localhost./",
+            "http://127.0.0.1:1420",
+            "http://2130706433/",
+            "http://[::1]/",
+            "https://u:p@example.com",
+            "https://example.com/a\nb",
+        ] {
+            assert!(external_url(url).is_err(), "{url}");
+        }
+        assert_eq!(
+            normalize_url("https://EXAMPLE.com:443/a#b").unwrap(),
+            "https://example.com/a"
+        );
+        assert!(normalize_metadata("https://example.com", LinkMeta::default()).is_err());
+        assert!(normalize_metadata(
+            "https://example.com",
+            LinkMeta {
+                title: "Just a moment...".into(),
+                ..LinkMeta::default()
+            }
+        )
+        .is_err());
+        assert!(normalize_metadata(
+            "https://example.com",
+            LinkMeta {
+                title: "字".repeat(META_MAX_BYTES / 2),
+                ..LinkMeta::default()
+            }
+        )
+        .is_err());
+        let meta = normalize_metadata(
+            "https://example.com",
+            LinkMeta {
+                title: "𠮷".repeat(201),
+                description: "&amp; <literal>".into(),
+                ..LinkMeta::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(meta.title, format!("{}…", "𠮷".repeat(200)));
+        assert_eq!(meta.description, "&amp; <literal>");
+    }
+
+    #[test]
+    fn cache_write_read_normalization_and_eviction_share_one_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = put_link_meta(
+            dir.path(),
+            "https://EXAMPLE.com:443/article#one",
+            LinkMeta {
+                url: "https://victim.example/".into(),
+                title: "Cached".into(),
+                ..LinkMeta::default()
+            },
+        )
+        .unwrap();
+        // No network: differently-spelled request hits the same normalized cache key.
+        assert_eq!(
+            link_meta(dir.path(), "https://example.com/article#two").unwrap(),
+            result
+        );
+        let mut restored = CacheState {
+            dir: None,
+            entries: HashMap::new(),
+        };
+        load_cache(&mut restored, dir.path());
+        assert_eq!(restored.entries.len(), 1);
+        assert!(restored.entries.contains_key("https://example.com/article"));
+        assert!(!restored.entries.contains_key("https://victim.example/"));
+        for i in 0..CACHE_CAP {
+            insert_cache(
+                &mut restored,
+                LinkMeta {
+                    url: format!("https://entry.example/{i}"),
+                    ..result.clone()
+                },
+            );
+        }
+        assert!(restored.entries.len() <= CACHE_CAP);
+        assert!(restored
+            .entries
+            .contains_key(&format!("https://entry.example/{}", CACHE_CAP - 1)));
+    }
+
+    #[test]
+    fn frontend_metadata_limits_match() {
+        let frontend = include_str!("../../../../src/lib/linkMeta.ts");
+        assert!(frontend.contains("LINK_META_MAX_BYTES = 16 * 1024"));
+        assert!(frontend.contains(&format!("URL_MAX = {URL_MAX}")));
+        assert!(frontend.contains(&format!("text(input.title, {TITLE_MAX})")));
+        assert!(frontend.contains(&format!("text(input.description, {DESC_MAX})")));
+    }
 
     #[test]
     fn extracts_title_and_meta() {

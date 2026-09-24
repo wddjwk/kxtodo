@@ -60,6 +60,7 @@ export type Task = {
   markdown: string;
   completed: boolean;
   important: boolean;
+  pinned?: boolean;
   myDay: boolean;
   plannedDate?: string;
   dueDate?: string;
@@ -215,6 +216,7 @@ export type Settings = {
   profile: ProfileSettings;
   appearance: {
     linkOpenMode: "app" | "system";
+    listSortMode: import("./sort").SortMode;
     uiScale: number;
     /** UI 字号：分组分类与页面标题（我的一天那些）吃它 */
     uiFontSize: number;
@@ -311,6 +313,8 @@ export type Settings = {
   };
   features: {
     showCategoryBadges: boolean;
+    pinnedIcon: boolean;
+    pinnedSection: boolean;
     sync: boolean;
     editorToolbar: boolean;
     /** 移动端页面左上角的返回箭头（默认关，桌面无感） */
@@ -368,6 +372,7 @@ export type SchedulerCondition = {
   enabled: boolean;
   mode: "contains" | "regex";
   pattern: string;
+  stream?: "stdout" | "stderr";
 };
 
 export type SchedulerScriptLanguage = "python" | "javascript" | "powershell" | "bash" | "makefile" | "custom";
@@ -399,6 +404,7 @@ export type ScheduledTaskAction = {
   executablePath: string;
   arguments: string;
   workingDirectory: string;
+  timeout?: string;
   notification: AppNotification;
   notifyOnComplete: boolean;
   completionNotification: AppNotification;
@@ -411,9 +417,30 @@ export type ScheduledTaskTrigger = {
   everySeconds: number;
   repeatCount: number;
   cron: string;
+  timezone?: string;
+  missedPolicy?: "skip" | "run-once";
+  cooldown?: string;
   stopCondition: SchedulerCondition;
   probeAction: ScheduledTaskAction;
   probeCondition: SchedulerCondition;
+};
+
+export type SchedulerGate = {
+  windows: Array<{ start: string; end: string; weekdays?: number[] }>;
+  probeAction?: ScheduledTaskAction;
+  condition?: SchedulerCondition;
+};
+
+export type ScheduleHistoryRun = {
+  taskId: string;
+  kind: string;
+  startedAt: string;
+  finishedAt: string;
+  status: string;
+  exitCode?: number | null;
+  stdout?: string;
+  stderr?: string;
+  stopReason?: string | null;
 };
 
 export type ScheduledTaskStatus = "idle" | "running" | "success" | "failed" | "stopped";
@@ -426,6 +453,8 @@ export type ScheduledTask = {
   editing?: boolean;
   trigger: ScheduledTaskTrigger;
   action: ScheduledTaskAction;
+  gate?: SchedulerGate;
+  until?: string;
   runCount: number;
   lastRunAt?: string;
   nextRunAt?: string;

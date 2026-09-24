@@ -352,6 +352,16 @@ pub fn gui_dispatch(
             serde_json::to_value(meta)
                 .map_err(|error| CoreError::internal(format!("链接元数据序列化失败：{error}")))
         }
+        "link-meta-put" => {
+            let url = required_str(&inv.params, "url")?;
+            let value = inv.params.get("metadata")
+                .ok_or_else(|| CoreError::validation("MISSING_PARAM", "缺少 metadata"))?;
+            let metadata: crate::linkmeta::LinkMeta = serde_json::from_value(value.clone())
+                .map_err(|_| CoreError::validation("LINK_META_INVALID", "链接元数据格式错误"))?;
+            let metadata = crate::linkmeta::put_link_meta(&ctx.repo.layout.runtime_dir(), &url, metadata)?;
+            serde_json::to_value(metadata)
+                .map_err(|error| CoreError::internal(format!("链接元数据序列化失败：{error}")))
+        }
         other => Err(CoreError::validation(
             "UNKNOWN_ACTION",
             format!("未知 gui 动作 `{other}`"),

@@ -292,6 +292,7 @@ pub fn settings_payload(settings: &SettingsFile) -> Value {
         },
         "appearance": {
             "linkOpenMode": settings.appearance.link_open_mode,
+            "listSortMode": settings.appearance.list_sort_mode,
             "themePresets": settings.appearance.theme_presets,
             "uiColors": settings.appearance.ui_colors,
             "newNodeDefaults": settings.appearance.new_node_defaults,
@@ -301,6 +302,8 @@ pub fn settings_payload(settings: &SettingsFile) -> Value {
         },
         "features": {
             "showCategoryBadges": settings.features.show_category_badges,
+            "pinnedIcon": settings.features.pinned_icon,
+            "pinnedSection": settings.features.pinned_section,
             // 临期高亮是观感偏好：一端开了三端一起开
             "dueHighlight": settings.features.due_highlight,
             // 渲染偏好：一端改了，其它端跟着改（只跟内容观感有关）
@@ -748,6 +751,11 @@ fn apply_settings_record(record: &EntityRecord, settings: &mut SettingsFile) -> 
                     settings.appearance.link_open_mode = parsed;
                 }
             }
+            if let Some(mode) = map.get("listSortMode") {
+                if let Ok(parsed) = crate::ops_config::expect_list_sort_mode(mode) {
+                    settings.appearance.list_sort_mode = parsed;
+                }
+            }
             if let Some(presets) = map.get("themePresets") {
                 if let Ok(parsed) = serde_json::from_value::<Vec<crate::model::ThemePreset>>(
                     presets.clone(),
@@ -800,6 +808,12 @@ fn apply_settings_record(record: &EntityRecord, settings: &mut SettingsFile) -> 
         if let Some(map) = features.as_object() {
             if let Some(value) = map.get("showCategoryBadges").and_then(Value::as_bool) {
                 settings.features.show_category_badges = value;
+            }
+            if let Some(value) = map.get("pinnedIcon").and_then(Value::as_bool) {
+                settings.features.pinned_icon = value;
+            }
+            if let Some(value) = map.get("pinnedSection").and_then(Value::as_bool) {
+                settings.features.pinned_section = value;
             }
             if let Some(value) = map.get("dueHighlight").and_then(Value::as_str) {
                 if matches!(value, "off" | "solid" | "gradient") {
@@ -1031,6 +1045,7 @@ mod tests {
             markdown: id.to_string(),
             completed: false,
             important: false,
+            pinned: false,
             my_day: false,
             planned_date: None,
             due_date: None,
@@ -1293,6 +1308,97 @@ mod tests {
         };
         apply_settings_record(&legacy_record, &mut legacy).unwrap();
         assert_eq!(legacy.sync.interval_seconds, 77);
+    }
+
+    #[test]
+    fn task_pinned_round_trips_independently_of_local_ui_and_order() {
+        let mut target = empty_data();
+        let mut item = task("task-pin", "entry-a", 7.0, "2026-01-01T00:00:00.000Z");
+        item.expanded = Some(true);
+        target.tasks.push(item.clone());
+        for (index, pinned) in [true, false].into_iter().enumerate() {
+            item.pinned = pinned;
+            let ts = format!("2026-01-0{}T00:00:00.000Z", index + 2);
+            item.updated_at = Some(ts.clone());
+            let payload = task_payload(&item);
+            assert_eq!(payload["pinned"], pinned);
+            assert!(payload.get("expanded").is_none());
+            let remote = record("task", "task-pin", &ts, "dev-b", payload);
+            assert!(remote_wins(
+                &remote,
+                target.tasks[0].updated_at.as_deref().map(|stamp| (stamp, "dev-a")),
+            ));
+            apply_data_record(&remote, &mut target).unwrap();
+            normalize_data_orders(&mut target);
+            assert_eq!(target.tasks[0].pinned, pinned);
+            assert_eq!(target.tasks[0].expanded, Some(true));
+            assert_eq!(target.tasks[0].order, 7.0);
+            assert_eq!(task_payload(&target.tasks[0])["pinned"], pinned);
+        }
+    }
+
+    #[test]
+    fn list_sort_and_pin_features_round_trip_in_shared_settings() {
+        for mode in crate::model::LIST_SORT_MODES {
+            for (icon, section) in [(true, true), (false, false), (true, false), (false, true)] {
+                let mut source = SettingsFile::default();
+                source.appearance.list_sort_mode = mode.to_string();
+                source.features.pinned_icon = icon;
+                source.features.pinned_section = section;
+                let payload = settings_payload(&source);
+                assert_eq!(payload["appearance"]["listSortMode"], mode);
+                assert_eq!(payload["features"]["pinnedIcon"], icon);
+                assert_eq!(payload["features"]["pinnedSection"], section);
+                let mut target = SettingsFile::default();
+                target.features.pinned_icon = !icon;
+                target.features.pinned_section = !section;
+                target.appearance.ui_scale = 1.25;
+                target.features.mobile_back = true;
+                target.features.sync = false;
+                apply_settings_record(&settings_record(payload, 1), &mut target).unwrap();
+                assert_eq!(target.appearance.list_sort_mode, mode);
+                assert_eq!(target.features.pinned_icon, icon);
+                assert_eq!(target.features.pinned_section, section);
+                assert_eq!(target.appearance.ui_scale, 1.25);
+                assert!(target.features.mobile_back);
+                assert!(!target.features.sync);
+                assert_eq!(settings_payload(&target), settings_payload(&source));
+            }
+        }
+    }
+
+    #[test]
+    fn shared_sort_and_pin_settings_ignore_absent_or_invalid_fields() {
+        let mut target = SettingsFile::default();
+        target.appearance.list_sort_mode = "alpha-desc".to_string();
+        target.features.pinned_icon = false;
+        target.features.pinned_section = true;
+        for payload in [
+            json!({ "appearance": {}, "features": {} }),
+            json!({ "appearance": { "listSortMode": "manual" },
+                "features": { "pinnedIcon": "true", "pinnedSection": 0 } }),
+            json!({ "appearance": { "listSortMode": false },
+                "features": { "pinnedIcon": null, "pinnedSection": [] } }),
+        ] {
+            apply_settings_record(&settings_record(payload, 1), &mut target).unwrap();
+            assert_eq!(target.appearance.list_sort_mode, "alpha-desc");
+            assert!(!target.features.pinned_icon);
+            assert!(target.features.pinned_section);
+        }
+        // Each feature is independent even in partial records.
+        apply_settings_record(
+            &settings_record(json!({ "features": { "pinnedIcon": true } }), 2),
+            &mut target,
+        ).unwrap();
+        assert!(target.features.pinned_icon);
+        assert!(target.features.pinned_section);
+        apply_settings_record(
+            &settings_record(json!({ "features": { "pinnedSection": false } }), 3),
+            &mut target,
+        ).unwrap();
+        assert!(target.features.pinned_icon);
+        assert!(!target.features.pinned_section);
+        assert_eq!(target.appearance.list_sort_mode, "alpha-desc");
     }
 
     fn settings_record(data: Value, seq: u64) -> EntityRecord {

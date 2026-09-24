@@ -45,6 +45,12 @@
     timer = window.setTimeout(flush, SAVE_DEBOUNCE_MS);
   }
 
+  function handleKeydown(event: KeyboardEvent): void {
+    if (event.key !== "Tab" || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.isComposing) return;
+    event.preventDefault();
+    document.execCommand("insertText", false, "\t");
+  }
+
   function onVisibility(): void {
     if (document.visibilityState === "hidden") flush();
   }
@@ -84,6 +90,7 @@
     class="scratchpad-area"
     bind:value={text}
     on:input={handleInput}
+    on:keydown={handleKeydown}
     placeholder="随手记点什么…（纯文本，不渲染，自动保存）"
     spellcheck="false"
   ></textarea>

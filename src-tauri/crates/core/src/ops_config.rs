@@ -17,6 +17,7 @@ pub fn is_shared_settings_path(path: &str) -> bool {
             | "profile.email"
             | "profile.avatar"
             | "appearance.linkOpenMode"
+            | "appearance.listSortMode"
             | "appearance.themePresets"
             | "appearance.uiColors"
             // 新建分组/条目的默认外观同 uiColors 一个待遇：换台设备建出来的条目不该变脸
@@ -30,6 +31,8 @@ pub fn is_shared_settings_path(path: &str) -> bool {
             | "appearance.newNodeDefaults.backgroundOpacity"
             | "updates.autoCheck"
             | "features.showCategoryBadges"
+            | "features.pinnedIcon"
+            | "features.pinnedSection"
             // 超链接渲染样式是内容观感：一端改了三端跟着改（从前漏了这两项，
             // merge 载荷里带着它们却从不刷新 LWW 时间戳，改了等于白改）
             | "features.linkRender"
@@ -89,6 +92,12 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         path: "appearance.linkOpenMode",
         kind: "enum(app|system)",
         description: "链接打开方式",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "appearance.listSortMode",
+        kind: "enum(created-desc|created-asc|alpha-asc|alpha-desc|due-asc|due-desc|importance)",
+        description: "列表排序方式（默认 created-desc，最新创建优先）",
         is_map: false,
     },
     FieldMeta {
@@ -434,6 +443,18 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         is_map: false,
     },
     FieldMeta {
+        path: "features.pinnedIcon",
+        kind: "boolean",
+        description: "显示任务置顶图标（默认开，与置顶分区独立，不影响置顶排序）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "features.pinnedSection",
+        kind: "boolean",
+        description: "置顶任务单独分区（默认关，与置顶图标独立，不影响置顶排序）",
+        is_map: false,
+    },
+    FieldMeta {
         path: "features.sync",
         kind: "boolean",
         description: "同步功能总开关：关掉后同步配置隐藏、自动同步与 sync 命令全部停用",
@@ -613,6 +634,7 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "appearance.diaryTagPresets" => json!(settings.appearance.diary_tag_presets),
         "appearance.dueColors" => json!(settings.appearance.due_colors),
         "appearance.navLayout" => json!(settings.appearance.nav_layout),
+        "appearance.listSortMode" => json!(settings.appearance.list_sort_mode),
         "appearance.themePresets" => json!(settings.appearance.theme_presets),
         "appearance.uiColors" => json!(settings.appearance.ui_colors),
         "appearance.newNodeDefaults.accent" => json!(settings.appearance.new_node_defaults.accent),
@@ -662,6 +684,8 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "sync.reconnectSeconds" => json!(settings.sync.reconnect_seconds),
         "updates.autoCheck" => json!(settings.updates.auto_check),
         "features.showCategoryBadges" => json!(settings.features.show_category_badges),
+        "features.pinnedIcon" => json!(settings.features.pinned_icon),
+        "features.pinnedSection" => json!(settings.features.pinned_section),
         "features.sync" => json!(settings.features.sync),
         "features.editorToolbar" => json!(settings.features.editor_toolbar),
         "features.mobileBack" => json!(settings.features.mobile_back),
@@ -841,6 +865,10 @@ fn expect_enum(path: &str, value: &Value, allowed: &[&str]) -> CoreResult<String
             format!("应为 {} 之一", allowed.join("|")),
         ))
     }
+}
+
+pub(crate) fn expect_list_sort_mode(value: &Value) -> CoreResult<String> {
+    expect_enum("appearance.listSortMode", value, &crate::model::LIST_SORT_MODES)
 }
 
 fn expect_color(path: &str, value: &Value) -> CoreResult<String> {
@@ -1112,6 +1140,9 @@ pub fn set_value(
             settings.appearance.nav_layout =
                 expect_enum(path, &value, &crate::model::NAV_LAYOUTS)?;
         }
+        "appearance.listSortMode" => {
+            settings.appearance.list_sort_mode = expect_list_sort_mode(&value)?;
+        }
         "appearance.themePresets" => {
             settings.appearance.theme_presets = expect_theme_presets(path, &value)?;
         }
@@ -1316,6 +1347,12 @@ pub fn set_value(
         "features.showCategoryBadges" => {
             settings.features.show_category_badges = expect_bool(path, &value)?;
         }
+        "features.pinnedIcon" => {
+            settings.features.pinned_icon = expect_bool(path, &value)?;
+        }
+        "features.pinnedSection" => {
+            settings.features.pinned_section = expect_bool(path, &value)?;
+        }
         "features.sync" => {
             settings.features.sync = expect_bool(path, &value)?;
         }
@@ -1506,6 +1543,9 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "appearance.linkOpenMode" => {
             target.appearance.link_open_mode = defaults.appearance.link_open_mode
         }
+        "appearance.listSortMode" => {
+            target.appearance.list_sort_mode = defaults.appearance.list_sort_mode.clone()
+        }
         "appearance.uiScale" => target.appearance.ui_scale = defaults.appearance.ui_scale,
         "appearance.uiFontSize" => {
             target.appearance.ui_font_size = defaults.appearance.ui_font_size
@@ -1621,6 +1661,8 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "features.showCategoryBadges" => {
             target.features.show_category_badges = defaults.features.show_category_badges
         }
+        "features.pinnedIcon" => target.features.pinned_icon = defaults.features.pinned_icon,
+        "features.pinnedSection" => target.features.pinned_section = defaults.features.pinned_section,
         "features.sync" => target.features.sync = defaults.features.sync,
         "features.editorToolbar" => target.features.editor_toolbar = defaults.features.editor_toolbar,
         "features.mobileBack" => target.features.mobile_back = defaults.features.mobile_back,

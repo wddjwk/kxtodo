@@ -33,6 +33,11 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+/** Native-only rendered metadata cache write; also works before the first store hydration. */
+export async function putLinkMeta(url: string, metadata: import("./linkMeta").LinkMeta): Promise<void> {
+  await coreDispatch("gui.link-meta-put", { url, metadata });
+}
+
 function state(): AppState {
   return get(appState);
 }
@@ -433,6 +438,7 @@ export async function addTask(entryId: string, draft: TaskDraft): Promise<Task |
 export type TaskChanges = {
   completed?: boolean;
   important?: boolean;
+  pinned?: boolean;
   myDay?: boolean;
   markdown?: string;
   entryId?: string;
@@ -460,6 +466,7 @@ export async function updateTask(id: string, changes: TaskChanges): Promise<void
     const params: Record<string, unknown> = { type: "item", id };
     if (changes.completed !== undefined) params.completed = changes.completed;
     if (changes.important !== undefined) params.important = changes.important;
+    if (changes.pinned !== undefined) params.pinned = changes.pinned;
     if (changes.myDay !== undefined) params.myDay = changes.myDay;
     if (changes.markdown !== undefined) params.markdown = changes.markdown;
     if (changes.entryId !== undefined) params.entryId = changes.entryId;
@@ -489,6 +496,7 @@ export async function updateTask(id: string, changes: TaskChanges): Promise<void
       next.completedAt = changes.completed ? new Date().toISOString() : undefined;
     }
     if (changes.important !== undefined) next.important = changes.important;
+    if (changes.pinned !== undefined) next.pinned = changes.pinned;
     if (changes.myDay !== undefined) next.myDay = changes.myDay;
     if (changes.markdown !== undefined) next.markdown = changes.markdown;
     if (changes.entryId !== undefined) next.nodeId = changes.entryId;
@@ -512,6 +520,7 @@ function legacyLocalTaskPatch(id: string, changes: TaskChanges): void {
         next.completedAt = changes.completed ? new Date().toISOString() : undefined;
       }
       if (changes.important !== undefined) next.important = changes.important;
+      if (changes.pinned !== undefined) next.pinned = changes.pinned;
       if (changes.myDay !== undefined) next.myDay = changes.myDay;
       if (changes.markdown !== undefined) next.markdown = changes.markdown;
       if (changes.entryId !== undefined) next.nodeId = changes.entryId;
@@ -1650,6 +1659,10 @@ async function afterLedgerImport(result: DiaryArchiveResult): Promise<void> {
 // 定时任务
 // ---------------------------------------------------------------------------
 
+import { entryToUi as scheduleEntryToUi } from "./scheduleAdapter";
+import { visibleScheduleHistory } from "./scheduleEditor";
+import type { ScheduleHistoryRun } from "./types";
+
 function scheduleState(): SchedulerState {
   return state().scheduler;
 }
@@ -1692,35 +1705,53 @@ export async function addSchedule(): Promise<ScheduledTask | null> {
   return ui;
 }
 
-export async function modifySchedule(id: string, ui: ScheduledTask): Promise<void> {
+export async function modifySchedule(id: string, ui: ScheduledTask): Promise<boolean> {
   if (coreMode) {
     const entry = get(scheduleEntries).get(id);
     if (!entry) {
       showToast("保存失败：定时任务数据未同步，请刷新");
-      return;
+      return false;
     }
     try {
-      const response = await coreDispatch<ScheduleEntryV9>("schedule.modify", {
-        id,
-        patch: uiToPatch(ui, entry)
-      });
+      const response = await coreDispatch<ScheduleEntryV9>("schedule.modify", { id, patch: uiToPatch(ui, entry) });
+      noteEnvelopeRevision(response.meta);
       scheduleEntries.update((map) => new Map(map).set(id, response.data));
+      const saved = scheduleEntryToUi(response.data);
+      appState.update((s) => ({ ...s, scheduler: { ...s.scheduler,
+        tasks: s.scheduler.tasks.map((task) => task.id === id ? { ...saved, expanded: task.expanded, editing: task.editing } : task)
+      } }));
+      return true;
     } catch (error) {
       await report(error, "保存失败");
-      return;
+      return false;
     }
-    appState.update((s) => ({
-      ...s,
-      scheduler: {
-        ...s.scheduler,
-        tasks: s.scheduler.tasks.map((task) => (task.id === id ? { ...ui, updatedAt: new Date().toISOString() } : task))
-      }
-    }));
-    return;
   }
   legacyCommitSchedulerTasks(
     scheduleState().tasks.map((task) => (task.id === id ? { ...ui, updatedAt: new Date().toISOString() } : task))
   );
+  return true;
+}
+
+/** Manual trials do not enable, disable, or reschedule the task. */
+export async function runSchedule(id: string): Promise<boolean> {
+  if (!coreMode) { showToast("试运行需要在 KXToDo 应用中进行"); return false; }
+  try {
+    const response = await coreDispatch<{ skipped?: string }>("schedule.run", { id, wait: true });
+    await refreshFromCore(["schedule"]);
+    showToast(response.data.skipped ? "任务正在执行，请稍后再试" : "试运行完成");
+    return !response.data.skipped;
+  } catch (error) {
+    await refreshFromCore(["schedule"]);
+    await report(error, "试运行失败");
+    return false;
+  }
+}
+
+/** Existing schedule.logs reads history/schedule.history JSONL; no second history store. */
+export async function loadScheduleHistory(id: string): Promise<ScheduleHistoryRun[]> {
+  if (!coreMode) return [];
+  const response = await coreDispatch<{ runs: ScheduleHistoryRun[] }>("schedule.logs", { id, limit: 200 });
+  return visibleScheduleHistory(response.data.runs);
 }
 
 export async function removeSchedule(id: string): Promise<void> {
@@ -1795,7 +1826,8 @@ export async function setScheduleUi(id: string, ui: { expanded?: boolean; editin
     }
     return;
   }
-  commit(state());
+  // Scheduler is stored separately from the regular state cache.
+  commitScheduler(scheduleState());
 }
 
 export async function setRuntime(name: string, path: string): Promise<void> {

@@ -1093,7 +1093,7 @@
   stroke: #f1f3f6;
 }
 
-/* ---------- 占比环的出场动效（首次挂载跑一次；数据变了不重放） ----------
+/* ---------- 占比环的出场动效（数据签名变化时重新挂载） ----------
    整环慢慢转出来 + 每片按序号错帧从 0 描边展开 = 标准的饼图入场。
    描边动画只写 from 帧：to 就是属性上的最终弧长，backwards 填充让延迟期停在 0。 */
 .ledger-donut-ring {
@@ -1860,7 +1860,7 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  align-items: flex-end;
+  align-items: center;
 }
 
 .ledger-fab {

@@ -1,6 +1,7 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { caps } from "./capabilities";
+import { externalLinkUrl, normalizeLinkMeta, type LinkMeta } from "./linkMeta";
 import { defaultSettings, emptySchedulerState, emptyState, normalizeDiaryEntries, normalizeSchedulerState, normalizeSettings, normalizeState } from "./defaults";
 import type { AppNotification, AppState, DiaryEntry, LedgerBook, SchedulerRuntimePaths, SchedulerState, Settings } from "./types";
 
@@ -772,4 +773,42 @@ export async function openExternalUrl(rawUrl: string): Promise<void> {
   }
 
   window.open(url.href, "_blank", "noopener,noreferrer");
+}
+
+/** The single opening path for cards, editors, global requests and search results. */
+export async function openLink(rawUrl: string, mode: "app" | "system", title = ""): Promise<void> {
+  if (mode === "system" || /^mailto:/i.test(rawUrl)) return openExternalUrl(rawUrl);
+  const url = externalLinkUrl(rawUrl);
+  if (!url) throw new Error("只支持外部 http/https 链接");
+  if (!isTauriRuntime) {
+    // Workspace owns the browser-dev-only iframe, not a native application window.
+    window.dispatchEvent(new CustomEvent("kxtodo-preview-link", { detail: { url, title } }));
+    return;
+  }
+  if (caps.linkPreview === "custom-tabs") {
+    const bridge = window.kxtodoAndroid as (typeof window.kxtodoAndroid & {
+      openCustomTab?: (url: string) => string;
+    });
+    try {
+      if (bridge?.openCustomTab && bridge.openCustomTab(url) === "") return;
+    } catch {
+      // Missing Custom Tabs provider/bridge: use the system, never navigate the main WebView.
+    }
+    return openExternalUrl(url);
+  }
+  try {
+    await invoke("open_link_preview", { url, title: title.slice(0, 200) });
+  } catch {
+    // A missing/broken webview runtime must not strand the user with an inert link.
+    await openExternalUrl(url);
+  }
+}
+
+export async function renderedLinkMeta(url: string): Promise<LinkMeta | null> {
+  if (!isTauriRuntime || !caps.renderedLinkMetadata) return null;
+  try {
+    return normalizeLinkMeta(url, await invoke<unknown>("extract_link_meta", { url }));
+  } catch {
+    return null;
+  }
 }

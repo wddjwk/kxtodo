@@ -32,11 +32,17 @@ function compareDue(a: Task, b: Task, direction: 1 | -1): number {
   return (left - right) * direction;
 }
 
+export function normalizeSortMode(value: unknown): SortMode {
+  return typeof value === "string" && Object.hasOwn(sortLabels, value) ? value as SortMode : "created-desc";
+}
+
 export function sortTasks(tasks: Task[], mode: SortMode): Task[] {
   return [...tasks].sort((a, b) => {
+    const pinned = Number(b.pinned === true) - Number(a.pinned === true);
+    if (pinned) return pinned;
     switch (mode) {
-      case "created-desc": return b.createdAt.localeCompare(a.createdAt);
-      case "created-asc": return a.createdAt.localeCompare(b.createdAt);
+      case "created-desc": return Date.parse(b.createdAt) - Date.parse(a.createdAt);
+      case "created-asc": return Date.parse(a.createdAt) - Date.parse(b.createdAt);
       case "alpha-asc": return a.markdown.localeCompare(b.markdown, "zh");
       case "alpha-desc": return b.markdown.localeCompare(a.markdown, "zh");
       case "due-asc": return compareDue(a, b, 1);

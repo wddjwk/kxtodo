@@ -62,6 +62,7 @@
 
 .kx-color-hex {
   flex: 1;
+  min-width: 0;
   height: 28px;
   padding: 0 8px;
   border: 1px solid #dedede;

@@ -18,19 +18,12 @@
  * 失败的结果 60 秒内不重试（免得每次重渲都去戳网络）。
  */
 import { get } from "svelte/store";
-import { isTauriRuntime, coreDispatch, type CoreEnvelope } from "./backend";
+import { isTauriRuntime, coreDispatch, renderedLinkMeta } from "./backend";
 import { appSettings, coreMode } from "./stores";
 import { copyText } from "./clipboard";
+import { normalizeLinkMeta, normalizeLinkUrl, type LinkMeta } from "./linkMeta";
 import type { Settings } from "./types";
-
-export type LinkMeta = {
-  url: string;
-  site: string;
-  title: string;
-  description: string;
-  /** 网页自己的图标；空串 = 用默认的链接图标 */
-  icon?: string;
-};
+export type { LinkMeta } from "./linkMeta";
 
 /** 标题上限：超了补省略号（用户点名 60 字） */
 const TITLE_MAX = 60;
@@ -59,12 +52,34 @@ async function withSlot<T>(task: () => Promise<T>): Promise<T> {
   }
 }
 
+/** Read only the head-sized prefix, rather than buffering an unbounded remote response. */
+async function pagePrefix(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const decoder = new TextDecoder();
+  let remaining = 256 * 1024;
+  let html = "";
+  try {
+    while (remaining > 0) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const part = value.subarray(0, remaining);
+      html += decoder.decode(part, { stream: true });
+      remaining -= part.length;
+    }
+    return html + decoder.decode();
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
+
 /** 浏览器 dev 预览的兜底抓取（核心侧那份解析器在 crates/core/src/linkmeta.rs） */
 async function fetchInPage(url: string): Promise<LinkMeta | null> {
   try {
-    const response = await fetch(url, { redirect: "follow" });
+    const response = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(12_000) });
     if (!response.ok) return null;
-    const html = await response.text();
+    const html = await pagePrefix(response);
     const doc = new DOMParser().parseFromString(html, "text/html");
     const pick = (selector: string): string =>
       (doc.querySelector(selector)?.getAttribute("content") ?? "").trim();
@@ -76,7 +91,8 @@ async function fetchInPage(url: string): Promise<LinkMeta | null> {
       pick("meta[property='og:description']") || pick("meta[name='description']");
     const site = pick("meta[property='og:site_name']") || hostOf(url);
     if (!title && !description) return null;
-    return { url, site, title, description, icon: iconInPage(doc, url) };
+    const finalUrl = response.url || url;
+    return normalizeLinkMeta(url, { url: finalUrl, site, title, description, icon: iconInPage(doc, finalUrl) });
   } catch {
     return null;
   }
@@ -106,7 +122,9 @@ function iconInPage(doc: Document, url: string): string {
 
 /** 取一个链接的元数据（会话缓存 + 失败 60 秒内不重试；失败不入标记位，
  *  等缓存过期后下一轮 enhanceLinks 会再试一次，不成功则一直保持原样链接）。 */
-export async function loadLinkMeta(url: string): Promise<LinkMeta | null> {
+export async function loadLinkMeta(rawUrl: string): Promise<LinkMeta | null> {
+  const url = normalizeLinkUrl(rawUrl);
+  if (!url) return null;
   const cached = metaCache.get(url);
   if (cached && (cached.value !== null || Date.now() - cached.at < FAIL_TTL_MS)) {
     return cached.value;
@@ -114,18 +132,29 @@ export async function loadLinkMeta(url: string): Promise<LinkMeta | null> {
   const running = pending.get(url);
   if (running) return running;
   const task = withSlot(async (): Promise<LinkMeta | null> => {
-    if (coreMode) {
+    if (coreMode || isTauriRuntime) {
       try {
-        const envelope: CoreEnvelope<LinkMeta> = await coreDispatch<LinkMeta>("gui.link-meta", { url });
-        return envelope.data ?? null;
+        const envelope = await coreDispatch<unknown>("gui.link-meta", { url });
+        const meta = normalizeLinkMeta(url, envelope.data);
+        if (meta) return meta;
       } catch {
-        return null;
+        // HTTP comes first. A public page may need normal rendering to expose its metadata.
       }
     }
     if (!isTauriRuntime) return fetchInPage(url);
-    return null;
+    const meta = await renderedLinkMeta(url);
+    if (meta) {
+      // Keep actions out of the renderer's initialization cycle. A cache write failure
+      // must not discard usable metadata.
+      try {
+        const { putLinkMeta } = await import("./actions");
+        await putLinkMeta(url, meta);
+      } catch { /* pure cache, retry next session */ }
+    }
+    return meta;
   })
     .then((meta) => {
+      if (metaCache.size >= 500) metaCache.delete(metaCache.keys().next().value!);
       metaCache.set(url, { value: meta, at: Date.now() });
       return meta;
     })

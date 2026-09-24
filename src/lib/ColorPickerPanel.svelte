@@ -23,7 +23,7 @@
   import { onDestroy, onMount, tick } from "svelte";
   import { appSettings } from "./stores";
   import { uiScaleValue } from "./styles";
-  import { placePopover } from "./popover";
+  import { placePopover, popoverFrame } from "./popover";
   import { imeInset } from "./imeInset";
   import {
     cancelColorPicker, colorPickRequest, colorPickerDebug, confirmColorPicker, normalizeHexInput, parseChannelInput,
@@ -143,28 +143,28 @@
     await tick();
     if (!panelEl) return;
     const scale = uiScaleValue($appSettings.appearance.uiScale);
+    const frame = popoverFrame(panelEl, scale);
+    const maxWidth = Math.max(0, frame.width - 16);
+    panelEl.style.maxWidth = `${maxWidth}px`;
+    applyPickerSize();
     const anchor = request?.anchor?.getBoundingClientRect();
     const panelRect = panelEl.getBoundingClientRect();
     const point = anchor
-      ? { x: anchor.right / scale, y: anchor.bottom / scale }
+      ? { x: (anchor.right - frame.x) / scale, y: (anchor.bottom - frame.y) / scale }
       : { x: 8, y: 8 };
     const placedBox = placePopover(
       point,
-      // 高度口径：rect 是视觉像素要 ÷scale，scrollHeight 本就是布局像素（不能再除）
       { width: panelRect.width / scale, height: Math.max(panelRect.height / scale, panelEl.scrollHeight) },
-      { width: window.innerWidth / scale, height: window.innerHeight / scale },
+      frame,
       { xAlign: anchor ? "right" : "left", gap: 6 }
     );
-    style = `top: ${placedBox.top}px; left: ${placedBox.left}px;${
+    style = `top: ${placedBox.top}px; left: ${placedBox.left}px; max-width: ${maxWidth}px;${
       placedBox.maxHeight ? ` max-height: ${placedBox.maxHeight}px; overflow-y: auto;` : ""
     }`;
     placed = true;
   }
 
-  const follow = (): void => {
-    applyPickerSize();
-    void layout();
-  };
+  const follow = (): void => { void layout(); };
 
   /**
    * 当前正在挂载 / 已挂载的请求 key。**不能用 `picker` 是否为真当判据**：
@@ -179,11 +179,13 @@
     window.addEventListener("resize", follow);
     // 软键盘弹起时 visualViewport 变了：面板要重新落位（别被键盘盖住）
     window.visualViewport?.addEventListener("resize", follow);
+    window.visualViewport?.addEventListener("scroll", follow);
   });
 
   onDestroy(() => {
     window.removeEventListener("resize", follow);
     window.visualViewport?.removeEventListener("resize", follow);
+    window.visualViewport?.removeEventListener("scroll", follow);
     releasePicker();
   });
 

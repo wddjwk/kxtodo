@@ -49,6 +49,8 @@ node scripts/v083-fixes-test.mjs   # v0.8.3 回归：日期与提醒（面板三
 node scripts/v084-fixes-test.mjs   # v0.8.4 回归：长列表窗口化（日记与 1000 卡条目只挂一段）/ 传输助手按 LocalSend 重做 / 交互一致性 7–15 / bugfix 16–21；v0.8.6 补了分组树拖到第 4 位与展开高度动画两节
 node scripts/v085-fixes-test.mjs   # v0.8.5 回归：P0 三条（裸类名、Endpoint::close、窗口化跨阈值）/ 传输分区与 relay / 深层编号与大字号日期面板的几何断言 + 两张本地截图（test-data/*.png 不入库）
 node scripts/v086-fixes-test.mjs   # v0.8.6 回归（68 项）：搜索封顶 200 与「搜索中…」/ 菜单四角与日期浮层单例 / 传输界面整治 / 工具页标题两端 / 年月面板大字号 / 齿轮 toggle / 统一取色盘（桌面与移动端：HEX 与 RGB 双向、非法输入、rAF 合帧、Esc 取消、touch-action）+ U13「输入完不按 Enter 直接确认」（v0.8.7 补，见下）
+node scripts/scheduler-editor-test.mjs # 定时任务三步编辑、参数折叠、移动端裁剪与编辑态持久化；可用 KXTODO_TEST_URL 指定独立端口
+node scripts/v088-fixes-test.mjs   # v0.8.8 定向冒烟：置顶/排序持久化、草稿纸 Tab/撤销、跨月饼图重播、FAB 对齐、移动端 IME 包含块与图钉几何（不截图）
 node scripts/v087-fixes-test.mjs   # v0.8.7 回归（67 项）：浮层两分支契约与无内部滚动 / 色盘几何（视觉尺寸==布局尺寸、把手指与光标差 < 3px、宿主高度补偿、面板不溢出）/ 确认冲刷 / 同入口重开 / 吸管 / 预设编辑器即输即生效（无保存取消、色盘预览双写、取消还原）/ 系统视图临期色预览与落盘 / 工具箱与工具子页的图标口径、⋯ 菜单锚定（桌面+移动端）、两层颜色互不干扰、relay 三选一（勾选在左、宽度不变、同步未开启时灰掉）/ 时刻双轨定宽与 overscroll（桌面+移动端）
 .\scripts\publish.ps1      # 本地一键发布（离线备用路径，基本不再用——日常发布走 tag 触发云端构建；默认 Windows+Android，all = 三平台）
 git tag vX.Y.Z; git push origin main vX.Y.Z   # 云端发布：触发 GitHub Actions release.yml 构建三平台并发 release（无需本地构建环境）

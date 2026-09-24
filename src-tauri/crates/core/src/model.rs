@@ -296,6 +296,9 @@ pub struct Item {
     pub completed: bool,
     #[serde(default)]
     pub important: bool,
+    /// 置顶是任务内容，独立于图标/分区显示开关，并跟随任务同步。
+    #[serde(default)]
+    pub pinned: bool,
     #[serde(rename = "myDay", default)]
     pub my_day: bool,
     #[serde(rename = "plannedDate", skip_serializing_if = "Option::is_none")]
@@ -1006,6 +1009,9 @@ pub fn default_theme_presets() -> Vec<ThemePreset> {
 pub struct AppearanceSettings {
     #[serde(rename = "linkOpenMode", default = "default_link_open_mode")]
     pub link_open_mode: LinkOpenMode,
+    /// 列表排序方式（跨设备共享）；合法值与前端 sort.ts 的 SortMode 一致。
+    #[serde(rename = "listSortMode", default = "default_list_sort_mode")]
+    pub list_sort_mode: String,
     #[serde(rename = "uiScale", default = "default_ui_scale")]
     pub ui_scale: f64,
     #[serde(rename = "uiFontSize", default = "default_ui_font_size")]
@@ -1099,6 +1105,16 @@ impl Default for NewNodeDefaults {
 fn default_link_open_mode() -> LinkOpenMode {
     LinkOpenMode::App
 }
+
+/// 与 src/lib/sort.ts 的 SortMode 联合类型保持一致（由 frontend_contract 测试钉住）。
+pub const LIST_SORT_MODES: [&str; 7] = [
+    "created-desc", "created-asc", "alpha-asc", "alpha-desc", "due-asc", "due-desc", "importance",
+];
+
+fn default_list_sort_mode() -> String {
+    "created-desc".to_string()
+}
+
 fn default_ui_scale() -> f64 {
     0.75
 }
@@ -1158,6 +1174,7 @@ impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
             link_open_mode: default_link_open_mode(),
+            list_sort_mode: default_list_sort_mode(),
             ui_scale: default_ui_scale(),
             ui_font_size: default_ui_font_size(),
             markdown_font_size: default_markdown_font_size(),
@@ -1639,6 +1656,12 @@ pub struct FeatureSettings {
     /// 侧栏分类行显示未完成条目数角标（特性开关）
     #[serde(rename = "showCategoryBadges", default = "default_true")]
     pub show_category_badges: bool,
+    /// 显示置顶图标；与置顶分区独立，两者都关也不改变任务的置顶排序。
+    #[serde(rename = "pinnedIcon", default = "default_true")]
+    pub pinned_icon: bool,
+    /// 置顶任务单独分区；与图标可同时开启，也可同时关闭。
+    #[serde(rename = "pinnedSection", default)]
+    pub pinned_section: bool,
     /// 同步功能总开关（特性开关）：关掉后同步配置隐藏、自动同步停、sync 命令拒执行、
     /// 内置主机/P2P 运行时停。默认开——已有配对的用户不该升级后静默失去同步。
     #[serde(rename = "sync", default = "default_true")]
@@ -1670,6 +1693,8 @@ impl Default for FeatureSettings {
     fn default() -> Self {
         Self {
             show_category_badges: true,
+            pinned_icon: true,
+            pinned_section: false,
             sync: true,
             editor_toolbar: true,
             mobile_back: false,
@@ -2032,6 +2057,31 @@ pub struct ScheduleSpec {
     pub enabled: bool,
     pub trigger: Trigger,
     pub action: Action,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gate: Option<ScheduleGate>,
+    /// Inclusive local date; calendar schedules use their IANA timezone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub until: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScheduleGate {
+    pub windows: Vec<ScheduleWindow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub probe: Option<Probe>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub when: Option<Match>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScheduleWindow {
+    pub start: String,
+    pub end: String,
+    /// 0 = Sunday .. 6 = Saturday. Overnight windows belong to the start day.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weekdays: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -2073,6 +2123,8 @@ pub enum Trigger {
         every: String,
         probe: Probe,
         when: Match,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cooldown: Option<String>,
         #[serde(rename = "missedPolicy", skip_serializing_if = "Option::is_none")]
         missed_policy: Option<MissedPolicy>,
     },

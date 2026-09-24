@@ -58,6 +58,18 @@ export const POPOVER_MARGIN_PX = 8;
 
 export type PopoverSize = { width: number; height: number };
 export type PopoverView = { width: number; height: number };
+
+export function popoverFrame(element: HTMLElement, scale: number): PopoverView & { x: number; y: number } {
+  const shell = element.closest(".app-shell");
+  const rect = shell?.getBoundingClientRect();
+  return {
+    x: rect?.left ?? 0,
+    y: rect?.top ?? 0,
+    width: (rect?.width ?? window.innerWidth) / scale,
+    height: (rect?.height ?? window.innerHeight) / scale
+  };
+}
+
 export type PopoverPlacement = {
   /** 逻辑像素（调用方把 rect 除以 uiScale 之后再进、再原样写进样式） */
   left: number;
@@ -80,7 +92,7 @@ export type PopoverPlacement = {
  *
  * 入参与返回都是**逻辑像素**：`app-shell` 有 `transform: scale(uiScale)`，rect 是
  * 视觉像素，调用方负责除一次 scale（与 `anchoredPopoverStyle` 同一约定）。
- * 前提：**锚点须在视口内**（界外锚点没有夹回语义，也不该有）。
+ * 输入法收矮包含块后，旧锚点的纵坐标先钳回可见区。
  */
 export function placePopover(
   anchor: { x: number; y: number },
@@ -90,6 +102,7 @@ export function placePopover(
 ): PopoverPlacement {
   const margin = options.margin ?? POPOVER_MARGIN_PX;
   const gap = options.gap ?? 0;
+  anchor = { x: anchor.x, y: Math.max(margin, Math.min(anchor.y, view.height - margin)) };
   const xAlign = options.xAlign ?? "left";
   const mirrorXOnFlip = options.mirrorXOnFlip ?? false;
   const width = Math.min(size.width, Math.max(0, view.width - margin * 2));
@@ -100,6 +113,9 @@ export function placePopover(
   if (size.height <= spaceBelow) return { left: xLeft, top: anchor.y + gap, maxHeight: 0 };
   // 翻上：下边缘贴锚点。`used` 只在「上方也放不下」时才小于内容高（滚动兜底）。
   const available = Math.max(0, anchor.y - gap - margin);
+  if (available === 0) {
+    return { left: xLeft, top: margin, maxHeight: Math.max(1, view.height - margin * 2) };
+  }
   const used = Math.min(size.height, available);
   return {
     left: mirrorXOnFlip ? clampLeft(anchor.x - width) : xLeft,

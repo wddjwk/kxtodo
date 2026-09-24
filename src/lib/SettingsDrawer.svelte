@@ -1219,6 +1219,17 @@
   {#if deepReady}
   <SettingsSection title="特性开关" storageKey="features">
     <div class="settings-card">
+      <div class="toggle-row link-style-row">
+        <span>置顶条目样式</span>
+        <span class="link-style-choices">
+          <label title="在折叠卡片的文字前显示图钉">
+            <input type="checkbox" checked={$appSettings.features.pinnedIcon} on:change={(event) => updateFeature("pinnedIcon", event.currentTarget.checked)} />图标
+          </label>
+          <label title="将置顶条目放入页面顶部可折叠的分区">
+            <input type="checkbox" checked={$appSettings.features.pinnedSection} on:change={(event) => updateFeature("pinnedSection", event.currentTarget.checked)} />分区
+          </label>
+        </span>
+      </div>
       <label class="toggle-row" title="在左侧栏分类行显示该分类下未完成条目数。">
         <span>显示分类角标</span>
         <input

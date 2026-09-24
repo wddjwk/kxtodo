@@ -956,6 +956,132 @@ fn missed_policy_handles_interval_calendar_and_condition_before_replan() {
 }
 
 #[test]
+fn scheduler_rules_manual_trial_preserves_once_and_interval_plans() {
+    let env = TestEnv::fresh();
+    let host = start_headless(&env);
+    let at = kxtodo_core::time::format_instant(chrono::Utc::now() + chrono::Duration::hours(2));
+    let mut ids = Vec::new();
+    for trigger in [json!({ "type": "once", "at": at }), json!({ "type": "interval", "every": "2h", "maxRuns": 1 })] {
+        let created = execute_on(&host.core, "schedule.add", json!({ "spec": {
+            "name": "manual must not schedule", "enabled": true, "trigger": trigger,
+            "gate": { "windows": [{ "start": "09:00", "end": "09:01" }] },
+            "action": { "type": "notification", "notification": { "message": "trial" } }
+        } }));
+        ids.push(created["id"].as_str().unwrap().to_string());
+    }
+    host.core.start_scheduler();
+    for id in &ids {
+        let before = host.core.repo.load_schedule().unwrap().tasks.into_iter().find(|e| &e.id == id).unwrap();
+        execute_on(&host.core, "schedule.run", json!({ "id": id, "wait": true }));
+        let after = host.core.repo.load_schedule().unwrap().tasks.into_iter().find(|e| &e.id == id).unwrap();
+        assert_eq!(after.state.run_count, before.state.run_count);
+        assert_eq!(after.spec.enabled, before.spec.enabled);
+        assert_eq!(after.state.next_run_at, before.state.next_run_at);
+        assert_eq!(after.state.last_run_at, before.state.last_run_at);
+        assert_eq!(after.updated_at, before.updated_at);
+        let logs = execute_on(&host.core, "schedule.logs", json!({ "id": id }));
+        assert_eq!(logs["runs"][0]["kind"], "manual");
+    }
+    assert_eq!(host.backend.notifications.lock().unwrap().len(), 2);
+    kxtodo_core::host::shutdown_host(&host.core);
+}
+
+#[test]
+fn scheduler_rules_expiry_precedes_missed_recovery_even_without_next_run() {
+    let env = TestEnv::fresh();
+    let host = start_headless(&env);
+    for name in ["missing timer", "missed timer"] {
+        execute_on(&host.core, "schedule.add", json!({ "spec": {
+            "name": name, "trigger": { "type": "interval", "every": "1h" },
+            "action": { "type": "notification", "notification": { "message": "must not run" } }
+        } }));
+    }
+    host.core.repo.write_schedule_internal("test.expired", |file| {
+        for (i, entry) in file.tasks.iter_mut().enumerate() {
+            entry.spec.enabled = true;
+            entry.spec.until = Some("2000-01-01".into());
+            entry.state.next_run_at = if i == 0 { None } else { Some("2000-01-01T00:00:00Z".into()) };
+        }
+        Ok(json!({}))
+    }).unwrap();
+    host.core.start_scheduler();
+    assert!(wait_for(5, || host.core.repo.load_schedule().unwrap().tasks.iter().all(|e| !e.spec.enabled)));
+    for entry in host.core.repo.load_schedule().unwrap().tasks {
+        assert!(entry.state.next_run_at.is_none()); assert_eq!(entry.state.run_count, 0); assert_eq!(entry.state.missed_count, 0);
+    }
+    assert!(host.backend.notifications.lock().unwrap().is_empty());
+    assert!(kxtodo_core::history::read_history(&host.core.repo.layout.schedule_history()).unwrap().is_empty());
+    kxtodo_core::host::shutdown_host(&host.core);
+}
+
+#[test]
+fn scheduler_rules_gate_probe_does_not_publish_running_or_pollute_history() {
+    if !python_available() { return; }
+    let env = TestEnv::fresh();
+    let host = start_headless(&env);
+    let marker = env.path().join("gate-started");
+    let marker_literal = serde_json::to_string(&marker.display().to_string()).unwrap();
+    let created = execute_on(&host.core, "schedule.add", json!({ "spec": {
+        "name": "gate", "enabled": true, "trigger": { "type": "interval", "every": "1h" },
+        "gate": { "windows": [], "probe": { "type": "script", "language": "python",
+            "source": { "type": "inline", "code": format!("import pathlib,time\npathlib.Path({marker_literal}).write_text('started')\ntime.sleep(2)\nprint('WAITING')") }, "timeout": "10s" },
+            "when": { "stream": "stdout", "pattern": "READY" } },
+        "action": { "type": "notification", "notification": { "message": "must not run" } }
+    } }));
+    let id = created["id"].as_str().unwrap();
+    host.core.repo.write_schedule_internal("test.gate-due", |file| {
+        file.tasks[0].state.next_run_at = Some("2000-01-01T00:00:00Z".into());
+        file.tasks[0].state.last_status = kxtodo_core::model::ScheduleStatus::Success;
+        Ok(json!({}))
+    }).unwrap();
+    host.core.start_scheduler();
+    assert!(wait_for(10, || marker.exists()));
+    let during = host.core.repo.load_schedule().unwrap().tasks.remove(0);
+    assert!(!during.state.running);
+    assert_eq!(during.state.last_status, kxtodo_core::model::ScheduleStatus::Success);
+    assert!(wait_for(10, || host.core.repo.load_schedule().unwrap().tasks[0].state.next_run_at.as_deref() != Some("2000-01-01T00:00:00Z")));
+    let after = host.core.repo.load_schedule().unwrap().tasks.remove(0);
+    assert_eq!(after.state.run_count, 0); assert_eq!(after.state.last_status, during.state.last_status);
+    assert_eq!(after.state.last_run_at, during.state.last_run_at); assert_eq!(after.state.missed_count, 0);
+    assert!(host.backend.notifications.lock().unwrap().is_empty());
+    assert!(execute_on(&host.core, "schedule.logs", json!({ "id": id }))["runs"].as_array().unwrap().is_empty());
+    kxtodo_core::host::shutdown_host(&host.core);
+}
+
+#[test]
+fn scheduler_rules_condition_repeats_only_with_cooldown() {
+    if !python_available() { return; }
+    for repeat in [false, true] {
+        let env = TestEnv::fresh();
+        let host = start_headless(&env);
+        let mut trigger = json!({ "type": "condition", "every": "1s",
+            "probe": { "type": "script", "language": "python", "source": { "type": "inline", "code": "print('READY')" }, "timeout": "5s" },
+            "when": { "stream": "stdout", "pattern": "READY" } });
+        if repeat { trigger["cooldown"] = json!("1h"); }
+        let created = execute_on(&host.core, "schedule.add", json!({ "spec": {
+            "name": "condition", "enabled": true, "trigger": trigger,
+            "action": { "type": "notification", "notification": { "message": "matched" } }
+        } }));
+        host.core.start_scheduler();
+        assert!(wait_for(10, || host.core.repo.load_schedule().unwrap().tasks[0].state.run_count == 1));
+        let task = host.core.repo.load_schedule().unwrap().tasks.remove(0);
+        assert_eq!(task.spec.enabled, repeat);
+        if repeat {
+            let last = kxtodo_core::time::parse_stored_instant(task.state.last_run_at.as_deref().unwrap()).unwrap();
+            let next = kxtodo_core::time::parse_stored_instant(task.state.next_run_at.as_deref().unwrap()).unwrap();
+            assert_eq!((next - last).num_seconds(), 3600);
+            // Manual matched trial neither consumes a run nor moves the cooldown anchor.
+            execute_on(&host.core, "schedule.run", json!({ "id": created["id"], "wait": true }));
+            let after = host.core.repo.load_schedule().unwrap().tasks.remove(0);
+            assert_eq!(after.state.run_count, 1); assert_eq!(after.state.next_run_at, task.state.next_run_at);
+            assert_eq!(after.state.last_run_at, task.state.last_run_at);
+            assert_eq!(serde_json::to_value(after.state.last_probe).unwrap(), serde_json::to_value(task.state.last_probe).unwrap());
+        } else { assert!(task.state.next_run_at.is_none()); }
+        kxtodo_core::host::shutdown_host(&host.core);
+    }
+}
+
+#[test]
 fn domain_events_emitted_on_writes() {
     let env = TestEnv::fresh();
     let host = start_headless(&env);

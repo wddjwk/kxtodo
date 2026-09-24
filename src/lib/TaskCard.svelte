@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, tick } from "svelte";
-  import { Check, ChevronUp, PenLine, Plus, X } from "@lucide/svelte";
+  import { Check, ChevronUp, PenLine, Pin, Plus, X } from "@lucide/svelte";
   import { collapsedMarkdownLine, hasMultipleMarkdownLines, renderInlineMarkdown, setRenderedTaskBox } from "./markdown";
   import { markdownTaskChecked, taskToggleIndex, toggleMarkdownTask } from "./markdownTasks";
   import { tagChipStyle } from "./tagColors";
@@ -14,7 +14,7 @@
   import { saveTaskMarkdown } from "./actions";
   import { isMobile as isMobileStore, touchOnly } from "./platform";
   import { uiScaleValue } from "./styles";
-  import { placePopover } from "./popover";
+  import { placePopover, popoverFrame } from "./popover";
   import {
     closeDatePopover, datePopoverTaskId, hideReveals, revealEmoji, revealTag, revealedEmoji, revealedTag, toggleDatePopover
   } from "./cardOverlays";
@@ -232,13 +232,13 @@
     await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
     if (!dueButtonEl || !datePanelEl) return;
     const scale = uiScaleValue($appSettings.appearance.uiScale);
+    const frame = popoverFrame(datePanelEl, scale);
     const rect = dueButtonEl.getBoundingClientRect();
     const panelRect = datePanelEl.getBoundingClientRect();
     const placed = placePopover(
-      { x: rect.right / scale, y: rect.bottom / scale },
-      // 高度口径：rect 是视觉像素要 ÷scale，scrollHeight 本就是布局像素（不能再除）
+      { x: (rect.right - frame.x) / scale, y: (rect.bottom - frame.y) / scale },
       { width: panelRect.width / scale, height: Math.max(panelRect.height / scale, datePanelEl.scrollHeight) },
-      { width: window.innerWidth / scale, height: window.innerHeight / scale },
+      frame,
       { xAlign: "right", gap: 6 }
     );
     datePopoverStyle = `top: ${placed.top}px; left: ${placed.left}px;${
@@ -263,15 +263,21 @@
     if (showPicker) {
       window.addEventListener("scroll", followDatePanel, true);
       window.addEventListener("resize", followDatePanel);
+      window.visualViewport?.addEventListener("resize", followDatePanel);
+      window.visualViewport?.addEventListener("scroll", followDatePanel);
     } else {
       window.removeEventListener("scroll", followDatePanel, true);
       window.removeEventListener("resize", followDatePanel);
+      window.visualViewport?.removeEventListener("resize", followDatePanel);
+      window.visualViewport?.removeEventListener("scroll", followDatePanel);
     }
   }
 
   onDestroy(() => {
     window.removeEventListener("scroll", followDatePanel, true);
     window.removeEventListener("resize", followDatePanel);
+    window.visualViewport?.removeEventListener("resize", followDatePanel);
+    window.visualViewport?.removeEventListener("scroll", followDatePanel);
   });
 
   function handleSchedule(patch: { dueDate: string; dueTime: string; reminders: ReminderRule[] }): void {
@@ -458,6 +464,7 @@
   class:multiline={canExpand}
   class:plain
   class:selected
+  class:task-pinned-icon={task.pinned && $appSettings.features.pinnedIcon && !isExpanded}
   class:due-soon={dueHighlight !== null}
   class:due-strong={dueHighlight?.strong === true}
   class="task-card"
@@ -477,6 +484,9 @@
           <Check size={14} strokeWidth={3.2} />
         {/if}
       </button>
+    {/if}
+    {#if task.pinned && $appSettings.features.pinnedIcon && !isExpanded}
+      <span class="task-pin" title="已置顶" aria-label="已置顶"><Pin size={16} /></span>
     {/if}
 
     <section class="task-body">

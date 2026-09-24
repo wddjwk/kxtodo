@@ -96,6 +96,10 @@ v0.8.0 起的几条补充（来龙去脉在 `history/v0.8.md` 批次 1）：
 13. **拖动跟手**：透明度条/取色器/背景链接输入在交互期间用本地草稿冻结（`opacityLive/uiColorLive/linkLive`），change/blur 后再跟随已提交值。原文（`ui-patterns.md`「⋯ 列表菜单」的「拖动跟手（v0.6.8）」）：日记模式的外观写入走 `config.set`——**它等 IPC 往返回来才更新 store，滞后的回渲会把「已提交的旧值」写回 range/color input，透明度条不跟手、取色器跳变**（条目页的 `setBackground` 同步改 store 所以没这病）。
 14. **`.list-header` 自带 `position:relative; z-index:20`**，新增整页面板时不必再把它列进兜底规则。
 
+15. **缩放壳内 fixed 浮层的钳制盒是 shell，不是 window**：输入法让 `.app-shell` 收矮并平移，裸 client 坐标必须减 shell 左上角后除 scale，限宽/限高使用同一个 rect；否则底部按钮落进键盘。共用入口 `popover.ts::popoverFrame`；IME 回归派发 visualViewport.resize，不能用可能直接关菜单的 window.resize 伪造成功（v0.8.8）。
+16. **远程 Webview 不能继承本地能力**：仅不加入 capabilities 不足以隔离应用自定义 IPC 与 asset 协议。`link_preview.rs` 在 invoke_handler 拒绝远程窗口，并由 asset 协议根据 webview label 放行本地 UI；元数据窗口的弹窗与下载一律拒绝。Tauri 的 on_web_resource_request 只拦 tauri 协议，不拦 asset（v0.8.8）。
+17. **置顶内容与显示开关独立**：关图标或分区不能清掉 `Item.pinned`；图钉在标题网格独立占列并参与宽度测量，不能往 markdown 容器里注入节点（v0.8.8）。
+
 ## 九、分散在各处的硬约束速查
 
 （每条都是原文照引 + 出处；出处文件里有完整的「为什么」。）

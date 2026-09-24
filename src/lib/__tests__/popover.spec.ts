@@ -7,12 +7,39 @@
  * 唯一的滚动兜底是「上下都放不下」的 maxHeight 钳制——**没有「原地限高」这一档**。
  */
 import { describe, expect, it } from "vitest";
-import { placePopover, POPOVER_MARGIN_PX } from "../popover";
+import { placePopover, popoverFrame, POPOVER_MARGIN_PX } from "../popover";
 
 const view = { width: 1000, height: 800 };
 const menu = { width: 232, height: 300 };
 
 describe("placePopover", () => {
+  it.each([0.75, 1, 1.25])("IME 平移和收矮后的包含块，缩放 %s", (scale) => {
+    const shell = { getBoundingClientRect: () => ({ left: 12, top: 70, width: 360, height: 400 }) };
+    const element = { closest: () => shell } as unknown as HTMLElement;
+    const frame = popoverFrame(element, scale);
+    expect(frame).toEqual({ x: 12, y: 70, width: 360 / scale, height: 400 / scale });
+    const height = 460;
+    const placed = placePopover(
+      { x: (340 - frame.x) / scale, y: (450 - frame.y) / scale },
+      { width: 250, height }, frame, { xAlign: "right" }
+    );
+    expect(placed.top * scale + frame.y).toBeGreaterThanOrEqual(70);
+    expect((placed.top + (placed.maxHeight || height)) * scale + frame.y).toBeLessThanOrEqual(470);
+    expect((placed.left + 250) * scale + frame.x).toBeLessThanOrEqual(372);
+  });
+
+  it("上沿锚点没有向上空间时仍给超高面板限高", () => {
+    const placed = placePopover({ x: 20, y: 8 }, { width: 230, height: 600 }, { width: 360, height: 380 }, { gap: 6 });
+    expect(placed.top).toBe(8);
+    expect(placed.maxHeight).toBe(364);
+  });
+
+  it("输入法收矮后旧锚点在界外时仍不落入键盘", () => {
+    const placed = placePopover({ x: 280, y: 780 }, { width: 230, height: 460 }, { width: 360, height: 380 });
+    expect(placed.top).toBeGreaterThanOrEqual(8);
+    expect(placed.top + (placed.maxHeight || 460)).toBeLessThanOrEqual(372);
+  });
+
   it("下方放得下：开在下方，左上角顶点贴鼠标", () => {
     const placed = placePopover({ x: 100, y: 100 }, menu, view);
     expect(placed).toEqual({ left: 100, top: 100, maxHeight: 0 });

@@ -3,7 +3,7 @@
   import {
     Calendar, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
     ChevronsDown, ChevronsUp, ExternalLink, FolderInput,
-    Lightbulb, MoreHorizontal, PenLine, Plus, RefreshCw, Search, Settings as SettingsIcon, SmilePlus, Star, Sun, Tag, Trash2, X
+    Lightbulb, MoreHorizontal, PenLine, Pin, PinOff, Plus, RefreshCw, Search, Settings as SettingsIcon, SmilePlus, Star, Sun, Tag, Trash2, X
   } from "@lucide/svelte";
   import {
     appState, appSettings, showToast,
@@ -19,14 +19,15 @@
     setItemsUi as setItemsUiAction, replaceTaskTags as replaceTaskTagsAction,
     replaceTaskEmojis as replaceTaskEmojisAction,
     setDiaryUi as setDiaryUiAction,
-    renameNode as renameNodeAction, syncNow as syncNowAction
+    renameNode as renameNodeAction, syncNow as syncNowAction, setConfig as setConfigAction
   } from "./actions";
   import { pullToRefresh } from "./pullrefresh";
   import { taskMoveTargets } from "./nodes";
   import { buildMainStyle, ledgerAccent, PAGE_HEADER_ICON_SIZE } from "./styles";
   import { accentWithPreview, backgroundWithPreview, colorPreview } from "./colorPreview";
   import { hasMultipleMarkdownLines } from "./markdown";
-  import { openExternalUrl, isTauriRuntime, saveMdImageFromDataUrl, mdImageUrl } from "./backend";
+  import { openExternalUrl, openLink, isTauriRuntime, saveMdImageFromDataUrl, mdImageUrl } from "./backend";
+  import { externalLinkUrl } from "./linkMeta";
   import { imageCache, resolveImageSrc, mdImageCache, primeMdImageCache } from "./images";
   import IconGlyph from "./IconGlyph.svelte";
   import MobileBack from "./MobileBack.svelte";
@@ -44,7 +45,7 @@
   import MoveTargetTree from "./menu/MoveTargetTree.svelte";
   import ListMenu from "./workspace/ListMenu.svelte";
   import TagMenuPanel from "./TagMenuPanel.svelte";
-  import { sortTasks, type SortMode } from "./sort";
+  import { sortTasks } from "./sort";
   import { filterPlannedTasks, plannedGroupOptions, plannedSections, type PlannedGroupKey } from "./plannedGroups";
   import { calendarWeekdayHeaders } from "./diary";
   import { createBackGuard, isMobile, mobileView } from "./platform";
@@ -83,7 +84,7 @@
   let showCompleted = false;
   let showSuggestions = false;
   let showCalendar = false;
-  let sortMode: SortMode = "created-desc";
+  $: sortMode = $appSettings.appearance.listSortMode;
   // 计划内视图：日期分组过滤 + 已完成显隐（默认隐藏，且不渲染折叠的已完成区）
   let plannedGroup: PlannedGroupKey = "all";
   let plannedShowCompleted = readCompletedOpen(COMPLETED_PLANNED_KEY);
@@ -224,21 +225,17 @@
         : sortedTasks.filter((task) => !task.completed);
   // 「已完成」按完成时间降序（最新完成在最上）；三点菜单的排序方式只管未完成部分。
   // 一般卡片条目不分区：已完成的当普通卡片混在主列表里显示。
-  $: completedTasks = isPlanned || selectedIsCard
+  $: completedCandidates = isPlanned || selectedIsCard
     ? []
     : isMyDay
       ? (isMyDayHistory
           ? byCompletedDesc(completedByDate[myDayViewDate] ?? [])
           : byCompletedDesc(sortedTasks.filter((task) => task.completed && dateOnly(task.completedAt) === todayIso())))
       : byCompletedDesc(sortedTasks.filter((task) => task.completed));
-  // 「计划内·全部」分段展示：互斥分区（已逾期/近三天/本周/稍后），空分区不渲染
-  $: plannedSectionList =
-    isPlanned && plannedGroup === "all"
-      ? plannedSections(
-          plannedShowCompleted ? plannedSortedTasks : plannedSortedTasks.filter((task) => !task.completed),
-          todayIso()
-        )
-      : [];
+  $: pinnedTasks = sortTasks([...incompleteTasks, ...completedCandidates].filter((task) => task.pinned), sortMode);
+  $: unpinnedTasks = incompleteTasks.filter((task) => !task.pinned);
+  $: completedTasks = completedCandidates.filter((task) => !task.pinned);
+  $: plannedSectionList = isPlanned && plannedGroup === "all" ? plannedSections(unpinnedTasks, todayIso()) : [];
   /** 渲染行：分区标题与卡片拍平成同一条列表（窗口化要吃一份可索引的数据） */
   type TaskRow = {
     kind: "label" | "task";
@@ -252,7 +249,16 @@
 
   // 渲染行：分区标题 + 卡片 拍平成一条列表，避免把 TaskCard 的接线复制第三遍；
   // 折叠的分区只留标题行（标题本身是折叠按钮）
-  $: taskRows = (plannedSectionList.length
+  $: pinnedRows = pinnedTasks.length === 0 ? [] : [
+    ...($appSettings.features.pinnedSection ? [{
+      kind: "label" as const, key: "section-pinned", label: "置顶", count: pinnedTasks.length,
+      sectionKey: "pinned", collapsed: Boolean(collapsedSections.pinned), task: null
+    }] : []),
+    ...($appSettings.features.pinnedSection && collapsedSections.pinned ? [] : pinnedTasks.map((task): TaskRow => ({
+      kind: "task", key: task.id, label: "", count: 0, sectionKey: "", collapsed: false, task
+    })))
+  ];
+  $: taskRows = [...pinnedRows, ...(plannedSectionList.length
     ? plannedSectionList.flatMap((section) => {
         const collapsed = Boolean(collapsedSections[section.key]);
         return [
@@ -278,7 +284,7 @@
               })))
         ];
       })
-    : incompleteTasks.map((task): TaskRow => ({
+    : unpinnedTasks.map((task): TaskRow => ({
         kind: "task",
         key: task.id,
         label: "",
@@ -286,7 +292,7 @@
         sectionKey: "",
         collapsed: false,
         task
-      }))) as TaskRow[];
+      })))] as TaskRow[];
   $: taskMenuTask = taskMenu ? $appState.tasks.find((task) => task.id === taskMenu?.taskId) : null;
   $: diaryMenuEntry = diaryMenu ? $diaryEntries.find((entry) => entry.id === diaryMenu?.id) ?? null : null;
   /** 记账搜索结果的 --accent：工作区里拿不到 LedgerView 的内联主题色，从设置算一份 */
@@ -772,13 +778,23 @@
 
   /** 供 App（编辑器浮窗）与 TaskCard 复用的链接打开入口。 */
   export function openLinkUrl(url: string, title?: string): void {
-    if ($appSettings.appearance.linkOpenMode === "system") {
-      void openExternalUrl(url).catch((error) => showToast(`打开链接失败：${String(error)}`));
-    } else {
-      linkPreviewUrl = url;
-      linkPreviewTitle = (title ?? "").trim() || hostOf(url);
-    }
+    void openLink(url, $appSettings.appearance.linkOpenMode, title)
+      .catch((error) => showToast(`打开链接失败：${String(error)}`));
   }
+
+  function showBrowserLinkPreview(event: CustomEvent<{ url: string; title?: string }>): void {
+    if (isTauriRuntime) return;
+    const url = externalLinkUrl(event.detail?.url);
+    if (!url) return;
+    linkPreviewUrl = url;
+    linkPreviewTitle = (event.detail.title ?? "").trim() || hostOf(url);
+  }
+
+  onMount(() => {
+    const preview = (event: Event) => showBrowserLinkPreview(event as CustomEvent<{ url: string; title?: string }>);
+    window.addEventListener("kxtodo-preview-link", preview);
+    return () => window.removeEventListener("kxtodo-preview-link", preview);
+  });
 
   /** 标题兜底：拿不到链接文字就显示主机名（总比一串 URL 好读）。 */
   function hostOf(url: string): string {
@@ -1044,7 +1060,7 @@
       showCompleted={plannedShowCompleted}
       onToggleShowCompleted={togglePlannedCompleted}
       {sortMode}
-      onSortMode={(mode) => (sortMode = mode)}
+      onSortMode={(mode) => void setConfigAction("appearance.listSortMode", mode)}
       onRenameRequest={beginHeaderRename}
       onClose={() => (listMenuAt = null)}
     />
@@ -1179,7 +1195,7 @@
       <svelte:fragment slot="item" let:row>
         {@const item = row as TaskRow}
         {#if item.kind === "label"}
-          <button class="task-section-label" type="button" on:click|stopPropagation={() => toggleSection(item.sectionKey)}>
+          <button class={item.sectionKey === "pinned" ? "menu-action-button completed-toggle" : "task-section-label"} type="button" aria-expanded={!item.collapsed} on:click|stopPropagation={() => toggleSection(item.sectionKey)}>
             <ChevronDown class={item.collapsed ? "collapsed" : ""} size={15} />
             {item.label} {item.count}
           </button>
@@ -1236,7 +1252,7 @@
     {/if}
     {/if}
 
-    {#if $isSearching ? $searchHits.length === 0 : incompleteTasks.length === 0 && completedTasks.length === 0}
+    {#if $isSearching ? $searchHits.length === 0 : incompleteTasks.length === 0 && completedTasks.length === 0 && pinnedTasks.length === 0}
       <div class="empty-state">
         {#if $isSearching && $searchScanning}
           <strong class="search-progress">搜索中…</strong>
@@ -1292,6 +1308,11 @@
         label={taskMenuTask.important ? "取消收藏" : "收藏"}
         onSelect={() => { void updateTaskAction(taskMenuTask.id, { important: !taskMenuTask.important }); taskMenu = null; }}
       />
+      <MenuItem
+        icon={taskMenuTask.pinned ? PinOff : Pin}
+        label={taskMenuTask.pinned ? "取消置顶" : "置顶"}
+        onSelect={() => { void updateTaskAction(taskMenuTask.id, { pinned: !taskMenuTask.pinned }); taskMenu = null; }}
+      />
       <MenuItem icon={Tag} label="标签">
         <div slot="submenu" class="tag-editor-panel" on:click|stopPropagation>
           <TagMenuPanel onAdd={(tag) => addTagToTask(taskMenuTask.id, tag)} />
@@ -1337,7 +1358,9 @@
   {/if}
   {/if}
 
-  {#if linkPreviewUrl}
+</main>
+
+  {#if !isTauriRuntime && linkPreviewUrl}
     <div class="link-preview-overlay">
       <div class="link-preview-bar">
         <span class="link-preview-title" title={linkPreviewTitle}>{linkPreviewTitle}</span>
@@ -1364,5 +1387,3 @@
       ></iframe>
     </div>
   {/if}
-
-</main>

@@ -61,9 +61,11 @@ pub fn normalize_spec_paths(spec: &mut Value, cwd: &Path) {
         return;
     };
     normalize_action_paths(action, cwd);
-    if let Some(trigger) = spec.get_mut("trigger").and_then(Value::as_object_mut) {
-        if let Some(probe) = trigger.get_mut("probe").and_then(Value::as_object_mut) {
-            normalize_action_paths(probe, cwd);
+    for key in ["trigger", "gate"] {
+        if let Some(container) = spec.get_mut(key).and_then(Value::as_object_mut) {
+            if let Some(probe) = container.get_mut("probe").and_then(Value::as_object_mut) {
+                normalize_action_paths(probe, cwd);
+            }
         }
     }
 }
@@ -115,7 +117,7 @@ fn check_branch_fields(raw: &Value) -> CoreResult<()> {
         .as_object()
         .ok_or_else(|| CoreError::validation("INVALID_SPEC", "ScheduleSpec 必须是对象"))?;
     for key in spec.keys() {
-        if !matches!(key.as_str(), "name" | "enabled" | "trigger" | "action") {
+        if !matches!(key.as_str(), "name" | "enabled" | "trigger" | "action" | "gate" | "until") {
             return Err(branch_error("spec", key));
         }
     }
@@ -125,7 +127,7 @@ fn check_branch_fields(raw: &Value) -> CoreResult<()> {
             "once" => &["type", "at", "missedPolicy"],
             "interval" => &["type", "every", "maxRuns", "stopWhen", "missedPolicy"],
             "calendar" => &["type", "cron", "timezone", "missedPolicy"],
-            "condition" => &["type", "every", "probe", "when", "missedPolicy"],
+            "condition" => &["type", "every", "probe", "when", "cooldown", "missedPolicy"],
             other => {
                 return Err(CoreError::validation(
                     "INVALID_SPEC",
@@ -150,6 +152,14 @@ fn check_branch_fields(raw: &Value) -> CoreResult<()> {
     }
     if let Some(action) = spec.get("action").and_then(Value::as_object) {
         check_action_like_fields(action, true)?;
+    }
+    if let Some(gate) = spec.get("gate").and_then(Value::as_object) {
+        if let Some(probe) = gate.get("probe").and_then(Value::as_object) {
+            check_action_like_fields(probe, false)?;
+        }
+        if let Some(matcher) = gate.get("when").and_then(Value::as_object) {
+            check_match_fields(matcher)?;
+        }
     }
     Ok(())
 }
@@ -321,6 +331,11 @@ pub fn ensure_action_supported(spec: &ScheduleSpec, mobile: bool) -> CoreResult<
             "移动端不支持条件触发：探针需要起子进程",
         ));
     }
+    if spec.gate.as_ref().and_then(|gate| gate.probe.as_ref()).is_some() {
+        return Err(CoreError::validation(
+            "SCHEDULE_GATE_UNSUPPORTED", "移动端不支持脚本探针门控",
+        ));
+    }
     Ok(())
 }
 
@@ -335,6 +350,37 @@ fn validate_spec_semantics(
             "定时任务 name 不能为空",
         ));
     }
+    if let Some(until) = &spec.until {
+        crate::plan::until_date(until)?;
+    }
+    if let Some(gate) = &spec.gate {
+        if matches!(spec.trigger, Trigger::Condition { .. }) {
+            return Err(CoreError::validation("INVALID_GATE", "条件触发不能叠加 gate"));
+        }
+        if gate.windows.len() > 64 || (gate.windows.is_empty() && gate.probe.is_none()) {
+            return Err(CoreError::validation("INVALID_GATE", "gate 需要时间窗口或探针，窗口最多 64 个"));
+        }
+        if gate.probe.is_some() != gate.when.is_some() {
+            return Err(CoreError::validation("INVALID_GATE", "gate.probe 与 gate.when 必须同时提供"));
+        }
+        for window in &gate.windows {
+            let start = crate::plan::window_minute(&window.start)?;
+            let end = crate::plan::window_minute(&window.end)?;
+            if start == end {
+                return Err(CoreError::validation("INVALID_GATE_WINDOW", "时间窗口起止不能相同"));
+            }
+            if let Some(days) = &window.weekdays {
+                let mut seen = std::collections::HashSet::new();
+                if days.is_empty() || days.iter().any(|day| *day > 6 || !seen.insert(*day)) {
+                    return Err(CoreError::validation("INVALID_GATE_WEEKDAYS", "星期须为不重复的 0–6（0 为周日）"));
+                }
+            }
+        }
+        if let Some(probe) = &gate.probe {
+            validate_executable_like_probe(probe, runtimes, warnings)?;
+        }
+        if let Some(when) = &gate.when { validate_match(when)?; }
+    }
     match &spec.trigger {
         Trigger::Once { at, .. } => {
             parse_stored_instant(at).map_err(|_| {
@@ -347,7 +393,7 @@ fn validate_spec_semantics(
             stop_when,
             ..
         } => {
-            parse_duration_ms(every)?;
+            crate::plan::schedule_duration(every)?;
             if let Some(max) = max_runs {
                 if *max == 0 {
                     return Err(CoreError::validation(
@@ -365,9 +411,10 @@ fn validate_spec_semantics(
             crate::plan::validate_timezone(timezone)?;
         }
         Trigger::Condition {
-            every, probe, when, ..
+            every, probe, when, cooldown, ..
         } => {
-            parse_duration_ms(every)?;
+            crate::plan::schedule_duration(every)?;
+            if let Some(cooldown) = cooldown { crate::plan::schedule_duration(cooldown)?; }
             validate_match(when)?;
             if when.pattern.trim().is_empty() {
                 return Err(CoreError::validation(
@@ -380,7 +427,7 @@ fn validate_spec_semantics(
             };
             match timeout {
                 Some(raw) => {
-                    parse_duration_ms(raw)?;
+                    crate::plan::schedule_duration(raw)?;
                 }
                 None => warnings.push(
                     "condition.probe 未设置 timeout，建议显式设置有限超时（如 30s）".to_string(),
@@ -421,7 +468,7 @@ fn validate_spec_semantics(
                 }
             }
             if let Some(raw) = timeout {
-                parse_duration_ms(raw)?;
+                crate::plan::schedule_duration(raw)?;
             }
             if let Some(dir) = working_directory {
                 if !Path::new(dir).is_dir() {
@@ -461,7 +508,7 @@ fn validate_spec_semantics(
                 ));
             }
             if let Some(raw) = timeout {
-                parse_duration_ms(raw)?;
+                crate::plan::schedule_duration(raw)?;
             }
             if let Some(dir) = working_directory {
                 if !Path::new(dir).is_dir() {
@@ -515,7 +562,7 @@ fn validate_executable_like_probe(
                 }
             }
             if let Some(raw) = timeout {
-                parse_duration_ms(raw)?;
+                crate::plan::schedule_duration(raw)?;
             }
             if let Some(dir) = working_directory {
                 if !Path::new(dir).is_dir() {
@@ -547,7 +594,7 @@ fn validate_executable_like_probe(
                 ));
             }
             if let Some(raw) = timeout {
-                parse_duration_ms(raw)?;
+                crate::plan::schedule_duration(raw)?;
             }
             if let Some(dir) = working_directory {
                 if !Path::new(dir).is_dir() {
@@ -683,12 +730,12 @@ pub fn apply_patch(current: &Value, patch: &Value) -> CoreResult<Value> {
                 format!("patch 不允许包含运行时字段 `{key}`"),
             ));
         }
-        if !matches!(key.as_str(), "name" | "enabled" | "trigger" | "action") {
+        if !matches!(key.as_str(), "name" | "enabled" | "trigger" | "action" | "gate" | "until") {
             return Err(CoreError::validation(
                 "PATCH_UNKNOWN_FIELD",
                 format!("patch 包含未知字段 `{key}`"),
             )
-            .with_hint("SchedulePatch 只允许 name/enabled/trigger/action"));
+            .with_hint("SchedulePatch 只允许 name/enabled/trigger/action/gate/until"));
         }
     }
     let mut merged = current.clone();
@@ -788,7 +835,11 @@ pub fn add_schedule(
         updated_at: now,
         extra: Map::new(),
     };
+    if crate::plan::is_expired(&entry.spec, chrono::Utc::now())? {
+        entry.spec.enabled = false;
+    }
     if entry.spec.enabled {
+        ensure_platform_supported(&entry.spec)?;
         entry.state.next_run_at =
             crate::plan::compute_next_run_iso(&entry, chrono::Utc::now())?;
     }
@@ -817,18 +868,18 @@ pub fn modify_schedule(
     normalize_spec_paths(&mut merged, cwd);
     let validation = validate_spec_value(&merged, &file.runtimes)?;
     let spec = validation.spec.expect("validated");
+    if spec.enabled { ensure_platform_supported(&spec)?; }
 
     let entry = &mut file.tasks[index];
-    let trigger_changed =
-        serde_json::to_value(&entry.spec)?["trigger"] != serde_json::to_value(&spec)?["trigger"];
+    let plan_changed = entry.spec.enabled != spec.enabled || entry.spec.until != spec.until
+        || serde_json::to_value(&entry.spec)?["trigger"] != serde_json::to_value(&spec)?["trigger"];
     entry.spec = spec;
     entry.updated_at = now_iso();
-    if trigger_changed || entry.spec.enabled {
-        entry.state.next_run_at = if entry.spec.enabled {
-            crate::plan::compute_next_run_iso(entry, chrono::Utc::now())?
-        } else {
-            None
-        };
+    if crate::plan::is_expired(&entry.spec, chrono::Utc::now())? {
+        entry.spec.enabled = false;
+        entry.state.next_run_at = None;
+    } else if plan_changed {
+        entry.state.next_run_at = crate::plan::compute_next_run_iso(entry, chrono::Utc::now())?;
     }
     Ok(AddOutcome {
         entry: entry.clone(),
@@ -848,7 +899,8 @@ pub fn set_enabled(file: &mut ScheduleFile, id: &str, enabled: bool) -> CoreResu
         let spec_json = serde_json::to_value(&file.tasks[index].spec)?;
         let validation = validate_spec_value(&spec_json, &file.runtimes)?;
         let entry = &mut file.tasks[index];
-        entry.spec.enabled = true;
+        ensure_platform_supported(&entry.spec)?;
+        entry.spec.enabled = !crate::plan::is_expired(&entry.spec, chrono::Utc::now())?;
         entry.updated_at = now_iso();
         entry.state.next_run_at =
             crate::plan::compute_next_run_iso(entry, chrono::Utc::now())?;

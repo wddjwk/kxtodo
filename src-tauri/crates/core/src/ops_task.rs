@@ -379,6 +379,7 @@ pub fn add_item(data: &mut DataFile, mut params: AddItemParams) -> CoreResult<It
         markdown,
         completed,
         important: params.important,
+        pinned: false,
         my_day: params.my_day,
         planned_date: params.planned_date,
         due_date: params.due_date,
@@ -489,6 +490,7 @@ pub fn item_view(data: &DataFile, item: &Item) -> Value {
         "markdown": item.markdown,
         "completed": item.completed,
         "important": item.important,
+        "pinned": item.pinned,
         "myDay": item.my_day,
         "tags": item.tags,
         "emojis": item.emojis,
@@ -1001,6 +1003,7 @@ pub struct ItemChanges {
     pub markdown: Option<String>,
     pub completed: Option<bool>,
     pub important: Option<bool>,
+    pub pinned: Option<bool>,
     pub my_day: Option<bool>,
     pub planned_date: Option<Option<String>>,
     pub due_date: Option<Option<String>>,
@@ -1148,6 +1151,12 @@ pub fn modify_item(data: &mut DataFile, id: &str, changes: ItemChanges) -> CoreR
     if let Some(important) = changes.important {
         item.important = important;
         touched = true;
+    }
+    if let Some(pinned) = changes.pinned {
+        if item.pinned != pinned {
+            item.pinned = pinned;
+            touched = true;
+        }
     }
     if let Some(my_day) = changes.my_day {
         item.my_day = my_day;

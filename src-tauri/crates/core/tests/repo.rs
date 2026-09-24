@@ -7,6 +7,82 @@ use common::TestEnv;
 use kxtodo_core::repo::{RepoLock, Repository};
 
 #[test]
+fn item_pinned_defaults_and_survives_normalization_and_persistence() {
+    use kxtodo_core::model::Item;
+    use kxtodo_core::sync::merge::normalize_data_orders;
+    use serde_json::json;
+
+    let env = TestEnv::fresh();
+    let entry = env.ok(&["task", "add", "--type", "entry", "--name", "pins"]);
+    let repo = Repository::open(env.path()).unwrap();
+    let mut item: Item = serde_json::from_value(json!({
+        "id": "task-pin", "nodeId": entry["id"], "markdown": "pin",
+        "order": 42.5, "createdAt": "2026-01-01T00:00:00.000Z"
+    })).unwrap();
+    assert!(!item.pinned, "missing pin defaults to false");
+    assert_eq!(serde_json::to_value(&item).unwrap()["pinned"], false);
+    assert!(!item.extra.contains_key("pinned"));
+
+    for pinned in [true, false] {
+        item.pinned = pinned;
+        let encoded = serde_json::to_value(&item).unwrap();
+        let decoded: Item = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.pinned, pinned);
+        assert!(!decoded.extra.contains_key("pinned"));
+        repo.write_data(None, None, "test.pin-persistence", |file| {
+            file.tasks = vec![decoded.clone()];
+            normalize_data_orders(file);
+            assert_eq!(file.tasks[0].pinned, pinned);
+            assert_eq!(file.tasks[0].order, 42.5, "pin does not overwrite manual order");
+            Ok(json!({}))
+        }).unwrap();
+        assert_eq!(env.read_file("data.json")["tasks"][0]["pinned"], pinned);
+        let reloaded = repo.load_data().unwrap();
+        assert_eq!(reloaded.tasks[0].pinned, pinned);
+        assert_eq!(serde_json::to_value(&reloaded).unwrap()["tasks"][0]["pinned"], pinned);
+    }
+}
+
+#[test]
+fn sort_and_pin_settings_serde_defaults_and_persistence() {
+    use kxtodo_core::model::SettingsFile;
+    use serde_json::json;
+
+    for raw in [json!({}), json!({ "appearance": {}, "features": {} })] {
+        let settings: SettingsFile = serde_json::from_value(raw).unwrap();
+        assert_eq!(settings.appearance.list_sort_mode, "created-desc");
+        assert!(settings.features.pinned_icon);
+        assert!(!settings.features.pinned_section);
+        let encoded = serde_json::to_value(settings).unwrap();
+        assert_eq!(encoded["appearance"]["listSortMode"], "created-desc");
+        assert_eq!(encoded["features"]["pinnedIcon"], true);
+        assert_eq!(encoded["features"]["pinnedSection"], false);
+    }
+
+    let env = TestEnv::fresh();
+    let repo = Repository::open(env.path()).unwrap();
+    for (icon, section) in [(false, false), (true, true), (false, true), (true, false)] {
+        repo.write_settings(None, None, "test.pin-settings-persistence", |settings| {
+            settings.appearance.list_sort_mode = "due-asc".to_string();
+            settings.features.pinned_icon = icon;
+            settings.features.pinned_section = section;
+            Ok(json!({}))
+        }).unwrap();
+        let saved = env.read_file("settings.json");
+        assert_eq!(saved["appearance"]["listSortMode"], "due-asc");
+        assert_eq!(saved["features"]["pinnedIcon"], icon);
+        assert_eq!(saved["features"]["pinnedSection"], section);
+        let reloaded = repo.load_settings().unwrap();
+        assert_eq!(reloaded.appearance.list_sort_mode, "due-asc");
+        assert_eq!(reloaded.features.pinned_icon, icon);
+        assert_eq!(reloaded.features.pinned_section, section);
+        assert!(!reloaded.appearance.extra.contains_key("listSortMode"));
+        assert!(!reloaded.features.extra.contains_key("pinnedIcon"));
+        assert!(!reloaded.features.extra.contains_key("pinnedSection"));
+    }
+}
+
+#[test]
 fn revisions_increment_per_domain_independently() {
     let env = TestEnv::fresh();
     let first = env.run(&["task", "add", "--type", "category", "--name", "c"]);
