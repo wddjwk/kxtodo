@@ -2,6 +2,7 @@
 //! GUI（kxtodo）与 CLI（kxtodo-cli）共享的纯 Rust 层，不依赖 Tauri。
 
 pub mod cards_archive;
+pub mod clipboard_sync;
 pub mod cli;
 pub mod core;
 pub mod diary_archive;

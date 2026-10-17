@@ -313,7 +313,9 @@ const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 
   // 编辑器工具栏的日期按钮（需求 10.8）
   await page.locator(".task-card .edit-button").click();
   await page.waitForSelector(".editor-dialog", { timeout: 10000 });
-  await page.locator(".editor-meta-trigger", { hasText: "9月" }).first().click();
+  // 日期按钮显示的是「截止日」的月份：脚本跨月运行也要跟着当前日期走
+  const dueMonth = Number(localToday(2).slice(5, 7));
+  await page.locator(".editor-meta-trigger", { hasText: `${dueMonth}月` }).first().click();
   await page.waitForSelector(".editor-meta-pop .date-reminder-panel", { timeout: 8000 });
   check("编辑器工具栏的日期按钮复用同一个面板", true);
   check("编辑器面板里带出了原时刻", (await page.locator(".editor-meta-pop .dr-row strong").textContent() ?? "").trim() === "09:15");

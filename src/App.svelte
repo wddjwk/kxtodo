@@ -14,6 +14,7 @@
   import { imeViewport, startImeViewport } from "./lib/imeViewport";
   import { startAutoSync } from "./lib/syncRunner";
   import { ensureTransferRuntime } from "./lib/transferStore";
+  import { ensureClipboardRuntime } from "./lib/clipboardSyncStore";
   import { ensureCardOverlayRuntime } from "./lib/cardOverlays";
   import { revealMainWindow } from "./lib/backend";
   import { oversizedAvatarShrink } from "./lib/images";
@@ -68,6 +69,8 @@
     // 文件传输的全局运行时（v0.8.5 需求 4）：事件订阅 + 恢复记住的口令都在这里，
     // 工具页没开也收得到拨入（人不在工具页时靠系统通知接住）
     ensureTransferRuntime();
+    // 剪切板同步（v0.8.9）：桌面核心自己轮询，移动端订阅前台剪切板变化并写回远端内容
+    ensureClipboardRuntime();
     // 卡片级浮层（日期浮层单例 + 触屏露出态）的唯一一份 document 监听（v0.8.6 需求 4）
     ensureCardOverlayRuntime();
     window.addEventListener("keydown", handleShortcut);

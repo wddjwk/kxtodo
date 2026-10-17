@@ -40,6 +40,9 @@ import {
   monthDayGroups,
   monthTotals,
   parseYuanToCents,
+  reportGrainFor,
+  reportKeyLabel,
+  reportRows,
   sortEntries,
   statsBounds,
   statsSeries,
@@ -1105,5 +1108,41 @@ describe("categoryColor（分类颜色）", () => {
     expect(categoryColor(book, undefined)).toBe("#95a5a6");
     expect(categoryColor(book, makeCategory({ id: "ghost-child", parentId: "lcat-ghost", color: "" }))).toBe("#f0862c");
     expect(categoryColor(book, makeCategory({ id: "ghost-income", side: "income", color: "" }))).toBe("#27ae60");
+  });
+});
+
+
+describe("报表统计（v0.8.9 需求 7）", () => {
+  it("顶部周期决定默认粒度：周/月→日、年→月、总→年、自定义按跨度", () => {
+    expect(reportGrainFor("week")).toBe("day");
+    expect(reportGrainFor("month")).toBe("day");
+    expect(reportGrainFor("year")).toBe("month");
+    expect(reportGrainFor("total")).toBe("year");
+    expect(reportGrainFor("custom", "2026-01-01", "2026-12-31")).toBe("month");
+    expect(reportGrainFor("custom", "2025-12-01", "2026-01-31")).toBe("year");
+    expect(reportGrainFor("custom", "2026-03-01", "2026-03-31")).toBe("day");
+  });
+
+  it("按日/月/年聚合收支，结余为该期间净额，空档不出行", () => {
+    const entries = [
+      makeEntry({ date: "2026-03-01", kind: "income", amountCents: 10000 }),
+      makeEntry({ date: "2026-03-01", kind: "expense", amountCents: 3000 }),
+      makeEntry({ date: "2026-03-15", kind: "expense", amountCents: 2500 }),
+      makeEntry({ date: "2026-05-02", kind: "transfer", amountCents: 9999 })
+    ];
+    const dayRows = reportRows(entries, { from: "2026-03-01", to: "2026-03-31" }, "day");
+    expect(dayRows).toEqual([
+      { key: "2026-03-01", income: 10000, expense: 3000, balance: 7000 },
+      { key: "2026-03-15", income: 0, expense: 2500, balance: -2500 }
+    ]);
+    const monthRows = reportRows(entries, { from: "2026-01-01", to: "2026-12-31" }, "month");
+    expect(monthRows).toEqual([
+      { key: "2026-03", income: 10000, expense: 5500, balance: 4500 }
+    ]);
+    // 转账不计入收入/支出/结余
+    expect(reportRows(entries, { from: "2026-01-01", to: "2026-12-31" }, "year"))
+      .toEqual([{ key: "2026", income: 10000, expense: 5500, balance: 4500 }]);
+    expect(reportKeyLabel("2026-03-01", "day")).toBe("2026-03-01");
+    expect(reportKeyLabel("2026", "year")).toBe("2026年");
   });
 });

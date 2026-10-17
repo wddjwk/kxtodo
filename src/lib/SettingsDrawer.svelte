@@ -1219,7 +1219,7 @@
   {#if deepReady}
   <SettingsSection title="特性开关" storageKey="features">
     <div class="settings-card">
-      <div class="toggle-row link-style-row">
+      <div class="toggle-row link-style-row" title="置顶条目的两种外观：图钉图标显示在卡片标题前；分区把置顶条目集中到列表顶部。两者互不排斥。">
         <span>置顶条目样式</span>
         <span class="link-style-choices">
           <label title="在折叠卡片的文字前显示图钉">

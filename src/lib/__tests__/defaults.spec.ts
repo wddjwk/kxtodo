@@ -461,3 +461,35 @@ describe("normalizeState（core 快照往返）", () => {
     expect(again.tasks).toEqual(normalized.tasks);
   });
 });
+
+
+describe("normalizeSettings 剪切板同步（v0.8.9）", () => {
+  it("缺省值与 core 的 ClipboardSettings 对齐", () => {
+    expect(normalizeSettings({}).clipboard).toEqual({
+      enabled: false,
+      code: "",
+      deviceName: "",
+      directEnabled: false,
+      directAddresses: "",
+      lanEnabled: true,
+      p2pEnabled: false,
+      types: { text: true, html: true, image: true, files: true },
+      limits: { textMb: 1, htmlMb: 2, imageMb: 10, filesMb: 100 },
+      saveDir: ""
+    });
+  });
+
+  it("口令去空白，大小上限夹到合法区间", () => {
+    const normalized = normalizeSettings({
+      clipboard: {
+        enabled: true,
+        code: "  12345678 ",
+        limits: { textMb: 0, htmlMb: 999, imageMb: 2.7, filesMb: 4096 },
+        types: { text: false, html: true, image: false, files: true }
+      }
+    });
+    expect(normalized.clipboard.code).toBe("12345678");
+    expect(normalized.clipboard.limits).toEqual({ textMb: 1, htmlMb: 64, imageMb: 3, filesMb: 1024 });
+    expect(normalized.clipboard.types).toEqual({ text: false, html: true, image: false, files: true });
+  });
+});

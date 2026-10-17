@@ -12,10 +12,12 @@
   } from "./stores";
   import {
     selectNode as selectNodeAction, toggleCategory as toggleCategoryAction,
+    setAllCategoriesCollapsed as setAllCategoriesCollapsedAction,
     addNode as addNodeAction, renameNode as renameNodeAction,
     deleteNodeCascade as deleteNodeCascadeAction, applyTreeOrder as applyTreeOrderAction,
     setNodeIcon as setNodeIconAction,
-    setToolPinned as setToolPinnedAction, reorderNavItems as reorderNavItemsAction
+    reorderNavItems as reorderNavItemsAction,
+    setConfig as setConfigAction
   } from "./actions";
   import { nodeAndDescendantIds, planTreeMove, planTreeRootEnd, moveTargetOptions, exportStateForNode } from "./nodes";
   import type { TreeHover } from "./nodes";
@@ -32,11 +34,11 @@
   import { isMobile, mobileView, showMobileContent, showMobileDiary, showMobileLedger, showMobileToolbox, createBackGuard } from "./platform";
   import { caps } from "./capabilities";
   import type { NavItemId } from "./nav";
-  import { navIdToolId } from "./nav";
+  import { NAV_ITEM_IDS, NAV_LAYOUTS, navIdToolId, navItemLabel, navToolId } from "./nav";
   import { toolRoute, openToolboxTool, resetToolRoute } from "./tools/navigation";
   import { toolById } from "./tools/registry";
   import { transferState } from "./transferStore";
-  import type { ToolId } from "./tools/catalog";
+  import { TOOL_CATALOG, type ToolId } from "./tools/catalog";
   import { longpress, isLongPressSuppressed } from "./longpress";
   import { DRAG_BAND_PX, scaleOf, schmitt, settledTop } from "./dragHit";
 
@@ -249,11 +251,14 @@
     openToolboxTool(toolId);
   }
 
-  // ---- 固定区：钉住的工具的右键 / 长按菜单（取消固定） ----
+  // ---- 固定区：所有行的右键 / 长按菜单（布局、添加固定、取消固定、展开/收起） ----
   let navMenu: { id: NavItemId; x: number; y: number } | null = null;
+  /** 「添加固定」草稿：勾选只改这一份，点确认才落盘；取消/点外面原样作废。 */
+  let navFixedDraft: NavItemId[] = [];
 
   function openNavMenuAt(x: number, y: number, id: NavItemId): void {
     navMenu = { id, x, y };
+    navFixedDraft = [...$appSettings.appearance.navItems];
   }
 
   function handleNavContext(event: MouseEvent, id: NavItemId): void {
@@ -264,11 +269,50 @@
     openNavMenuAt(event.clientX, event.clientY, id);
   }
 
+  function toggleNavDraft(id: NavItemId): void {
+    navFixedDraft = navFixedDraft.includes(id)
+      ? navFixedDraft.filter((item) => item !== id)
+      : [...navFixedDraft, id];
+  }
+
+  function chooseNavLayout(layout: (typeof NAV_LAYOUTS)[number]["id"]): void {
+    navMenu = null;
+    void setConfigAction("appearance.navLayout", layout);
+  }
+
+  function confirmNavFixed(): void {
+    if (navFixedDraft.length === 0) {
+      showToast("至少保留一个固定项", 3000);
+      return;
+    }
+    navMenu = null;
+    void setConfigAction("appearance.navItems", navFixedDraft);
+  }
+
   function unpinNavRow(): void {
     const id = navMenu?.id;
     navMenu = null;
-    const toolId = id ? navIdToolId(id) : null;
-    if (toolId) void setToolPinnedAction(toolId, false);
+    const items = $appSettings.appearance.navItems;
+    if (!id) return;
+    if (items.length <= 1) {
+      showToast("至少保留一个固定项", 3000);
+      return;
+    }
+    void setConfigAction("appearance.navItems", items.filter((item) => item !== id));
+  }
+
+  function expandAllCategories(): void {
+    treeMenu = null;
+    emptyAreaMenu = null;
+    navMenu = null;
+    void setAllCategoriesCollapsedAction(false);
+  }
+
+  function collapseAllCategories(): void {
+    treeMenu = null;
+    emptyAreaMenu = null;
+    navMenu = null;
+    void setAllCategoriesCollapsedAction(true);
   }
 
   // ---- 固定区拖动排序（鼠标；触屏长按是菜单，与全应用手势一致） ----
@@ -628,6 +672,7 @@
   inert={coveredByFullPage}
   style={`width: ${sidebarWidth}px; min-width: ${sidebarWidth}px;`}
   on:click|stopPropagation
+  on:contextmenu={openEmptyAreaMenu}
 >
   <button class="profile-card" type="button" on:click|stopPropagation={() => { showSettings.update((v) => !v); }}>
     <span class="avatar" style={avStyle}>{$appSettings.profile.avatar ? "" : avInitial}</span>
@@ -654,7 +699,6 @@
     class:nav-dragging={navDrag !== null}
   >
     {#each navRows as row, index (row.id)}
-      {@const toolRow = navIdToolId(row.id) !== null}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <button
         class="nav-row"
@@ -664,8 +708,8 @@
         title={row.label}
         on:click={() => { if (!navDragSuppressClick) row.onSelect(); }}
         on:pointerdown={(event) => navPointerDown(event, row.id)}
-        on:contextmenu={(event) => { if (toolRow) handleNavContext(event, row.id); }}
-        use:longpress={(pos) => { if (toolRow) openNavMenuAt(pos.x, pos.y, row.id); }}
+        on:contextmenu={(event) => handleNavContext(event, row.id)}
+        use:longpress={(pos) => openNavMenuAt(pos.x, pos.y, row.id)}
         animate:flip={{ duration: 150 }}
       >
         <span class="active-rail"></span>
@@ -686,7 +730,7 @@
     {/each}
   </nav>
 
-  <div class="nav-divider"></div>
+  <div class="nav-divider" on:contextmenu={openEmptyAreaMenu}></div>
 
   <nav class="custom-nav" class:root-drop-active={draggingId !== null} use:longpress={handleEmptyAreaLongPress} on:contextmenu={openEmptyAreaMenu} on:click|stopPropagation>
     <ListTree
@@ -713,8 +757,54 @@
   </nav>
 
   {#if navMenu}
-    <ContextMenu x={navMenu.x} y={navMenu.y} minWidth={168} onClose={() => (navMenu = null)}>
-      <MenuItem icon={PinOff} label="取消固定" onSelect={unpinNavRow} />
+    <ContextMenu x={navMenu.x} y={navMenu.y} minWidth={196} onClose={() => (navMenu = null)}>
+      <MenuItem icon={Shapes} label="选择布局">
+        <div slot="submenu" class="submenu-list">
+          {#each NAV_LAYOUTS as layout (layout.id)}
+            <MenuItem
+              checkable
+              active={$appSettings.appearance.navLayout === layout.id}
+              label={layout.label}
+              onSelect={() => chooseNavLayout(layout.id)}
+            />
+          {/each}
+        </div>
+      </MenuItem>
+      <MenuItem icon={FilePlus2} label="添加固定">
+        <div slot="submenu" class="submenu-list nav-fixed-editor" on:click|stopPropagation>
+          {#each NAV_ITEM_IDS as item (item)}
+            <MenuItem
+              checkable
+              active={navFixedDraft.includes(item)}
+              label={navItemLabel(item)}
+              onSelect={() => toggleNavDraft(item)}
+            />
+          {/each}
+          <MenuSeparator />
+          <MenuItem label="工具箱内的工具">
+            <div slot="submenu" class="submenu-list">
+              {#each TOOL_CATALOG as tool (tool.id)}
+                {@const id = navToolId(tool.id)}
+                <MenuItem
+                  checkable
+                  active={navFixedDraft.includes(id)}
+                  label={tool.name}
+                  onSelect={() => toggleNavDraft(id)}
+                />
+              {/each}
+            </div>
+          </MenuItem>
+          <MenuSeparator />
+          <div class="nav-fixed-actions">
+            <button class="settings-button" type="button" on:click|stopPropagation={() => (navMenu = null)}>取消</button>
+            <button class="settings-button primary" type="button" on:click|stopPropagation={confirmNavFixed}>确认</button>
+          </div>
+        </div>
+      </MenuItem>
+      <MenuItem icon={PinOff} label="取消固定" disabled={$appSettings.appearance.navItems.length <= 1} onSelect={unpinNavRow} />
+      <MenuSeparator />
+      <MenuItem icon={ChevronsUpDown} label="展开全部" onSelect={expandAllCategories} />
+      <MenuItem icon={ChevronsDownUp} label="收起全部" onSelect={collapseAllCategories} />
     </ContextMenu>
   {/if}
 
@@ -753,6 +843,9 @@
         <MenuSeparator />
         <MenuItem icon={Trash2} danger label="删除" onSelect={() => deleteNode(treeMenuNode.id)} />
       {/if}
+      <MenuSeparator />
+      <MenuItem icon={ChevronsUpDown} label="展开全部" onSelect={expandAllCategories} />
+      <MenuItem icon={ChevronsDownUp} label="收起全部" onSelect={collapseAllCategories} />
     </ContextMenu>
   {/if}
 
@@ -760,6 +853,9 @@
     <ContextMenu x={emptyAreaMenu.x} y={emptyAreaMenu.y} minWidth={208} onClose={() => (emptyAreaMenu = null)}>
       <MenuItem icon={FilePlus2} label="新建条目" onSelect={() => addNode(currentCategoryId(), "entry")} />
       <MenuItem icon={FolderPlus} label="新建分类" onSelect={() => addNode(null, "category")} />
+      <MenuSeparator />
+      <MenuItem icon={ChevronsUpDown} label="展开全部" onSelect={expandAllCategories} />
+      <MenuItem icon={ChevronsDownUp} label="收起全部" onSelect={collapseAllCategories} />
     </ContextMenu>
   {/if}
 

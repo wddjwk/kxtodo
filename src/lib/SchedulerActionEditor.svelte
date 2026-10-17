@@ -1,7 +1,7 @@
 <script lang="ts">
   import Dropdown from "./Dropdown.svelte";
   import NumberField from "./NumberField.svelte";
-  import { FolderOpen, Search } from "@lucide/svelte";
+  import { Bell, FileCode2, FolderOpen, Search, Terminal } from "@lucide/svelte";
   import { pickExecutableFile, resolveExecutablePath } from "./backend";
   import { caps, executablePathPlaceholder } from "./capabilities";
   import { showToast } from "./stores";
@@ -26,6 +26,12 @@
   };
 
   let actionTypeOptions: Array<{ value: ScheduledTaskAction["type"]; label: string }> = [];
+  /** 动作方块（v0.8.9 需求 4.3）：与「何时执行」的触发方块同一套视觉，不再用下拉框。 */
+  const actionTypeMeta: Record<ScheduledTaskAction["type"], { detail: string; icon: typeof Bell }> = {
+    script: { detail: "运行内联代码或脚本文件", icon: FileCode2 },
+    executable: { detail: "启动本机程序并传入参数", icon: Terminal },
+    notification: { detail: "弹出应用内或系统通知", icon: Bell }
+  };
 
   // 移动端只有「发送通知」一种动作：设备上没有 shell、没有可执行文件的路径语义，
   // core 的 ops_schedule::ensure_platform_supported 也会拒。界面给了选项，
@@ -124,19 +130,26 @@
 
 <section class="action-editor">
   <div class="action-editor-title">{title}</div>
-  <div class="scheduler-form-grid">
-    <label>
-      <span>类型</span>
-      <Dropdown
-        value={action.type}
-        options={actionTypeOptions}
-        ariaLabel="动作类型"
-        on:change={(event) => onType(event.detail as ScheduledTaskAction["type"])}
-      />
-    </label>
-    {#if action.type === "script"}
+  <div class="scheduler-trigger-tiles scheduler-action-tiles" role="group" aria-label="动作类型">
+    {#each actionTypeOptions as option}
+      {@const meta = actionTypeMeta[option.value]}
+      <button
+        class="settings-button scheduler-trigger-tile"
+        class:scheduler-tile-selected={action.type === option.value}
+        type="button"
+        aria-pressed={action.type === option.value}
+        on:click={() => onType(option.value)}
+      >
+        <svelte:component this={meta.icon} size={20} />
+        <strong>{option.label}</strong>
+        <span>{meta.detail}</span>
+      </button>
+    {/each}
+  </div>
+  {#if action.type === "script"}
+    <div class="scheduler-form-grid">
       <label>
-        <span>语言</span>
+        <span>脚本语言</span>
         <Dropdown
           value={action.language}
           options={languageOptions}
@@ -144,8 +157,8 @@
           on:change={(event) => onLanguage(event.detail as ScheduledTaskAction["language"])}
         />
       </label>
-    {/if}
-  </div>
+    </div>
+  {/if}
 
   {#if action.type === "notification"}
     <div class="notification-fields">

@@ -61,6 +61,13 @@ tauri-plugin-window-state = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-os = "2"
+# 剪切板同步（v0.8.9）：桌面端直接读写系统剪切板由 Rust 轮询完成，
+# 不依赖 WebView 的 focus/权限（隐藏到托盘后仍要同步）。
+arboard = "3"
+
+[target.'cfg(windows)'.dependencies]
+# Windows 的「复制文件」是 CF_HDROP，arboard 不覆盖；只补这一个格式。
+clipboard-win = "5"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tauri-plugin-notification = "2"

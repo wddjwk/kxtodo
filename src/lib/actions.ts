@@ -130,6 +130,22 @@ export async function toggleCategory(nodeId: string, collapsed: boolean): Promis
   });
 }
 
+export async function setAllCategoriesCollapsed(collapsed: boolean): Promise<void> {  const apply = (s: AppState): AppState => ({
+    ...s,
+    nodes: s.nodes.map((node) => (node.kind === "category" ? { ...node, collapsed } : node))
+  });
+  if (coreMode) {
+    await withRollback(
+      appState,
+      "折叠状态保存失败",
+      () => appState.update(apply),
+      () => coreDispatch("gui.set-all-collapsed", { collapsed })
+    );
+    return;
+  }
+  commit(apply(state()));
+}
+
 export async function setNodeIcon(nodeId: string, icon: string): Promise<void> {
   if (coreMode) {
     const kind = findNode(nodeId)?.kind ?? "entry";
@@ -817,6 +833,23 @@ export async function setConfig(path: string, value: unknown): Promise<boolean> 
   const next = clone(settings());
   applySettingsPath(next, path, value);
   commitSettings(next);
+  return true;
+}
+
+/** 剪切板设置一次写整份：逐字段 config.set 会让后台服务按字段数重启多次。 */
+export async function configureClipboard(next: Settings["clipboard"]): Promise<boolean> {
+  if (coreMode) {
+    return withRollback(
+      appSettings,
+      "剪切板设置保存失败",
+      () => appSettings.update((current) => ({ ...current, clipboard: clone(next) })),
+      async () => {
+        const envelope = await coreDispatch("gui.clipboard-configure", { settings: next });
+        noteEnvelopeRevision(envelope.meta);
+      }
+    );
+  }
+  commitSettings({ ...settings(), clipboard: clone(next) });
   return true;
 }
 

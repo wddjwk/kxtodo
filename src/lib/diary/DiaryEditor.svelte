@@ -299,6 +299,12 @@
     }
   }
 
+  /** 桌面右击仍不弹浏览器原生菜单；移动端必须放行长按菜单（复制/剪切/全选/粘贴）。 */
+  function handleOverlayContext(event: MouseEvent): void {
+    event.stopPropagation();
+    if (!$isMobile) event.preventDefault();
+  }
+
   function handleBackdropPointerDown(event: PointerEvent): void {
     if (event.target !== event.currentTarget) return;
     // 浮层马上就拆掉，触屏补发的那一下 click 会落到下面的卡片上（见 ghostClick.ts）
@@ -345,7 +351,7 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="editor-overlay" use:imeInset on:pointerdown={handleBackdropPointerDown} on:contextmenu|preventDefault|stopPropagation>
+<div class="editor-overlay" use:imeInset on:pointerdown={handleBackdropPointerDown} on:contextmenu={handleOverlayContext}>
   <!-- --accent 内联：编辑器浮层挂在 App 层，拿不到 .diary-view 的主题色，跟着用户选的日记色走 -->
   <div class="editor-dialog diary-editor" style={`--accent: ${diaryAccent($appSettings.diary)}; ${editorSizeStyle}`} role="dialog" aria-label="编辑日记" tabindex="-1" on:pointerdown|stopPropagation on:click|stopPropagation>
     <header class="editor-header">

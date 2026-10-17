@@ -22,6 +22,8 @@ import {
   syntaxHighlighting
 } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
+import { get } from "svelte/store";
+import { isMobile } from "../platform";
 
 const mdHighlight = HighlightStyle.define([
   { tag: tags.heading1, color: "#1f2937", fontWeight: "700", fontSize: "1.25em" },
@@ -56,7 +58,9 @@ export function createMarkdownEditor(
 ): EditorView {
   const extensions: Extension[] = [
     history(),
-    drawSelection(),
+    // 移动端（Android WebView）必须让原生选区接管：CM 的 drawSelection 会隐藏原生选区，
+    // 于是长按只剩一条自绘高亮、系统不弹复制/剪切/粘贴菜单（v0.8.9 需求 3）。
+    ...(get(isMobile) ? [] : [drawSelection()]),
     dropCursor(),
     EditorState.allowMultipleSelections.of(true),
     syntaxHighlighting(mdHighlight),

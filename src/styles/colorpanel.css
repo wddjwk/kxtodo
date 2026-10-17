@@ -6,6 +6,9 @@
   position: fixed;
   z-index: 3600;
   display: grid;
+  /* 单列 minmax(0,1fr)：色盘内部的 iro 布局宽可能大于面板（缩放补偿），
+     不允许它把 grid 轨道撑开，否则 HEX/RGB/按钮会一起溢出到屏幕右侧 */
+  grid-template-columns: minmax(0, 1fr);
   width: calc(var(--font-control) * 12.5);
   /* 窄屏兜底：面板比视口还宽时把宽度收回来 */
   max-width: calc(100vw - 24px);
@@ -15,6 +18,7 @@
   border-radius: 12px;
   background: #ffffff;
   box-shadow: 0 16px 50px rgb(0 0 0 / 16%);
+  overflow: hidden;
   animation: menu-fade-in 0.1s ease-out;
   /* 落位前藏着（量尺寸算钳制要等一帧），避免在错位置闪一下 */
   visibility: hidden;
@@ -29,7 +33,10 @@
    `place-items: start stretch` 而不是 center：uiScale > 1 时 svg 的布局宽大于宿主，
    center 会把溢出均到左边、裁剪边与 svg 视觉边错开（start 让两条边在任意缩放下重合）。 */
 .kx-color-canvas {
+  position: relative;
   display: grid;
+  width: 100%;
+  min-width: 0;
   place-items: start stretch;
   overflow: hidden;
   touch-action: none;
@@ -41,14 +48,19 @@
 
 /* 反缩放层（v0.8.7 需求 2.2）：外壳有 transform: scale(--ui-scale)，而 iro 的指针
    数学是「视觉坐标 ÷ 布局宽」——这一层把缩放抵消掉，让 svg 视觉尺寸 == 布局尺寸。
-   高度不需要设：iro 的 svg 撑开它，宿主高度由 applyPickerSize 显式补偿。 */
+   **必须 absolute**：它的布局宽 = 视觉宽 × uiScale，正常流里会把 grid 轨道撑大，
+   HEX/RGB/确认按钮跟着溢出（v0.8.9 需求 5）。高度由 applyPickerSize 显式补给宿主。 */
 .kx-color-canvas-scale {
+  position: absolute;
+  top: 0;
+  left: 0;
   transform: scale(calc(1 / var(--ui-scale, 1)));
   transform-origin: top left;
 }
 
 .kx-color-fields {
   display: grid;
+  min-width: 0;
   gap: 6px;
 }
 
@@ -120,6 +132,7 @@
 
 .kx-color-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
 }

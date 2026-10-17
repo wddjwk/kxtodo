@@ -171,13 +171,16 @@
    * 树上（返回零闪烁的代价）——加 `inert` 摘出可访问性与交互；旧 WebKit 由 mobile.css
    * 的 `visibility: hidden` 兜底。
    */
-  $: coveredByFullPage = $isMobile && ($mobileView === "diary" || $mobileView === "ledger" || $mobileView === "toolbox");
+  // 链接预览是从日记/记账/工具箱里也能打开的：预览开着时先把工作区解 inert，
+  // 否则覆盖层在但它点不动（v0.8.9 回退 iframe 后移动端链接必须仍然可用）。
+  $: coveredByFullPage = $isMobile && !linkPreviewUrl && ($mobileView === "diary" || $mobileView === "ledger" || $mobileView === "toolbox");
 
   function handlePanelKeydown(event: KeyboardEvent): void {
-    if (!showHeaderMenu && !showPlannedGroups) return;
+    if (!showHeaderMenu && !showPlannedGroups && !linkPreviewUrl) return;
     if (event.key === "Escape" && !event.isComposing && event.keyCode !== 229) {
       showHeaderMenu = false;
       showPlannedGroups = false;
+      if (linkPreviewUrl) closeLinkPreview();
     }
   }
 
@@ -782,8 +785,7 @@
       .catch((error) => showToast(`打开链接失败：${String(error)}`));
   }
 
-  function showBrowserLinkPreview(event: CustomEvent<{ url: string; title?: string }>): void {
-    if (isTauriRuntime) return;
+  function showLinkPreview(event: CustomEvent<{ url: string; title?: string }>): void {
     const url = externalLinkUrl(event.detail?.url);
     if (!url) return;
     linkPreviewUrl = url;
@@ -791,7 +793,7 @@
   }
 
   onMount(() => {
-    const preview = (event: Event) => showBrowserLinkPreview(event as CustomEvent<{ url: string; title?: string }>);
+    const preview = (event: Event) => showLinkPreview(event as CustomEvent<{ url: string; title?: string }>);
     window.addEventListener("kxtodo-preview-link", preview);
     return () => window.removeEventListener("kxtodo-preview-link", preview);
   });
@@ -1360,7 +1362,7 @@
 
 </main>
 
-  {#if !isTauriRuntime && linkPreviewUrl}
+  {#if linkPreviewUrl}
     <div class="link-preview-overlay">
       <div class="link-preview-bar">
         <span class="link-preview-title" title={linkPreviewTitle}>{linkPreviewTitle}</span>
@@ -1377,12 +1379,15 @@
           <X size={18} strokeWidth={2.5} />
         </button>
       </div>
+      <!-- 同窗口 iframe：sandbox 不给 allow-popups（否则网页又能弹新窗口），
+           也不给 allow-top-navigation（不能让网页把应用导航走）。 -->
       <iframe
         bind:this={previewFrame}
         class="link-preview-frame"
         src={linkPreviewUrl}
         title="链接预览"
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+        referrerpolicy="no-referrer"
+        sandbox="allow-scripts allow-same-origin allow-forms"
         on:load={readPreviewTitle}
       ></iframe>
     </div>

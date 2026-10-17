@@ -424,6 +424,57 @@ export function statsSeries(entries: LedgerEntry[], bounds: StatsBounds): Ledger
   return keys.map((key) => buckets.get(key) ?? { key, income: 0, expense: 0 });
 }
 
+// ---------------------------------------------------------------------------
+// 报表统计（v0.8.9 需求 7）：按日/月/年出一张「时间 / 收入 / 支出 / 结余」的表
+// ---------------------------------------------------------------------------
+
+export type LedgerReportGrain = "day" | "month" | "year";
+
+export type LedgerReportRow = {
+  key: string;
+  income: number;
+  expense: number;
+  /** 该期间的净结余（收入 − 支出）；与汇总卡、趋势线、CLI netCents 同口径。 */
+  balance: number;
+};
+
+/** 顶部周期 → 报表默认粒度：周/月→日、年→月、总→年、自定义按跨度。 */
+export function reportGrainFor(mode: StatsMode, from = "", to = ""): LedgerReportGrain {
+  if (mode === "week" || mode === "month") return "day";
+  if (mode === "year") return "month";
+  if (mode === "total") return "year";
+  if (from.slice(0, 4) !== to.slice(0, 4)) return "year";
+  if (from.slice(0, 7) !== to.slice(0, 7)) return "month";
+  return "day";
+}
+
+/** 报表行：只列有流水的期间（空档不铺一行 0，避免「总」用日粒度时画出几千行空表）。 */
+export function reportRows(
+  entries: LedgerEntry[],
+  bounds: StatsBounds,
+  grain: LedgerReportGrain
+): LedgerReportRow[] {
+  const buckets = new Map<string, LedgerReportRow>();
+  for (const entry of entries) {
+    if (!inStatsBounds(entry.date, bounds)) continue;
+    // 转账不是收支，既不该出金额也不该凭空造一个 0 行
+    if (entry.kind !== "income" && entry.kind !== "expense") continue;
+    const key =
+      grain === "day" ? entry.date : grain === "month" ? entry.date.slice(0, 7) : entry.date.slice(0, 4);
+    const row = buckets.get(key) ?? { key, income: 0, expense: 0, balance: 0 };
+    if (entry.kind === "income") row.income += entry.amountCents;
+    if (entry.kind === "expense") row.expense += entry.amountCents;
+    row.balance = row.income - row.expense;
+    buckets.set(key, row);
+  }
+  return [...buckets.values()].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+}
+
+/** 报表时间列：日 2026-03-14、月 2026-03、年 2026（等宽数字，窄屏也不会挤成两行）。 */
+export function reportKeyLabel(key: string, grain: LedgerReportGrain): string {
+  return grain === "year" ? `${key}年` : key;
+}
+
 /** 周期标签：年 <2026>、月 <2026/09>、周 <2026/09/14-09/20>、总/自定义 起止全写。 */
 export function statsPeriodLabel(mode: StatsMode, bounds: StatsBounds, cursor: MonthCursor): string {
   if (mode === "year") return `${cursor.year}`;

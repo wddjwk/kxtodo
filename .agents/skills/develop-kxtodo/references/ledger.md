@@ -104,3 +104,10 @@ CLI 子命令是 kebab（`ledger account-add` 等；core 命令名仍 camel，`b
 
 `ledger_dispatch` 分发层对 add/transfer/modify/accountAdd/accountModify/categoryAdd/categoryModify 统一 `require_confirmation`（remove/accountRemove/categoryRemove/import 保留各自信息量更大的内部门——**一个动作只有一道门**），未带 `--yes` 返回退出码 10，文案明确告诉 Agent「金融数据敏感，先向用户说明这次增删改并得到同意」；只读动作不设门；GUI/Android 桥恒带 `controls.yes=true` 不受影响；`schema.rs::risk_for` 里这些动作全是 high-risk-write。
 
+
+## 报表统计（v0.8.9）
+
+- 位置：`LedgerStats.svelte` 在「分类占比」之后新增 `<section class="ledger-panel ledger-report-panel">`；右上角 `.ledger-segmented` 三档日/月/年。
+- 纯逻辑：`ledger.ts::reportGrainFor(mode, from, to)` 只看顶部周期与自定义跨度（周/月→日、年→月、总→年；自定义跨年→年、跨月→月、月内→日）；`reportRows(entries, bounds, grain)` 只收 `income/expense`（转账跳过），结余 = 该期间收入 − 支出，与汇总卡/趋势线/CLI `netCents` 同口径；`reportKeyLabel` 日=YYYY-MM-DD、月=YYYY-MM、年=YYYY年。
+- 默认粒度用周期 key 驱动，**不要依赖 entries**：否则任何一次记账写入都会把用户手选的粒度重置。
+- 报表只列有流水的期间（空档不铺 0 行），避免「总」用日粒度时出现几千行空表。

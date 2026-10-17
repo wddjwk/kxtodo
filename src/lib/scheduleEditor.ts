@@ -219,20 +219,68 @@ export function nextRunPreview(task: ScheduledTask, now = new Date()): string {
   try {
     const t = task.trigger;
     const timezone = t.type === "calendar" ? t.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone : Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!task.enabled) return "未启用";
     if (task.until && zonedDay(now, timezone) > task.until) return "已过截止日期";
-    let next: Date | null = null;
-    if (t.type === "once") next = new Date(localInputToIso(t.runAt));
-    else if (t.type === "calendar") {
-      next = nextCalendarInstant(t.cron, timezone, now);
-      if (!next) return "预览范围内无触发时间，请检查 Cron";
-    } else {
+    const next = nextRunInstant(task, now);
+    if (!next) {
+      if (t.type === "once" && task.runCount > 0) return "不会再次执行";
       if (t.type === "interval" && t.repeatCount > 0 && task.runCount >= t.repeatCount) return "已达到执行次数";
-      if (task.nextRunAt && Date.parse(task.nextRunAt) > now.getTime()) next = new Date(task.nextRunAt);
-      else next = new Date(now.getTime() + t.everySeconds * 1000);
+      // 有下次触发、只是落在截止日期之后：给一句比「没有下次触发」更准确的说明
+      const raw = computeNextIgnoringUntil(task, now);
+      if (task.until && raw && zonedDay(raw, timezone) > task.until) return "截止日期内无下次触发";
+      if (t.type === "calendar") return "预览范围内无触发时间，请检查 Cron";
+      return "没有下次触发";
     }
-    if (!next || !Number.isFinite(next.getTime())) return "请完善触发规则";
-    if (task.until && zonedDay(next, timezone) > task.until) return "截止日期内无下次触发";
     const label = next.toLocaleString([], { timeZone: timezone, month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
     return `${label}${t.type === "calendar" ? ` · ${timezone}` : ""}${task.gate || t.type === "condition" ? " · 满足条件才执行" : ""}`;
   } catch { return "请完善触发规则"; }
+}
+
+/**
+ * 与 core `plan.rs::compute_next_run` 逐条同口径的「下次触发」纯函数。
+ *
+ * 早先草稿预览用 `now + everySeconds`：编辑任务时 `update()` 会清掉 nextRunAt，
+ * 于是「换个名字再看」也会把按 lastRun/updatedAt 对齐的节拍改成「从现在起跳」，
+ * 跟实际触发时间对不上。这里把四条触发器的锚点、次数上限、冷却和截止日期
+ * 全部照 core 算一遍；改动公式时必须同步 `crates/core/src/plan.rs` 与测试。
+ */
+export function nextRunInstant(task: ScheduledTask, now = new Date()): Date | null {
+  const t = task.trigger;
+  const timezone = t.type === "calendar" ? t.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone : Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (!task.enabled) return null;
+  if (task.until && zonedDay(now, timezone) > task.until) return null;
+  const next = computeNextIgnoringUntil(task, now);
+  if (!next) return null;
+  if (task.until && zonedDay(next, timezone) > task.until) return null;
+  return next;
+}
+
+function computeNextIgnoringUntil(task: ScheduledTask, now: Date): Date | null {
+  const t = task.trigger;
+  const timezone = t.type === "calendar" ? t.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone : Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (t.type === "once") {
+    if (task.runCount > 0) return null;
+    return new Date(localInputToIso(t.runAt));
+  }
+  if (t.type === "calendar") return nextCalendarInstant(t.cron, timezone, now);
+  if (t.type === "interval") {
+    if (t.repeatCount > 0 && task.runCount >= t.repeatCount) return null;
+    const step = t.everySeconds * 1000;
+    if (!Number.isFinite(step) || step <= 0) return null;
+    const base = Date.parse(task.lastRunAt ?? "") || Date.parse(task.updatedAt ?? "") || Date.parse(task.createdAt) || now.getTime();
+    const first = base + step;
+    if (first > now.getTime()) return new Date(first);
+    const remainder = ((now.getTime() - base) % step + step) % step;
+    return new Date(now.getTime() + (step - remainder));
+  }
+  const step = t.everySeconds * 1000;
+  if (!Number.isFinite(step) || step <= 0) return null;
+  const base = Date.parse(task.lastProbeAt ?? "") || now.getTime();
+  let value = base + step;
+  const cooldown = t.cooldown === undefined ? NaN : durationToMs(t.cooldown, NaN);
+  const lastRun = Date.parse(task.lastRunAt ?? "");
+  if (Number.isFinite(cooldown) && cooldown > 0 && Number.isFinite(lastRun)) {
+    value = Math.max(value, lastRun + Math.max(step, cooldown));
+  }
+  return new Date(value <= now.getTime() ? now.getTime() + step : value);
 }

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from "svelte";
   import { ChevronRight } from "@lucide/svelte";
-  import { submenuClosed, submenuOpened, submenuBack } from "./submenu";
+  import { closingSubmenuDepth, submenuClosed, submenuOpened, submenuBack } from "./submenu";
   import type { Component } from "svelte";
 
   export let icon: Component | null = null;
@@ -18,6 +18,8 @@
   export let onSelect: () => void = () => {};
 
   let submenuOpen = false;
+  /** 自己的层级（根菜单里的子菜单 = 1，子菜单里的子菜单 = 2…）。 */
+  let submenuDepth = 1;
   let submenuEl: HTMLElement;
   let itemEl: HTMLElement;
   let flipX = false;
@@ -31,10 +33,17 @@
   $: submenuClass = `submenu-panel${flipX ? " flip-x" : ""}${flipY ? " flip-y" : ""}`;
 
   function openSubmenu(): void {
+    let depth = 1;
+    let node = itemEl?.parentElement ?? null;
+    while (node) {
+      if (node.classList.contains("submenu-panel")) depth += 1;
+      node = node.parentElement;
+    }
+    submenuDepth = depth;
     submenuOpen = true;
     if (!counted) {
       counted = true;
-      submenuOpened();
+      submenuOpened(depth);
     }
     window.addEventListener("click", handleDocumentClick, true);
     void adjustSubmenu();
@@ -44,7 +53,7 @@
     submenuOpen = false;
     if (counted) {
       counted = false;
-      submenuClosed();
+      submenuClosed(submenuDepth);
     }
     window.removeEventListener("click", handleDocumentClick, true);
   }
@@ -53,6 +62,9 @@
   function handleDocumentClick(event: MouseEvent): void {
     const target = event.target as Node | null;
     if (target && itemEl?.contains(target)) return;
+    // 「返回」由 ContextMenu 自己逐级退；这个捕获阶段的全局点击监听如果也收，
+    // 会在 goBack 之前把每一层都关掉（v0.8.9 三级菜单踩到）。
+    if (target instanceof Element && target.closest(".submenu-back")) return;
     closeSubmenu();
   }
 
@@ -98,9 +110,10 @@
   }
 
   onMount(() =>
-    // 移动端二级面板上的「返回」：收起自己，一级菜单随即重新显示
+    // 「返回」逐级退：只有当前最深的那一层关自己，否则三级菜单会一次退光
+    // （v0.8.9 固定区「添加固定 → 工具箱内的工具」踩到）。
     submenuBack.subscribe((count) => {
-      if (count > 0 && submenuOpen) closeSubmenu();
+      if (count > 0 && submenuOpen && closingSubmenuDepth() === submenuDepth) closeSubmenu();
     })
   );
 
@@ -111,6 +124,7 @@
   <div
     bind:this={itemEl}
     class="menu-item has-submenu"
+    class:submenu-open={submenuOpen}
     role="none"
   >
     <button

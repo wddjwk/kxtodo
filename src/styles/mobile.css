@@ -67,6 +67,7 @@
 .app-shell.mobile .scheduler-panel .scheduler-step-heading { gap: 8px; grid-template-columns: 24px minmax(0, 1fr) 16px; }
 .app-shell.mobile .scheduler-step-summary { display: none; }
 .app-shell.mobile .scheduler-trigger-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.app-shell.mobile .scheduler-action-tiles { grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); }
 .app-shell.mobile .scheduler-panel .scheduler-trigger-tile { padding: 12px 8px; }
 .app-shell.mobile .scheduler-trigger-tile span { display: none; }
 .app-shell.mobile .scheduler-panel .scheduler-form-grid,
@@ -75,7 +76,8 @@
 .app-shell.mobile .scheduler-weekdays { gap: 3px; }
 .app-shell.mobile .scheduler-editor-footer { gap: 10px; }
 .app-shell.mobile .scheduler-footer-name { flex-basis: 100%; }
-.app-shell.mobile .scheduler-footer-actions { flex: 1; justify-content: flex-end; }
+.app-shell.mobile .scheduler-footer-actions { flex: 1; justify-content: stretch; gap: 6px; }
+.app-shell.mobile .scheduler-footer-actions .settings-button { flex: 1 1 0; min-width: 0; }
 .app-shell.mobile .scheduler-history-run > summary { flex-wrap: wrap; }
 .app-shell.mobile .scheduler-panel .scheduler-floating-add { bottom: calc(6px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1)); }
 
@@ -1026,4 +1028,28 @@
 .app-shell.mobile .ledger-transfer-arrow {
   align-self: center;
   transform: rotate(90deg);
+}
+
+/* 报表统计窄屏：四列压在一行里，字号收小、内边距收窄（不产生横向滚动） */
+.app-shell.mobile .ledger-report {
+  font-size: calc(var(--font-ledger) - 6px);
+}
+
+.app-shell.mobile .ledger-report th,
+.app-shell.mobile .ledger-report td {
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+/* 三级菜单（固定区「添加固定 → 工具箱内的工具」）：移动端只显示最深一层，
+   同级的其余项与取消/确认先收起，按「返回」逐级退回。否则三层叠加会把菜单
+   撑出屏幕（v0.8.9；根菜单的 sub-open 只处理了第一层）。 */
+.app-shell.mobile .context-menu.sub-deep .nav-fixed-editor > .menu-item:not(.submenu-open),
+.app-shell.mobile .context-menu.sub-deep .nav-fixed-editor > .menu-separator,
+.app-shell.mobile .context-menu.sub-deep .nav-fixed-editor > .nav-fixed-actions {
+  display: none;
+}
+
+.app-shell.mobile .context-menu.sub-deep .nav-fixed-editor > .menu-item.submenu-open > .menu-item-button {
+  display: none;
 }

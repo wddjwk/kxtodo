@@ -1,5 +1,8 @@
 package com.wddjwk.kxtodo
 
+import android.content.ClipboardManager
+import android.content.Context
+import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -10,8 +13,17 @@ import androidx.activity.enableEdgeToEdge
 
 class MainActivity : TauriActivity() {
   private var webViewRef: WebView? = null
+  private var bridgeRef: ApkBridge? = null
+  private var clipboardManager: ClipboardManager? = null
+  private var clipboardListening = false
+  private var multicastLock: WifiManager.MulticastLock? = null
+  private var tokenTimer: Runnable? = null
   private var lastBackAt = 0L
   private val mainHandler = Handler(Looper.getMainLooper())
+
+  private val clipboardListener = ClipboardManager.OnPrimaryClipChangedListener {
+    notifyClipboardChanged()
+  }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
@@ -56,16 +68,92 @@ class MainActivity : TauriActivity() {
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
     webViewRef = webView
-    // openCustomTab launches a browser-owned Activity; never load its remote URL into this
-    // bridge-bearing application WebView. Existing ProGuard rules keep all ApkBridge methods.
-    webView.addJavascriptInterface(ApkBridge(applicationContext), "kxtodoAndroid")
+    val bridge = ApkBridge(applicationContext)
+    bridgeRef = bridge
+    webView.addJavascriptInterface(bridge, "kxtodoAndroid")
+    // token 只写主 frame（evaluateJavascript 的语义）；外部 iframe 跨源读不到父窗口变量。
+    // 页面加载与 JS 初始化有先后，重复注入一小段时间，直到主文档稳定下来。
+    injectBridgeToken(40)
+  }
+
+  override fun onResume() {
+    super.onResume()
+    acquireMulticastLock()
+    startClipboardListening()
+    injectBridgeToken(40)
+    // 切回前台时补一次：后台期间复制的内容（Android 10+ 不让后台读）现在才读得到。
+    mainHandler.postDelayed({ notifyClipboardChanged() }, 500)
+  }
+
+  override fun onPause() {
+    stopClipboardListening()
+    releaseMulticastLock()
+    super.onPause()
   }
 
   override fun onDestroy() {
+    releaseMulticastLock()
+    tokenTimer?.let { mainHandler.removeCallbacks(it) }
+    tokenTimer = null
+    stopClipboardListening()
     // 销毁链里再进返回回调也不许碰一个正在死的 WebView
     webViewRef?.removeJavascriptInterface("kxtodoAndroid")
     webViewRef = null
+    bridgeRef = null
     super.onDestroy()
+  }
+
+  private fun injectBridgeToken(attempts: Int) {
+    tokenTimer?.let { mainHandler.removeCallbacks(it) }
+    if (attempts <= 0) return
+    val webView = webViewRef
+    val token = bridgeRef?.tokenForHost()
+    if (webView != null && token != null) {
+      webView.evaluateJavascript("window.__kxtodoAndroidToken='$token';", null)
+    }
+    val next = Runnable { injectBridgeToken(attempts - 1) }
+    tokenTimer = next
+    mainHandler.postDelayed(next, 250)
+  }
+
+  /** Android Wi-Fi 栈默认过滤组播/广播；局域网剪切板发现需要一把 MulticastLock。 */
+  private fun acquireMulticastLock() {
+    if (multicastLock != null) return
+    val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
+    val lock = wifi.createMulticastLock("kxtodo-clipboard-lan").apply {
+      setReferenceCounted(false)
+      acquire()
+    }
+    multicastLock = lock
+  }
+
+  private fun releaseMulticastLock() {
+    multicastLock?.release()
+    multicastLock = null
+  }
+
+  private fun startClipboardListening() {
+    if (clipboardListening) return
+    val manager = applicationContext.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+      ?: return
+    clipboardManager = manager
+    manager.addPrimaryClipChangedListener(clipboardListener)
+    clipboardListening = true
+  }
+
+  private fun stopClipboardListening() {
+    if (!clipboardListening) return
+    clipboardManager?.removePrimaryClipChangedListener(clipboardListener)
+    clipboardListening = false
+  }
+
+  /** 只报告「变了」，读剪切板由 JS 决定（设置关着时连读都不读，避免系统提示）。 */
+  private fun notifyClipboardChanged() {
+    if (!clipboardListening) return
+    webViewRef?.evaluateJavascript(
+      "window.dispatchEvent(new Event('kxtodo-native-clipboard'))",
+      null
+    )
   }
 
   private fun exitApp() {

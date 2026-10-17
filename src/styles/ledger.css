@@ -3044,3 +3044,73 @@
   transform: translateX(-50%);
   user-select: none;
 }
+
+/* ---------- 报表统计（v0.8.9 需求 7） ----------
+   无边框表格：用列对齐、留白与行悬浮分区，不画任何 border 线。
+   金额列右对齐 + 等宽数字，时间列左对齐并禁止换行。 */
+.ledger-report-grains {
+  margin-left: auto;
+}
+
+.ledger-report-grains button {
+  padding: 4px 12px;
+}
+
+.ledger-report-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.ledger-report {
+  width: 100%;
+  border-collapse: collapse;
+  color: #3a4048;
+  font-size: calc(var(--font-ledger) - 4px);
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-report th {
+  padding: 0 8px 8px;
+  color: #8a919b;
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.ledger-report td {
+  padding: 9px 8px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.ledger-report th:first-child,
+.ledger-report td:first-child {
+  padding-left: 2px;
+  text-align: left;
+}
+
+.ledger-report th:last-child,
+.ledger-report td:last-child {
+  padding-right: 2px;
+}
+
+.ledger-report tbody tr {
+  transition: background-color 0.12s ease;
+}
+
+.ledger-report tbody tr:hover {
+  background: rgb(0 0 0 / 2.5%);
+}
+
+.ledger-report-time {
+  color: #5c6470;
+}
+
+.ledger-report-income {
+  color: #2f9e6e;
+}
+
+.ledger-report-expense,
+.ledger-report-balance.negative {
+  color: #e0654f;
+}

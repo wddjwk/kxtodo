@@ -1075,6 +1075,19 @@ h1 {
 .scheduler-panel .scheduler-power,
 .scheduler-panel .scheduler-config-button,
 .scheduler-panel .scheduler-delete { padding: 0; min-height: 32px; }
+/* settings.css 的 .settings-button.danger 是 inline-flex（0,2,0），会盖掉上面那组
+   workspace 里的 grid；删除按钮因此图标左偏。这里用 0,3,0 把它按回正中间。 */
+.scheduler-panel .scheduler-power.settings-button,
+.scheduler-panel .scheduler-config-button.settings-button,
+.scheduler-panel .scheduler-delete.settings-button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  place-items: center;
+  justify-content: center;
+  padding: 0;
+}
 .scheduler-sentence {
   display: flex;
   flex-wrap: wrap;
@@ -1149,6 +1162,8 @@ h1 {
 .scheduler-step-active .scheduler-step-heading svg { transform: rotate(180deg); }
 .scheduler-step-content { display: grid; gap: 16px; padding: 0 0 22px 40px; min-width: 0; }
 .scheduler-trigger-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
+/* 动作类型只有三种（移动端一种）：auto-fit 让单个方块铺满，而不是孤零零占 1/4 宽 */
+.scheduler-action-tiles { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
 .scheduler-panel .scheduler-trigger-tile {
   display: grid;
   align-content: start;
@@ -1202,6 +1217,8 @@ h1 {
 .scheduler-footer-name { flex: 1; min-width: 160px !important; }
 .scheduler-footer-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .scheduler-editor-footer .settings-button { min-height: 38px; }
+/* 试运行/取消/保存三个按钮统一宽度，别让图标与字数决定大小（v0.8.9 需求 4.4） */
+.scheduler-footer-actions .settings-button { min-width: 96px; justify-content: center; }
 .scheduler-error { color: #b3261e; font-size: calc(var(--font-control) - 4px); margin: 0; }
 .scheduler-history { margin-top: 16px; }
 .scheduler-history p { font-size: calc(var(--font-control) - 5px); color: #737b85; }
@@ -2975,6 +2992,9 @@ h1 {
   position: fixed;
   inset: 0;
   z-index: 9000;
+  /* 日记/记账/工具箱整页覆盖时 .workspace 是 visibility:hidden；预览是它的子元素，
+     必须显式 visible 才能在整页视图里打开（inert 同时由 coveredByFullPage 解除）。 */
+  visibility: visible;
   display: flex;
   flex-direction: column;
   background: white;

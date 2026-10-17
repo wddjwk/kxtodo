@@ -577,6 +577,102 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         description: "每个工具子页自己的背景色（整份对象写：{ 工具id: #rrggbb }；键同上，缺省跟工具箱主界面）",
         is_map: false,
     },
+    FieldMeta {
+        path: "clipboard.enabled",
+        kind: "bool",
+        description: "剪切板同步总开关（关掉后本机不再监听连接，也不接受远端写入）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "clipboard.code",
+        kind: "string",
+        description: "剪切板同步口令（≥8 位；LAN / 直接 IP / P2P 共用；空 = 未配对）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "clipboard.deviceName",
+        kind: "string",
+        description: "剪切板同步：本机设备名（空 = KXToDo·平台）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "clipboard.directEnabled",
+        kind: "bool",
+        description: "剪切板同步：直接 IP 方式开关（优先级最高）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "clipboard.directAddresses",
+        kind: "string",
+        description: "剪切板同步：直接 IP 列表（一行一个 ip 或 ip:port）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "clipboard.lanEnabled",
+        kind: "bool",
+        description: "剪切板同步：局域网 UDP 广播发现开关",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "clipboard.p2pEnabled",
+        kind: "bool",
+        description: "剪切板同步：iroh P2P 开关（relay 与目录沿用传输/同步配置）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "clipboard.acceptText",
+        kind: "bool",
+        description: "剪切板同步：接收纯文本",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "clipboard.acceptHtml",
+        kind: "bool",
+        description: "剪切板同步：接收 HTML（带纯文本回退）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "clipboard.acceptImage",
+        kind: "bool",
+        description: "剪切板同步：接收图片",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "clipboard.acceptFiles",
+        kind: "bool",
+        description: "剪切板同步：接收文件",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "clipboard.textLimitMb",
+        kind: "integer(1-64)",
+        description: "剪切板同步：纯文本大小上限（MB）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "clipboard.htmlLimitMb",
+        kind: "integer(1-64)",
+        description: "剪切板同步：HTML 大小上限（MB）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "clipboard.imageLimitMb",
+        kind: "integer(1-256)",
+        description: "剪切板同步：图片大小上限（MB）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "clipboard.filesLimitMb",
+        kind: "integer(1-1024)",
+        description: "剪切板同步：文件总大小上限（MB）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "clipboard.saveDir",
+        kind: "string",
+        description: "剪切板同步：收到文件的保存目录（空 = 下载目录下的 kxtodo-clipboard）",
+        is_map: false,
+    },
 ];
 
 pub fn field_meta(path: &str) -> Option<&'static FieldMeta> {
@@ -672,6 +768,22 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "transfer.relay" => json!(settings.transfer.relay),
         "transfer.deviceName" => json!(settings.transfer.device_name),
         "transfer.autoAccept" => json!(settings.transfer.auto_accept),
+        "clipboard.enabled" => json!(settings.clipboard.enabled),
+        "clipboard.code" => json!(settings.clipboard.code),
+        "clipboard.deviceName" => json!(settings.clipboard.device_name),
+        "clipboard.directEnabled" => json!(settings.clipboard.direct_enabled),
+        "clipboard.directAddresses" => json!(settings.clipboard.direct_addresses),
+        "clipboard.lanEnabled" => json!(settings.clipboard.lan_enabled),
+        "clipboard.p2pEnabled" => json!(settings.clipboard.p2p_enabled),
+        "clipboard.acceptText" => json!(settings.clipboard.types.text),
+        "clipboard.acceptHtml" => json!(settings.clipboard.types.html),
+        "clipboard.acceptImage" => json!(settings.clipboard.types.image),
+        "clipboard.acceptFiles" => json!(settings.clipboard.types.files),
+        "clipboard.textLimitMb" => json!(settings.clipboard.limits.text_mb),
+        "clipboard.htmlLimitMb" => json!(settings.clipboard.limits.html_mb),
+        "clipboard.imageLimitMb" => json!(settings.clipboard.limits.image_mb),
+        "clipboard.filesLimitMb" => json!(settings.clipboard.limits.files_mb),
+        "clipboard.saveDir" => json!(settings.clipboard.save_dir),
         "sync.serverUrl" => json!(settings.sync.server_url),
         "sync.username" => json!(settings.sync.username),
         "sync.secret" => json!(settings.sync.secret),
@@ -843,6 +955,10 @@ fn expect_int(path: &str, value: &Value, min: i64, max: i64) -> CoreResult<i64> 
         return Err(invalid_value(path, format!("应在 {min}-{max} 之间")));
     }
     Ok(number)
+}
+
+fn expect_clipboard_limit(path: &str, value: &Value, max: u32) -> CoreResult<u32> {
+    Ok(expect_int(path, value, 1, max as i64)? as u32)
 }
 
 fn expect_scale(path: &str, value: &Value) -> CoreResult<f64> {
@@ -1297,6 +1413,42 @@ pub fn set_value(
                 .as_bool()
                 .ok_or_else(|| invalid_value(path, "应为 true/false"))?;
         }
+        "clipboard.enabled" => settings.clipboard.enabled = expect_bool(path, &value)?,
+        "clipboard.code" => {
+            let raw = expect_string(path, &value)?.trim().to_string();
+            if !raw.is_empty() && raw.chars().count() < 8 {
+                return Err(invalid_value(path, "同步口令至少 8 位"));
+            }
+            settings.clipboard.code = raw;
+        }
+        "clipboard.deviceName" => {
+            settings.clipboard.device_name = expect_string(path, &value)?.trim().to_string();
+        }
+        "clipboard.directEnabled" => settings.clipboard.direct_enabled = expect_bool(path, &value)?,
+        "clipboard.directAddresses" => {
+            settings.clipboard.direct_addresses = expect_string(path, &value)?.trim().to_string();
+        }
+        "clipboard.lanEnabled" => settings.clipboard.lan_enabled = expect_bool(path, &value)?,
+        "clipboard.p2pEnabled" => settings.clipboard.p2p_enabled = expect_bool(path, &value)?,
+        "clipboard.acceptText" => settings.clipboard.types.text = expect_bool(path, &value)?,
+        "clipboard.acceptHtml" => settings.clipboard.types.html = expect_bool(path, &value)?,
+        "clipboard.acceptImage" => settings.clipboard.types.image = expect_bool(path, &value)?,
+        "clipboard.acceptFiles" => settings.clipboard.types.files = expect_bool(path, &value)?,
+        "clipboard.textLimitMb" => {
+            settings.clipboard.limits.text_mb = expect_clipboard_limit(path, &value, 64)?;
+        }
+        "clipboard.htmlLimitMb" => {
+            settings.clipboard.limits.html_mb = expect_clipboard_limit(path, &value, 64)?;
+        }
+        "clipboard.imageLimitMb" => {
+            settings.clipboard.limits.image_mb = expect_clipboard_limit(path, &value, 256)?;
+        }
+        "clipboard.filesLimitMb" => {
+            settings.clipboard.limits.files_mb = expect_clipboard_limit(path, &value, 1024)?;
+        }
+        "clipboard.saveDir" => {
+            settings.clipboard.save_dir = expect_string(path, &value)?.trim().to_string();
+        }
         "sync.serverUrl" => {
             let raw = expect_string(path, &value)?;
             if !raw.is_empty() && !raw.starts_with("http://") && !raw.starts_with("https://") {
@@ -1643,6 +1795,36 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
             target.transfer.device_name = defaults.transfer.device_name.clone()
         }
         "transfer.autoAccept" => target.transfer.auto_accept = defaults.transfer.auto_accept,
+        "clipboard.enabled" => target.clipboard.enabled = defaults.clipboard.enabled,
+        "clipboard.code" => target.clipboard.code = defaults.clipboard.code.clone(),
+        "clipboard.deviceName" => {
+            target.clipboard.device_name = defaults.clipboard.device_name.clone()
+        }
+        "clipboard.directEnabled" => {
+            target.clipboard.direct_enabled = defaults.clipboard.direct_enabled
+        }
+        "clipboard.directAddresses" => {
+            target.clipboard.direct_addresses = defaults.clipboard.direct_addresses.clone()
+        }
+        "clipboard.lanEnabled" => target.clipboard.lan_enabled = defaults.clipboard.lan_enabled,
+        "clipboard.p2pEnabled" => target.clipboard.p2p_enabled = defaults.clipboard.p2p_enabled,
+        "clipboard.acceptText" => target.clipboard.types.text = defaults.clipboard.types.text,
+        "clipboard.acceptHtml" => target.clipboard.types.html = defaults.clipboard.types.html,
+        "clipboard.acceptImage" => target.clipboard.types.image = defaults.clipboard.types.image,
+        "clipboard.acceptFiles" => target.clipboard.types.files = defaults.clipboard.types.files,
+        "clipboard.textLimitMb" => {
+            target.clipboard.limits.text_mb = defaults.clipboard.limits.text_mb
+        }
+        "clipboard.htmlLimitMb" => {
+            target.clipboard.limits.html_mb = defaults.clipboard.limits.html_mb
+        }
+        "clipboard.imageLimitMb" => {
+            target.clipboard.limits.image_mb = defaults.clipboard.limits.image_mb
+        }
+        "clipboard.filesLimitMb" => {
+            target.clipboard.limits.files_mb = defaults.clipboard.limits.files_mb
+        }
+        "clipboard.saveDir" => target.clipboard.save_dir = defaults.clipboard.save_dir.clone(),
         "sync.serverUrl" => target.sync.server_url = defaults.sync.server_url.clone(),
         "sync.username" => target.sync.username = defaults.sync.username.clone(),
         "sync.secret" => target.sync.secret = defaults.sync.secret.clone(),

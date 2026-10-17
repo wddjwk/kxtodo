@@ -6,7 +6,7 @@
  * 所有工具的 chunk 拉进首屏链——目录这一层就是为了解耦而存在的。
  */
 
-export type ToolId = "random" | "rmb" | "scratchpad" | "transfer";
+export type ToolId = "random" | "rmb" | "scratchpad" | "transfer" | "clipboard";
 
 export type ToolCatalogEntry = {
   id: ToolId;
@@ -34,6 +34,11 @@ export const TOOL_CATALOG: readonly ToolCatalogEntry[] = [
     id: "transfer",
     name: "文件传输助手",
     desc: "两台设备凭同一句口令互传文件与文件夹（打洞直连，实时进度）"
+  },
+  {
+    id: "clipboard",
+    name: "剪切板同步",
+    desc: "同一局域网/同一口令的设备之间自动同步文字、图片、文件与 HTML"
   }
 ];
 

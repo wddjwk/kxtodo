@@ -22,7 +22,8 @@
   import { ChevronLeft, ChevronRight } from "@lucide/svelte";
   import {
     categoryColor, categoryStats, compactCents, formatCents, statsBounds, statsEntries,
-    statsPeriodLabel, statsSeries, shiftWeek, paletteColor, type StatsMode
+    statsPeriodLabel, statsSeries, shiftWeek, paletteColor, reportGrainFor, reportKeyLabel,
+    reportRows, type LedgerReportGrain, type StatsMode
   } from "../ledger";
   import type { LedgerDonutItem } from "../ledger";
   import { ledgerIcon } from "../ledgerIcons";
@@ -71,6 +72,11 @@
     income: { full: "收入", short: "收" }
   };
   const SIDES: Side[] = ["expense", "income"];
+  const REPORT_GRAINS: Array<{ id: LedgerReportGrain; label: string }> = [
+    { id: "day", label: "日" },
+    { id: "month", label: "月" },
+    { id: "year", label: "年" }
+  ];
 
   let mode: StatsMode = "month";
   let side: Side = "expense";
@@ -88,13 +94,26 @@
   /** 趋势图上正在读数的桶（桌面悬浮 / 移动点按）；null = 没在读 */
   let hoverIndex: number | null = null;
 
+  /** 报表粒度（v0.8.9 需求 7）：跟着顶部周期给默认值，用户手动切过后在当前周期内保持不变。 */
+  let reportGrain: LedgerReportGrain = "day";
+  let lastReportPeriodKey = "";
+
   // 「周」两端都有（v0.8.4 需求 10 把移动端加回来——侧段控少了一档，宽度腾出来了）
   $: modes = MODES;
   $: sideText = (key: Side) => ($isMobile ? SIDE_LABELS[key].short : SIDE_LABELS[key].full);
   $: bounds = statsBounds(entries, mode, cursor, weekAnchor, customFrom, customTo, $weekStart);
   $: periodLabel = statsPeriodLabel(mode, bounds, cursor);
+  // 报表默认粒度只看「顶部选了什么周期」与自定义跨度，不依赖 entries：
+  // 否则每次记账写入都会把用户手动选的粒度顶回去。
+  $: reportDefaultGrain = reportGrainFor(mode, customFrom, customTo);
+  $: reportPeriodKey = `${mode}|${cursor.year}-${cursor.month}|${weekAnchor}|${customFrom}|${customTo}`;
+  $: if (reportPeriodKey !== lastReportPeriodKey) {
+    lastReportPeriodKey = reportPeriodKey;
+    reportGrain = reportDefaultGrain;
+  }
   // 曲线、占比、排行都吃同一个窗口——早前占比拿全量数据配当期汇总，两个数字对不上
   $: rangeEntries = statsEntries(entries, bounds);
+  $: reportTable = reportRows(rangeEntries, bounds, reportGrain);
   $: series = statsSeries(entries, bounds);
   $: totalIncome = series.reduce((sum, point) => sum + point.income, 0);
   $: totalExpense = series.reduce((sum, point) => sum + point.expense, 0);
@@ -561,6 +580,43 @@
             </li>
           {/each}
         </ul>
+      </div>
+    {/if}
+  </section>
+
+  <section class="ledger-panel ledger-report-panel">
+    <header class="ledger-panel-head">
+      <h2>报表统计</h2>
+      <div class="ledger-segmented ledger-report-grains" role="group" aria-label="报表时间粒度">
+        {#each REPORT_GRAINS as item (item.id)}
+          <button
+            type="button"
+            class:active={reportGrain === item.id}
+            aria-pressed={reportGrain === item.id}
+            on:click|stopPropagation={() => (reportGrain = item.id)}
+          >{item.label}</button>
+        {/each}
+      </div>
+    </header>
+    {#if reportTable.length === 0}
+      <div class="ledger-day-empty">{periodLabel}还没有可统计的流水。</div>
+    {:else}
+      <div class="ledger-report-scroll">
+        <table class="ledger-report">
+          <thead>
+            <tr><th>时间</th><th>收入</th><th>支出</th><th>结余</th></tr>
+          </thead>
+          <tbody>
+            {#each reportTable as row (row.key)}
+              <tr>
+                <td class="ledger-report-time">{reportKeyLabel(row.key, reportGrain)}</td>
+                <td class="ledger-report-income">{formatCents(row.income)}</td>
+                <td class="ledger-report-expense">{formatCents(row.expense)}</td>
+                <td class="ledger-report-balance" class:negative={row.balance < 0}>{formatCents(row.balance)}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
       </div>
     {/if}
   </section>

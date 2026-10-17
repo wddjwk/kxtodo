@@ -19,6 +19,7 @@ use tauri::{AppHandle, Manager, State};
 
 use kxtodo_core as domain;
 
+mod clipboard_os;
 mod link_preview;
 
 #[cfg(desktop)]
@@ -2261,6 +2262,31 @@ impl domain::host::HostBackend for TauriBackend {
     ) -> Result<(), domain::CoreError> {
         ensure_p2p_services(data_dir, sync)
     }
+
+    fn clipboard_available(&self) -> bool {
+        clipboard_os::available()
+    }
+
+    fn clipboard_read(
+        &self,
+    ) -> Result<Option<domain::clipboard_sync::ClipboardContent>, domain::CoreError> {
+        clipboard_os::read().map_err(domain::CoreError::io)
+    }
+
+    fn clipboard_write(
+        &self,
+        content: &domain::clipboard_sync::ClipboardContent,
+    ) -> Result<(), domain::CoreError> {
+        clipboard_os::write(content).map_err(domain::CoreError::io)
+    }
+
+    fn clipboard_default_dir(&self) -> Option<PathBuf> {
+        clipboard_os::default_clipboard_dir(&self.app)
+    }
+
+    fn clipboard_reset_cache(&self) {
+        clipboard_os::reset_read_cache();
+    }
 }
 
 #[cfg(desktop)]
@@ -2320,6 +2346,8 @@ fn init_host_core(
     // 「本机作为服务器」随应用启动恢复（隐藏 Host 模式也一样：那正是开机自启后常驻的进程）。
     // 之后设置一变就由 emit_domain_event(Domain::Settings) → reconcile_sync_host 跟进。
     core.reconcile_sync_host();
+    // 剪切板同步（v0.8.9）：与同步主机同一套路，设置变化由 Settings 域事件跟进。
+    core.reconcile_clipboard_sync();
     Ok(core)
 }
 
@@ -2409,8 +2437,10 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
             app_version,
             update_download_and_apply,
             open_url,
-            link_preview::open_link_preview,
             link_preview::extract_link_meta,
+            clipboard_status,
+            clipboard_local_changed,
+            clipboard_default_dir,
             core_dispatch,
             core_snapshot,
             core_ping,
@@ -3188,6 +3218,73 @@ fn transfer_default_save_dir(app: AppHandle) -> Result<String, String> {
     Ok(dir.to_string_lossy().to_string())
 }
 
+/// 移动端 Kotlin 桥读到的剪切板 → core 的 ClipboardContent。
+/// 图片先落在应用缓存里传路径，避免把几十 MB 的 base64 塞进 IPC。
+fn clipboard_content_from_bridge(value: &Value) -> Result<domain::clipboard_sync::ClipboardContent, String> {
+    let text = value.get("text").and_then(Value::as_str).unwrap_or_default().to_string();
+    let html = value.get("html").and_then(Value::as_str).unwrap_or_default().to_string();
+    let image = value
+        .get("imagePath")
+        .and_then(Value::as_str)
+        .filter(|path| !path.trim().is_empty())
+        .map(|path| {
+            let meta = std::fs::metadata(path).map_err(|error| format!("读取剪切板图片失败：{error}"))?;
+            if meta.len() > 256 * 1024 * 1024 {
+                return Err("剪切板图片超过 256MB".to_string());
+            }
+            std::fs::read(path).map_err(|error| format!("读取剪切板图片失败：{error}"))
+        })
+        .transpose()?;
+    let mut files = Vec::new();
+    for item in value.get("files").and_then(Value::as_array).into_iter().flatten() {
+        let path = item.get("path").and_then(Value::as_str).unwrap_or_default();
+        if path.trim().is_empty() {
+            continue;
+        }
+        let name = item
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| !name.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                std::path::Path::new(path)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "file".to_string())
+            });
+        files.push(domain::clipboard_sync::ClipboardFile {
+            name,
+            path: Some(std::path::PathBuf::from(path)),
+            bytes: None,
+        });
+    }
+    Ok(domain::clipboard_sync::ClipboardContent { text, html, image, files })
+}
+
+#[tauri::command]
+fn clipboard_status(core: State<'_, Arc<domain::host::HostCore>>) -> Value {
+    domain::clipboard_sync::status(&core.repo.layout)
+}
+
+#[tauri::command]
+async fn clipboard_local_changed(
+    core: State<'_, Arc<domain::host::HostCore>>,
+    content: Value,
+) -> Result<Value, String> {
+    let layout = core.repo.layout.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let parsed = clipboard_content_from_bridge(&content)?;
+        domain::clipboard_sync::local_changed(&layout, parsed).map_err(|error| error.message)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+fn clipboard_default_dir(app: AppHandle) -> Option<String> {
+    clipboard_os::default_clipboard_dir(&app).map(|dir| dir.to_string_lossy().to_string())
+}
+
 /// 以 GUI 的身份跑一条 core 命令（与 core_dispatch 同一套上下文与确认语义）。
 fn run_core_command(
     host: &Arc<domain::host::HostCore>,
@@ -3329,6 +3426,12 @@ impl domain::host::HostBackend for MobileBackend {
     ) -> Result<(), domain::CoreError> {
         ensure_p2p_services(data_dir, sync)
     }
+
+    /// 移动端不读不写系统剪切板（Android 10+ 只允许前台读），但收到文件时的
+    /// 默认保存目录仍要用 Tauri 的 download_dir（外部文件目录），不能落到内部数据目录。
+    fn clipboard_default_dir(&self) -> Option<PathBuf> {
+        clipboard_os::default_clipboard_dir(&self.app)
+    }
 }
 
 #[cfg(not(desktop))]
@@ -3352,6 +3455,9 @@ fn init_mobile_core(app: &AppHandle) -> Result<(), String> {
     // 「本机作为服务器」在 Android 上同样是 in-process 起（不能 exec 外部二进制）。
     // 只在应用前台可靠：Doze 会掐掉后台监听，本期不做前台服务保活（设置页有说明）。
     core.reconcile_sync_host();
+    // 剪切板同步：Android 上没有 Rust 轮询（系统只允许前台读），网络服务照样常驻；
+    // 前端可见时经 Kotlin 桥读剪切板并调用 clipboard_local_changed。
+    core.reconcile_clipboard_sync();
     // manage 先于调度启动（与桌面同一条口径：通知路径可能经 try_state 取 HostCore）
     app.manage(core.clone());
     // 调度 + 提醒引擎（v0.8.3 起移动端也跑）：定时通知与任务提醒都靠这条 500ms 节拍。
@@ -3430,8 +3536,10 @@ pub fn run() {
                 transfer_default_save_dir,
                 app_version,
                 open_url,
-                link_preview::open_link_preview,
                 link_preview::extract_link_meta,
+                clipboard_status,
+                clipboard_local_changed,
+                clipboard_default_dir,
                 save_background_image,
                 load_background_image,
                 delete_background_image,

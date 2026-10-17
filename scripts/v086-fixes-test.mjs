@@ -193,8 +193,10 @@ const mobile = await browser.newContext({
     const corners = [
       { x: 4, y: 4 },
       { x: 1436, y: 4 },
-      { x: 4, y: 896 },
-      { x: 1436, y: 896 }
+      // 离底边 10px（在 8px 边距之外）：才谈得上「下边缘贴锚点」；
+      // 更贴边的点会被 placePopover 的 margin 钳制，锚点本身已经不是点击位置。
+      { x: 4, y: 890 },
+      { x: 1436, y: 890 }
     ];
     return corners.map((anchor) => {
       const placed = place(anchor, size, view);

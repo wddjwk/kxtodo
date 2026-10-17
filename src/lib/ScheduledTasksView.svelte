@@ -69,7 +69,11 @@
     try { trigger(id, { cron: calendarCron(rule) }); } catch (error) { showToast((error as Error).message); }
   }
   function openStep(id: string, step: number): void {
-    steps = { ...steps, [id]: step };
+    // 再点一次当前步骤 = 折叠（v0.8.9 需求 4.2）；点别的步骤仍然互斥展开。
+    // 注意 steps 里可能还没有这个 id：渲染默认值是 1（见 rows），收起/展开判据
+    // 必须用同一个默认值，否则第一次点当前步骤会被当成「打开第 1 步」。
+    const active = steps[id] ?? 1;
+    steps = { ...steps, [id]: active === step ? 0 : step };
     void setScheduleUi(id, { editing: true, expanded: true });
   }
   function discard(id: string): void {
@@ -146,13 +150,13 @@
           <button class="settings-button" type="button" on:click={() => openStep(task.id, 2)}>{actionSentence(task)}</button><span>，</span>
           <button class="settings-button" type="button" on:click={() => openStep(task.id, 3)}>{stopSentence(task)}</button><span>。</span>
         </div>
-        <p class="scheduler-next"><Clock3 size={13} /><span>{task.trigger.type === "condition" ? "下次检查" : "下次触发"} · {nextRunPreview(task, $currentMinute)}{!saved.enabled ? "（启用后生效）" : ""}</span></p>
+        <p class="scheduler-next"><Clock3 size={13} /><span>{task.trigger.type === "condition" ? "下次检查" : "下次触发"} · {nextRunPreview(task, $currentMinute)}</span></p>
         {#if saved.editing}
           <form class="scheduled-card-panel scheduler-editor scheduler-guided" on:submit|preventDefault={() => void save(task.id)}>
             <fieldset class="scheduler-draft-fields" disabled={busy[task.id]}>
               {#each [1, 2, 3] as number}
                 <section class="scheduler-step" class:scheduler-step-active={step === number}>
-                  <button class="settings-button scheduler-step-heading" type="button" aria-expanded={step === number} aria-controls={`scheduler-${task.id}-step-${number}`} on:click={() => steps = { ...steps, [task.id]: number }}>
+                  <button class="settings-button scheduler-step-heading" type="button" aria-expanded={step === number} aria-controls={`scheduler-${task.id}-step-${number}`} on:click={() => openStep(task.id, number)}>
                     <span class="scheduler-step-number">0{number}</span><strong>{number === 1 ? "何时执行" : number === 2 ? "执行什么" : task.trigger.type === "condition" ? "命中之后" : "何时结束"}</strong>
                     <span class="scheduler-step-summary">{number === 1 ? whenSentence(task) : number === 2 ? actionSentence(task) : stopSentence(task)}</span><ChevronDown size={15} />
                   </button>

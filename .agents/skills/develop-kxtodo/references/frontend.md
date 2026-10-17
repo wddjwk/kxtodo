@@ -168,3 +168,12 @@ v9 ScheduleEntry（spec/state/ui 三段）↔ UI 编辑模型双向适配，patc
 - 设置抽屉里的按钮 → `settings-button`（settings.css：同一视觉语言），主操作加 `.primary`（accent 填充白字）。
 - 菜单项一律走 `MenuItem` 组件（menu-item-button），不写裸 `<button>`。
 - 新写任何按钮前先想这两个类能不能用；风格不一致的裸按钮视为 bug。
+
+## v0.8.9 新增模块
+
+- `src/lib/clipboardSyncStore.ts`：剪切板同步的前端运行时。订阅 `kxtodo://clipboard`；桌面只更新状态；移动端监听 `kxtodo-native-clipboard` 与 `visibilitychange`，经 `androidBridge.ts` 读原生剪切板后调 `clipboard_local_changed`；远端 `remote` 事件经 Kotlin 桥写回，3 秒内忽略一次自触发。首次读取只建基线不发送（`primed`）。
+- `src/lib/androidBridge.ts`：Kotlin 桥封装。主 frame token `window.__kxtodoAndroidToken` 由 MainActivity 注入；`readNativeClipboard` / `writeNativeClipboard` 只在这一个文件里拼桥参数，外部 iframe 拿不到 token。
+- `src/lib/tools/ClipboardTool.svelte` + `tools/catalog.ts` / `registry.ts` / `NAV_TOOL_IDS`：第五个工具；整份设置走 `actions.ts::configureClipboard` → `gui.clipboard-configure`。
+- 编辑器：`codemirrorSetup.ts` 在移动端不挂 `drawSelection()`；两个编辑器 overlay 的 contextmenu 仅在桌面 preventDefault；`.cm-content` 显式 user-select。
+- `Sidebar.svelte`：navMenu/treeMenu/emptyAreaMenu 统一带展开/收起；`addBack` 草稿；`submenu.ts` 记录打开深度栈，`MenuItem` 按深度快照逐级退，并让全局捕获点击避开 `.submenu-back`。
+- `ColorPickerPanel`：反缩放层改绝对定位 + 面板 `minmax(0,1fr)`（v0.8.9 窄屏溢出修复）。

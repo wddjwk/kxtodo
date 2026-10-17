@@ -209,3 +209,16 @@
 .menu-action-button:active {
   background: #e9edf2;
 }
+
+/* 固定导航「添加固定」二级菜单底部的取消/确认（v0.8.9） */
+.nav-fixed-actions {
+  display: flex;
+  gap: 8px;
+  padding: 6px 8px 8px;
+}
+
+.nav-fixed-actions .settings-button {
+  flex: 1;
+  min-height: 32px;
+  justify-content: center;
+}

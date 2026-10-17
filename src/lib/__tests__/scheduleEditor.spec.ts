@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createScheduledTask, normalizeSchedulerState } from "../defaults";
 import { entryToUi, joinArguments, localInputToIso, splitArguments, uiToPatch, uiToSpec, type ScheduleEntryV9 } from "../scheduleAdapter";
-import { calendarCron, nextCalendarInstant, nextRunPreview, readCalendar, scheduleDirty, validateScheduleDraft, visibleScheduleHistory } from "../scheduleEditor";
+import { calendarCron, nextCalendarInstant, nextRunInstant, nextRunPreview, readCalendar, scheduleDirty, validateScheduleDraft, visibleScheduleHistory } from "../scheduleEditor";
 import type { ScheduleHistoryRun } from "../types";
 
 function entry(trigger: any = { type: "calendar", cron: "15 8 * * MON,WED", timezone: "America/New_York", missedPolicy: "skip" }): ScheduleEntryV9 {
@@ -56,8 +56,10 @@ describe("scheduler adapter preserves source semantics", () => {
   });
   it("keeps new scheduler fields through browser persistence normalization", () => {
     const source = entryToUi(entry());
+    source.lastProbeAt = "2030-01-01T08:00:00Z";
     const normalized = normalizeSchedulerState({ tasks: [source] }).tasks[0];
     expect(normalized.gate).toEqual(source.gate);
+    expect(normalized.lastProbeAt).toBe("2030-01-01T08:00:00Z");
     expect(normalized.until).toBe(source.until);
     expect(normalized.trigger.timezone).toBe(source.trigger.timezone);
     expect(normalized.action.timeout).toBe(source.action.timeout);
@@ -119,5 +121,46 @@ describe("scheduler guided editor", () => {
     const failure = run({ kind: "probe", status: "failed", exitCode: 7, stopReason: "probe 未命中" });
     const newer = run({ kind: "manual", startedAt: "2030-01-01T09:00:00+08:00" });
     expect(visibleScheduleHistory([newer, failure, run({ kind: "probe", exitCode: 0, stopReason: "probe 未命中" })])).toEqual([newer, failure]);
+  });
+});
+
+
+describe("next trigger mirrors core plan.rs (v0.8.9)", () => {
+  it("interval keeps the saved anchor instead of restarting from now after an unrelated edit", () => {
+    const task = createScheduledTask();
+    task.enabled = true;
+    task.trigger = { ...task.trigger, type: "interval", everySeconds: 60, repeatCount: 0 };
+    task.lastRunAt = "2030-01-01T08:00:20Z";
+    task.updatedAt = "2030-01-01T08:00:20Z";
+    task.nextRunAt = undefined;
+    const now = new Date("2030-01-01T08:00:50Z");
+    expect(nextRunInstant(task, now)?.toISOString()).toBe("2030-01-01T08:01:20.000Z");
+  });
+
+  it("condition waits for the larger of interval and cooldown", () => {
+    const task = createScheduledTask();
+    task.enabled = true;
+    task.trigger = {
+      ...task.trigger,
+      type: "condition",
+      everySeconds: 30,
+      cooldown: "5m",
+      probeCondition: { ...task.trigger.probeCondition, enabled: true, pattern: "READY" }
+    };
+    task.lastProbeAt = "2030-01-01T08:00:00Z";
+    task.lastRunAt = "2030-01-01T08:00:10Z";
+    const next = nextRunInstant(task, new Date("2030-01-01T08:00:20Z"));
+    expect(next?.toISOString()).toBe("2030-01-01T08:05:10.000Z");
+  });
+
+  it("disabled and exhausted schedules have no next trigger", () => {
+    const once = createScheduledTask();
+    once.enabled = true;
+    once.trigger = { ...once.trigger, type: "once", runAt: "2030-01-01T09:00" };
+    once.runCount = 1;
+    expect(nextRunInstant(once, new Date("2030-01-01T08:00:00Z"))).toBeNull();
+    expect(nextRunPreview(once, new Date("2030-01-01T08:00:00Z"))).toBe("不会再次执行");
+    once.enabled = false;
+    expect(nextRunPreview(once, new Date("2030-01-01T08:00:00Z"))).toBe("未启用");
   });
 });

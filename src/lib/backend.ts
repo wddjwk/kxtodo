@@ -3,6 +3,7 @@ import { save, open } from "@tauri-apps/plugin-dialog";
 import { caps } from "./capabilities";
 import { externalLinkUrl, normalizeLinkMeta, type LinkMeta } from "./linkMeta";
 import { defaultSettings, emptySchedulerState, emptyState, normalizeDiaryEntries, normalizeSchedulerState, normalizeSettings, normalizeState } from "./defaults";
+import { androidToken } from "./androidBridge";
 import type { AppNotification, AppState, DiaryEntry, LedgerBook, SchedulerRuntimePaths, SchedulerState, Settings } from "./types";
 
 const stateKey = "todo-note-state-v3";
@@ -124,7 +125,7 @@ export async function exportData(payload: unknown, defaultName: string): Promise
     if (!bridge?.shareText) {
       throw new Error("当前 APK 不支持导出");
     }
-    const err = bridge.shareText(defaultName, "application/json", JSON.stringify(payload, null, 2));
+    const err = bridge.shareText(androidToken(), defaultName, "application/json", JSON.stringify(payload, null, 2));
     if (err) {
       throw new Error(err);
     }
@@ -196,7 +197,7 @@ export async function exportDiaryZip(range: DiaryExportRange): Promise<number> {
   if (!result.path) {
     throw new Error("导出没有产出文件");
   }
-  const error = bridge.shareFile(result.path, "application/zip");
+  const error = bridge.shareFile(androidToken(), result.path, "application/zip");
   if (error) {
     throw new Error(error);
   }
@@ -261,7 +262,7 @@ export async function exportLedgerZip(range: DiaryExportRange): Promise<number> 
   if (!result.path) {
     throw new Error("导出没有产出文件");
   }
-  const error = bridge.shareFile(result.path, "application/zip");
+  const error = bridge.shareFile(androidToken(), result.path, "application/zip");
   if (error) {
     throw new Error(error);
   }
@@ -324,7 +325,7 @@ export async function exportCardsZip(nodeId: string): Promise<number> {
   if (!result.path) {
     throw new Error("导出没有产出文件");
   }
-  const error = bridge.shareFile(result.path, "application/zip");
+  const error = bridge.shareFile(androidToken(), result.path, "application/zip");
   if (error) {
     throw new Error(error);
   }
@@ -553,6 +554,57 @@ export async function listenTransfer(handler: (payload: TransferEvent) => void):
   return listen<TransferEvent>("kxtodo://transfer", (event) => handler(event.payload));
 }
 
+// ---------------------------------------------------------------------------
+// 剪切板同步（v0.8.9）
+// ---------------------------------------------------------------------------
+
+export type ClipboardPeer = {
+  id: string;
+  name: string;
+  transports: string[];
+  preferred: string;
+  online: boolean;
+};
+
+export type ClipboardStatus = {
+  running: boolean;
+  enabled: boolean;
+  codeReady: boolean;
+  deviceId: string;
+  deviceName: string;
+  port: number;
+  discoveryPort: number;
+  localAddresses: string[];
+  transports: { direct: boolean; lan: boolean; p2p: boolean };
+  peers: ClipboardPeer[];
+  lastError: string;
+  lastEvent: { at: string; kind: string; detail: string; peer: string } | null;
+  sent: number;
+  received: number;
+  saveDir: string;
+};
+
+export type ClipboardRemoteContent = {
+  text: string;
+  html: string;
+  imagePath: string | null;
+  files: Array<{ name: string; path: string | null }>;
+};
+
+export type ClipboardEvent =
+  | { kind: "status"; status: ClipboardStatus }
+  | { kind: "remote"; content: ClipboardRemoteContent; peer: string };
+
+export const clipboardStatus = (): Promise<ClipboardStatus> => invoke("clipboard_status");
+export const clipboardDefaultDir = (): Promise<string | null> => invoke("clipboard_default_dir");
+/** 移动端前台读到的剪切板（图片/文件已经由 Kotlin 桥落到缓存目录）。 */
+export const clipboardLocalChanged = (content: unknown): Promise<unknown> =>
+  invoke("clipboard_local_changed", { content });
+export async function listenClipboard(handler: (payload: ClipboardEvent) => void): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<ClipboardEvent>("kxtodo://clipboard", (event) => handler(event.payload));
+}
+
 export async function resolveExecutablePath(name: string): Promise<string | null> {
   if (!isTauriRuntime || !caps.desktop || !name.trim()) {
     return null;
@@ -775,33 +827,17 @@ export async function openExternalUrl(rawUrl: string): Promise<void> {
   window.open(url.href, "_blank", "noopener,noreferrer");
 }
 
-/** The single opening path for cards, editors, global requests and search results. */
+/** The single opening path for cards, editors, global requests and search results.
+ *
+ * 应用内打开一律走主窗口里的 iframe 覆盖层（v0.8.9 回退 v0.8.8 的原生窗口/Custom Tabs）：
+ * 桌面与 Android 都必须在同一个窗口内打开，且窗口切换会打断阅读上下文。Workspace
+ * 负责渲染覆盖层、关闭按钮与返回键；这里只派发一个事件。
+ */
 export async function openLink(rawUrl: string, mode: "app" | "system", title = ""): Promise<void> {
   if (mode === "system" || /^mailto:/i.test(rawUrl)) return openExternalUrl(rawUrl);
   const url = externalLinkUrl(rawUrl);
   if (!url) throw new Error("只支持外部 http/https 链接");
-  if (!isTauriRuntime) {
-    // Workspace owns the browser-dev-only iframe, not a native application window.
-    window.dispatchEvent(new CustomEvent("kxtodo-preview-link", { detail: { url, title } }));
-    return;
-  }
-  if (caps.linkPreview === "custom-tabs") {
-    const bridge = window.kxtodoAndroid as (typeof window.kxtodoAndroid & {
-      openCustomTab?: (url: string) => string;
-    });
-    try {
-      if (bridge?.openCustomTab && bridge.openCustomTab(url) === "") return;
-    } catch {
-      // Missing Custom Tabs provider/bridge: use the system, never navigate the main WebView.
-    }
-    return openExternalUrl(url);
-  }
-  try {
-    await invoke("open_link_preview", { url, title: title.slice(0, 200) });
-  } catch {
-    // A missing/broken webview runtime must not strand the user with an inert link.
-    await openExternalUrl(url);
-  }
+  window.dispatchEvent(new CustomEvent("kxtodo-preview-link", { detail: { url, title } }));
 }
 
 export async function renderedLinkMeta(url: string): Promise<LinkMeta | null> {

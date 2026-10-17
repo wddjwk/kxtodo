@@ -1,7 +1,10 @@
 //! gui namespace: GUI-sourced business writes (§4.3; internal, not a CLI surface).
 //!
-//! **这些命令一律不发域事件**（没有 `notify_host`）：调用方只有 GUI 桥，而前端在
-//! `actions.ts` 里是「先乐观更新 store、再 dispatch」，事件只会换来一次多余的全量快照往返。
+//! **除 `clipboard-configure` 外，这些命令一律不发域事件**（没有 `notify_host`）：
+//! 调用方只有 GUI 桥，而前端在 `actions.ts` 里是「先乐观更新 store、再 dispatch」，
+//! 事件只会换来一次多余的全量快照往返。`clipboard-configure` 是设置类业务写：
+//! 后台剪切板服务必须靠 Settings 域事件启停，所以它显式 notify_host；前端用
+//! `noteEnvelopeRevision` 把随后的快照往返挡在 revision 水位之外。
 //! 纯 UI 状态写（select-node / set-collapsed / set-*-ui）另外还不进审计流，见
 //! `Repository::audit` 的 UI_ONLY_COMMANDS。**若将来把 gui.* 开放给 CLI 或出现第二个
 //! 消费者，必须给 apply-tree-order 与 import-state 这两个实质业务写补 `notify_host`**，
@@ -12,7 +15,7 @@ use serde_json::{json, Value};
 use crate::core::{ExecContext, Invocation};
 use crate::envelope::Meta;
 use crate::error::{CoreError, CoreResult};
-use crate::model::{DataFile, NodeKind, SYSTEM_NODE_IDS};
+use crate::model::{ClipboardSettings, DataFile, NodeKind, SYSTEM_NODE_IDS};
 use crate::ops_task as task_ops;
 use crate::repo::Domain;
 
@@ -65,6 +68,51 @@ pub fn gui_dispatch(
             meta.revision_domain = Some(Domain::Data);
             meta.revision = Some(outcome.revision);
             Ok(json!({ "id": id, "collapsed": collapsed }))
+        }
+        "set-all-collapsed" => {
+            let collapsed = inv
+                .params
+                .get("collapsed")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| CoreError::validation("MISSING_PARAM", "缺少 collapsed"))?;
+            let (_file, outcome) = ctx.repo.write_data(None, None, &inv.command, |file| {
+                let mut changed = 0usize;
+                for node in file.nodes.iter_mut() {
+                    if node.kind == NodeKind::Category && node.collapsed != Some(collapsed) {
+                        node.collapsed = Some(collapsed);
+                        changed += 1;
+                    }
+                }
+                Ok(json!({ "collapsed": collapsed, "changed": changed }))
+            })?;
+            meta.revision_domain = Some(Domain::Data);
+            meta.revision = Some(outcome.revision);
+            Ok(json!({ "collapsed": collapsed }))
+        }
+        // 剪切板设置整份写入：一次保存只触发一次 Settings 域事件，
+        // 否则逐字段 config.set 会让后台服务反复重启（每个字段一次）。
+        "clipboard-configure" => {
+            let raw = inv
+                .params
+                .get("settings")
+                .cloned()
+                .ok_or_else(|| CoreError::validation("MISSING_PARAM", "缺少 settings"))?;
+            let parsed: ClipboardSettings = serde_json::from_value(raw)
+                .map_err(|error| CoreError::validation("INVALID_CONFIG_VALUE", format!("剪切板设置格式不正确：{error}")))?;
+            let normalized = crate::clipboard_sync::normalize_settings(&parsed)?;
+            let (_file, outcome) = ctx.repo.write_settings(
+                inv.controls.if_revision,
+                inv.controls.idempotency_key.as_deref(),
+                &inv.command,
+                |file| {
+                    file.clipboard = normalized.clone();
+                    Ok(json!({ "clipboard": normalized }))
+                },
+            )?;
+            crate::core::notify_host(ctx, Domain::Settings, outcome.revision, vec!["clipboard".to_string()]);
+            meta.revision_domain = Some(Domain::Settings);
+            meta.revision = Some(outcome.revision);
+            Ok(json!({ "revision": outcome.revision }))
         }
         "set-item-ui" => {
             let id = required_str(&inv.params, "id")?;

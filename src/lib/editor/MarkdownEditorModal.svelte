@@ -373,6 +373,13 @@
     }
   }
 
+  /** 桌面右击仍不弹浏览器原生菜单；移动端必须放行长按菜单（复制/剪切/全选/粘贴）。
+   *  v0.8.8 之前整块 `preventDefault` 连安卓系统的文本操作菜单一起吞掉了。 */
+  function handleOverlayContext(event: MouseEvent): void {
+    event.stopPropagation();
+    if (!$isMobile) event.preventDefault();
+  }
+
   function handleBackdropPointerDown(event: PointerEvent): void {
     if (event.target !== event.currentTarget) return;
     // 浮层马上就拆掉，触屏补发的那一下 click 会落到下面的卡片上（见 ghostClick.ts）
@@ -424,7 +431,7 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="editor-overlay" use:imeInset on:pointerdown={handleBackdropPointerDown} on:contextmenu|preventDefault|stopPropagation>
+<div class="editor-overlay" use:imeInset on:pointerdown={handleBackdropPointerDown} on:contextmenu={handleOverlayContext}>
   <div class="editor-dialog" style={editorSizeStyle} role="dialog" aria-label={draftMode ? "新建事项" : "编辑任务"} tabindex="-1" on:pointerdown|stopPropagation on:click|stopPropagation>
     <header class="editor-header">
       <div class="editor-mode-switch" role="tablist" data-mode={mode}>

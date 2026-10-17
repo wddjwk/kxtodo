@@ -335,3 +335,18 @@ v0.8.0 起的几条补充（来龙去脉在 `history/v0.8.md` 批次 1）：
 - 「**工具箱的外观分两层**：主界面（`toolbox.accent` / `toolbox.backgroundColor`）+ 每个工具子页自己的（`toolbox.toolAccents` / `toolbox.toolBackgrounds`，键按 `NAV_TOOL_IDS` 白名单校验）。工具没配过就跟主界面——「单独调」与「一次调好」两种用法都成立；取色预览的作用域按路由分（`toolbox` / `toolbox:<工具id>`）」——`history/v0.8.7.md` 八.2
 - 「**菜单里的勾选要住最左侧的定宽槽位**（`MenuItem` 的 `checkable`）：勾在行尾时「选中项一换、最宽的那一项跟着换」，菜单宽度会跳（用户明确要求「点不同项宽度不变」）。同类菜单一起挂（排序方式/移动到分组/卡片类型/改账户/计划内分组/relay）」——`history/v0.8.7.md` 八.3
 - 「**菜单「配置在上 → 分割线 → UI颜色 / 背景颜色在下」是全应用统一结构**（ListMenu 与工具箱 ⋯ 菜单逐字一致）；段落标题就叫「UI颜色」，别再出现「主题颜色」这种第二种叫法」——`history/v0.8.7.md` 八.1
+
+### v0.8.9 新增
+
+- 「**剪切板同步不保存内容**：文字 / HTML / 图片只在内存与网络里过一手；只有收到的**文件**必须写到保存目录（系统剪贴板要引用本地文件）。设备身份用持久化的 iroh 密钥（`deviceId = EndpointId.to_z32()`），三路共用；**不要拿设备名当身份**（重名很常见）」——`clipboard_sync.rs` + `history/v0.8.9.md` 一
+- 「**三种线路按 直接 IP → 局域网 → P2P 逐条降级，同一台设备只发一次**：发送端按 `deviceId` 合并 LAN/P2P/直接 IP（完全相同的地址先合并），接收端再按消息 id 去重 5 分钟兜底；`receive_clipboard` 必须先占位再读、失败撤回占位，否则两条线路并发到达会各写一遍」——同上
+- 「**剪切板 P2P 的 ALPN / 房间前缀必须独立**（`kxtodo-clipboard/1`、`kxtodo-clipboard/v1/room/`）：同一 iroh 端点上 ALPN 是唯一路由依据，复用同步/传输的 ALPN 会被对方的 accept 循环抢走；LAN 载荷必须用口令派生密钥加密（ChaCha20-Poly1305），**不提供明文回退**」——同上
+- 「**Android 10+ 只有前台能读剪贴板**：只在 `onResume` 注册 `OnPrimaryClipChangedListener`、`onPause` 注销；变化只发事件，由 Kotlin 桥读内容后调用 `clipboard_local_changed`；首次读取只建基线不发送（可能是后台时复制的旧内容）。**不要**在安卓上后台轮询」——`MainActivity.kt` + `clipboardSyncStore.ts` + 同上
+- 「**`addJavascriptInterface` 注入所有 iframe**：应用内预览外部网页时远端页面也能摸到 `window.kxtodoAndroid`。桥的每个方法都必须要求 MainActivity 只写进主 frame 的随机 token；剪切板/分享/装 APK 全部走 token 校验」——`ApkBridge.kt` + `MainActivity.kt` + 同上 二
+- 「**应用内打开必须同窗口 iframe**：`sandbox` 不含 `allow-popups`；桌面与安卓同一份覆盖层。整页覆盖（日记/记账/工具箱）时 `coveredByFullPage` 要因 `linkPreviewUrl` 解除 `inert`，覆盖层显式 `visibility:visible`，否则预览在 DOM 里却看不见/点不动」——`Workspace.svelte` + 同上 二
+- 「**移动端编辑器不要自绘选区、不要拦 contextmenu**：`drawSelection()` 会隐藏原生选区，安卓长按只剩高亮、不弹复制/剪切/全选/粘贴；两个编辑器 overlay 的 contextmenu 在移动端必须放行（桌面才 preventDefault）」——`codemirrorSetup.ts` + 同上 三
+- 「**步骤折叠的判据必须与渲染默认值一致**：`steps[id]` 可能为空、渲染按 `?? 1` 打开第 1 步；`openStep` 也要用 `steps[id] ?? 1` 判断「再点当前步骤」，否则第一次点击被当成打开」——`ScheduledTasksView.svelte` + 同上 四
+- 「**下次触发要逐条照 core `plan.rs::compute_next_run`**：interval 用 lastRun/updatedAt/createdAt 锚点、condition 用 lastProbe+cooldown、calendar 用 Cron+时区、once 受 runCount、最后判 until；禁用时显示「未启用」，不要虚构 now+step。`lastProbeAt` 要从 core state 映射到 UI」——`scheduleEditor.ts` + 同上 四
+- 「**反缩放层必须绝对定位**（取色盘）：iro 的布局宽 = 宿主宽 × uiScale，留在文档流里会把 grid 轨道撑大；面板 `grid-template-columns: minmax(0,1fr)`，否则窄屏上 HEX/RGB/按钮一起溢出」——`colorpanel.css` + 同上 五
+- 「**侧栏展开/收起覆盖所有区域**：固定区每行、树行、树空白、资料卡/搜索框/分隔线都要有；「添加固定」是草稿（勾选只改副本、确认才写 `appearance.navItems`），工具箱子工具与工具箱本身分开（`toolbox` vs `tool:<id>`）。三级子菜单的「返回」按**深度快照**逐级退，并让 MenuItem 的全局捕获点击监听避开 `.submenu-back`（capture 先于 goBack 会一次退光）」——`Sidebar.svelte` + `MenuItem.svelte` + `submenu.ts` + 同上 六
+- 「**报表统计的默认粒度只看顶部周期**（周/月→日、年→月、总→年、自定义按跨度），不能依赖 entries——否则每次记账写入都会把用户手选的粒度顶回去；结余是期间净额（收入 − 支出），转账不计入」——`ledger.ts::reportGrainFor/reportRows` + 同上 七

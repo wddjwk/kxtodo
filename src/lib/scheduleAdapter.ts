@@ -8,6 +8,7 @@ export type ScheduleEntryV9 = {
   spec: any;
   state: {
     runCount: number; running?: boolean; lastRunAt?: string; nextRunAt?: string;
+    lastProbe?: { at?: string };
     lastStatus: ScheduledTask["lastStatus"]; lastExitCode?: number | null;
     lastStdout?: string; lastStderr?: string;
   };
@@ -127,7 +128,8 @@ export function entryToUi(entry: ScheduleEntryV9): ScheduledTask {
       probeAction: spec.gate.probe ? actionToUi(spec.gate.probe, true) : undefined,
       condition: spec.gate.when ? matchToCondition(spec.gate.when) : undefined
     } : undefined,
-    runCount: entry.state?.runCount ?? 0, lastRunAt: entry.state?.lastRunAt, nextRunAt: entry.state?.nextRunAt,
+    runCount: entry.state?.runCount ?? 0, lastRunAt: entry.state?.lastRunAt,
+    lastProbeAt: entry.state?.lastProbe?.at, nextRunAt: entry.state?.nextRunAt,
     lastStatus: entry.state?.lastStatus ?? "idle", lastExitCode: entry.state?.lastExitCode,
     lastStdout: entry.state?.lastStdout ?? "", lastStderr: entry.state?.lastStderr ?? "",
     createdAt: entry.createdAt, updatedAt: entry.updatedAt

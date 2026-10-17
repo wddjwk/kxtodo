@@ -922,6 +922,8 @@ pub struct SettingsFile {
     #[serde(default)]
     pub transfer: TransferSettings,
     #[serde(default)]
+    pub clipboard: ClipboardSettings,
+    #[serde(default)]
     pub updates: UpdateSettings,
     #[serde(default)]
     pub features: FeatureSettings,
@@ -1154,7 +1156,7 @@ pub const NAV_ITEM_IDS: [&str; 7] = [
 /// 与前端 `src/lib/tools/catalog.ts` 的 `TOOL_CATALOG` 是同一份清单的两份拷贝
 /// （core 要在 config.set 时挡住拼错的 id，而它不 import 前端）——
 /// 有 `nav_tool_ids_match_frontend_catalog` 测试用 include_str! 钉住两边。
-pub const NAV_TOOL_IDS: [&str; 4] = ["random", "rmb", "scratchpad", "transfer"];
+pub const NAV_TOOL_IDS: [&str; 5] = ["random", "rmb", "scratchpad", "transfer", "clipboard"];
 
 /// navItems 里工具行的前缀
 pub const NAV_TOOL_PREFIX: &str = "tool:";
@@ -1524,6 +1526,117 @@ impl Default for TransferSettings {
             relay: default_transfer_relay(),
             device_name: String::new(),
             auto_accept: false,
+        }
+    }
+}
+
+/// 剪切板同步（v0.8.9）的本机设置。
+///
+/// 与传输/同步账户都无关：三台设备凭同一句「同步口令」在同一张局域网/同一个 P2P
+/// 房间里互认。**所有字段都不进设置同步**——IP、保存目录、启停开关本来就是每台机器
+/// 自己的事；把 A 的保存目录同步给 B 只会让文件落到错误的位置。
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ClipboardSettings {
+    /// 总开关：关掉后本机不再监听连接，也不再接受/写入远端剪切板。
+    #[serde(default)]
+    pub enabled: bool,
+    /// 同步口令（≥8 位）：局域网发现、直接 IP、P2P 三种方式共用同一把钥匙。
+    /// 空 = 还没配对，网络层不启动（不会退回明文）。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub code: String,
+    /// 本机在设备列表里的名字；空 = KXToDo·平台。
+    #[serde(rename = "deviceName", default, skip_serializing_if = "String::is_empty")]
+    pub device_name: String,
+    /// 直接 IP：填了就优先走它（仍要求同步口令一致）。
+    #[serde(rename = "directEnabled", default)]
+    pub direct_enabled: bool,
+    /// 一行一个 `ip` 或 `ip:port`；没写端口时用默认的 LAN 端口。
+    #[serde(rename = "directAddresses", default, skip_serializing_if = "String::is_empty")]
+    pub direct_addresses: String,
+    /// 局域网 UDP 广播发现（默认开）。
+    #[serde(rename = "lanEnabled", default = "default_true")]
+    pub lan_enabled: bool,
+    /// iroh P2P（走 transfer.relay / sync.p2pRelay 的 relay 与 pkarr 目录）。
+    #[serde(rename = "p2pEnabled", default)]
+    pub p2p_enabled: bool,
+    /// 接受的内容类型（默认全开）。
+    #[serde(default)]
+    pub types: ClipboardAcceptTypes,
+    /// 各类内容的大小上限（MB）。
+    #[serde(default)]
+    pub limits: ClipboardLimits,
+    /// 收到文件时落盘的位置；空 = 宿主下载目录下的 kxtodo-clipboard。
+    #[serde(rename = "saveDir", default, skip_serializing_if = "String::is_empty")]
+    pub save_dir: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ClipboardAcceptTypes {
+    #[serde(default = "default_true")]
+    pub text: bool,
+    #[serde(default = "default_true")]
+    pub html: bool,
+    #[serde(default = "default_true")]
+    pub image: bool,
+    #[serde(default = "default_true")]
+    pub files: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ClipboardLimits {
+    #[serde(rename = "textMb", default = "default_clipboard_text_mb")]
+    pub text_mb: u32,
+    #[serde(rename = "htmlMb", default = "default_clipboard_html_mb")]
+    pub html_mb: u32,
+    #[serde(rename = "imageMb", default = "default_clipboard_image_mb")]
+    pub image_mb: u32,
+    #[serde(rename = "filesMb", default = "default_clipboard_files_mb")]
+    pub files_mb: u32,
+}
+
+fn default_clipboard_text_mb() -> u32 {
+    1
+}
+fn default_clipboard_html_mb() -> u32 {
+    2
+}
+fn default_clipboard_image_mb() -> u32 {
+    10
+}
+fn default_clipboard_files_mb() -> u32 {
+    100
+}
+
+impl Default for ClipboardAcceptTypes {
+    fn default() -> Self {
+        Self { text: true, html: true, image: true, files: true }
+    }
+}
+
+impl Default for ClipboardLimits {
+    fn default() -> Self {
+        Self {
+            text_mb: default_clipboard_text_mb(),
+            html_mb: default_clipboard_html_mb(),
+            image_mb: default_clipboard_image_mb(),
+            files_mb: default_clipboard_files_mb(),
+        }
+    }
+}
+
+impl Default for ClipboardSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            code: String::new(),
+            device_name: String::new(),
+            direct_enabled: false,
+            direct_addresses: String::new(),
+            lan_enabled: true,
+            p2p_enabled: false,
+            types: ClipboardAcceptTypes::default(),
+            limits: ClipboardLimits::default(),
+            save_dir: String::new(),
         }
     }
 }

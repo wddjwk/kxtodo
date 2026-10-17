@@ -64,23 +64,6 @@ pub fn without_remote_link_ipc(
 }
 
 #[tauri::command]
-pub async fn open_link_preview(
-    app: AppHandle,
-    url: String,
-    title: Option<String>,
-) -> Result<(), String> {
-    #[cfg(desktop)]
-    {
-        desktop::open(app, url, title.unwrap_or_default()).await
-    }
-    #[cfg(not(desktop))]
-    {
-        let _ = (app, url, title);
-        Err("此平台使用系统浏览器/Custom Tabs".into())
-    }
-}
-
-#[tauri::command]
 pub async fn extract_link_meta(app: AppHandle, url: String) -> Result<LinkMeta, String> {
     #[cfg(desktop)]
     {
@@ -107,10 +90,8 @@ mod desktop {
         webview::{NewWindowResponse, PageLoadEvent},
         Manager, Url, WebviewUrl, WebviewWindowBuilder,
     };
-    use tauri_plugin_opener::OpenerExt;
     use tokio::time::{timeout_at, Instant};
 
-    const PREVIEW: &str = "link-preview";
     const PREFIX: &str = "KXLM:";
     const DEADLINE: Duration = Duration::from_secs(12);
 
@@ -141,83 +122,6 @@ mod desktop {
                 && self.app_origin.as_ref() != Some(&origin)
                 && self.dev_origin.as_ref() != Some(&origin)
         }
-    }
-
-    fn window_title(title: &str) -> String {
-        title
-            .chars()
-            .filter(|c| !c.is_control())
-            .take(200)
-            .collect::<String>()
-            .trim()
-            .to_owned()
-    }
-
-    pub async fn open(app: AppHandle, url: String, title: String) -> Result<(), String> {
-        let url = external_url(&url).map_err(|e| e.to_string())?;
-        let (tx, mut rx) = tauri::async_runtime::channel(1);
-        let handle = app.clone();
-        // An async command must schedule construction on the UI thread; never block that thread
-        // waiting for its own run_on_main_thread closure (WebView2/GTK construction can deadlock).
-        app.run_on_main_thread(move || {
-            let result = (|| -> Result<(), String> {
-                let policy = NavigationPolicy::new(&handle);
-                if !policy.allows(&url) {
-                    return Err("不允许打开应用本地地址".into());
-                }
-                let title = window_title(&title);
-                let title = if title.is_empty() {
-                    url.host_str().unwrap_or("链接预览").to_owned()
-                } else {
-                    title
-                };
-                if let Some(window) = handle.get_webview_window(PREVIEW) {
-                    // Typed navigation avoids interpolating URL text into JavaScript.
-                    window.navigate(url).map_err(|e| e.to_string())?;
-                    window.set_title(&title).map_err(|e| e.to_string())?;
-                    window.show().map_err(|e| e.to_string())?;
-                    window.unminimize().map_err(|e| e.to_string())?;
-                    return window.set_focus().map_err(|e| e.to_string());
-                }
-                let popup_app = handle.clone();
-                let popup_policy = policy.clone();
-                WebviewWindowBuilder::new(&handle, PREVIEW, WebviewUrl::External(url))
-                    .title(&title)
-                    .inner_size(1080.0, 780.0)
-                    .center()
-                    .disable_drag_drop_handler()
-                    // This hook only serves the local tauri protocol, not external web responses.
-                    .on_web_resource_request(|_, response| {
-                        *response.status_mut() = tauri::http::StatusCode::FORBIDDEN;
-                        *response.body_mut() = std::borrow::Cow::Borrowed(&[]);
-                    })
-                    .on_navigation(move |url| policy.allows(url))
-                    .on_document_title_changed(|window, title| {
-                        let title = window_title(&title);
-                        if !title.is_empty() {
-                            let _ = window.set_title(&title);
-                        }
-                    })
-                    .on_new_window(move |url, _| {
-                        // No child remote WebView may escape the navigation guard/capability boundary.
-                        if popup_policy.allows(&url) {
-                            let app = popup_app.clone();
-                            tauri::async_runtime::spawn_blocking(move || {
-                                let _ = app.opener().open_url(url.as_str(), None::<&str>);
-                            });
-                        }
-                        NewWindowResponse::Deny
-                    })
-                    .build()
-                    .map_err(|e| e.to_string())?;
-                Ok(())
-            })();
-            let _ = tx.try_send(result);
-        })
-        .map_err(|e| e.to_string())?;
-        rx.recv()
-            .await
-            .ok_or_else(|| "链接窗口创建已取消".to_owned())?
     }
 
     type MetaResult = Result<LinkMeta, String>;

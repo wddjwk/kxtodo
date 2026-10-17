@@ -68,3 +68,9 @@ kxtodo.exe (GUI)                    kxtodo-cli (CLI)
     主机库丢了由设备重新播种（/healthz 的 instanceId 变化触发全量重对账）
     局域网发现：固定 UDP 52177 收广播/组播查询 → 单播应答 --name + 真实 TCP 端口
 ```
+
+## v0.8.9 运行时文件与后台服务
+
+- `runtime/clipboard-identity.json`：剪切板同步的稳定 iroh 私钥（hex），`deviceId = EndpointId.to_z32()`。
+- `runtime/clipboard-inbox/`：安卓端收到图片后写给 Kotlin 桥的缓存（24h 清理）。
+- `HostCore::reconcile_clipboard_sync`：启动与 Settings 域事件时按 `settings.clipboard` 启停 `clipboard_sync` 服务；服务自己持有 2 线程 tokio 运行时、UDP/TCP 监听、iroh 端点与桌面轮询线程。设置全部本机偏好，不进同步共享子集。

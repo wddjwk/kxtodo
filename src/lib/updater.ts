@@ -15,6 +15,7 @@ import { listen } from "@tauri-apps/api/event";
 import { isTauriRuntime } from "./backend";
 import { caps } from "./capabilities";
 import { hostOs } from "./platform";
+import { androidToken } from "./androidBridge";
 
 const RELEASE_API = "https://api.github.com/repos/wddjwk/kxtodo/releases/latest";
 const FETCH_TIMEOUT_MS = 15_000;
@@ -87,7 +88,7 @@ if (isTauriRuntime) {
       // 移动端：APK 已落盘，交给 Kotlin 桥拉起 PackageInstaller。
       const bridge = window.kxtodoAndroid;
       if (bridge?.installApk) {
-        const err = bridge.installApk(path);
+        const err = bridge.installApk(androidToken(), path);
         if (err) {
           updateProgress.set({ phase: "failed", stage: "", percent: 0, message: err });
           return;

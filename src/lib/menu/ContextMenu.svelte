@@ -31,17 +31,21 @@
   let minWidthPx = minWidth;
   let maxWidthPx = 0;
   let ready = false;
-  let lastSubOpen = false;
+  let lastSubCount = -1;
 
   /** 有子菜单打开着：移动端据此把菜单变成钻入式（一级隐藏，二级占据菜单位置） */
   $: subOpen = $openSubmenus > 0;
+  /** 二级里又开了三级（「添加固定 → 工具箱内的工具」）：移动端只显示最深的这一层。 */
+  $: subDeep = $openSubmenus > 1;
   // isMobile 是 store：当布尔直接用会永远为真，桌面端就会误走移动端的钻入式菜单
   $: mobile = $isMobileStore;
   // 子菜单开合后菜单的尺寸完全变了（移动端一级被藏起来、二级顶上来），
   // 原来收敛好的位置可能已经超出屏幕，必须重新量一次。桌面端子菜单是绝对定位的
   // 浮出面板，不改变根菜单尺寸，不必重排。
-  $: if (subOpen !== lastSubOpen) {
-    lastSubOpen = subOpen;
+  // **按层数比较，不是按布尔**：二级 → 三级时布尔仍是 true，旧写法会漏掉重排，
+  // 嵌套面板把菜单撑出屏幕（v0.8.9 侧栏「添加固定」踩到）。
+  $: if ($openSubmenus !== lastSubCount) {
+    lastSubCount = $openSubmenus;
     if (mobile) void layout();
   }
 
@@ -245,6 +249,7 @@
   class="context-menu"
   class:capped={maxHeight > 0}
   class:sub-open={subOpen && mobile}
+  class:sub-deep={subDeep && mobile}
   role="menu"
   tabindex="-1"
   style={`left: ${left}px; top: ${top}px; min-width: ${minWidthPx}px;${maxWidthPx ? ` max-width: ${maxWidthPx}px;` : ""}${maxHeight ? ` max-height: ${maxHeight}px; overflow-y: auto;` : ""} visibility: ${ready ? "visible" : "hidden"};`}

@@ -162,6 +162,18 @@ export const defaultSettings: Settings = {
     deviceName: "",
     autoAccept: false
   },
+  clipboard: {
+    enabled: false,
+    code: "",
+    deviceName: "",
+    directEnabled: false,
+    directAddresses: "",
+    lanEnabled: true,
+    p2pEnabled: false,
+    types: { text: true, html: true, image: true, files: true },
+    limits: { textMb: 1, htmlMb: 2, imageMb: 10, filesMb: 100 },
+    saveDir: ""
+  },
   updates: {
     autoCheck: true
   },
@@ -684,6 +696,7 @@ function normalizeScheduledTask(raw: unknown): ScheduledTask | null {
     } : undefined,
     runCount: normalizeNonNegativeInteger(source.runCount, 0, 1_000_000),
     lastRunAt: typeof source.lastRunAt === "string" ? source.lastRunAt : undefined,
+    lastProbeAt: typeof source.lastProbeAt === "string" ? source.lastProbeAt : undefined,
     nextRunAt: typeof source.nextRunAt === "string" ? source.nextRunAt : undefined,
     lastStatus:
       source.lastStatus === "running" || source.lastStatus === "success" || source.lastStatus === "failed" || source.lastStatus === "stopped"
@@ -1261,6 +1274,28 @@ export function normalizeSettings(raw: unknown): Settings {
       relay: typeof source?.transfer?.relay === "string" ? source.transfer.relay : "default",
       deviceName: typeof source?.transfer?.deviceName === "string" ? source.transfer.deviceName : "",
       autoAccept: typeof source?.transfer?.autoAccept === "boolean" ? source.transfer.autoAccept : false,
+    },
+    clipboard: {
+      enabled: typeof source?.clipboard?.enabled === "boolean" ? source.clipboard.enabled : false,
+      code: typeof source?.clipboard?.code === "string" ? source.clipboard.code.trim() : "",
+      deviceName: typeof source?.clipboard?.deviceName === "string" ? source.clipboard.deviceName.trim() : "",
+      directEnabled: typeof source?.clipboard?.directEnabled === "boolean" ? source.clipboard.directEnabled : false,
+      directAddresses: typeof source?.clipboard?.directAddresses === "string" ? source.clipboard.directAddresses : "",
+      lanEnabled: typeof source?.clipboard?.lanEnabled === "boolean" ? source.clipboard.lanEnabled : true,
+      p2pEnabled: typeof source?.clipboard?.p2pEnabled === "boolean" ? source.clipboard.p2pEnabled : false,
+      types: {
+        text: typeof source?.clipboard?.types?.text === "boolean" ? source.clipboard.types.text : true,
+        html: typeof source?.clipboard?.types?.html === "boolean" ? source.clipboard.types.html : true,
+        image: typeof source?.clipboard?.types?.image === "boolean" ? source.clipboard.types.image : true,
+        files: typeof source?.clipboard?.types?.files === "boolean" ? source.clipboard.types.files : true
+      },
+      limits: {
+        textMb: normalizePositiveInteger(source?.clipboard?.limits?.textMb, 1, 1, 64),
+        htmlMb: normalizePositiveInteger(source?.clipboard?.limits?.htmlMb, 2, 1, 64),
+        imageMb: normalizePositiveInteger(source?.clipboard?.limits?.imageMb, 10, 1, 256),
+        filesMb: normalizePositiveInteger(source?.clipboard?.limits?.filesMb, 100, 1, 1024)
+      },
+      saveDir: typeof source?.clipboard?.saveDir === "string" ? source.clipboard.saveDir : ""
     },
     updates: {
       autoCheck: typeof source?.updates?.autoCheck === "boolean" ? source.updates.autoCheck : true

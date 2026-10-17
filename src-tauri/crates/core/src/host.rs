@@ -106,6 +106,32 @@ pub trait HostBackend: Send + Sync {
         let _ = (data_dir, sync);
         Ok(())
     }
+
+    /// 桌面端能否直接读写系统剪切板。移动端返回 false：Android 10+ 只有前台能读，
+    /// 由 Kotlin 桥 + 前端在可见时调用 `clipboard_local_changed`，核心不轮询。
+    fn clipboard_available(&self) -> bool {
+        false
+    }
+
+    /// 读当前系统剪切板（没有内容时 Ok(None)）。桌面端每秒轮询一次。
+    fn clipboard_read(&self) -> CoreResult<Option<crate::clipboard_sync::ClipboardContent>> {
+        Ok(None)
+    }
+
+    /// 把远端内容写进系统剪切板（桌面端由核心直接调用；移动端走事件 + Kotlin 桥）。
+    fn clipboard_write(&self, content: &crate::clipboard_sync::ClipboardContent) -> CoreResult<()> {
+        let _ = content;
+        Err(CoreError::internal("当前平台不支持直接写系统剪切板"))
+    }
+
+    /// 新的剪切板轮询线程启动前清掉桌面端的「序号未变」缓存，保证第一轮能建基线。
+    fn clipboard_reset_cache(&self) {}
+
+
+    /// 收到文件时的默认保存目录；None = 由 core 回落到数据目录。
+    fn clipboard_default_dir(&self) -> Option<PathBuf> {
+        None
+    }
 }
 
 /// 启动 P2P 运行时需要的东西：账户密钥派生目录签名密钥，其余是可选的自部署覆盖。
@@ -132,7 +158,7 @@ pub struct HostCore {
     /// 该 Host 服务的数据目录是否为自定义目录（影响开机自启注册与 meta 提示）。
     pub custom_data_dir: bool,
     pub processes: crate::exec::ProcessRegistry,
-    pub backend: RwLock<Option<Box<dyn HostBackend>>>,
+    pub backend: RwLock<Option<Arc<dyn HostBackend>>>,
     pub mode: String,
     pub scheduler: RwLock<Option<SchedulerHandle>>,
     pub notifications: NotificationTracker,
@@ -162,7 +188,28 @@ impl HostCore {
 
     pub fn set_backend(&self, backend: Box<dyn HostBackend>) {
         if let Ok(mut slot) = self.backend.write() {
-            *slot = Some(backend);
+            *slot = Some(Arc::from(backend));
+        }
+    }
+
+    /// 宿主能力句柄：剪切板同步等后台服务需要长期持有 emit/剪切板读写，
+    /// 不能每次回来读 `backend` 锁（设置事件、退出路径会短暂写锁）。
+    pub fn backend_handle(&self) -> Option<Arc<dyn HostBackend>> {
+        self.backend.read().ok().and_then(|slot| slot.clone())
+    }
+
+    /// 按设置启停剪切板同步。与 `reconcile_sync_host` 同一套路：设置在哪儿改的
+    /// 都经 Settings 域事件走到这里；服务自己持有后台线程与网络任务。
+    pub fn reconcile_clipboard_sync(&self) {
+        let Ok(settings) = self.repo.load_settings() else {
+            return;
+        };
+        if let Err(error) = crate::clipboard_sync::reconcile(
+            &self.repo.layout,
+            &settings,
+            self.backend_handle(),
+        ) {
+            crate::sync::engine::debug_log(format!("clipboard sync reconcile failed: {}", error.message));
         }
     }
 
@@ -279,7 +326,10 @@ impl HostCore {
         match domain {
             Domain::Schedule => self.notify_scheduler_reload(),
             // 设置里带着「本机作为服务器」的开关与主机名/端口：变了就要启停内置服务器
-            Domain::Settings => self.reconcile_sync_host(),
+            Domain::Settings => {
+                self.reconcile_sync_host();
+                self.reconcile_clipboard_sync();
+            }
             Domain::Data => {}
             // 日记没有宿主侧副作用：事件只是让 GUI 回刷快照
             Domain::Diary => {}
