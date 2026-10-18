@@ -584,39 +584,45 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         is_map: false,
     },
     FieldMeta {
-        path: "clipboard.code",
-        kind: "string",
-        description: "剪切板同步口令（≥8 位；LAN / 直接 IP / P2P 共用；空 = 未配对）",
-        is_map: false,
-    },
-    FieldMeta {
         path: "clipboard.deviceName",
         kind: "string",
-        description: "剪切板同步：本机设备名（空 = KXToDo·平台）",
-        is_map: false,
-    },
-    FieldMeta {
-        path: "clipboard.directEnabled",
-        kind: "bool",
-        description: "剪切板同步：直接 IP 方式开关（优先级最高）",
-        is_map: false,
-    },
-    FieldMeta {
-        path: "clipboard.directAddresses",
-        kind: "string",
-        description: "剪切板同步：直接 IP 列表（一行一个 ip 或 ip:port）",
+        description: "剪切板同步：设备名自定义前缀（空 = kxtodo；显示名追加 ·平台）",
         is_map: false,
     },
     FieldMeta {
         path: "clipboard.lanEnabled",
         kind: "bool",
-        description: "剪切板同步：局域网 UDP 广播发现开关",
+        description: "剪切板同步：局域网广播发现开关",
         is_map: false,
     },
     FieldMeta {
-        path: "clipboard.p2pEnabled",
+        path: "clipboard.serverEnabled",
         kind: "bool",
-        description: "剪切板同步：iroh P2P 开关（relay 与目录沿用传输/同步配置）",
+        description: "剪切板同步：统一服务器发现开关",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "clipboard.wanP2pEnabled",
+        kind: "bool",
+        description: "剪切板同步：P2P 账户房间发现开关（relay 与目录沿用传输/同步配置）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "clipboard.serverUrl",
+        kind: "string",
+        description: "剪切板同步：统一服务器地址（可省略 http:// 与端口）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "clipboard.account",
+        kind: "string",
+        description: "剪切板同步：广域网账户名（统一服务器与 P2P 共用）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "clipboard.password",
+        kind: "string",
+        description: "剪切板同步：广域网密码（只存本机）",
         is_map: false,
     },
     FieldMeta {
@@ -769,12 +775,13 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "transfer.deviceName" => json!(settings.transfer.device_name),
         "transfer.autoAccept" => json!(settings.transfer.auto_accept),
         "clipboard.enabled" => json!(settings.clipboard.enabled),
-        "clipboard.code" => json!(settings.clipboard.code),
         "clipboard.deviceName" => json!(settings.clipboard.device_name),
-        "clipboard.directEnabled" => json!(settings.clipboard.direct_enabled),
-        "clipboard.directAddresses" => json!(settings.clipboard.direct_addresses),
         "clipboard.lanEnabled" => json!(settings.clipboard.lan_enabled),
-        "clipboard.p2pEnabled" => json!(settings.clipboard.p2p_enabled),
+        "clipboard.serverEnabled" => json!(settings.clipboard.server_enabled),
+        "clipboard.wanP2pEnabled" => json!(settings.clipboard.p2p_enabled),
+        "clipboard.serverUrl" => json!(settings.clipboard.server_url),
+        "clipboard.account" => json!(settings.clipboard.account),
+        "clipboard.password" => json!(settings.clipboard.password),
         "clipboard.acceptText" => json!(settings.clipboard.types.text),
         "clipboard.acceptHtml" => json!(settings.clipboard.types.html),
         "clipboard.acceptImage" => json!(settings.clipboard.types.image),
@@ -1414,22 +1421,21 @@ pub fn set_value(
                 .ok_or_else(|| invalid_value(path, "应为 true/false"))?;
         }
         "clipboard.enabled" => settings.clipboard.enabled = expect_bool(path, &value)?,
-        "clipboard.code" => {
-            let raw = expect_string(path, &value)?.trim().to_string();
-            if !raw.is_empty() && raw.chars().count() < 8 {
-                return Err(invalid_value(path, "同步口令至少 8 位"));
-            }
-            settings.clipboard.code = raw;
-        }
         "clipboard.deviceName" => {
             settings.clipboard.device_name = expect_string(path, &value)?.trim().to_string();
         }
-        "clipboard.directEnabled" => settings.clipboard.direct_enabled = expect_bool(path, &value)?,
-        "clipboard.directAddresses" => {
-            settings.clipboard.direct_addresses = expect_string(path, &value)?.trim().to_string();
-        }
         "clipboard.lanEnabled" => settings.clipboard.lan_enabled = expect_bool(path, &value)?,
-        "clipboard.p2pEnabled" => settings.clipboard.p2p_enabled = expect_bool(path, &value)?,
+        "clipboard.serverEnabled" => settings.clipboard.server_enabled = expect_bool(path, &value)?,
+        "clipboard.wanP2pEnabled" => settings.clipboard.p2p_enabled = expect_bool(path, &value)?,
+        "clipboard.serverUrl" => {
+            settings.clipboard.server_url = expect_string(path, &value)?.trim().to_string();
+        }
+        "clipboard.account" => {
+            settings.clipboard.account = expect_string(path, &value)?.trim().to_string();
+        }
+        "clipboard.password" => {
+            settings.clipboard.password = expect_string(path, &value)?.to_string();
+        }
         "clipboard.acceptText" => settings.clipboard.types.text = expect_bool(path, &value)?,
         "clipboard.acceptHtml" => settings.clipboard.types.html = expect_bool(path, &value)?,
         "clipboard.acceptImage" => settings.clipboard.types.image = expect_bool(path, &value)?,
@@ -1796,18 +1802,17 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         }
         "transfer.autoAccept" => target.transfer.auto_accept = defaults.transfer.auto_accept,
         "clipboard.enabled" => target.clipboard.enabled = defaults.clipboard.enabled,
-        "clipboard.code" => target.clipboard.code = defaults.clipboard.code.clone(),
         "clipboard.deviceName" => {
             target.clipboard.device_name = defaults.clipboard.device_name.clone()
         }
-        "clipboard.directEnabled" => {
-            target.clipboard.direct_enabled = defaults.clipboard.direct_enabled
-        }
-        "clipboard.directAddresses" => {
-            target.clipboard.direct_addresses = defaults.clipboard.direct_addresses.clone()
-        }
         "clipboard.lanEnabled" => target.clipboard.lan_enabled = defaults.clipboard.lan_enabled,
-        "clipboard.p2pEnabled" => target.clipboard.p2p_enabled = defaults.clipboard.p2p_enabled,
+        "clipboard.serverEnabled" => {
+            target.clipboard.server_enabled = defaults.clipboard.server_enabled
+        }
+        "clipboard.wanP2pEnabled" => target.clipboard.p2p_enabled = defaults.clipboard.p2p_enabled,
+        "clipboard.serverUrl" => target.clipboard.server_url = defaults.clipboard.server_url.clone(),
+        "clipboard.account" => target.clipboard.account = defaults.clipboard.account.clone(),
+        "clipboard.password" => target.clipboard.password = defaults.clipboard.password.clone(),
         "clipboard.acceptText" => target.clipboard.types.text = defaults.clipboard.types.text,
         "clipboard.acceptHtml" => target.clipboard.types.html = defaults.clipboard.types.html,
         "clipboard.acceptImage" => target.clipboard.types.image = defaults.clipboard.types.image,

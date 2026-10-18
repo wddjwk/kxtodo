@@ -463,32 +463,37 @@ describe("normalizeState（core 快照往返）", () => {
 });
 
 
-describe("normalizeSettings 剪切板同步（v0.8.9）", () => {
+describe("normalizeSettings 剪切板同步（v0.8.10）", () => {
   it("缺省值与 core 的 ClipboardSettings 对齐", () => {
     expect(normalizeSettings({}).clipboard).toEqual({
       enabled: false,
-      code: "",
       deviceName: "",
-      directEnabled: false,
-      directAddresses: "",
       lanEnabled: true,
-      p2pEnabled: false,
+      serverEnabled: false,
+      wanP2pEnabled: false,
+      serverUrl: "",
+      account: "",
+      password: "",
       types: { text: true, html: true, image: true, files: true },
       limits: { textMb: 1, htmlMb: 2, imageMb: 10, filesMb: 100 },
       saveDir: ""
     });
   });
 
-  it("口令去空白，大小上限夹到合法区间", () => {
+  it("账户与设备名去空白，大小上限夹到合法区间", () => {
     const normalized = normalizeSettings({
       clipboard: {
         enabled: true,
-        code: "  12345678 ",
+        deviceName: "  书房 ",
+        account: "  user ",
+        serverUrl: " http://192.168.1.10:52177 ",
         limits: { textMb: 0, htmlMb: 999, imageMb: 2.7, filesMb: 4096 },
         types: { text: false, html: true, image: false, files: true }
       }
     });
-    expect(normalized.clipboard.code).toBe("12345678");
+    expect(normalized.clipboard.deviceName).toBe("书房");
+    expect(normalized.clipboard.account).toBe("user");
+    expect(normalized.clipboard.serverUrl).toBe("http://192.168.1.10:52177");
     expect(normalized.clipboard.limits).toEqual({ textMb: 1, htmlMb: 64, imageMb: 3, filesMb: 1024 });
     expect(normalized.clipboard.types).toEqual({ text: false, html: true, image: false, files: true });
   });

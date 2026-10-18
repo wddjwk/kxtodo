@@ -339,8 +339,10 @@ v0.8.0 起的几条补充（来龙去脉在 `history/v0.8.md` 批次 1）：
 ### v0.8.9 新增
 
 - 「**剪切板同步不保存内容**：文字 / HTML / 图片只在内存与网络里过一手；只有收到的**文件**必须写到保存目录（系统剪贴板要引用本地文件）。设备身份用持久化的 iroh 密钥（`deviceId = EndpointId.to_z32()`），三路共用；**不要拿设备名当身份**（重名很常见）」——`clipboard_sync.rs` + `history/v0.8.9.md` 一
-- 「**三种线路按 直接 IP → 局域网 → P2P 逐条降级，同一台设备只发一次**：发送端按 `deviceId` 合并 LAN/P2P/直接 IP（完全相同的地址先合并），接收端再按消息 id 去重 5 分钟兜底；`receive_clipboard` 必须先占位再读、失败撤回占位，否则两条线路并发到达会各写一遍」——同上
-- 「**剪切板 P2P 的 ALPN / 房间前缀必须独立**（`kxtodo-clipboard/1`、`kxtodo-clipboard/v1/room/`）：同一 iroh 端点上 ALPN 是唯一路由依据，复用同步/传输的 ALPN 会被对方的 accept 循环抢走；LAN 载荷必须用口令派生密钥加密（ChaCha20-Poly1305），**不提供明文回退**」——同上
+- 「**剪切板发送按 局域网 → 广域网（iroh）逐条降级，同一台设备只发一次**（v0.8.10 起）：发送端按 `deviceId` 合并 LAN 与服务器/P2P 目标；接收端再按消息 id 去重 5 分钟兜底；`receive_clipboard` 必须先占位再读、失败撤回占位，否则多条线路并发到达会各写一遍」——`history/v0.8.10.md` 二
+- 「**剪切板没有共享口令（v0.8.10）**：局域网广播发现所有设备；广域网用账户名+密码在统一服务器 / P2P 房间里配对。每台设备单独勾选、默认全选，**双方都勾选才同步**；勾选落 `runtime/clipboard-selection.json`，不重启服务、不同步」——同上 一/二
+- 「**剪切板 ALPN / 房间前缀必须独立**（`kxtodo-clipboard/2`、`kxtodo-clipboard/2/room/`）；LAN 握手用设备 Ed25519 签名 + 每次连接的临时 X25519 协商会话密钥（ChaCha20-Poly1305），**不提供明文回退**」——同上 二
+- 「**pkarr 一个 key 只有一份包**：设备名记录必须用**设备私钥**签；拿房间私钥发 `_name` 会覆盖同 key 的房间设备目录，症状是「P2P 只有一侧看得见对方」」——同上 一.3
 - 「**Android 10+ 只有前台能读剪贴板**：只在 `onResume` 注册 `OnPrimaryClipChangedListener`、`onPause` 注销；变化只发事件，由 Kotlin 桥读内容后调用 `clipboard_local_changed`；首次读取只建基线不发送（可能是后台时复制的旧内容）。**不要**在安卓上后台轮询」——`MainActivity.kt` + `clipboardSyncStore.ts` + 同上
 - 「**`addJavascriptInterface` 注入所有 iframe**：应用内预览外部网页时远端页面也能摸到 `window.kxtodoAndroid`。桥的每个方法都必须要求 MainActivity 只写进主 frame 的随机 token；剪切板/分享/装 APK 全部走 token 校验」——`ApkBridge.kt` + `MainActivity.kt` + 同上 二
 - 「**应用内打开必须同窗口 iframe**：`sandbox` 不含 `allow-popups`；桌面与安卓同一份覆盖层。整页覆盖（日记/记账/工具箱）时 `coveredByFullPage` 要因 `linkPreviewUrl` 解除 `inert`，覆盖层显式 `visibility:visible`，否则预览在 DOM 里却看不见/点不动」——`Workspace.svelte` + 同上 二
@@ -350,3 +352,13 @@ v0.8.0 起的几条补充（来龙去脉在 `history/v0.8.md` 批次 1）：
 - 「**反缩放层必须绝对定位**（取色盘）：iro 的布局宽 = 宿主宽 × uiScale，留在文档流里会把 grid 轨道撑大；面板 `grid-template-columns: minmax(0,1fr)`，否则窄屏上 HEX/RGB/按钮一起溢出」——`colorpanel.css` + 同上 五
 - 「**侧栏展开/收起覆盖所有区域**：固定区每行、树行、树空白、资料卡/搜索框/分隔线都要有；「添加固定」是草稿（勾选只改副本、确认才写 `appearance.navItems`），工具箱子工具与工具箱本身分开（`toolbox` vs `tool:<id>`）。三级子菜单的「返回」按**深度快照**逐级退，并让 MenuItem 的全局捕获点击监听避开 `.submenu-back`（capture 先于 goBack 会一次退光）」——`Sidebar.svelte` + `MenuItem.svelte` + `submenu.ts` + 同上 六
 - 「**报表统计的默认粒度只看顶部周期**（周/月→日、年→月、总→年、自定义按跨度），不能依赖 entries——否则每次记账写入都会把用户手选的粒度顶回去；结余是期间净额（收入 − 支出），转账不计入」——`ledger.ts::reportGrainFor/reportRows` + 同上 七
+
+### v0.8.10 新增
+
+- 「**绝不持锁 emit_status / 做 IO**：`push_peer` 持着 `lan_peers` 锁调 `emit_status` → `status_snapshot` 再锁同一把 std Mutex（不可重入），发现第一台设备即死锁；状态快照必须先克隆、放锁、再拼 JSON。回归：`clipboard_sync::tests::status_after_new_lan_peer_does_not_self_deadlock`」——`clipboard_sync.rs` + `history/v0.8.10.md` 一
+- 「**Tauri 状态/查询命令必须 `async`**：同步命令跑主线程，后台锁一卡就是整窗无响应；`clipboard_status` / `clipboard_refresh` 走 async + `spawn_blocking`。任何可能碰网络/磁盘/后台锁的新命令照此办理」——`src-tauri/src/lib.rs` + 同上
+- 「**局域网发现三件齐**：UDP 52178 广播 + 组播、收到新设备单播回包、`SO_REUSEADDR` 绑定；TCP 被占退临时端口并在广播里带实际端口。诊断端口覆盖 `KXTODO_CLIPBOARD_DISCOVERY_PORT` / `KXTODO_CLIPBOARD_LAN_PORT` 只给探针/同机多实例用」——`clipboard_sync.rs` + 同上 一
+- 「**Android 窄屏铁律**：任何新界面必须在 **360×800** 与 392 宽度下逐元素量 rect；行容器 `min-width:0` + `flex-wrap`，grid 一律 `minmax(0,1fr)`，长名字 `overflow-wrap:anywhere`，禁止超过视口的定宽行。只测页面 `scrollWidth` 会漏掉越界子元素」——`toolbox.css` 的 `.clipboard-*` + `scripts/v0810-fixes-test.mjs` 第 2 节 + 同上 四
+- 「**AppImage 不删 AppRun 的 `GDK_BACKEND=x11`**（除非 WSLg）：这是 Tauri 的标准稳定路径；v0.8.9 在所有 Wayland 会话里改回原生 Wayland，换来 GNOME 上无响应/卡顿。NVIDIA 专有驱动再关 DMABUF + `__NV_DISABLE_EXPLICIT_SYNC`，其它 GPU 保留快路径」——`src-tauri/src/lib.rs::prepare_linux_webview` + 同上 五
+- 「**统一服务器只做设备发现**：`POST/DELETE /api/v1/clipboard/presence` + `GET /api/v1/clipboard/peers`，按 Bearer token 的账户隔离、TTL 90 秒；表里只有设备名/EndpointId/直连地址，**绝不存剪切板内容**。设备之间仍然直连（iroh）并端到端加密」——`server/src/{api,db}.rs` + `sync/transport.rs` + 同上 二
+- 「**设备显示名统一追加平台**：默认 `kxtodo·平台(deviceId 前 8 位)`，用户填了前缀就是 `前缀·平台`；设置只存前缀」——`clipboard_sync.rs::device_display_name` + 同上 一

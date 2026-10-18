@@ -45,15 +45,16 @@ impl Env {
     }
 }
 
-fn clipboard_settings(code: &str) -> Value {
+fn clipboard_settings() -> Value {
     json!({
         "enabled": true,
-        "code": code,
         "deviceName": "客厅电脑",
-        "directEnabled": true,
-        "directAddresses": "192.168.1.20",
         "lanEnabled": true,
-        "p2pEnabled": true,
+        "serverEnabled": true,
+        "wanP2pEnabled": true,
+        "serverUrl": "192.168.1.10",
+        "account": "user",
+        "password": "secret",
         "types": { "text": true, "html": true, "image": false, "files": true },
         "limits": { "textMb": 3, "htmlMb": 4, "imageMb": 8, "filesMb": 64 },
         "saveDir": "D:\\clipboard"
@@ -63,30 +64,61 @@ fn clipboard_settings(code: &str) -> Value {
 #[test]
 fn configures_clipboard_settings_in_one_write() {
     let env = Env::new();
-    env.dispatch("gui.clipboard-configure", json!({ "settings": clipboard_settings("12345678") }));
+    env.dispatch("gui.clipboard-configure", json!({ "settings": clipboard_settings() }));
     let settings = env.repo.load_settings().expect("load settings");
     assert!(settings.clipboard.enabled);
-    assert_eq!(settings.clipboard.code, "12345678");
     assert_eq!(settings.clipboard.device_name, "客厅电脑");
     assert_eq!(settings.clipboard.limits.files_mb, 64);
     assert!(!settings.clipboard.types.image);
     assert_eq!(settings.clipboard.save_dir, "D:\\clipboard");
-    assert!(settings.clipboard.direct_enabled && settings.clipboard.lan_enabled && settings.clipboard.p2p_enabled);
+    assert!(settings.clipboard.lan_enabled && settings.clipboard.server_enabled && settings.clipboard.p2p_enabled);
+    assert_eq!(settings.clipboard.account, "user");
+    assert_eq!(settings.clipboard.server_url, "http://192.168.1.10:52177");
 }
 
 #[test]
-fn rejects_short_code_and_clamps_limits() {
+fn saves_wan_without_credentials_and_clamps_limits() {
     let env = Env::new();
-    let envelope = env.dispatch_error(
-        "gui.clipboard-configure",
-        json!({ "settings": clipboard_settings("short") }),
-    );
-    assert_eq!(envelope["error"]["code"], "CLIPBOARD_CODE_TOO_SHORT");
-    let mut settings = clipboard_settings("12345678");
+    // 旧配置升级/CLI 分步配置：缺密码也要能保存，服务只启动局域网部分；
+    // GUI 的保存按钮另做即时校验（v0810 前端回归）。
+    let mut missing = clipboard_settings();
+    missing["password"] = json!("");
+    env.dispatch("gui.clipboard-configure", json!({ "settings": missing }));
+    let stored = env.repo.load_settings().expect("load settings");
+    assert_eq!(stored.clipboard.password, "");
+    assert!(stored.clipboard.lan_enabled);
+    let mut settings = clipboard_settings();
     settings["limits"]["textMb"] = json!(999);
     env.dispatch("gui.clipboard-configure", json!({ "settings": settings }));
     let stored = env.repo.load_settings().expect("load settings");
     assert_eq!(stored.clipboard.limits.text_mb, 64);
+    // 非法服务器地址仍然拒绝
+    let mut bad = clipboard_settings();
+    bad["serverUrl"] = json!("http://");
+    let envelope = env.dispatch_error(
+        "gui.clipboard-configure",
+        json!({ "settings": bad }),
+    );
+    assert_eq!(envelope["error"]["code"], "CLIPBOARD_SERVER_URL_INVALID");
+}
+
+#[test]
+fn persists_per_device_selection_without_restarting_service() {
+    let env = Env::new();
+    env.dispatch(
+        "gui.clipboard-peer",
+        json!({ "deviceId": "peer-1", "selected": false }),
+    );
+    let path = env.repo.layout.runtime_dir().join("clipboard-selection.json");
+    let raw = std::fs::read_to_string(path).expect("selection file");
+    assert!(raw.contains("peer-1"));
+    env.dispatch(
+        "gui.clipboard-peer",
+        json!({ "deviceId": "peer-1", "selected": true }),
+    );
+    let raw = std::fs::read_to_string(env.repo.layout.runtime_dir().join("clipboard-selection.json"))
+        .expect("selection file");
+    assert!(!raw.contains("peer-1"));
 }
 
 #[test]

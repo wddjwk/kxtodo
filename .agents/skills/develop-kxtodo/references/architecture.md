@@ -71,6 +71,8 @@ kxtodo.exe (GUI)                    kxtodo-cli (CLI)
 
 ## v0.8.9 运行时文件与后台服务
 
-- `runtime/clipboard-identity.json`：剪切板同步的稳定 iroh 私钥（hex），`deviceId = EndpointId.to_z32()`。
+- `runtime/clipboard-identity.json`：剪切板同步的稳定 iroh/Ed25519 私钥（hex），`deviceId = EndpointId.to_z32()`。
+- `runtime/clipboard-selection.json`：每台设备的同步勾选（v0.8.10；本机偏好，不同步）。
 - `runtime/clipboard-inbox/`：安卓端收到图片后写给 Kotlin 桥的缓存（24h 清理）。
 - `HostCore::reconcile_clipboard_sync`：启动与 Settings 域事件时按 `settings.clipboard` 启停 `clipboard_sync` 服务；服务自己持有 2 线程 tokio 运行时、UDP/TCP 监听、iroh 端点与桌面轮询线程。设置全部本机偏好，不进同步共享子集。
+- 统一服务器（v0.8.10）：`kxtodo-server` 的 `/api/v1/clipboard/presence` 与 `/api/v1/clipboard/peers` 只做同账户设备在线目录（Bearer token + 90 秒 TTL），剪切板内容永远不经过服务器。

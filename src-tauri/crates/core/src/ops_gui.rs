@@ -114,6 +114,18 @@ pub fn gui_dispatch(
             meta.revision = Some(outcome.revision);
             Ok(json!({ "revision": outcome.revision }))
         }
+        "clipboard-peer" => {
+            // 每台设备的「同步 / 不同步」勾选是纯本机偏好：不进 settings.json
+            // （否则每点一次复选框都会重启一次后台服务），也不进审计台账。
+            let device = required_str(&inv.params, "deviceId")?;
+            let selected = inv
+                .params
+                .get("selected")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| CoreError::validation("MISSING_PARAM", "缺少 selected"))?;
+            crate::clipboard_sync::set_peer_selected(&ctx.repo.layout, &device, selected)?;
+            Ok(json!({ "deviceId": device, "selected": selected }))
+        }
         "set-item-ui" => {
             let id = required_str(&inv.params, "id")?;
             let expanded = inv.params.get("expanded").and_then(Value::as_bool);

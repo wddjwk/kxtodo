@@ -22,6 +22,14 @@ pub struct UserRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct ClipboardPresenceRow {
+    pub device_id: String,
+    pub name: String,
+    pub endpoint_id: String,
+    pub addrs: Vec<String>,
+    pub updated_at: i64,
+}
+
 pub struct EntityRow {
     pub entity_id: String,
     pub nonce: String,
@@ -99,6 +107,16 @@ CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS clipboard_presence (
+    user_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    endpoint_id TEXT NOT NULL,
+    addrs TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, device_id)
+);
+CREATE INDEX IF NOT EXISTS idx_clipboard_presence_user ON clipboard_presence(user_id, updated_at);
 ";
 
 impl Db {
@@ -279,6 +297,80 @@ impl Db {
     pub fn delete_token(&self, token_hash: &str) -> ServerResult<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM tokens WHERE token_hash = ?1", [token_hash])?;
+        Ok(())
+    }
+
+    /// 剪切板在线登记（v0.8.10）：只存发现所需的元数据，不存剪切板内容。
+    /// 同一账户同一设备覆盖写；顺带清掉一小时没刷新过的旧行。
+    pub fn upsert_clipboard_presence(
+        &self,
+        user_id: &str,
+        device_id: &str,
+        name: &str,
+        endpoint_id: &str,
+        addrs: &[String],
+        updated_at: i64,
+    ) -> ServerResult<()> {
+        let encoded = serde_json::to_string(addrs)
+            .map_err(|error| ServerError::internal(format!("序列化设备地址失败：{error}")))?;
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO clipboard_presence (user_id, device_id, name, endpoint_id, addrs, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(user_id, device_id) DO UPDATE SET
+               name = excluded.name,
+               endpoint_id = excluded.endpoint_id,
+               addrs = excluded.addrs,
+               updated_at = excluded.updated_at",
+            rusqlite::params![user_id, device_id, name, endpoint_id, encoded, updated_at],
+        )?;
+        conn.execute(
+            "DELETE FROM clipboard_presence WHERE updated_at < ?1",
+            [updated_at - 3600],
+        )?;
+        Ok(())
+    }
+
+    /// 同一账户下在线（updated_at >= fresh_after）的其它设备。
+    pub fn clipboard_peers(
+        &self,
+        user_id: &str,
+        exclude_device: &str,
+        fresh_after: i64,
+    ) -> ServerResult<Vec<ClipboardPresenceRow>> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM clipboard_presence WHERE updated_at < ?1",
+            [fresh_after - 3600],
+        )?;
+        let mut stmt = conn.prepare(
+            "SELECT device_id, name, endpoint_id, addrs, updated_at
+             FROM clipboard_presence
+             WHERE user_id = ?1 AND device_id <> ?2 AND updated_at >= ?3
+             ORDER BY name, device_id
+             LIMIT 64",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![user_id, exclude_device, fresh_after])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let addrs: String = row.get(3)?;
+            out.push(ClipboardPresenceRow {
+                device_id: row.get(0)?,
+                name: row.get(1)?,
+                endpoint_id: row.get(2)?,
+                addrs: serde_json::from_str(&addrs).unwrap_or_default(),
+                updated_at: row.get::<_, i64>(4)?,
+            });
+        }
+        Ok(out)
+    }
+
+    pub fn delete_clipboard_presence(&self, user_id: &str, device_id: &str) -> ServerResult<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM clipboard_presence WHERE user_id = ?1 AND device_id = ?2",
+            rusqlite::params![user_id, device_id],
+        )?;
         Ok(())
     }
 
@@ -994,5 +1086,34 @@ CREATE TABLE entities (
         assert!(db
             .put_entity(&user, "task-1", 1, "n", "c", "h")
             .is_err());
+    }
+
+    #[test]
+    fn clipboard_presence_lists_only_fresh_peers_of_same_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join("data.db")).unwrap();
+        let alice = db.create_user("alice", "k1").unwrap();
+        let bob = db.create_user("bob", "k2").unwrap();
+        let addrs = vec!["192.168.1.10:50000".to_string()];
+        db.upsert_clipboard_presence(&alice, "dev-a", "书房", "id-a", &addrs, 1_000)
+            .unwrap();
+        db.upsert_clipboard_presence(&alice, "dev-b", "客厅", "id-b", &[], 1_000)
+            .unwrap();
+        db.upsert_clipboard_presence(&bob, "dev-c", "别人", "id-c", &[], 1_000)
+            .unwrap();
+        let peers = db.clipboard_peers(&alice, "dev-a", 900).unwrap();
+        assert_eq!(peers.len(), 1, "只返回同账户的其它设备");
+        assert_eq!(peers[0].device_id, "dev-b");
+        // 过期记录不返回
+        assert!(db.clipboard_peers(&alice, "dev-a", 1_100).unwrap().is_empty());
+        // 同设备覆盖写而不是新增
+        db.upsert_clipboard_presence(&alice, "dev-b", "客厅新名字", "id-b", &[], 1_200)
+            .unwrap();
+        let peers = db.clipboard_peers(&alice, "dev-a", 1_100).unwrap();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].name, "客厅新名字");
+        // 退出删掉自己
+        db.delete_clipboard_presence(&alice, "dev-b").unwrap();
+        assert!(db.clipboard_peers(&alice, "dev-a", 1_100).unwrap().is_empty());
     }
 }

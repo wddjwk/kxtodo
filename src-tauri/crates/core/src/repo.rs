@@ -1122,10 +1122,11 @@ impl Repository {
         // 同一个 ops_gui 里的 apply-tree-order / import-state 是实质业务写，必须留痕。
         // 这些字段既不参与同步（merge 明确剥离 collapsed/expanded）、又是点击频率最高的写，
         // 记进 10MB 上限的审计流只会把真正的操作记录挤出去，还要为每次点击付一次追加。
-        const UI_ONLY_COMMANDS: [&str; 7] = [
+        const UI_ONLY_COMMANDS: [&str; 8] = [
             "gui.select-node",
             "gui.set-collapsed",
             "gui.set-all-collapsed",
+    "gui.clipboard-peer",
             "gui.set-item-ui",
             "gui.set-items-ui",
             "gui.set-diary-ui",

@@ -547,7 +547,23 @@ fn condition_probe_gates_main_action() {
     );
     host.core.start_scheduler();
 
-    std::thread::sleep(Duration::from_secs(3));
+    // CI 的 Windows runner 比开发机慢，固定 3 秒会在 probe 还没跑完时误判
+    // `last_probe == None`；等服务真正写出 probe 结果，再断言内容。
+    assert!(
+        wait_for(20, || {
+            host.core
+                .repo
+                .load_schedule()
+                .ok()
+                .and_then(|file| {
+                    file.tasks
+                        .first()
+                        .and_then(|task| task.state.last_probe.as_ref().map(|_| true))
+                })
+                .unwrap_or(false)
+        }),
+        "probe 未在期限内执行"
+    );
     let fired = host.backend.notifications.lock().unwrap().len();
     let file = host.core.repo.load_schedule().unwrap();
     assert_eq!(fired, 0, "probe 不匹配时不得执行主通知");

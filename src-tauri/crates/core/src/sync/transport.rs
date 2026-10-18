@@ -74,9 +74,14 @@ pub fn network_error(error: ureq::Error) -> CoreError {
 
 impl SyncClient {
     pub fn new(base: &str) -> CoreResult<Self> {
+        Self::new_with_timeout(base, HTTP_TIMEOUT_SECS)
+    }
+
+    /// 剪切板发现这类后台轮询需要更短的超时：30 秒会把「服务器不可达」拖成一整轮卡住。
+    pub fn new_with_timeout(base: &str, timeout_secs: u64) -> CoreResult<Self> {
         Ok(Self {
             agent: ureq::AgentBuilder::new()
-                .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
+                .timeout(Duration::from_secs(timeout_secs.max(1)))
                 .build(),
             base: normalize_base_url(base)?,
         })
@@ -182,6 +187,48 @@ impl SyncClient {
         self.agent
             .get(&format!("{}/api/v1/{path}", self.base))
             .set("Authorization", &format!("Bearer {token}"))
+    }
+
+    fn authed_post(&self, path: &str, token: &str) -> ureq::Request {
+        self.agent
+            .post(&format!("{}/api/v1/{path}", self.base))
+            .set("Authorization", &format!("Bearer {token}"))
+    }
+
+    /// 剪切板发现：登记本机在线。服务端只保存设备名/EndpointId/直连地址，不碰剪切板内容。
+    pub fn clipboard_presence(&self, token: &str, body: &Value) -> CoreResult<()> {
+        self.authed_post("clipboard/presence", token)
+            .send_json(body.clone())
+            .map_err(network_error)?;
+        Ok(())
+    }
+
+    /// 同一账户下其它在线设备（服务端已做 TTL 过滤）。
+    pub fn clipboard_peers(&self, token: &str, device_id: &str) -> CoreResult<Value> {
+        let response = self
+            .authed_get(
+                &format!("clipboard/peers?deviceId={}", encode_query(device_id)),
+                token,
+            )
+            .call()
+            .map_err(network_error)?;
+        response
+            .into_json::<Value>()
+            .map_err(|error| CoreError::io(format!("clipboard/peers 响应无效：{error}")))
+    }
+
+    /// 退出时撤掉在线记录（尽力而为；服务端 TTL 兜底）。
+    pub fn clipboard_leave(&self, token: &str, device_id: &str) -> CoreResult<()> {
+        self.agent
+            .delete(&format!(
+                "{}/api/v1/clipboard/presence?deviceId={}",
+                self.base,
+                encode_query(device_id)
+            ))
+            .set("Authorization", &format!("Bearer {token}"))
+            .call()
+            .map_err(network_error)?;
+        Ok(())
     }
 
     pub fn me(&self, token: &str) -> CoreResult<Value> {

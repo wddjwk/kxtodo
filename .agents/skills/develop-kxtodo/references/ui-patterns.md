@@ -209,3 +209,11 @@
 - **所有侧栏区域**（固定行、树行、树空白、资料卡/搜索框/分隔线）的右键菜单都带「展开全部/收起全部」；它调用 `gui.set-all-collapsed`，是 UI-only 命令。
 - **调度编辑器**：删除按钮用 0,3,0 规则压回 grid 居中；步骤标题再点当前步骤折叠；「执行什么」与「何时执行」同一套方块；底部三按钮同宽（桌面 96px、移动端三等分）。下次触发显示禁用时是「未启用」。
 - **记账报表统计**：`.ledger-panel` 里 h2「报表统计」+ 右侧 `.ledger-segmented` 日/月/年；表格 `.ledger-report` 无边框，金额右对齐、时间左对齐、空期间不出行。
+
+
+## 标准开关、说明浮层与窄屏宽度（v0.8.10）
+
+- **总开关用 `.ui-switch`**（`shared.css`）：真正的 checkbox 透明覆盖在轨道上，轨道 + 滑块纯 CSS。尺寸 42×24（小号 `.sm` 36×20）；点击要落在 `<label>` 上（Playwright 点隐藏 input 会被轨道 span 拦住），键盘与无障碍仍走原生 checkbox。不要再用 `accent-color` 的原生方框做「开始同步」。
+- **说明收进 ⓘ 浮层**：工具页正文不放「注释段」。浮层是 `.clipboard-info`（绝对定位在标题下方，`width:min(360px, calc(100% - 2px))`，`max-height:62vh; overflow-y:auto`），后面一层 `position:fixed; inset:0` 的透明 backdrop 负责点外关闭；Esc 用 `svelte:window`，安卓返回键用 `createBackGuard(open, close)`。移动端 `left:0; right:0; width:auto`。
+- **Android 窄屏铁律**：新界面按 **360×800** 与 392 两档逐元素量 `getBoundingClientRect()`；行容器 `min-width:0` + `flex-wrap`，grid 一律 `minmax(0,1fr)`，长设备名 `overflow-wrap:anywhere`；禁止超过视口的定宽行。只断言页面 `scrollWidth` 会漏掉越界子元素。模板见 `scripts/v0810-fixes-test.mjs` 第 2 节。
+- **设备列表行**：勾选框在左、名字 `flex:1 1 110px`、传输标签 `flex:none` 可换行；未勾选用 `.off` 降透明度，不要隐藏（用户要能重新勾上）。局域网与广域网各自过滤同一个 `status.peers`，同一台设备可能同时在两区出现，勾选是同一个设备 id。

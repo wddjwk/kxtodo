@@ -106,3 +106,16 @@ keystore 存于仓库 secret `ANDROID_KEYSTORE_BASE64`（`base64 -w0 release.jks
   2. **每次推送远程前必须询问用户：这一版是否需要打 tag（即是否发 release）**。要打则 commit → 在 HEAD 打 `vX.Y.Z` tag → 一并推送分支与 tag；不打则只推分支。
   3. **同一版本的修复只能 amend，不许新开 commit**：用户要求实现某个版本（如 v0.4.2），该版本已经 commit 了，用户又反馈有问题——**在用户没有明确指定"这次修复要升版本号"之前，所有修改（bugfix、文档补充、CI 修复、遗漏的改动）一律 `git commit --amend` 并进那笔 `vX.Y.Z` commit**，保持"一个版本 = 一笔 commit"。已经打了 tag 的按顺序来：`git tag -d vX.Y.Z` → amend → 在 HEAD 重打 `vX.Y.Z`（tag 已推远程则 force-push tag，并按需处理对应的 GitHub release）。另起一笔 `vX.Y.Z 修复…`、或不带版本号前缀的散 commit，都算违规。
   4. **不论是否打 tag，推送后必须监听远程 CI 直到结束**（ci.yml 编译检查；打了 tag 还有 release.yml 三平台构建 + 发布）：确认检查通过、构建/发布成功；任何失败都必须后续处理（修复重推或 re-run failed jobs），不许放着红着不管。
+
+
+## AppImage 图形与「无响应」排查（v0.8.10）
+
+AppImage 用官方 Tauri bundler（`release.sh` 的 `npx tauri build --bundles appimage`）；**不要手工拼 AppDir**，也不要在所有 Wayland 会话里改 `GDK_BACKEND`。
+
+- **标准路径是 X11**：linuxdeploy 的 AppRun 钩子会 `export GDK_BACKEND=x11`（tauri#8541，旧 WebKitGTK 原生 Wayland 会崩）。这是 Tauri AppImage 的稳定路径，**保留**。
+- **唯一例外是 WSLg**：WSLg 的 XWayland 光标通路坏（任何 X11 客户端丢光标）。`src-tauri/src/lib.rs::prepare_linux_webview` 只在 `WSL_INTEROP` / `WSL_DISTRO_NAME` 存在时撤销 `GDK_BACKEND=x11`。
+- **NVIDIA 专有驱动**：检测 `/proc/driver/nvidia/version` 默认 `WEBKIT_DISABLE_DMABUF_RENDERER=1`；Wayland 会话再设 `__NV_DISABLE_EXPLICIT_SYNC=1`（官方 Linux graphics 文档的 Error 71 修复）。AMD/Intel 保留 DMA-BUF 快路径，否则滚动/视频更慢。
+- **逃生门**：`KXTODO_WEBKIT_SAFE=1` 启动会在非 NVIDIA 上也关掉 DMABUF；用户已显式设置环境变量时不覆盖。
+- **构建基线**：CI/本地都在 Ubuntu 24.04（glibc 2.39 + WebKitGTK 4.1）；AppImage 不打包 glibc，更老的发行版需自行评估。官方建议在更老的基底上构建；本项目受 WebKitGTK 4.1 可用性限制，当前基线是 24.04，发布说明里要写清楚。
+- **症状对照**：窗口在 GNOME Wayland 上无响应/卡顿、被系统问 force quit → 先确认没有强制原生 Wayland（v0.8.9 的全局撤销）；NVIDIA 上空白/冻结 → DMABUF 变量；启动即白屏但进程活着 → 先查是否裸 `cargo build --release`（`pitfalls-linux.md` 第 2 条）。
+- **不要**用 `--no-sandbox`、`--appimage-extract-and-run` 作为默认启动方式；FUSE 缺失时才用 extract-and-run 手工验证。

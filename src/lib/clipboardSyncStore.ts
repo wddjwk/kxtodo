@@ -20,6 +20,12 @@ import { readNativeClipboard, writeNativeClipboard } from "./androidBridge";
 
 export const clipboardSyncStatus = writable<ClipboardStatus | null>(null);
 
+// 仅开发服务器：给 Playwright 注入运行态（真实 Tauri 里状态由后端事件驱动）。
+// 不用动态 import 模块路径——HMR 后模块 URL 带 ?t=，测试拿到的是另一份实例。
+if (import.meta.env.DEV) {
+  (window as unknown as Record<string, unknown>).__kxtodoClipboardStatus = clipboardSyncStatus;
+}
+
 let started = false;
 let suppressNativeUntil = 0;
 let lastLocalSignature = "";
@@ -36,7 +42,10 @@ export async function refreshClipboardStatus(): Promise<void> {
 
 function clipboardEnabled(): boolean {
   const settings = get(appSettings).clipboard;
-  return settings.enabled && settings.code.trim().length >= 8;
+  return (
+    settings.enabled &&
+    (settings.lanEnabled || settings.serverEnabled || settings.wanP2pEnabled)
+  );
 }
 
 function handleNativeClipboard(): void {

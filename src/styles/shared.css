@@ -77,3 +77,80 @@
   width: 100%;
   pointer-events: none;
 }
+
+/* ---------- 标准开关（v0.8.10） ----------
+   复选框换成轨道 + 滑块；`input` 仍然是真正的 checkbox（键盘/无障碍/绑定都不变），
+   只是视觉上藏在轨道下面。42×24 的触屏目标，移动端不再用原生小方框。 */
+.ui-switch {
+  position: relative;
+  display: inline-flex;
+  width: 42px;
+  height: 24px;
+  flex: none;
+  cursor: pointer;
+}
+
+.ui-switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.ui-switch-track {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  background: #cbd5e1;
+  transition: background 0.16s ease;
+}
+
+.ui-switch-track::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 24%);
+  transition: transform 0.16s ease;
+}
+
+.ui-switch input:checked + .ui-switch-track {
+  background: var(--accent, #2564cf);
+}
+
+.ui-switch input:checked + .ui-switch-track::after {
+  transform: translateX(18px);
+}
+
+.ui-switch input:disabled + .ui-switch-track {
+  opacity: 0.5;
+}
+
+.ui-switch input:focus-visible + .ui-switch-track {
+  outline: 2px solid color-mix(in srgb, var(--accent, #2564cf) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.ui-switch.sm {
+  width: 36px;
+  height: 20px;
+}
+
+.ui-switch.sm .ui-switch-track::after {
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+}
+
+.ui-switch.sm input:checked + .ui-switch-track::after {
+  transform: translateX(16px);
+}

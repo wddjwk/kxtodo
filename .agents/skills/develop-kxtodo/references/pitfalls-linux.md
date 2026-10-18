@@ -37,4 +37,6 @@ WSL2 有 `/dev/fuse` 可直接跑；无 FUSE 的环境用 `./KXToDo.AppImage --a
 
 ### 6. WSLg 的 XWayland 丢光标 + AppImage 强制 x11
 
-本机 WSLg 实测——任何 X11 客户端（连系统 GTK 探针程序）都看不见鼠标光标，Wayland 原生一切正常；而 AppImage 的 AppRun（linuxdeploy-plugin-gtk 钩子）为绕旧版 WebKitGTK 的 Wayland 崩溃（tauri#8541）强制 `GDK_BACKEND=x11`，正好踩进坏通路（表现：整窗交互正常但光标消失，连进程内原生 GTK 对话框也丢光标）。`run()` 在「APPDIR 存在 + WAYLAND_DISPLAY 存在 + GDK_BACKEND==x11」时撤掉该强制值回 Wayland 原生；纯 X11 会话保持 x11。若将来在旧 WebKitGTK 环境遇 Wayland 崩溃，重新评估这段撤销逻辑。
+本机 WSLg 实测——任何 X11 客户端（连系统 GTK 探针程序）都看不见鼠标光标，Wayland 原生一切正常；而 AppImage 的 AppRun（linuxdeploy-plugin-gtk 钩子）为绕旧版 WebKitGTK 的 Wayland 崩溃（tauri#8541）强制 `GDK_BACKEND=x11`，正好踩进坏通路（表现：整窗交互正常但光标消失）。
+
+**v0.8.10 修正**：撤销只对 **WSLg** 生效（`WSL_INTEROP` / `WSL_DISTRO_NAME` 存在时），真实 Linux 桌面保持 AppRun 的 x11。v0.8.9 曾在所有 Wayland 会话里撤销，Ubuntu/GNOME 上出现无响应与卡顿——那不是标准 AppImage 路径。NVIDIA 专有驱动另见 `build-and-release.md` 的 AppImage 图形一节。

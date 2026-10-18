@@ -1,19 +1,27 @@
 <script lang="ts">
   /**
-   * 剪切板同步（v0.8.9）：工具箱里的一个工具页。
+   * 剪切板同步（v0.8.10）：工具箱里的一个工具页。
    *
-   * 设置一次写整份（`configureClipboard` → `gui.clipboard-configure`）：逐字段保存会让
-   * 后台服务按字段数重启。总开关是唯一「一键生效」的入口，改完立即应用；
-   * 其它字段改完点「保存并应用」。
+   * 界面上不放任何解释性段落：所有说明收进右上角的 ⓘ 浮层（需求 1）。
+   * 设置一次写整份（`configureClipboard` → `gui.clipboard-configure`）；
+   * 设备勾选是纯本机偏好，立刻生效、不重启后台服务（`gui.clipboard-peer`）。
    */
   import { onDestroy, onMount } from "svelte";
-  import { ClipboardCopy, Copy, RefreshCw, Save, Wifi } from "@lucide/svelte";
+  import {
+    ChevronDown,
+    ClipboardCopy,
+    FolderOpen,
+    Info,
+    RefreshCw,
+    Save,
+    X
+  } from "@lucide/svelte";
   import { appSettings, showToast } from "../stores";
-  import { configureClipboard } from "../actions";
-  import { isMobile } from "../platform";
-  import { copyText } from "../clipboard";
-  import { clipboardDefaultDir, pickDirectory } from "../backend";
+  import { configureClipboard, setClipboardPeer } from "../actions";
+  import { isMobile, createBackGuard } from "../platform";
+  import { clipboardDefaultDir, clipboardRefresh, pickDirectory } from "../backend";
   import { clipboardSyncStatus, refreshClipboardStatus } from "../clipboardSyncStore";
+  import type { ClipboardPeer } from "../backend";
   import type { Settings } from "../types";
 
   type Draft = Settings["clipboard"];
@@ -22,65 +30,83 @@
   let draft = copy($appSettings.clipboard);
   let lastSaved = $appSettings.clipboard;
   let saving = false;
+  let refreshing = false;
   let defaultDir = "";
   let timer: number | undefined;
+  let infoOpen = false;
+  let methodsOpen = true;
+  let contentOpen = false;
+  let pendingPeers = new Set<string>();
+
+  // 浮层开/关自动接管返回键：组件销毁时 createBackGuard 内部会注销拦截器。
+  const backGuard = createBackGuard();
+  $: backGuard(infoOpen, () => (infoOpen = false));
 
   $: if ($appSettings.clipboard !== lastSaved) {
     lastSaved = $appSettings.clipboard;
     draft = copy($appSettings.clipboard);
   }
   $: dirty = JSON.stringify(draft) !== JSON.stringify($appSettings.clipboard);
-  $: codeOk = draft.code.trim().length >= 8;
-  $: anyTransport = draft.lanEnabled || draft.p2pEnabled || draft.directEnabled;
   $: status = $clipboardSyncStatus;
-  $: transportLabels = { direct: "直接 IP", lan: "局域网", p2p: "P2P" } as Record<string, string>;
+  $: lanPeers = (status?.peers ?? []).filter((peer) => peer.transports.includes("lan"));
+  $: wanPeers = (status?.peers ?? []).filter(
+    (peer) => peer.transports.includes("server") || peer.transports.includes("p2p")
+  );
+  $: wanDraftOn = draft.serverEnabled || draft.wanP2pEnabled;
+  $: anyTransport = draft.lanEnabled || draft.serverEnabled || draft.wanP2pEnabled;
 
   onMount(() => {
     void refreshClipboardStatus();
-    void clipboardDefaultDir().then((dir) => {
-      defaultDir = dir ?? "";
-    }).catch(() => undefined);
+    void clipboardDefaultDir()
+      .then((dir) => {
+        defaultDir = dir ?? "";
+      })
+      .catch(() => undefined);
     timer = window.setInterval(() => void refreshClipboardStatus(), 3000);
   });
   onDestroy(() => {
     if (timer) window.clearInterval(timer);
   });
 
-  function looksLikeAddressList(raw: string): boolean {
-    return raw
-      .split(/[\s,;]+/)
-      .filter(Boolean)
-      .every((item) => /^\[?[0-9a-fA-F:.]+\]?(:\d{1,5})?$/.test(item));
+  function transportLabel(id: string): string {
+    if (id === "server") return "服务器";
+    if (id === "p2p") return "P2P";
+    return "局域网";
+  }
+
+  function validate(next: Draft): boolean {
+    if (!(next.lanEnabled || next.serverEnabled || next.wanP2pEnabled)) {
+      showToast("请至少开启一种同步方式", 4000);
+      return false;
+    }
+    if ((next.serverEnabled || next.wanP2pEnabled) && (!next.account.trim() || !next.password.trim())) {
+      methodsOpen = true;
+      showToast("广域网同步需要填写账户名和密码", 4000);
+      return false;
+    }
+    if (next.serverEnabled && !next.serverUrl.trim()) {
+      methodsOpen = true;
+      showToast("统一服务器同步需要填写服务器地址", 4000);
+      return false;
+    }
+    return true;
+  }
+
+  function normalizedLimits(next: Draft): Draft {
+    return {
+      ...next,
+      limits: {
+        textMb: Math.min(64, Math.max(1, Math.round(Number(next.limits.textMb) || 1))),
+        htmlMb: Math.min(64, Math.max(1, Math.round(Number(next.limits.htmlMb) || 1))),
+        imageMb: Math.min(256, Math.max(1, Math.round(Number(next.limits.imageMb) || 1))),
+        filesMb: Math.min(1024, Math.max(1, Math.round(Number(next.limits.filesMb) || 1)))
+      }
+    };
   }
 
   async function save(enable?: boolean): Promise<void> {
-    const next: Draft = { ...draft, enabled: enable ?? draft.enabled };
-    const limits = [next.limits.textMb, next.limits.htmlMb, next.limits.imageMb, next.limits.filesMb];
-    if (limits.some((value) => !Number.isFinite(value) || value < 1)) {
-      showToast("大小上限需要填写 ≥1 的整数（MB）", 4000);
-      return;
-    }
-    // 与 core normalize_settings 的夹取区间对齐，保存后界面不出现「填 999 显示 64」
-    next.limits = {
-      textMb: Math.min(64, Math.max(1, Math.round(next.limits.textMb))),
-      htmlMb: Math.min(64, Math.max(1, Math.round(next.limits.htmlMb))),
-      imageMb: Math.min(256, Math.max(1, Math.round(next.limits.imageMb))),
-      filesMb: Math.min(1024, Math.max(1, Math.round(next.limits.filesMb)))
-    };
-    if (next.enabled) {
-      if (!codeOk) {
-        showToast("请先设置至少 8 位同步口令", 4000);
-        return;
-      }
-      if (!anyTransport) {
-        showToast("请至少启用一种同步方式", 4000);
-        return;
-      }
-      if (next.directEnabled && next.directAddresses.trim() && !looksLikeAddressList(next.directAddresses)) {
-        showToast("直接 IP 列表格式不对：一行一个 ip 或 ip:port", 5000);
-        return;
-      }
-    }
+    const next: Draft = normalizedLimits({ ...draft, enabled: enable ?? draft.enabled });
+    if (next.enabled && !validate(next)) return;
     draft = next;
     saving = true;
     const ok = await configureClipboard(next);
@@ -88,19 +114,49 @@
     if (!ok) return;
     lastSaved = $appSettings.clipboard;
     await refreshClipboardStatus();
-    showToast(next.enabled ? "剪切板同步已保存并应用" : "剪切板同步已关闭", 2500);
+    showToast(next.enabled ? "剪切板同步已保存并应用" : "剪切板同步已关闭", 2200);
   }
 
-  function generateCode(): void {
-    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-    const bytes = new Uint8Array(12);
-    crypto.getRandomValues(bytes);
-    draft = { ...draft, code: [...bytes].map((byte) => alphabet[byte % alphabet.length]).join("") };
+  async function toggleMaster(checked: boolean): Promise<void> {
+    if (checked) {
+      const next = { ...draft, enabled: true };
+      if (!validate(next)) return;
+    }
+    await save(checked);
   }
 
-  async function copyCode(): Promise<void> {
-    if (!draft.code) return;
-    if (await copyText(draft.code)) showToast("口令已复制，去另一台设备填同一句", 3000);
+  async function refresh(): Promise<void> {
+    if (refreshing) return;
+    refreshing = true;
+    try {
+      clipboardSyncStatus.set(await clipboardRefresh());
+    } catch {
+      await refreshClipboardStatus();
+    }
+    refreshing = false;
+  }
+
+  async function togglePeer(peer: ClipboardPeer, selected: boolean): Promise<void> {
+    if (pendingPeers.has(peer.id)) return;
+    pendingPeers.add(peer.id);
+    // 先本地翻状态（勾选是纯本机偏好，核心命令不会失败到需要回滚整页的程度）。
+    clipboardSyncStatus.update((current) =>
+      current
+        ? {
+            ...current,
+            peers: current.peers.map((item) =>
+              item.id === peer.id ? { ...item, selected } : item
+            )
+          }
+        : current
+    );
+    const ok = await setClipboardPeer(peer.id, selected);
+    pendingPeers.delete(peer.id);
+    if (!ok) {
+      await refreshClipboardStatus();
+      return;
+    }
+    await refreshClipboardStatus();
   }
 
   async function chooseDir(): Promise<void> {
@@ -109,151 +165,281 @@
   }
 
   function resetDir(): void {
-    draft = { ...draft, saveDir: defaultDir };
-  }
-
-  function transportBadge(id: string): string {
-    return transportLabels[id] ?? id;
+    draft = { ...draft, saveDir: "" };
   }
 </script>
 
+<svelte:window
+  on:keydown={(event) => {
+    if (event.key === "Escape" && infoOpen) infoOpen = false;
+  }}
+/>
+
 <div class="toolbox-sub clipboard-page">
-  <div class="clipboard-hero">
-    <div class="clipboard-hero-icon"><ClipboardCopy size={24} /></div>
-    <div>
-      <strong>剪切板同步</strong>
-      <p>复制即同步，不保存历史。同一句口令的设备按「直接 IP → 局域网 → P2P」择优发送。</p>
+  <div class="clipboard-hero-wrap">
+    <div class="clipboard-hero">
+      <div class="clipboard-hero-icon"><ClipboardCopy size={24} /></div>
+      <div class="clipboard-hero-text">
+        <strong>剪切板同步</strong>
+        <span class="clipboard-device" title={status?.deviceId ?? ""}>
+          {status?.deviceName || "kxtodo·平台(自动)"}
+        </span>
+      </div>
+      <div class="clipboard-hero-actions">
+        <button
+          class="clipboard-icon-button"
+          type="button"
+          title="说明"
+          aria-label="说明"
+          on:click|stopPropagation={() => (infoOpen = !infoOpen)}
+        >
+          <Info size={17} />
+        </button>
+        <label class="ui-switch" title={draft.enabled ? "关闭剪切板同步" : "开启剪切板同步"}>
+          <input
+            type="checkbox"
+            checked={$appSettings.clipboard.enabled}
+            disabled={saving}
+            on:change={(event) => void toggleMaster((event.currentTarget as HTMLInputElement).checked)}
+          />
+          <span class="ui-switch-track" aria-hidden="true"></span>
+        </label>
+      </div>
     </div>
-    <label class="clipboard-master">
-      <input
-        type="checkbox"
-        checked={draft.enabled}
-        disabled={saving}
-        on:change={(event) => void save((event.currentTarget as HTMLInputElement).checked)}
-      />
-      <span>{draft.enabled ? "已开启" : "已关闭"}</span>
-    </label>
+
+    {#if infoOpen}
+      <div class="clipboard-info-backdrop" on:click={() => (infoOpen = false)} role="presentation"></div>
+      <div class="clipboard-info" role="dialog" aria-label="剪切板同步说明">
+        <div class="clipboard-info-head">
+          <strong>剪切板同步</strong>
+          <button class="clipboard-icon-button" type="button" title="关闭" on:click={() => (infoOpen = false)}>
+            <X size={15} />
+          </button>
+        </div>
+        <h4>配对</h4>
+        <p>局域网：同一网络下开启本工具的 KXToDo 会自动出现；双方都勾选后开始同步。</p>
+        <p>广域网：填写账户名和密码。统一服务器还需要服务器地址；P2P 不需要。相同账户的设备会自动出现，同样双方勾选后同步。</p>
+        <h4>内容与安全</h4>
+        <p>只转发文字、HTML、图片和文件，不保存剪切板历史。设备之间加密传输；统一服务器只做设备发现，不保存内容。</p>
+        <p>收到文件会存到「文件保存位置」；其它内容只写入系统剪切板。</p>
+        <h4>Android</h4>
+        <p>系统限制：只有 KXToDo 在前台时才能读写剪切板。</p>
+      </div>
+    {/if}
   </div>
 
-  {#if $isMobile}
-    <p class="clipboard-note">
-      Android 10 起系统只允许前台应用读取剪切板：本机复制内容仅在本应用前台时同步；
-      远端写入也需要本应用在前台。这是系统限制，不是开关没生效。
+  <div class="clipboard-status-line">
+    <span class="clipboard-dot" class:on={status?.running}></span>
+    <span class="clipboard-status-text">
+      {status?.running ? "运行中" : status?.enabled ? "未运行" : "已关闭"}
+    </span>
+    {#if status?.running && status.transports.server}
+      <span class="clipboard-badge" class:on={status.serverRegistered}>服务器</span>
+    {/if}
+    {#if status?.running && status.transports.p2p}
+      <span class="clipboard-badge" class:on={status.p2pActive}>P2P</span>
+    {/if}
+    <button
+      class="clipboard-icon-button clipboard-refresh"
+      type="button"
+      title="立刻刷新设备"
+      aria-label="立刻刷新设备"
+      disabled={refreshing}
+      on:click={() => void refresh()}
+    >
+      <span class="clipboard-spin" class:on={refreshing}><RefreshCw size={15} /></span>
+    </button>
+  </div>
+  {#if status?.lastError && (status.running || status.enabled)}
+    <p class="clipboard-status-note" class:error={status.running}>{status.lastError}</p>
+  {/if}
+  {#if status?.running && status.lastEvent}
+    <p class="clipboard-status-note muted">
+      最近：{status.lastEvent.detail}{status.lastEvent.peer ? ` · ${status.lastEvent.peer}` : ""}
     </p>
   {/if}
 
   <section class="clipboard-card">
-    <div class="clipboard-status-line">
-      <span class="clipboard-dot" class:on={status?.running}></span>
-      <strong>{status?.running ? "运行中" : status ? (status.enabled ? "未运行" : "未启用") : draft.enabled ? "当前环境不支持" : "未启用"}</strong>
-      {#if status?.deviceId}
-        <span class="clipboard-mono" title={status.deviceId}>{status.deviceId.slice(0, 12)}</span>
-      {/if}
-      <button class="menu-action-button" type="button" on:click={() => void refreshClipboardStatus()}>
-        <RefreshCw size={13} /> 刷新
-      </button>
+    <label class="clipboard-field-inline">
+      <span>设备名</span>
+      <input
+        class="clipboard-text-input"
+        value={draft.deviceName}
+        spellcheck="false"
+        placeholder={status?.deviceName || "kxtodo·平台(自动)"}
+        on:input={(event) =>
+          (draft = { ...draft, deviceName: (event.currentTarget as HTMLInputElement).value })}
+      />
+    </label>
+    <div class="clipboard-field-inline">
+      <span>文件保存位置</span>
+      <div class="clipboard-dir-row">
+        <input
+          class="clipboard-text-input"
+          value={draft.saveDir}
+          spellcheck="false"
+          placeholder={defaultDir || "下载目录 / kxtodo-clipboard"}
+          on:input={(event) =>
+            (draft = { ...draft, saveDir: (event.currentTarget as HTMLInputElement).value })}
+        />
+        <button class="menu-action-button" type="button" title="选择目录" on:click={() => void chooseDir()}>
+          <FolderOpen size={13} />
+        </button>
+        <button class="menu-action-button" type="button" title="恢复默认" on:click={resetDir}>默认</button>
+      </div>
     </div>
-    {#if status?.lastError}
-      {#if status.running}
-        <p class="clipboard-error">{status.lastError}</p>
-      {:else}
-        <p class="clipboard-meta">{status.lastError}</p>
-      {/if}
-    {/if}
-    {#if status?.running}
-      <p class="clipboard-meta">
-        <Wifi size={13} />
-        本机 {status.deviceName} · 端口 {status.port} · 发现端口 {status.discoveryPort}
-        {#if status.localAddresses.length} · {status.localAddresses.join(" / ")}{/if}
-      </p>
-      <p class="clipboard-meta">保存目录：{status.saveDir || defaultDir || "下载目录/kxtodo-clipboard"}</p>
-      {#if status.lastEvent}
-        <p class="clipboard-meta">最近：{status.lastEvent.detail}{status.lastEvent.peer ? ` · ${status.lastEvent.peer}` : ""}</p>
-      {/if}
-      <div class="clipboard-peers">
-        {#if status.peers.length === 0}
-          <span class="clipboard-empty">还没有发现在线设备（设备需要开启同一口令、同一局域网/账号）。</span>
-        {:else}
-          {#each status.peers as peer (peer.id)}
-            <span class="clipboard-peer" title={peer.id}>
-              <span class="clipboard-dot on"></span>
-              <strong>{peer.name || "未命名设备"}</strong>
-              {#each peer.transports as transport (transport)}
-                <em>{transportBadge(transport)}</em>
+  </section>
+
+  <section class="clipboard-card">
+    <button class="clipboard-section-head" type="button" on:click={() => (methodsOpen = !methodsOpen)}>
+      <span>同步方式</span>
+      <span class="clipboard-chevron" class:down={!methodsOpen}><ChevronDown size={16} /></span>
+    </button>
+    {#if methodsOpen}
+      <div class="clipboard-method">
+        <div class="clipboard-method-head">
+          <strong>局域网同步</strong>
+          <label class="ui-switch sm">
+            <input type="checkbox" bind:checked={draft.lanEnabled} />
+            <span class="ui-switch-track" aria-hidden="true"></span>
+          </label>
+        </div>
+        {#if draft.lanEnabled}
+          <div class="clipboard-peer-list">
+            {#if lanPeers.length === 0}
+              <span class="clipboard-empty">未发现在线设备</span>
+            {:else}
+              {#each lanPeers as peer (peer.id)}
+                <label class="clipboard-peer-row" class:off={!peer.selected}>
+                  <input
+                    type="checkbox"
+                    checked={peer.selected}
+                    on:change={(event) =>
+                      void togglePeer(peer, (event.currentTarget as HTMLInputElement).checked)}
+                  />
+                  <span class="clipboard-peer-name">{peer.name}</span>
+                  <span class="clipboard-peer-tags">
+                    {#each peer.transports as transport (transport)}
+                      <em>{transportLabel(transport)}</em>
+                    {/each}
+                  </span>
+                </label>
               {/each}
-            </span>
-          {/each}
+            {/if}
+          </div>
         {/if}
       </div>
-    {:else if status?.enabled}
-      <p class="clipboard-meta">核心服务会在保存后自动启动；若一直停着，检查口令与同步方式。</p>
+
+      <div class="clipboard-divider"></div>
+
+      <div class="clipboard-method">
+        <div class="clipboard-method-head"><strong>广域网同步</strong></div>
+        {#if wanDraftOn}
+          <div class="clipboard-form-grid">
+            <label class="clipboard-field">
+              <span>账户名</span>
+              <input
+                class="clipboard-text-input"
+                value={draft.account}
+                spellcheck="false"
+                autocomplete="username"
+                placeholder="账户名"
+                on:input={(event) =>
+                  (draft = { ...draft, account: (event.currentTarget as HTMLInputElement).value })}
+              />
+            </label>
+            <label class="clipboard-field">
+              <span>密码</span>
+              <input
+                class="clipboard-text-input"
+                type="password"
+                value={draft.password}
+                autocomplete="current-password"
+                placeholder="密码"
+                on:input={(event) =>
+                  (draft = { ...draft, password: (event.currentTarget as HTMLInputElement).value })}
+              />
+            </label>
+          </div>
+        {/if}
+        <div class="clipboard-inline-switch">
+          <span>统一服务器</span>
+          <label class="ui-switch sm">
+            <input type="checkbox" bind:checked={draft.serverEnabled} />
+            <span class="ui-switch-track" aria-hidden="true"></span>
+          </label>
+        </div>
+        {#if draft.serverEnabled}
+          <input
+            class="clipboard-text-input clipboard-server-url"
+            value={draft.serverUrl}
+            spellcheck="false"
+            inputmode="url"
+            placeholder="服务器地址，例如 192.168.1.10:52177"
+            on:input={(event) =>
+              (draft = { ...draft, serverUrl: (event.currentTarget as HTMLInputElement).value })}
+          />
+        {/if}
+        <div class="clipboard-inline-switch">
+          <span>P2P</span>
+          <label class="ui-switch sm">
+            <input type="checkbox" bind:checked={draft.wanP2pEnabled} />
+            <span class="ui-switch-track" aria-hidden="true"></span>
+          </label>
+        </div>
+        {#if wanDraftOn}
+          <div class="clipboard-peer-list">
+            {#if wanPeers.length === 0}
+              <span class="clipboard-empty">未发现在线设备</span>
+            {:else}
+              {#each wanPeers as peer (peer.id)}
+                <label class="clipboard-peer-row" class:off={!peer.selected}>
+                  <input
+                    type="checkbox"
+                    checked={peer.selected}
+                    on:change={(event) =>
+                      void togglePeer(peer, (event.currentTarget as HTMLInputElement).checked)}
+                  />
+                  <span class="clipboard-peer-name">{peer.name}</span>
+                  <span class="clipboard-peer-tags">
+                    {#each peer.transports as transport (transport)}
+                      <em>{transportLabel(transport)}</em>
+                    {/each}
+                  </span>
+                </label>
+              {/each}
+            {/if}
+          </div>
+        {/if}
+      </div>
     {/if}
   </section>
 
   <section class="clipboard-card">
-    <h3>配对</h3>
-    <div class="clipboard-code-row">
-      <input class="clipboard-text-input" value={draft.code} spellcheck="false" placeholder="至少 8 位同步口令" on:input={(event) => (draft = { ...draft, code: (event.currentTarget as HTMLInputElement).value })} />
-      <button class="menu-action-button" type="button" title="生成随机口令" on:click={generateCode}>生成</button>
-      <button class="menu-action-button" type="button" title="复制口令" disabled={!draft.code} on:click={() => void copyCode()}><Copy size={13} />复制</button>
-    </div>
-    <p class="clipboard-hint">同一句口令 = 同一组设备；LAN、直接 IP、P2P 三种方式共用，不会明文传输。P2P 用口令在 pkarr 房间互认，不复用同步账户（剪贴板事件不进同步数据），relay 沿用文件传输/同步的设置。</p>
-    <label class="clipboard-field">
-      <span>本机设备名</span>
-      <input class="clipboard-text-input" value={draft.deviceName} placeholder="留空显示 KXToDo·平台" on:input={(event) => (draft = { ...draft, deviceName: (event.currentTarget as HTMLInputElement).value })} />
-    </label>
-  </section>
-
-  <section class="clipboard-card">
-    <h3>同步方式</h3>
-    <label class="toggle-row">
-      <span><strong>直接 IP</strong><small>填了地址就优先走它（仍需同一口令）</small></span>
-      <input type="checkbox" bind:checked={draft.directEnabled} />
-    </label>
-    {#if draft.directEnabled}
-      <textarea class="clipboard-addresses" rows="2" placeholder="192.168.1.20 或 192.168.1.20:52179（一行一个）" value={draft.directAddresses} on:input={(event) => (draft = { ...draft, directAddresses: (event.currentTarget as HTMLTextAreaElement).value })}></textarea>
+    <button class="clipboard-section-head" type="button" on:click={() => (contentOpen = !contentOpen)}>
+      <span>接收内容</span>
+      <span class="clipboard-chevron" class:down={!contentOpen}><ChevronDown size={16} /></span>
+    </button>
+    {#if contentOpen}
+      <div class="clipboard-types">
+        <div class="clipboard-type-row">
+          <label class="checkbox-line"><input type="checkbox" bind:checked={draft.types.text} />文字</label>
+          <input class="clipboard-limit" type="number" min="1" max="64" bind:value={draft.limits.textMb} /><span>MB</span>
+        </div>
+        <div class="clipboard-type-row">
+          <label class="checkbox-line"><input type="checkbox" bind:checked={draft.types.html} />HTML</label>
+          <input class="clipboard-limit" type="number" min="1" max="64" bind:value={draft.limits.htmlMb} /><span>MB</span>
+        </div>
+        <div class="clipboard-type-row">
+          <label class="checkbox-line"><input type="checkbox" bind:checked={draft.types.image} />图片</label>
+          <input class="clipboard-limit" type="number" min="1" max="256" bind:value={draft.limits.imageMb} /><span>MB</span>
+        </div>
+        <div class="clipboard-type-row">
+          <label class="checkbox-line"><input type="checkbox" bind:checked={draft.types.files} />文件</label>
+          <input class="clipboard-limit" type="number" min="1" max="1024" bind:value={draft.limits.filesMb} /><span>MB</span>
+        </div>
+      </div>
     {/if}
-    <label class="toggle-row">
-      <span><strong>局域网发现</strong><small>UDP 广播自动找同一局域网里的设备，最省事</small></span>
-      <input type="checkbox" bind:checked={draft.lanEnabled} />
-    </label>
-    <label class="toggle-row">
-      <span><strong>P2P（异地）</strong><small>iroh 打洞，relay 沿用文件传输/同步的设置</small></span>
-      <input type="checkbox" bind:checked={draft.p2pEnabled} />
-    </label>
-  </section>
-
-  <section class="clipboard-card">
-    <h3>接收类型与上限</h3>
-    <div class="clipboard-types">
-      <div class="clipboard-type-row">
-        <label class="checkbox-line"><input type="checkbox" bind:checked={draft.types.text} />文字</label>
-        <input class="clipboard-limit" type="number" min="1" max="64" bind:value={draft.limits.textMb} /><span>MB</span>
-      </div>
-      <div class="clipboard-type-row">
-        <label class="checkbox-line"><input type="checkbox" bind:checked={draft.types.html} />HTML</label>
-        <input class="clipboard-limit" type="number" min="1" max="64" bind:value={draft.limits.htmlMb} /><span>MB</span>
-      </div>
-      <div class="clipboard-type-row">
-        <label class="checkbox-line"><input type="checkbox" bind:checked={draft.types.image} />图片</label>
-        <input class="clipboard-limit" type="number" min="1" max="256" bind:value={draft.limits.imageMb} /><span>MB</span>
-      </div>
-      <div class="clipboard-type-row">
-        <label class="checkbox-line"><input type="checkbox" bind:checked={draft.types.files} />文件</label>
-        <input class="clipboard-limit" type="number" min="1" max="1024" bind:value={draft.limits.filesMb} /><span>MB</span>
-      </div>
-    </div>
-    <p class="clipboard-hint">超过上限或关闭了该类型时，远端内容会被丢弃；整条都不可用则不写本机剪切板。</p>
-  </section>
-
-  <section class="clipboard-card">
-    <h3>文件保存位置</h3>
-    <div class="clipboard-code-row">
-      <input class="clipboard-text-input" value={draft.saveDir} placeholder={defaultDir || "下载目录/kxtodo-clipboard"} on:input={(event) => (draft = { ...draft, saveDir: (event.currentTarget as HTMLInputElement).value })} />
-      <button class="menu-action-button" type="button" on:click={() => void chooseDir()}>选择</button>
-      <button class="menu-action-button" type="button" on:click={resetDir}>恢复默认</button>
-    </div>
-    <p class="clipboard-hint">只有收到的文件会落盘；文字、HTML 和图片只写系统剪切板，不写历史。</p>
   </section>
 
   <div class="clipboard-actions">

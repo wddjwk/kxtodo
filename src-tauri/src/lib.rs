@@ -2439,6 +2439,7 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
             open_url,
             link_preview::extract_link_meta,
             clipboard_status,
+            clipboard_refresh,
             clipboard_local_changed,
             clipboard_default_dir,
             core_dispatch,
@@ -3262,8 +3263,35 @@ fn clipboard_content_from_bridge(value: &Value) -> Result<domain::clipboard_sync
 }
 
 #[tauri::command]
-fn clipboard_status(core: State<'_, Arc<domain::host::HostCore>>) -> Value {
-    domain::clipboard_sync::status(&core.repo.layout)
+async fn clipboard_status(core: State<'_, Arc<domain::host::HostCore>>) -> Result<Value, String> {
+    // 必须 async：同步命令跑在 Tauri 主线程上，状态快照一旦撞上后台锁
+    // 就会把整个窗口卡死（v0.8.9「点刷新必现无响应」的放大器）。
+    let core = core.inner().clone();
+    let layout = core.repo.layout.clone();
+    let settings = core
+        .repo
+        .load_settings()
+        .map_err(|error| error.message)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        domain::clipboard_sync::status(&layout, &settings)
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn clipboard_refresh(core: State<'_, Arc<domain::host::HostCore>>) -> Result<Value, String> {
+    let core = core.inner().clone();
+    let layout = core.repo.layout.clone();
+    let settings = core
+        .repo
+        .load_settings()
+        .map_err(|error| error.message)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        domain::clipboard_sync::refresh(&layout, &settings)
+    })
+    .await
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -3467,15 +3495,41 @@ fn init_mobile_core(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// AppImage 的 AppRun（linuxdeploy-plugin-gtk）为绕旧版 WebKitGTK 的 Wayland 崩溃
-/// （tauri#8541）强制 GDK_BACKEND=x11；但 WSLg 的 XWayland 光标通路是坏的（实测任何
-/// X11 客户端都丢鼠标光标，Wayland 原生一切正常）。Wayland 会话里撤掉这个强制值回
-/// 原生后端；纯 X11 会话（无 WAYLAND_DISPLAY）保持 x11 不动。
+/// Linux WebView 启动前的兼容处理（必须在创建窗口之前）。
+///
+/// 1. **标准 AppImage 行为是 X11**：linuxdeploy 的 AppRun 会设置 `GDK_BACKEND=x11`
+///    （tauri#8541：早期 WebKitGTK 的原生 Wayland 会崩溃）。v0.8.9 之前在**所有**
+///    Wayland 会话里把它删掉回退到原生 Wayland，导致 Ubuntu/GNOME 上无响应、卡顿
+///    ——这不是 AppImage 的标准路径。现在只在 **WSLg** 撤掉：WSLg 的 XWayland
+///    光标通路是坏的（任何 X11 客户端都丢鼠标），其余真实 Linux 桌面保持 x11。
+/// 2. NVIDIA 专有驱动 + WebKitGTK 的 DMA-BUF 渲染器是 Tauri 官方文档列出的
+///    空白/冻结组合：检测到 `/proc/driver/nvidia/version` 时关掉它（用户已显式
+///    设置环境变量则尊重用户）。AMD/Intel 保持快速路径。
 #[cfg(target_os = "linux")]
-fn restore_wayland_backend_in_appimage() {
+fn prepare_linux_webview() {
+    let set_default = |key: &str, value: &str| {
+        if std::env::var_os(key).is_none() {
+            std::env::set_var(key, value);
+        }
+    };
+    if std::path::Path::new("/proc/driver/nvidia/version").exists() {
+        set_default("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            // 官方文档：修复 NVIDIA + Wayland 的 Error 71（窗口消失/崩溃）。
+            set_default("__NV_DISABLE_EXPLICIT_SYNC", "1");
+        }
+    }
+    // 手动逃生门：少数 Mesa/远程桌面组合仍会被 WebKit 的 DMABUF 路径卡住，
+    // 启动前设 KXTODO_WEBKIT_SAFE=1 即可整条退回非 DMABUF 渲染。
+    if std::env::var_os("KXTODO_WEBKIT_SAFE").as_deref() == Some(std::ffi::OsStr::new("1")) {
+        set_default("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+    let wslg = std::env::var_os("WSL_INTEROP").is_some()
+        || std::env::var_os("WSL_DISTRO_NAME").is_some();
     let forced_x11 = std::env::var_os("GDK_BACKEND").as_deref()
         == Some(std::ffi::OsStr::new("x11"));
-    if std::env::var_os("APPDIR").is_some()
+    if wslg
+        && std::env::var_os("APPDIR").is_some()
         && std::env::var_os("WAYLAND_DISPLAY").is_some()
         && forced_x11
     {
@@ -3488,7 +3542,7 @@ pub fn run() {
     #[cfg(desktop)]
     {
         #[cfg(target_os = "linux")]
-        restore_wayland_backend_in_appimage();
+        prepare_linux_webview();
         let args: Vec<String> = env::args().skip(1).collect();
         match parse_host_mode_args(&args) {
             Some(data_dir) => run_desktop_app(AppMode::HiddenHost, data_dir),
@@ -3538,6 +3592,7 @@ pub fn run() {
                 open_url,
                 link_preview::extract_link_meta,
                 clipboard_status,
+                clipboard_refresh,
                 clipboard_local_changed,
                 clipboard_default_dir,
                 save_background_image,

@@ -73,6 +73,11 @@ pub fn router(state: SharedState) -> Router {
         .route("/api/v1/images/changes", get(image_changes))
         .route("/api/v1/images/check", post(image_check))
         .route("/api/v1/images/{id}", get(get_image).put(put_image))
+        .route(
+            "/api/v1/clipboard/presence",
+            post(clipboard_presence).delete(clipboard_leave),
+        )
+        .route("/api/v1/clipboard/peers", get(clipboard_peers))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             request_log,
@@ -335,6 +340,106 @@ async fn logout(
         .and_then(|value| value.strip_prefix("Bearer "))
         .ok_or_else(ServerError::unauthorized)?;
     state.db.delete_token(&util::sha256_hex(token.as_bytes()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------
+// 剪切板发现（v0.8.10）
+//
+// 统一服务器只做「同账户设备在线目录」：设备登记名字 / EndpointId / 直连地址，
+// 客户端之间自行建立加密连接。剪切板内容永远不经过这里。
+// ---------------------------------------------------------------------------
+
+/// 在线记录的有效期；客户端每 5 秒刷新一次，退出后最多这么久从列表消失。
+const CLIPBOARD_PRESENCE_TTL_SECS: i64 = 90;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipboardPresenceBody {
+    device_id: String,
+    name: String,
+    endpoint_id: String,
+    #[serde(default)]
+    addrs: Vec<String>,
+}
+
+fn valid_peer_id(raw: &str) -> bool {
+    !raw.is_empty()
+        && raw.len() <= 64
+        && raw
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+}
+
+async fn clipboard_presence(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(body): Json<ClipboardPresenceBody>,
+) -> ApiResult<StatusCode> {
+    let user = auth_user(&state, &headers)?;
+    if !valid_peer_id(&body.device_id) || !valid_peer_id(&body.endpoint_id) {
+        return Err(ServerError::bad_request("deviceId / endpointId 不合法"));
+    }
+    if body.name.chars().count() > 96
+        || body.addrs.len() > 8
+        || body.addrs.iter().any(|addr| addr.len() > 96)
+    {
+        return Err(ServerError::bad_request("设备名或地址过长"));
+    }
+    let now = chrono::Utc::now().timestamp();
+    state.db.upsert_clipboard_presence(
+        &user.id,
+        &body.device_id,
+        body.name.trim(),
+        &body.endpoint_id,
+        &body.addrs,
+        now,
+    )?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct ClipboardPeersQuery {
+    #[serde(rename = "deviceId")]
+    device_id: Option<String>,
+}
+
+async fn clipboard_peers(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Query(query): Query<ClipboardPeersQuery>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let user = auth_user(&state, &headers)?;
+    let exclude = query.device_id.unwrap_or_default();
+    let fresh_after = chrono::Utc::now().timestamp() - CLIPBOARD_PRESENCE_TTL_SECS;
+    let rows = state
+        .db
+        .clipboard_peers(&user.id, &exclude, fresh_after)?;
+    let peers: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| {
+            json!({
+                "deviceId": row.device_id,
+                "name": row.name,
+                "endpointId": row.endpoint_id,
+                "addrs": row.addrs,
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "peers": peers, "serverTime": util::now_iso() })))
+}
+
+async fn clipboard_leave(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Query(query): Query<ClipboardPeersQuery>,
+) -> ApiResult<StatusCode> {
+    let user = auth_user(&state, &headers)?;
+    let device = query.device_id.unwrap_or_default();
+    if !valid_peer_id(&device) {
+        return Err(ServerError::bad_request("deviceId 不合法"));
+    }
+    state.db.delete_clipboard_presence(&user.id, &device)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

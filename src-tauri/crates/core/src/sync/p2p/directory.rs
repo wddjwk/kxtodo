@@ -136,20 +136,30 @@ pub fn now_unix() -> u64 {
 /// 目录服务不可达时每台设备各自当自己的枢纽，本地数据不受影响，
 /// 等网络恢复下一轮自然收敛——比把同步整轮报错更符合「静默重连」的约定。
 pub async fn fetch(client: &PkarrRelayClient, account_id: EndpointId) -> Vec<DirectoryEntry> {
-    let packet = match client.resolve(account_id).await {
-        Ok(packet) => packet,
+    match fetch_checked(client, account_id).await {
+        Ok(entries) => entries,
         Err(error) => {
-            let mut chain = format!("{error}");
-            let mut source = std::error::Error::source(&error);
-            while let Some(next) = source {
-                chain.push_str(" -> ");
-                chain.push_str(&next.to_string());
-                source = std::error::Error::source(next);
-            }
-            crate::sync::engine::debug_log(format!("p2p directory resolve failed: {chain}"));
-            return Vec::new();
+            crate::sync::engine::debug_log(error.message.clone());
+            Vec::new()
         }
-    };
+    }
+}
+
+/// 与 [`fetch`] 相同，但把解析失败暴露给调用方（剪切板要据此区分「没有设备」与「目录不可达」）。
+pub async fn fetch_checked(
+    client: &PkarrRelayClient,
+    account_id: EndpointId,
+) -> CoreResult<Vec<DirectoryEntry>> {
+    let packet = client.resolve(account_id).await.map_err(|error| {
+        let mut chain = format!("{error}");
+        let mut source = std::error::Error::source(&error);
+        while let Some(next) = source {
+            chain.push_str(" -> ");
+            chain.push_str(&next.to_string());
+            source = std::error::Error::source(next);
+        }
+        CoreError::io(format!("P2P 目录解析失败：{chain}"))
+    })?;
     let now = now_unix();
     let mut entries: Vec<DirectoryEntry> = packet
         .txt_records(DIRECTORY_NAME)
@@ -159,7 +169,7 @@ pub async fn fetch(client: &PkarrRelayClient, account_id: EndpointId) -> Vec<Dir
         .collect();
     entries.sort_by_key(|entry| entry.published_at);
     entries.dedup_by(|a, b| a.id == b.id);
-    entries
+    Ok(entries)
 }
 
 /// 发布「我自己在线」：读-改-写合并别人的条目，409 就重来。

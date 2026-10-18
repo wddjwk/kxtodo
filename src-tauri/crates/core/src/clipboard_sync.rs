@@ -1,21 +1,24 @@
-//! 剪切板同步（v0.8.9）：三台设备凭同一句同步口令互发剪切板。
+//! 剪切板同步（v0.8.10 重构）。
 //!
-//! 设计口径：
-//! - **不保存剪切板内容**：只在内存里过一手；落盘的只有设备密钥与用户设置。
-//!   收到文件时例外——必须写到保存目录，否则系统剪切板无法引用它。
-//! - 三种来源同时可用、按优先级择优：**直接 IP > 局域网发现 > iroh P2P**；
-//!   同一台设备只发一次（设备身份 = 持久化的 iroh EndpointId，三种方式共用）。
-//! - 局域网走 UDP 广播发现 + 自建 TCP；所有载荷用同步口令派生的
-//!   ChaCha20-Poly1305 密钥加密，抓包看不到明文。P2P 复用传输助手那套
-//!   iroh + pkarr 目录，但 ALPN / 房间前缀都是独立的。
-//! - 接收端按自己的「类型开关 + 大小上限」裁剪，超限或未启用的类型直接丢弃；
-//!   整条都不可用时只回 ok（不把对方的内容写进本机）。
-//! - 消息 id 去重 5 分钟：同一台设备即使同时从 IP 与局域网各发一遍，也只落一次。
-//! - 移动端受系统限制：Android 10+ 只有前台应用能读剪切板，因此移动端没有
-//!   Rust 轮询线程，由 Kotlin 桥在前台读取后调用 `clipboard_local_changed`。
+//! 配对模型不再有「同步口令」：
+//! - **局域网**：UDP 广播/组播发现所有开启该功能的设备；双方各自在界面上勾选后同步。
+//! - **广域网统一服务器**：同一 kxtodo-server 上同一账户的设备互相发现，再按勾选同步。
+//! - **广域网 P2P**：账户名 + 密码派生一个 pkarr 房间，同账户设备互相发现，同样按勾选同步。
+//!
+//! 安全：
+//! - 设备身份 = `runtime/clipboard-identity.json` 里持久化的 Ed25519 私钥；
+//!   局域网握手用它对「角色|设备|nonce|临时公钥」签名，对端按设备 id 验签。
+//! - 每次连接生成一对临时 X25519 密钥，会话密钥 = SHA256(共享密钥 + 双方 nonce + 双方设备 id)；
+//!   之后所有帧用 ChaCha20-Poly1305，AAD 绑定本次握手。抓包看不到明文。
+//! - 广域网走 iroh，本身已是端到端加密的 QUIC；仍然复用同一套握手做设备级校验。
+//!
+//! **锁纪律**：任何 `Mutex` 都不许在持锁期间调用 `emit_status` / 网络 / 文件 I/O。
+//! v0.8.9 的「发现第一台设备就整机卡死」就是 `push_peer` 持着 `lan_peers` 锁去
+//! `emit_status` → `status_snapshot` → 再次锁 `lan_peers`（std Mutex 不可重入）。
+//! 状态快照一律先克隆、放锁、再拼 JSON。
 
-use std::collections::{BTreeMap, HashMap};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -24,47 +27,68 @@ use std::time::{Duration, Instant};
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use iroh::endpoint::presets;
-use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, SecretKey, TransportAddr};
+use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, SecretKey, Signature, TransportAddr};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use socket2::{Domain, Protocol, Socket, Type};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 use tokio::sync::Notify;
+use x25519_dalek::{PublicKey as XPublicKey, StaticSecret as XSecret};
 
 use crate::error::{CoreError, CoreResult};
 use crate::host::HostBackend;
 use crate::model::{ClipboardLimits, ClipboardSettings, SettingsFile};
 use crate::repo::Layout;
-use crate::sync::crypto::hmac_sha256;
+use crate::sync::crypto::derive_keys;
 use crate::sync::p2p::{directory, net};
+use crate::sync::transport::SyncClient;
 
-/// 独立的 ALPN（不能与同步 `kxtodo-p2p/1`、传输 `kxtodo-transfer/1` 相同）。
-pub const ALPN: &[u8] = b"kxtodo-clipboard/1";
-/// 同步口令下限，与传输助手同一口径。
-pub const CODE_MIN_CHARS: usize = 8;
+/// 独立的 ALPN（与同步 `kxtodo-p2p/1`、传输 `kxtodo-transfer/1` 不同）。
+pub const ALPN: &[u8] = b"kxtodo-clipboard/2";
 /// 局域网发现端口（固定，所有设备一致）。
 pub const DISCOVERY_PORT: u16 = 52178;
-/// 局域网 TCP 默认端口；被占用时自动换临时端口并在 UI 里显示实际端口。
+/// 局域网 TCP 默认端口；被占用时自动换临时端口并在广播里带实际端口。
 pub const LAN_PORT: u16 = 52179;
+
+/// 诊断用：允许探针/同机多实例改端口（`KXTODO_CLIPBOARD_DISCOVERY_PORT` /
+/// `KXTODO_CLIPBOARD_LAN_PORT`）。正常应用不设置这两个环境变量，端口仍是固定值。
+fn discovery_port() -> u16 {
+    std::env::var("KXTODO_CLIPBOARD_DISCOVERY_PORT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(DISCOVERY_PORT)
+}
+
+fn preferred_lan_port() -> u16 {
+    std::env::var("KXTODO_CLIPBOARD_LAN_PORT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(LAN_PORT)
+}
+/// kxtodo-server 默认端口（用户只填 IP 时补这个）。
+pub const SERVER_DEFAULT_PORT: u16 = 52177;
+
 const APP: &str = "kxtodo-clipboard";
-const PROTOCOL_VERSION: u32 = 1;
-const REPUBLISH_SECS: u64 = 20;
-const DEVICE_FRESH_SECS: u64 = 45;
+const PROTOCOL_VERSION: u32 = 2;
+const DISCOVERY_TICK: Duration = Duration::from_secs(2);
 const LAN_FRESH: Duration = Duration::from_secs(10);
-const P2P_FRESH: Duration = Duration::from_secs(60);
-const DIRECT_FRESH: Duration = Duration::from_secs(15);
-const PEER_POLL: Duration = Duration::from_secs(2);
-const DIRECT_POLL: Duration = Duration::from_secs(5);
+const WAN_TICK: Duration = Duration::from_secs(5);
+const WAN_FRESH: Duration = Duration::from_secs(60);
+const REPUBLISH_SECS: u64 = 20;
+const PEER_NAME_FRESH: Duration = Duration::from_secs(30);
 const CLIPBOARD_POLL: Duration = Duration::from_millis(800);
 const RECENT_TTL: Duration = Duration::from_secs(300);
+const DIRECTORY_FRESH_SECS: u64 = 60;
 const MAX_HANDSHAKE_FRAME: usize = 64 * 1024;
 const MAX_CTRL_FRAME: usize = 1024 * 1024;
 const MAX_BLOB_FRAME: usize = 1024 * 1024;
 const CHUNK: usize = 256 * 1024;
 const MAX_MB: u64 = 1024 * 1024;
+const MULTICAST_V4: Ipv4Addr = Ipv4Addr::new(239, 255, 77, 53);
 
 // ---------------------------------------------------------------------------
 // 载荷与线路格式
@@ -100,8 +124,7 @@ impl ClipboardContent {
     }
 
     /// 内容指纹：文件只算「名字 + 大小」，**不算路径/修改时间**。
-    /// 走到对端后文件会被改名落盘，若把路径算进指纹，回声抑制就永远对不上；
-    /// 文本/图片则按实际字节算，远端写回后本机读到的指纹与发送时完全一致。
+    /// 走到对端后文件会被改名落盘，若把路径算进指纹，回声抑制就永远对不上。
     pub fn signature(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(b"text\0");
@@ -116,7 +139,7 @@ impl ClipboardContent {
         for file in &self.files {
             hasher.update(b"\0file\0");
             hasher.update(file.name.as_bytes());
-            hasher.update((file_size(file).unwrap_or(0)).to_le_bytes());
+            hasher.update((file_size(file).unwrap_or(0) as u64).to_le_bytes());
         }
         hex(&hasher.finalize())
     }
@@ -140,7 +163,8 @@ struct Hello {
     device: String,
     name: String,
     nonce: String,
-    tag: String,
+    eph: String,
+    sig: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,6 +178,10 @@ struct HelloAck {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     nonce: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
+    eph: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    sig: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     reason: String,
 }
 
@@ -165,7 +193,6 @@ struct DiscoverPacket {
     device: String,
     name: String,
     port: u16,
-    tag: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,7 +207,6 @@ struct WireFile {
 struct WireHeader {
     v: u32,
     app: String,
-    /// `clipboard` | `ping`
     kind: String,
     id: String,
     origin: String,
@@ -202,6 +228,32 @@ struct WireHeader {
     sig: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PresenceBody {
+    device_id: String,
+    name: String,
+    endpoint_id: String,
+    #[serde(default)]
+    addrs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ServerPeer {
+    device_id: String,
+    name: String,
+    endpoint_id: String,
+    #[serde(default)]
+    addrs: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ServerPeersResponse {
+    #[serde(default)]
+    peers: Vec<ServerPeer>,
+}
+
 struct SessionInfo {
     key: [u8; 32],
     aad: Vec<u8>,
@@ -210,11 +262,22 @@ struct SessionInfo {
 }
 
 // ---------------------------------------------------------------------------
-// 加解密与帧
+// 工具
 // ---------------------------------------------------------------------------
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn unhex(raw: &str) -> Option<Vec<u8>> {
+    let raw = raw.trim();
+    if raw.len() % 2 != 0 || raw.is_empty() {
+        return None;
+    }
+    (0..raw.len())
+        .step_by(2)
+        .map(|index| u8::from_str_radix(&raw[index..index + 2], 16).ok())
+        .collect()
 }
 
 fn random_hex(bytes: usize) -> String {
@@ -223,29 +286,51 @@ fn random_hex(bytes: usize) -> String {
     hex(&buffer)
 }
 
-fn group_key(code: &str) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(b"kxtodo-clipboard/v1/group/");
-    hasher.update(code.as_bytes());
-    hasher.finalize().into()
+fn random_secret() -> XSecret {
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    XSecret::from(bytes)
 }
 
-fn group_tag(key: &[u8; 32], label: &[u8]) -> String {
-    hex(&hmac_sha256(key, label))
-}
-
-fn session_key(group: &[u8; 32], client_nonce: &str, server_nonce: &str) -> [u8; 32] {
+fn session_key(
+    shared: &[u8; 32],
+    client_nonce: &str,
+    server_nonce: &str,
+    client_device: &str,
+    server_device: &str,
+) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(group);
-    hasher.update(b"|session|");
+    hasher.update(b"kxtodo-clipboard/2/session\0");
+    hasher.update(shared);
+    hasher.update(b"\0");
     hasher.update(client_nonce.as_bytes());
-    hasher.update(b"|");
+    hasher.update(b"\0");
     hasher.update(server_nonce.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(client_device.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(server_device.as_bytes());
     hasher.finalize().into()
 }
 
 fn session_aad(client_nonce: &str, server_nonce: &str) -> Vec<u8> {
-    format!("kxtodo-clipboard/v1|{client_nonce}|{server_nonce}").into_bytes()
+    format!("kxtodo-clipboard/2|{client_nonce}|{server_nonce}").into_bytes()
+}
+
+fn hello_message(role: &str, device: &str, nonce: &str, eph: &str) -> Vec<u8> {
+    format!("kxtodo-clipboard/2/{role}|{device}|{nonce}|{eph}").into_bytes()
+}
+
+fn verify_device_signature(device: &str, message: &[u8], sig_hex: &str) -> CoreResult<EndpointId> {
+    let id = EndpointId::from_z32(device)
+        .map_err(|_| CoreError::validation("CLIPBOARD_BAD_DEVICE", "对方设备 id 不合法"))?;
+    let bytes = unhex(sig_hex)
+        .ok_or_else(|| CoreError::validation("CLIPBOARD_BAD_SIGNATURE", "握手签名格式不对"))?;
+    let signature = Signature::try_from(bytes.as_slice())
+        .map_err(|_| CoreError::validation("CLIPBOARD_BAD_SIGNATURE", "握手签名长度不对"))?;
+    id.verify(message, &signature)
+        .map_err(|_| CoreError::validation("CLIPBOARD_BAD_SIGNATURE", "握手签名校验失败"))?;
+    Ok(id)
 }
 
 fn seal(key: &[u8; 32], aad: &[u8], plain: &[u8]) -> CoreResult<Vec<u8>> {
@@ -269,7 +354,7 @@ fn open(key: &[u8; 32], aad: &[u8], sealed: &[u8]) -> CoreResult<Vec<u8>> {
     let (nonce, body) = sealed.split_at(12);
     cipher
         .decrypt(Nonce::from_slice(nonce), Payload { msg: body, aad })
-        .map_err(|_| CoreError::validation("CLIPBOARD_DECRYPT", "剪切板内容解密失败：口令不一致？"))
+        .map_err(|_| CoreError::validation("CLIPBOARD_DECRYPT", "剪切板内容解密失败"))
 }
 
 async fn write_raw<W: AsyncWrite + Unpin>(writer: &mut W, bytes: &[u8]) -> CoreResult<()> {
@@ -342,13 +427,14 @@ async fn read_sealed_json<R: AsyncRead + Unpin>(
 }
 
 // ---------------------------------------------------------------------------
-// 身份与网络配置
+// 身份、命名与设置
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ClipboardNet {
     pub relay: Option<String>,
     pub directory_url: String,
+    pub server_url: String,
 }
 
 impl ClipboardNet {
@@ -366,7 +452,11 @@ impl ClipboardNet {
         } else {
             custom
         };
-        Self { relay, directory_url }
+        Self {
+            relay,
+            directory_url,
+            server_url: settings.clipboard.server_url.clone(),
+        }
     }
 }
 
@@ -384,8 +474,8 @@ fn identity_secret(layout: &Layout) -> CoreResult<SecretKey> {
     let path = identity_path(layout);
     if let Ok(raw) = std::fs::read_to_string(&path) {
         if let Ok(parsed) = serde_json::from_str::<IdentityFile>(&raw) {
-            if let Some(secret) = decode_secret(&parsed.secret) {
-                return Ok(secret);
+            if let Some(bytes) = unhex(&parsed.secret).and_then(|bytes| bytes.try_into().ok()) {
+                return Ok(SecretKey::from_bytes(&bytes));
             }
         }
     }
@@ -398,35 +488,66 @@ fn identity_secret(layout: &Layout) -> CoreResult<SecretKey> {
     Ok(secret)
 }
 
-fn decode_secret(raw: &str) -> Option<SecretKey> {
-    let raw = raw.trim();
-    if raw.len() != 64 {
-        return None;
-    }
-    let mut bytes = [0u8; 32];
-    for index in 0..32 {
-        bytes[index] = u8::from_str_radix(&raw[index * 2..index * 2 + 2], 16).ok()?;
-    }
-    Some(SecretKey::from_bytes(&bytes))
-}
-
-fn default_device_name() -> String {
-    let platform = match std::env::consts::OS {
+fn platform_label() -> &'static str {
+    match std::env::consts::OS {
         "windows" => "Windows",
         "android" => "Android",
         "linux" => "Linux",
         "macos" => "macOS",
         "ios" => "iOS",
         other => other,
+    }
+}
+
+/// 设备显示名：自定义前缀 + `·平台`；没填前缀时是 `kxtodo·平台(设备 id 前 8 位)`。
+pub fn device_display_name(device_id: &str, base: &str) -> String {
+    let platform = platform_label();
+    let base = directory::sanitize_name(base);
+    if base.is_empty() {
+        let suffix: String = device_id.chars().take(8).collect();
+        if suffix.is_empty() {
+            format!("kxtodo·{platform}")
+        } else {
+            format!("kxtodo·{platform}({suffix})")
+        }
+    } else {
+        format!("{base}·{platform}")
+    }
+}
+
+fn normalize_server_url(raw: &str) -> CoreResult<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(String::new());
+    }
+    let candidate = if raw.starts_with("http://") || raw.starts_with("https://") {
+        raw.to_string()
+    } else {
+        format!("http://{raw}")
     };
-    format!("KXToDo·{platform}")
+    let mut url = url::Url::parse(&candidate).map_err(|error| {
+        CoreError::validation(
+            "CLIPBOARD_SERVER_URL_INVALID",
+            format!("服务器地址不合法（{raw}）：{error}"),
+        )
+    })?;
+    // 用户只填 IP 是常态：补 kxtodo-server 默认端口；显式写了端口就尊重。
+    if url.scheme() == "http" && url.port().is_none() {
+        let _ = url.set_port(Some(SERVER_DEFAULT_PORT));
+    }
+    let mut out = url.to_string();
+    if out.ends_with('/') {
+        out.pop();
+    }
+    Ok(out)
 }
 
 fn normalized(settings: &ClipboardSettings) -> ClipboardSettings {
     let mut value = settings.clone();
-    value.code = value.code.trim().to_string();
-    value.device_name = value.device_name.trim().to_string();
-    value.direct_addresses = value.direct_addresses.trim().to_string();
+    value.device_name = directory::sanitize_name(&value.device_name);
+    value.server_url = value.server_url.trim().to_string();
+    value.account = value.account.trim().to_string();
+    value.password = value.password.trim().to_string();
     value.save_dir = value.save_dir.trim().to_string();
     value.limits.text_mb = value.limits.text_mb.clamp(1, 64);
     value.limits.html_mb = value.limits.html_mb.clamp(1, 64);
@@ -435,18 +556,22 @@ fn normalized(settings: &ClipboardSettings) -> ClipboardSettings {
     value
 }
 
-/// 一次写整份剪切板设置时的校验（GUI 的「保存并应用」走这里）。
+fn requires_wan(value: &ClipboardSettings) -> bool {
+    value.server_enabled || value.p2p_enabled
+}
+
+/// 一次写整份剪切板设置时的校验（GUI「保存并应用」与 CLI config set 都走这里）。
 pub fn normalize_settings(settings: &ClipboardSettings) -> CoreResult<ClipboardSettings> {
-    let value = normalized(settings);
-    // 关闭状态允许留一个还没填完的口令：用户清空口令后先关掉同步是正常操作，
-    // 不必逼他先凑够 8 位。真正启动服务前 reconcile 会再检查一次。
-    if value.enabled && !value.code.is_empty() && value.code.chars().count() < CODE_MIN_CHARS {
-        return Err(CoreError::validation(
-            "CLIPBOARD_CODE_TOO_SHORT",
-            format!("同步口令至少 {CODE_MIN_CHARS} 位"),
-        ));
-    }
+    let mut value = normalized(settings);
+    value.server_url = normalize_server_url(&value.server_url)?;
+    // 这里刻意**不**因为缺少账户/密码/传输方式而拒绝保存：旧配置升级、CLI 分步配置、
+    // 用户先把开关打开再填凭据都应当保留设置；能启动的部分照常启动，缺的那块由
+    // 状态里的 lastError 说明（GUI 的保存按钮另有即时校验）。
     Ok(value)
+}
+
+fn wan_ready(value: &ClipboardSettings) -> bool {
+    requires_wan(value) && !value.account.is_empty() && !value.password.is_empty()
 }
 
 fn limit_bytes(limits: &ClipboardLimits) -> (u64, u64, u64, u64) {
@@ -458,78 +583,110 @@ fn limit_bytes(limits: &ClipboardLimits) -> (u64, u64, u64, u64) {
     )
 }
 
-fn parse_direct_addresses(raw: &str) -> Vec<SocketAddr> {
-    let mut out = Vec::new();
-    for item in raw.split(|ch: char| ch == ',' || ch == '\n' || ch == ';' || ch.is_whitespace()) {
-        let text = item.trim();
-        if text.is_empty() {
-            continue;
-        }
-        let address = if let Ok(address) = text.parse::<SocketAddr>() {
-            Some(address)
-        } else if let Ok(ip) = text.parse::<IpAddr>() {
-            Some(SocketAddr::new(ip, LAN_PORT))
-        } else {
-            let unbracketed = text.trim_start_matches('[').trim_end_matches(']');
-            format!("[{unbracketed}]:{LAN_PORT}").parse::<SocketAddr>().ok()
-        };
-        if let Some(address) = address {
-            if !out.contains(&address) {
-                out.push(address);
-            }
-            if out.len() >= 16 {
-                break;
-            }
-        }
-    }
-    out
+// ---------------------------------------------------------------------------
+// 每台设备的勾选（本机偏好，单独落 runtime 文件）
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct SelectionFile {
+    #[serde(default)]
+    disabled: Vec<String>,
 }
 
-fn direct_addrs(endpoint: &Endpoint) -> Vec<SocketAddr> {
-    endpoint
-        .addr()
-        .addrs
-        .iter()
-        .filter_map(|addr| match addr {
-            TransportAddr::Ip(socket) => Some(*socket),
-            _ => None,
-        })
-        .collect()
+fn selection_path(layout: &Layout) -> PathBuf {
+    layout.runtime_dir().join("clipboard-selection.json")
 }
 
-fn local_addresses() -> Vec<String> {
-    // UDP connect 不发包，只让系统选一条出口地址；离线时为空。
-    std::net::UdpSocket::bind("0.0.0.0:0")
-        .ok()
-        .and_then(|socket| {
-            socket.connect("8.8.8.8:80").ok()?;
-            let ip = socket.local_addr().ok()?.ip();
-            (!ip.is_unspecified()).then(|| ip.to_string())
-        })
+fn load_disabled(layout: &Layout) -> BTreeSet<String> {
+    let Ok(raw) = std::fs::read_to_string(selection_path(layout)) else {
+        return BTreeSet::new();
+    };
+    let Ok(parsed) = serde_json::from_str::<SelectionFile>(&raw) else {
+        return BTreeSet::new();
+    };
+    parsed
+        .disabled
         .into_iter()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .take(2048)
         .collect()
+}
+
+fn save_disabled(layout: &Layout, disabled: &BTreeSet<String>) -> CoreResult<()> {
+    let payload = serde_json::to_string_pretty(&SelectionFile {
+        disabled: disabled.iter().cloned().collect(),
+    })?;
+    let path = selection_path(layout);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    crate::repo::atomic_write(&path, &payload)?;
+    Ok(())
+}
+
+/// 界面上勾选/取消一台设备。立刻作用于正在跑的服务，不做重启。
+pub fn set_peer_selected(layout: &Layout, device_id: &str, selected: bool) -> CoreResult<()> {
+    let id = device_id.trim();
+    if id.is_empty() {
+        return Err(CoreError::validation("CLIPBOARD_BAD_DEVICE", "缺少设备 id"));
+    }
+    let mut disabled = load_disabled(layout);
+    if selected {
+        disabled.remove(id);
+    } else {
+        if disabled.len() >= 2048 {
+            disabled.pop_first();
+        }
+        disabled.insert(id.to_string());
+    }
+    save_disabled(layout, &disabled)?;
+    if let Some(inner) = running_slot(layout) {
+        if let Ok(mut slot) = inner.disabled.lock() {
+            *slot = disabled;
+        }
+        inner.emit_status();
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
 // 服务状态
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 struct LanPeer {
     name: String,
     addr: SocketAddr,
     last_seen: Instant,
 }
 
-struct P2pPeer {
+#[derive(Clone)]
+struct WanPeer {
     name: String,
     addr: EndpointAddr,
-    last_seen: Instant,
+    server_seen: Option<Instant>,
+    p2p_seen: Option<Instant>,
 }
 
-struct DirectPeer {
-    device_id: String,
-    name: String,
-    last_ok: Instant,
+impl WanPeer {
+    fn fresh(&self, now: Instant) -> bool {
+        self.server_seen
+            .is_some_and(|at| now.duration_since(at) <= WAN_FRESH)
+            || self.p2p_seen
+                .is_some_and(|at| now.duration_since(at) <= WAN_FRESH)
+    }
+
+    fn transports(&self, now: Instant) -> Vec<&'static str> {
+        let mut out = Vec::new();
+        if self.server_seen.is_some_and(|at| now.duration_since(at) <= WAN_FRESH) {
+            out.push("server");
+        }
+        if self.p2p_seen.is_some_and(|at| now.duration_since(at) <= WAN_FRESH) {
+            out.push("p2p");
+        }
+        out
+    }
 }
 
 struct Inner {
@@ -539,24 +696,32 @@ struct Inner {
     backend: Option<Arc<dyn HostBackend>>,
     signature: String,
     cancel: AtomicBool,
+    /// 停止信号（notify_waiters + notify_one，防止重试窗口丢唤醒）。
     notify: Notify,
+    /// 「刷新」：立刻广播 / 拉一次发现结果，不等下一轮定时器。
+    refresh: Notify,
     secret: SecretKey,
     device_id: String,
     name: String,
-    group: [u8; 32],
     save_dir: PathBuf,
     tcp_port: Mutex<u16>,
-    direct_addrs: Vec<SocketAddr>,
     endpoint: Mutex<Option<Endpoint>>,
     lan_peers: Mutex<BTreeMap<String, LanPeer>>,
-    p2p_peers: Mutex<BTreeMap<String, P2pPeer>>,
-    direct_peers: Mutex<BTreeMap<SocketAddr, DirectPeer>>,
+    wan_peers: Mutex<BTreeMap<String, WanPeer>>,
+    disabled: Mutex<BTreeSet<String>>,
     recent: Mutex<BTreeMap<String, Instant>>,
     last_local: Mutex<String>,
     last_remote: Mutex<String>,
     last_error: Mutex<String>,
+    lan_error: Mutex<String>,
+    endpoint_error: Mutex<String>,
+    server_error: Mutex<String>,
+    p2p_error: Mutex<String>,
     last_event: Mutex<Option<Value>>,
     last_status: Mutex<String>,
+    server_token: Mutex<Option<String>>,
+    server_ok: AtomicBool,
+    p2p_ok: AtomicBool,
     sent_count: AtomicU64,
     received_count: AtomicU64,
 }
@@ -569,6 +734,11 @@ fn running() -> &'static Mutex<BTreeMap<String, Arc<Inner>>> {
 
 fn slot_key(layout: &Layout) -> String {
     layout.runtime_dir().to_string_lossy().to_string()
+}
+
+fn running_slot(layout: &Layout) -> Option<Arc<Inner>> {
+    let guard = running().lock().ok()?;
+    guard.get(&slot_key(layout)).cloned()
 }
 
 fn runtime() -> CoreResult<Arc<Runtime>> {
@@ -598,12 +768,10 @@ pub fn reconcile(
 ) -> CoreResult<()> {
     let config = normalize_settings(&settings.clipboard)?;
     let net = ClipboardNet::from_settings(settings);
-    // relay / 目录也进签名：改了传输或同步的 relay，P2P 端点必须重建。
     let signature = serde_json::to_string(&(&config, &net))?;
     let key = slot_key(layout);
-    let enabled = config.enabled
-        && config.code.chars().count() >= CODE_MIN_CHARS
-        && (config.lan_enabled || config.p2p_enabled || config.direct_enabled);
+    // 广域网开关开着但凭据还没填：局域网仍然要能跑，不能把它一起拖停。
+    let enabled = config.enabled && (config.lan_enabled || wan_ready(&config));
     if !enabled {
         stop(&key);
         return Ok(());
@@ -616,11 +784,7 @@ pub fn reconcile(
     stop(&key);
     let secret = identity_secret(layout)?;
     let device_id = secret.public().to_z32();
-    let name = if config.device_name.is_empty() {
-        default_device_name()
-    } else {
-        directory::sanitize_name(&config.device_name)
-    };
+    let name = device_display_name(&device_id, &config.device_name);
     let save_dir = if config.save_dir.is_empty() {
         backend
             .as_ref()
@@ -630,16 +794,16 @@ pub fn reconcile(
         PathBuf::from(config.save_dir.trim())
     };
     std::fs::create_dir_all(&save_dir)?;
+    let disabled = load_disabled(layout);
     let inner = Arc::new(Inner {
         layout: layout.clone(),
-        group: group_key(&config.code),
-        direct_addrs: parse_direct_addresses(&config.direct_addresses),
+        settings: config,
         net,
         backend,
-        settings: config,
         signature,
         cancel: AtomicBool::new(false),
         notify: Notify::new(),
+        refresh: Notify::new(),
         secret,
         device_id,
         name,
@@ -647,14 +811,21 @@ pub fn reconcile(
         tcp_port: Mutex::new(0),
         endpoint: Mutex::new(None),
         lan_peers: Mutex::new(BTreeMap::new()),
-        p2p_peers: Mutex::new(BTreeMap::new()),
-        direct_peers: Mutex::new(BTreeMap::new()),
+        wan_peers: Mutex::new(BTreeMap::new()),
+        disabled: Mutex::new(disabled),
         recent: Mutex::new(BTreeMap::new()),
         last_local: Mutex::new(String::new()),
         last_remote: Mutex::new(String::new()),
         last_error: Mutex::new(String::new()),
+        lan_error: Mutex::new(String::new()),
+        endpoint_error: Mutex::new(String::new()),
+        server_error: Mutex::new(String::new()),
+        p2p_error: Mutex::new(String::new()),
         last_event: Mutex::new(None),
         last_status: Mutex::new(String::new()),
+        server_token: Mutex::new(None),
+        server_ok: AtomicBool::new(false),
+        p2p_ok: AtomicBool::new(false),
         sent_count: AtomicU64::new(0),
         received_count: AtomicU64::new(0),
     });
@@ -673,15 +844,15 @@ fn stop(key: &str) {
         return;
     };
     inner.cancel.store(true, Ordering::SeqCst);
-    // notify_waiters 只唤醒“此刻在等”的任务；run_service 可能还在重试绑端口，
-    // 还没走到 await。notify_one 会留下一个 permit，保证它随后一定能醒。
+    // notify_waiters 只唤醒此刻在等的人；run_service 可能还在重试绑端口，
+    // notify_one 留下 permit，保证它随后一定能醒。
     inner.notify.notify_waiters();
     inner.notify.notify_one();
     let endpoint = inner.endpoint.lock().ok().and_then(|mut slot| slot.take());
     if let Some(endpoint) = endpoint {
         if let Ok(runtime) = runtime() {
             runtime.spawn(async move {
-                endpoint.close().await;
+                let _ = tokio::time::timeout(Duration::from_secs(3), endpoint.close()).await;
             });
         }
     }
@@ -691,22 +862,28 @@ pub fn stop_for_layout(layout: &Layout) {
     stop(&slot_key(layout));
 }
 
+fn pick_error(slots: &[String]) -> String {
+    slots
+        .iter()
+        .find(|value| !value.is_empty())
+        .cloned()
+        .unwrap_or_default()
+}
+
 /// 状态快照。服务没跑时也返回「为什么没跑」，UI 不用自己猜。
-pub fn status(layout: &Layout) -> Value {
-    if let Some(inner) = running().lock().ok().and_then(|guard| guard.get(&slot_key(layout)).cloned()) {
-        return inner.status_snapshot();
+pub fn status(layout: &Layout, settings: &SettingsFile) -> Value {
+    if let Some(inner) = running_slot(layout) {
+        return inner.status_value();
     }
-    let settings = crate::repo::Repository::open_readonly(layout.root.clone())
-        .load_settings()
-        .unwrap_or_default();
     let config = normalized(&settings.clipboard);
-    let code_ready = config.code.chars().count() >= CODE_MIN_CHARS;
     let reason = if !config.enabled {
         "未启用"
-    } else if !code_ready {
-        "请设置同步口令（至少 8 位）"
-    } else if !(config.lan_enabled || config.p2p_enabled || config.direct_enabled) {
-        "请至少启用一种同步方式"
+    } else if !(config.lan_enabled || requires_wan(&config)) {
+        "请至少开启一种同步方式"
+    } else if requires_wan(&config) && (config.account.is_empty() || config.password.is_empty()) {
+        "请填写广域网账户和密码"
+    } else if config.server_enabled && config.server_url.is_empty() {
+        "请填写统一服务器地址"
     } else {
         "未运行"
     };
@@ -716,29 +893,40 @@ pub fn status(layout: &Layout) -> Value {
     json!({
         "running": false,
         "enabled": config.enabled,
-        "codeReady": code_ready,
         "deviceId": device_id,
-        "deviceName": if config.device_name.is_empty() { default_device_name() } else { config.device_name.clone() },
+        "deviceName": device_display_name(&device_id, &config.device_name),
         "port": 0,
-        "discoveryPort": DISCOVERY_PORT,
-        "localAddresses": [],
+        "discoveryPort": discovery_port(),
+        "localAddresses": local_ipv4s(),
         "transports": {
-            "direct": config.direct_enabled,
             "lan": config.lan_enabled,
+            "server": config.server_enabled,
             "p2p": config.p2p_enabled,
         },
+        "serverRegistered": false,
+        "p2pActive": false,
         "peers": [],
         "lastError": reason,
         "lastEvent": Value::Null,
         "sent": 0,
         "received": 0,
-        "saveDir": config.save_dir.clone(),
+        "saveDir": config.save_dir,
     })
+}
+
+/// 立刻触发一轮发现（局域网广播 + 服务器/P2P 拉取），不等定时器。
+pub fn refresh(layout: &Layout, settings: &SettingsFile) -> Value {
+    if let Some(inner) = running_slot(layout) {
+        inner.refresh.notify_waiters();
+        inner.emit_status();
+        return inner.status_value();
+    }
+    status(layout, settings)
 }
 
 /// 移动端前台读到的剪切板：交给服务去发送。桌面侧由 Rust 轮询线程直接调用。
 pub fn local_changed(layout: &Layout, content: ClipboardContent) -> CoreResult<Value> {
-    let Some(inner) = running().lock().ok().and_then(|guard| guard.get(&slot_key(layout)).cloned()) else {
+    let Some(inner) = running_slot(layout) else {
         return Ok(json!({ "sent": 0, "running": false }));
     };
     inner.on_local(content);
@@ -746,36 +934,39 @@ pub fn local_changed(layout: &Layout, content: ClipboardContent) -> CoreResult<V
 }
 
 impl Inner {
-    fn status_snapshot(&self) -> Value {
-        let port = self.tcp_port.lock().map(|slot| *slot).unwrap_or(0);
-        json!({
-            "running": !self.cancel.load(Ordering::SeqCst),
-            "enabled": true,
-            "codeReady": true,
-            "deviceId": self.device_id,
-            "deviceName": self.name,
-            "port": port,
-            "discoveryPort": DISCOVERY_PORT,
-            "localAddresses": local_addresses(),
-            "transports": {
-                "direct": self.settings.direct_enabled,
-                "lan": self.settings.lan_enabled,
-                "p2p": self.settings.p2p_enabled,
-            },
-            "peers": self.peer_list(),
-            "lastError": self.last_error.lock().map(|slot| slot.clone()).unwrap_or_default(),
-            "lastEvent": self.last_event.lock().ok().and_then(|slot| slot.clone()).unwrap_or(Value::Null),
-            "sent": self.sent_count.load(Ordering::Relaxed),
-            "received": self.received_count.load(Ordering::Relaxed),
-            "saveDir": self.save_dir.to_string_lossy(),
-        })
+    fn set_error_slot(slot: &Mutex<String>, message: impl Into<String>) {
+        if let Ok(mut value) = slot.lock() {
+            *value = message.into();
+        }
+    }
+
+    fn set_lan_error(&self, message: impl Into<String>) {
+        Self::set_error_slot(&self.lan_error, message);
+        self.emit_status();
+    }
+
+    fn set_endpoint_error(&self, message: impl Into<String>) {
+        Self::set_error_slot(&self.endpoint_error, message);
+        self.emit_status();
+    }
+
+    fn set_server_error(&self, message: impl Into<String>) {
+        Self::set_error_slot(&self.server_error, message);
+        self.emit_status();
+    }
+
+    fn set_p2p_error(&self, message: impl Into<String>) {
+        Self::set_error_slot(&self.p2p_error, message);
+        self.emit_status();
     }
 
     fn set_error(&self, message: impl Into<String>) {
-        if let Ok(mut slot) = self.last_error.lock() {
-            *slot = message.into();
-        }
+        Self::set_error_slot(&self.last_error, message);
         self.emit_status();
+    }
+
+    fn clear_send_error(&self) {
+        Self::set_error_slot(&self.last_error, "");
     }
 
     fn set_event(&self, kind: &str, detail: impl Into<String>, peer: impl Into<String>) {
@@ -797,7 +988,8 @@ impl Inner {
     }
 
     fn emit_status(&self) {
-        let snapshot = self.status_snapshot();
+        // 先完整取快照（内部逐个短锁、放锁），再序列化、比较、发送。
+        let snapshot = self.status_value();
         let rendered = match serde_json::to_string(&snapshot) {
             Ok(value) => value,
             Err(_) => return,
@@ -819,63 +1011,112 @@ impl Inner {
         }
     }
 
-    fn peer_list(&self) -> Vec<Value> {
-        let mut merged: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
-        if let Ok(peers) = self.lan_peers.lock() {
-            for (id, peer) in peers.iter() {
-                if peer.last_seen.elapsed() <= LAN_FRESH {
-                    let entry = merged.entry(id.clone()).or_insert_with(|| (peer.name.clone(), Vec::new()));
-                    if entry.0.is_empty() {
-                        entry.0 = peer.name.clone();
-                    }
-                    entry.1.push("lan".to_string());
-                }
+    fn lane_error(&self) -> String {
+        pick_error(&[
+            self.last_error.lock().map(|v| v.clone()).unwrap_or_default(),
+            self.lan_error.lock().map(|v| v.clone()).unwrap_or_default(),
+            self.endpoint_error.lock().map(|v| v.clone()).unwrap_or_default(),
+            self.server_error.lock().map(|v| v.clone()).unwrap_or_default(),
+            self.p2p_error.lock().map(|v| v.clone()).unwrap_or_default(),
+        ])
+    }
+
+    fn peer_selected(&self, device_id: &str) -> bool {
+        self.disabled
+            .lock()
+            .map(|slot| !slot.contains(device_id))
+            .unwrap_or(true)
+    }
+
+    fn status_value(&self) -> Value {
+        let port = self.tcp_port.lock().map(|slot| *slot).unwrap_or(0);
+        let lan_peers = self
+            .lan_peers
+            .lock()
+            .map(|slot| slot.clone())
+            .unwrap_or_default();
+        let wan_peers = self
+            .wan_peers
+            .lock()
+            .map(|slot| slot.clone())
+            .unwrap_or_default();
+        let disabled = self
+            .disabled
+            .lock()
+            .map(|slot| slot.clone())
+            .unwrap_or_default();
+        let last_event = self
+            .last_event
+            .lock()
+            .ok()
+            .and_then(|slot| slot.clone())
+            .unwrap_or(Value::Null);
+        let now = Instant::now();
+        let mut merged: BTreeMap<String, (String, Vec<&'static str>)> = BTreeMap::new();
+        for (id, peer) in &lan_peers {
+            if now.duration_since(peer.last_seen) > LAN_FRESH {
+                continue;
             }
-        }
-        if let Ok(peers) = self.p2p_peers.lock() {
-            for (id, peer) in peers.iter() {
-                if peer.last_seen.elapsed() <= P2P_FRESH {
-                    let entry = merged.entry(id.clone()).or_insert_with(|| (peer.name.clone(), Vec::new()));
-                    if entry.0.is_empty() {
-                        entry.0 = peer.name.clone();
-                    }
-                    entry.1.push("p2p".to_string());
-                }
+            let entry = merged
+                .entry(id.clone())
+                .or_insert_with(|| (peer.name.clone(), Vec::new()));
+            if entry.0.is_empty() {
+                entry.0 = peer.name.clone();
             }
+            entry.1.push("lan");
         }
-        if let Ok(peers) = self.direct_peers.lock() {
-            for peer in peers.values() {
-                if peer.last_ok.elapsed() <= DIRECT_FRESH {
-                    let entry = merged.entry(peer.device_id.clone()).or_insert_with(|| (peer.name.clone(), Vec::new()));
-                    if entry.0.is_empty() {
-                        entry.0 = peer.name.clone();
-                    }
-                    entry.1.push("direct".to_string());
-                }
+        for (id, peer) in &wan_peers {
+            if !peer.fresh(now) {
+                continue;
             }
+            let entry = merged
+                .entry(id.clone())
+                .or_insert_with(|| (peer.name.clone(), Vec::new()));
+            if entry.0.is_empty() {
+                entry.0 = peer.name.clone();
+            }
+            entry.1.extend(peer.transports(now));
         }
-        let priority = ["direct", "lan", "p2p"];
-        let mut out: Vec<Value> = merged
+        let mut peers: Vec<Value> = merged
             .into_iter()
-            .map(|(id, (name, transports))| {
-                let mut transports = transports;
-                transports.sort_by_key(|item| priority.iter().position(|value| value == item).unwrap_or(9));
+            .map(|(id, (name, mut transports))| {
                 transports.dedup();
                 json!({
                     "id": id,
                     "name": if name.is_empty() { "未命名设备" } else { name.as_str() },
                     "transports": transports,
-                    "preferred": transports.first().cloned().unwrap_or_default(),
-                    "online": true,
+                    "selected": !disabled.contains(&id),
                 })
             })
             .collect();
-        out.sort_by(|left, right| {
+        peers.sort_by(|left, right| {
             let a = left["name"].as_str().unwrap_or("");
             let b = right["name"].as_str().unwrap_or("");
-            a.cmp(b).then_with(|| left["id"].as_str().unwrap_or("").cmp(right["id"].as_str().unwrap_or("")))
+            a.cmp(b)
+                .then_with(|| left["id"].as_str().unwrap_or("").cmp(right["id"].as_str().unwrap_or("")))
         });
-        out
+        json!({
+            "running": !self.cancel.load(Ordering::SeqCst),
+            "enabled": true,
+            "deviceId": self.device_id,
+            "deviceName": self.name,
+            "port": port,
+            "discoveryPort": discovery_port(),
+            "localAddresses": local_ipv4s(),
+            "transports": {
+                "lan": self.settings.lan_enabled,
+                "server": self.settings.server_enabled,
+                "p2p": self.settings.p2p_enabled,
+            },
+            "serverRegistered": self.server_ok.load(Ordering::Relaxed),
+            "p2pActive": self.p2p_ok.load(Ordering::Relaxed),
+            "peers": peers,
+            "lastError": self.lane_error(),
+            "lastEvent": last_event,
+            "sent": self.sent_count.load(Ordering::Relaxed),
+            "received": self.received_count.load(Ordering::Relaxed),
+            "saveDir": self.save_dir.to_string_lossy(),
+        })
     }
 
     fn on_local(self: &Arc<Self>, content: ClipboardContent) {
@@ -902,24 +1143,82 @@ impl Inner {
         }
     }
 
-    fn push_peer(&self, device_id: &str, name: &str, addr: SocketAddr) {
-        if let Ok(mut peers) = self.lan_peers.lock() {
+    fn push_lan_peer(&self, device_id: &str, name: &str, addr: SocketAddr) -> bool {
+        let is_new = {
+            let Ok(mut peers) = self.lan_peers.lock() else { return false };
             let is_new = !peers.contains_key(device_id);
-            peers.insert(
-                device_id.to_string(),
-                LanPeer { name: name.to_string(), addr, last_seen: Instant::now() },
-            );
-            if is_new {
-                self.emit_status();
+            if let Some(existing) = peers.get_mut(device_id) {
+                existing.name = name.to_string();
+                existing.addr = addr;
+                existing.last_seen = Instant::now();
+            } else {
+                peers.insert(
+                    device_id.to_string(),
+                    LanPeer {
+                        name: name.to_string(),
+                        addr,
+                        last_seen: Instant::now(),
+                    },
+                );
             }
+            is_new
+        };
+        // 锁已放：emit_status 会重新锁 lan_peers 取快照。
+        self.emit_status();
+        is_new
+    }
+
+    fn prune_lan(&self) {
+        let changed = {
+            let Ok(mut peers) = self.lan_peers.lock() else { return };
+            let before = peers.len();
+            peers.retain(|_, peer| peer.last_seen.elapsed() <= LAN_FRESH);
+            peers.len() != before
+        };
+        if changed {
+            self.emit_status();
         }
+    }
+
+    fn apply_wan_source(&self, source: WanSource, entries: Vec<(String, String, EndpointAddr)>) {
+        let now = Instant::now();
+        {
+            let Ok(mut peers) = self.wan_peers.lock() else { return };
+            for peer in peers.values_mut() {
+                match source {
+                    WanSource::Server => peer.server_seen = None,
+                    WanSource::P2p => peer.p2p_seen = None,
+                }
+            }
+            for (id, name, addr) in entries {
+                if id == self.device_id {
+                    continue;
+                }
+                let peer = peers.entry(id.clone()).or_insert_with(|| WanPeer {
+                    name: name.clone(),
+                    addr: addr.clone(),
+                    server_seen: None,
+                    p2p_seen: None,
+                });
+                if !name.is_empty() {
+                    peer.name = name;
+                }
+                if !addr.addrs.is_empty() {
+                    peer.addr = addr;
+                }
+                match source {
+                    WanSource::Server => peer.server_seen = Some(now),
+                    WanSource::P2p => peer.p2p_seen = Some(now),
+                }
+            }
+            peers.retain(|_, peer| peer.fresh(now));
+        }
+        self.emit_status();
     }
 
     fn recent_seen(&self, id: &str) -> bool {
         let Ok(recent) = self.recent.lock() else { return false };
-        recent
-            .get(id)
-            .is_some_and(|at| at.elapsed() < RECENT_TTL)
+        recent.get(id).is_some_and(|at| at.elapsed() < RECENT_TTL)
     }
 
     fn remember_recent(&self, id: &str) {
@@ -936,6 +1235,70 @@ impl Inner {
             recent.remove(id);
         }
     }
+
+    fn targets(&self) -> Vec<Target> {
+        let lan = self
+            .lan_peers
+            .lock()
+            .map(|slot| slot.clone())
+            .unwrap_or_default();
+        let wan = self
+            .wan_peers
+            .lock()
+            .map(|slot| slot.clone())
+            .unwrap_or_default();
+        let disabled = self
+            .disabled
+            .lock()
+            .map(|slot| slot.clone())
+            .unwrap_or_default();
+        let now = Instant::now();
+        let mut map: BTreeMap<String, Target> = BTreeMap::new();
+        for (id, peer) in lan {
+            if now.duration_since(peer.last_seen) > LAN_FRESH {
+                continue;
+            }
+            let entry = map.entry(id).or_insert_with(|| Target {
+                name: peer.name.clone(),
+                lan: None,
+                wan: None,
+            });
+            if entry.name.is_empty() {
+                entry.name = peer.name;
+            }
+            entry.lan = Some(peer.addr);
+        }
+        for (id, peer) in wan {
+            if !peer.fresh(now) {
+                continue;
+            }
+            let entry = map.entry(id).or_insert_with(|| Target {
+                name: peer.name.clone(),
+                lan: None,
+                wan: None,
+            });
+            if entry.name.is_empty() {
+                entry.name = peer.name;
+            }
+            entry.wan = Some(peer.addr);
+        }
+        map.into_iter()
+            .filter(|(id, _)| !disabled.contains(id))
+            .map(|(_, target)| target)
+            .collect()
+    }
+}
+
+enum WanSource {
+    Server,
+    P2p,
+}
+
+#[derive(Clone)]
+struct Target {
+    name: String,
+    lan: Option<SocketAddr>,
+    wan: Option<EndpointAddr>,
 }
 
 // ---------------------------------------------------------------------------
@@ -945,57 +1308,28 @@ impl Inner {
 async fn run_service(inner: Arc<Inner>) {
     cleanup_inbox(&inner);
     if inner.settings.lan_enabled {
-        // 设置保存 = 停旧服务再起新服务；旧监听协程可能还没跑到 drop。默认端口先重试
-        // 一小段时间，避免每次保存都把端口换成一个随机值（直接 IP 的用户会莫名其妙连不上）。
-        let mut listener = None;
-        for _ in 0..6 {
-            match TcpListener::bind(("0.0.0.0", LAN_PORT)).await {
-                Ok(bound) => {
-                    listener = Some(bound);
-                    break;
-                }
-                Err(_) => tokio::time::sleep(Duration::from_millis(120)).await,
-            }
-        }
-        let listener = match listener {
-            Some(listener) => Some(listener),
-            None => TcpListener::bind(("0.0.0.0", 0)).await.ok(),
-        };
-        match listener {
-            Some(listener) => {
-                let port = listener.local_addr().map(|addr| addr.port()).unwrap_or(LAN_PORT);
-                if let Ok(mut slot) = inner.tcp_port.lock() {
-                    *slot = port;
-                }
-                let task = inner.clone();
-                inner_runtime_spawn(async move {
-                    lan_accept_loop(task, listener).await;
-                });
-                let task = inner.clone();
-                inner_runtime_spawn(async move {
-                    discovery_loop(task).await;
-                });
-            }
-            None => inner.set_error("局域网监听失败：端口不可用"),
-        }
-    }
-    if inner.settings.direct_enabled && !inner.direct_addrs.is_empty() {
         let task = inner.clone();
         inner_runtime_spawn(async move {
-            direct_loop(task).await;
+            lan_listener_loop(task).await;
         });
-    }
-    if inner.settings.p2p_enabled {
         let task = inner.clone();
         inner_runtime_spawn(async move {
-            if let Err(error) = p2p_loop(task.clone()).await {
-                if !task.cancel.load(Ordering::SeqCst) {
-                    task.set_error(format!("P2P 启动失败：{}", error.message));
-                }
-            }
+            lan_discovery_loop(task).await;
         });
     }
-    if inner.backend.as_ref().is_some_and(|backend| backend.clipboard_available()) {
+    if wan_ready(&inner.settings) {
+        let task = inner.clone();
+        inner_runtime_spawn(async move {
+            wan_loop(task).await;
+        });
+    } else if requires_wan(&inner.settings) {
+        inner.set_endpoint_error("广域网未启动：请填写账户名和密码");
+    }
+    if inner
+        .backend
+        .as_ref()
+        .is_some_and(|backend| backend.clipboard_available())
+    {
         spawn_native_poller(inner.clone());
     }
     inner.emit_status();
@@ -1018,7 +1352,10 @@ fn cleanup_inbox(inner: &Inner) {
     let inbox = inner.layout.runtime_dir().join("clipboard-inbox");
     let Ok(entries) = std::fs::read_dir(&inbox) else { return };
     for entry in entries.flatten() {
-        if entry.metadata().ok().and_then(|meta| meta.modified().ok())
+        if entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
             .and_then(|modified| modified.elapsed().ok())
             .is_some_and(|age| age > Duration::from_secs(24 * 3600))
         {
@@ -1054,8 +1391,6 @@ fn spawn_native_poller(inner: Arc<Inner>) {
                         }
                         Ok(_) => {}
                         Err(error) => {
-                            // 剪切板偶尔被别的进程短暂占用是常态，不要把它写成大红错误；
-                            // 连续失败由状态里的 lastError 兜底（只保留最后一条）。
                             if inner.last_error.lock().map(|slot| slot.is_empty()).unwrap_or(false) {
                                 inner.set_error(format!("读取本机剪切板失败：{error}"));
                             }
@@ -1068,70 +1403,135 @@ fn spawn_native_poller(inner: Arc<Inner>) {
 }
 
 // ---------------------------------------------------------------------------
-// 局域网发现
+// 局域网：UDP 发现
 // ---------------------------------------------------------------------------
 
-async fn discovery_loop(inner: Arc<Inner>) {
-    if inner.cancel.load(Ordering::SeqCst) {
-        return;
-    }
-    let mut socket = None;
-    let mut last_error = None;
-    for _ in 0..6 {
-        match UdpSocket::bind(("0.0.0.0", DISCOVERY_PORT)).await {
-            Ok(bound) => {
-                socket = Some(bound);
-                break;
+fn bind_discovery_socket() -> std::io::Result<std::net::UdpSocket> {
+    let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+    socket.set_reuse_address(true)?;
+    socket.set_broadcast(true)?;
+    socket.set_nonblocking(true)?;
+    socket.bind(&SocketAddr::from((Ipv4Addr::UNSPECIFIED, discovery_port())).into())?;
+    Ok(socket.into())
+}
+
+fn local_ipv4s() -> Vec<String> {
+    let mut out: Vec<Ipv4Addr> = Vec::new();
+    if let Ok(interfaces) = if_addrs::get_if_addrs() {
+        for interface in interfaces {
+            if interface.is_loopback() {
+                continue;
             }
-            Err(error) => {
-                last_error = Some(error);
-                tokio::time::sleep(Duration::from_millis(120)).await;
+            if let if_addrs::IfAddr::V4(v4) = interface.addr {
+                if !v4.ip.is_unspecified() {
+                    out.push(v4.ip);
+                }
             }
         }
     }
-    let Some(socket) = socket else {
-        inner.set_error(format!(
-            "局域网发现端口 {DISCOVERY_PORT} 不可用：{}",
-            last_error.map(|error| error.to_string()).unwrap_or_default()
-        ));
-        return;
+    out.sort();
+    out.dedup();
+    out.into_iter().map(|ip| ip.to_string()).collect()
+}
+
+fn broadcast_targets() -> Vec<SocketAddr> {
+    let mut ips: Vec<Ipv4Addr> = vec![Ipv4Addr::BROADCAST];
+    if let Ok(interfaces) = if_addrs::get_if_addrs() {
+        for interface in interfaces {
+            if interface.is_loopback() {
+                continue;
+            }
+            if let if_addrs::IfAddr::V4(v4) = interface.addr {
+                let broadcast = v4.broadcast.unwrap_or_else(|| {
+                    let ip = u32::from(v4.ip);
+                    let mask = u32::from(v4.netmask);
+                    Ipv4Addr::from(ip | !mask)
+                });
+                if !broadcast.is_unspecified() {
+                    ips.push(broadcast);
+                }
+            }
+        }
+    }
+    ips.sort();
+    ips.dedup();
+    ips.into_iter().map(|ip| SocketAddr::from((ip, discovery_port()))).collect()
+}
+
+async fn lan_discovery_loop(inner: Arc<Inner>) {
+    let socket = loop {
+        if inner.cancel.load(Ordering::SeqCst) {
+            return;
+        }
+        match bind_discovery_socket() {
+            Ok(std_socket) => match UdpSocket::from_std(std_socket) {
+                Ok(socket) => break socket,
+                Err(error) => {
+                    inner.set_lan_error(format!("局域网发现套接字创建失败：{error}"));
+                }
+            },
+            Err(error) => {
+                inner.set_lan_error(format!(
+                    "局域网发现端口 {} 暂不可用：{error}（稍后重试）", discovery_port()
+                ));
+            }
+        }
+        tokio::select! {
+            _ = inner.notify.notified() => return,
+            _ = tokio::time::sleep(Duration::from_secs(3)) => {}
+        }
     };
     let _ = socket.set_broadcast(true);
-    let _ = socket.join_multicast_v4(Ipv4Addr::new(239, 255, 77, 53), Ipv4Addr::UNSPECIFIED);
-    let mut interval = tokio::time::interval(Duration::from_secs(2));
-    let mut buffer = vec![0u8; 2048];
+    // 组播：Windows 需要逐个接口 join；Linux/Android 允许 INADDR_ANY。失败不致命，
+    // 广播仍然是主路径。
+    let mut joined = false;
+    for ip in local_ipv4s() {
+        if let Ok(addr) = ip.parse::<Ipv4Addr>() {
+            if socket.join_multicast_v4(MULTICAST_V4, addr).is_ok() {
+                joined = true;
+            }
+        }
+    }
+    if !joined {
+        let _ = socket.join_multicast_v4(MULTICAST_V4, Ipv4Addr::UNSPECIFIED);
+    }
+    inner.set_lan_error("");
+    let mut interval = tokio::time::interval(DISCOVERY_TICK);
+    let mut buffer = vec![0u8; 4096];
     loop {
         if inner.cancel.load(Ordering::SeqCst) {
             break;
         }
         tokio::select! {
             _ = inner.notify.notified() => break,
+            _ = inner.refresh.notified() => {
+                announce(&inner, &socket).await;
+            }
             _ = interval.tick() => {
-                let announce = self_announce(&inner);
-                let bytes = serde_json::to_vec(&announce).unwrap_or_default();
-                let _ = socket.send_to(&bytes, ("255.255.255.255", DISCOVERY_PORT)).await;
-                let _ = socket.send_to(&bytes, ("239.255.77.53", DISCOVERY_PORT)).await;
-                prune_lan(&inner);
+                announce(&inner, &socket).await;
+                inner.prune_lan();
             }
             result = socket.recv_from(&mut buffer) => {
                 let Ok((size, source)) = result else { continue };
                 let Ok(packet) = serde_json::from_slice::<DiscoverPacket>(&buffer[..size]) else { continue };
-                if packet.v != PROTOCOL_VERSION || packet.app != APP || packet.device == inner.device_id {
+                if packet.v != PROTOCOL_VERSION || packet.app != APP {
                     continue;
                 }
-                if packet.tag != group_tag(&inner.group, b"discover") || packet.port == 0 {
+                if packet.device == inner.device_id || packet.device.is_empty() || packet.port == 0 {
                     continue;
                 }
+                // 发现包里的名字可能是旧的；端口可能因默认端口被占用而变化。
                 let addr = SocketAddr::new(source.ip(), packet.port);
-                let is_new = inner.lan_peers.lock().map(|peers| !peers.contains_key(&packet.device)).unwrap_or(false);
-                inner.push_peer(&packet.device, &packet.name, addr);
+                let is_new = inner.push_lan_peer(&packet.device, &packet.name, addr);
                 if is_new {
+                    // 单播回一包：对方的广播可能被 AP 隔离/防火墙挡掉，但反向单播通常能通。
                     let reply = serde_json::to_vec(&self_announce(&inner)).unwrap_or_default();
                     let _ = socket.send_to(&reply, source).await;
                 }
             }
         }
     }
+    let _ = socket.leave_multicast_v4(MULTICAST_V4, Ipv4Addr::UNSPECIFIED);
 }
 
 fn self_announce(inner: &Inner) -> DiscoverPacket {
@@ -1141,26 +1541,55 @@ fn self_announce(inner: &Inner) -> DiscoverPacket {
         device: inner.device_id.clone(),
         name: inner.name.clone(),
         port: inner.tcp_port.lock().map(|slot| *slot).unwrap_or(0),
-        tag: group_tag(&inner.group, b"discover"),
     }
 }
 
-fn prune_lan(inner: &Inner) {
-    if let Ok(mut peers) = inner.lan_peers.lock() {
-        let before = peers.len();
-        peers.retain(|_, peer| peer.last_seen.elapsed() <= LAN_FRESH);
-        if peers.len() != before {
-            drop(peers);
-            inner.emit_status();
+async fn announce(inner: &Inner, socket: &UdpSocket) {
+    if inner.tcp_port.lock().map(|slot| *slot == 0).unwrap_or(true) {
+        return;
+    }
+    let bytes = match serde_json::to_vec(&self_announce(inner)) {
+        Ok(bytes) => bytes,
+        Err(_) => return,
+    };
+    for target in broadcast_targets() {
+        let _ = socket.send_to(&bytes, target).await;
+    }
+    let _ = socket
+        .send_to(&bytes, SocketAddr::from((MULTICAST_V4, discovery_port())))
+        .await;
+}
+
+// ---------------------------------------------------------------------------
+// 局域网：TCP 监听
+// ---------------------------------------------------------------------------
+
+async fn lan_listener_loop(inner: Arc<Inner>) {
+    let mut listener = None;
+    for _ in 0..5 {
+        match TcpListener::bind(("0.0.0.0", preferred_lan_port())).await {
+            Ok(bound) => {
+                listener = Some(bound);
+                break;
+            }
+            Err(_) => tokio::time::sleep(Duration::from_millis(120)).await,
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// 局域网 TCP
-// ---------------------------------------------------------------------------
-
-async fn lan_accept_loop(inner: Arc<Inner>, listener: TcpListener) {
+    let listener = match listener {
+        Some(listener) => listener,
+        None => match TcpListener::bind(("0.0.0.0", 0)).await {
+            Ok(listener) => listener,
+            Err(error) => {
+                inner.set_lan_error(format!("局域网监听失败：{error}"));
+                return;
+            }
+        },
+    };
+    let port = listener.local_addr().map(|addr| addr.port()).unwrap_or(preferred_lan_port());
+    if let Ok(mut slot) = inner.tcp_port.lock() {
+        *slot = port;
+    }
+    inner.set_lan_error("");
     loop {
         if inner.cancel.load(Ordering::SeqCst) {
             break;
@@ -1169,19 +1598,29 @@ async fn lan_accept_loop(inner: Arc<Inner>, listener: TcpListener) {
             _ = inner.notify.notified() => break,
             result = listener.accept() => {
                 let Ok((stream, _addr)) = result else { continue };
+                let _ = stream.set_nodelay(true);
                 let task = inner.clone();
                 inner_runtime_spawn(async move {
                     let _ = tokio::time::timeout(Duration::from_secs(300), async {
                         let (mut reader, mut writer) = stream.into_split();
                         if let Err(error) = serve_stream(&task, &mut reader, &mut writer).await {
-                            let _ = write_json(&mut writer, &json!({ "kind": "error", "message": error.message })).await;
+                            let _ = write_json(
+                                &mut writer,
+                                &json!({ "kind": "error", "message": error.message }),
+                            )
+                            .await;
                         }
-                    }).await;
+                    })
+                    .await;
                 });
             }
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// 握手（局域网 TCP 与广域网 iroh 共用）
+// ---------------------------------------------------------------------------
 
 async fn serve_stream<R, W>(inner: &Arc<Inner>, reader: &mut R, writer: &mut W) -> CoreResult<()>
 where
@@ -1189,17 +1628,32 @@ where
     W: AsyncWrite + Unpin,
 {
     let session = server_handshake(inner, reader, writer).await?;
+    if !inner.peer_selected(&session.peer_id) {
+        let _ = write_sealed_json(
+            writer,
+            &session,
+            &json!({ "ok": false, "reason": "对方未勾选与本机同步" }),
+        )
+        .await;
+        return Err(CoreError::validation(
+            "CLIPBOARD_NOT_SELECTED",
+            "未与对方勾选同步",
+        ));
+    }
     let header = read_sealed_json::<R>(reader, &session, MAX_CTRL_FRAME).await?;
     let parsed: WireHeader = serde_json::from_value(header.clone())
         .map_err(|error| CoreError::validation("CLIPBOARD_BAD_FRAME", format!("头部不合法：{error}")))?;
     if parsed.v != PROTOCOL_VERSION || parsed.app != APP {
-        let _ = write_sealed_json(writer, &session, &json!({ "ok": false, "reason": "协议版本不匹配" })).await;
+        let _ = write_sealed_json(
+            writer,
+            &session,
+            &json!({ "ok": false, "reason": "协议版本不匹配" }),
+        )
+        .await;
         return Err(CoreError::validation("CLIPBOARD_BAD_FRAME", "协议版本不匹配"));
     }
-    if parsed.kind == "ping" {
-        write_sealed_json(writer, &session, &json!({ "ok": true })).await?;
-        let _ = writer.shutdown().await;
-        return Ok(());
+    if parsed.kind != "clipboard" {
+        return Err(CoreError::validation("CLIPBOARD_BAD_FRAME", "未知消息类型"));
     }
     match receive_clipboard(inner, reader, &session, &parsed).await {
         Ok(accepted) => {
@@ -1235,29 +1689,58 @@ where
         write_json(writer, &json!({ "ok": false, "reason": "协议版本不匹配" })).await?;
         return Err(CoreError::validation("CLIPBOARD_BAD_HELLO", "协议版本不匹配"));
     }
-    if hello.tag != group_tag(&inner.group, b"hello") {
-        write_json(writer, &json!({ "ok": false, "reason": "同步口令不一致" })).await?;
-        return Err(CoreError::validation("CLIPBOARD_CODE_MISMATCH", "同步口令不一致"));
+    if hello.device.is_empty() || hello.nonce.is_empty() || hello.eph.is_empty() {
+        return Err(CoreError::validation("CLIPBOARD_BAD_HELLO", "握手字段不完整"));
     }
+    verify_device_signature(
+        &hello.device,
+        &hello_message("hello", &hello.device, &hello.nonce, &hello.eph),
+        &hello.sig,
+    )?;
     if hello.device == inner.device_id {
         return Err(CoreError::validation("CLIPBOARD_SELF", "不能与自己同步"));
     }
+    let eph_bytes = unhex(&hello.eph)
+        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+        .ok_or_else(|| CoreError::validation("CLIPBOARD_BAD_HELLO", "临时公钥不合法"))?;
+    let server_secret = random_secret();
+    let server_public = XPublicKey::from(&server_secret);
     let server_nonce = random_hex(16);
+    let server_eph = hex(server_public.as_bytes());
+    let signature = inner.secret.sign(&hello_message(
+        "ack",
+        &inner.device_id,
+        &server_nonce,
+        &server_eph,
+    ));
     let ack = HelloAck {
         ok: true,
         device: inner.device_id.clone(),
         name: inner.name.clone(),
         nonce: server_nonce.clone(),
+        eph: server_eph.clone(),
+        sig: hex(&signature.to_bytes()),
         reason: String::new(),
     };
     write_json(writer, &serde_json::to_value(&ack)?).await?;
-    let key = session_key(&inner.group, &hello.nonce, &server_nonce);
-    let aad = session_aad(&hello.nonce, &server_nonce);
+    let peer_public = XPublicKey::from(eph_bytes);
+    let shared = server_secret.diffie_hellman(&peer_public);
+    let key = session_key(
+        shared.as_bytes(),
+        &hello.nonce,
+        &server_nonce,
+        &hello.device,
+        &inner.device_id,
+    );
     Ok(SessionInfo {
         key,
-        aad,
+        aad: session_aad(&hello.nonce, &server_nonce),
         peer_id: hello.device,
-        peer_name: if hello.name.is_empty() { "未命名设备".to_string() } else { hello.name },
+        peer_name: if hello.name.is_empty() {
+            "未命名设备".to_string()
+        } else {
+            hello.name
+        },
     })
 }
 
@@ -1270,14 +1753,24 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    let client_secret = random_secret();
+    let client_public = XPublicKey::from(&client_secret);
     let client_nonce = random_hex(16);
+    let client_eph = hex(client_public.as_bytes());
+    let signature = inner.secret.sign(&hello_message(
+        "hello",
+        &inner.device_id,
+        &client_nonce,
+        &client_eph,
+    ));
     let hello = Hello {
         v: PROTOCOL_VERSION,
         app: APP.to_string(),
         device: inner.device_id.clone(),
         name: inner.name.clone(),
         nonce: client_nonce.clone(),
-        tag: group_tag(&inner.group, b"hello"),
+        eph: client_eph,
+        sig: hex(&signature.to_bytes()),
     };
     write_json(writer, &serde_json::to_value(&hello)?).await?;
     let ack: HelloAck = serde_json::from_value(read_json(reader, MAX_HANDSHAKE_FRAME).await?)
@@ -1288,41 +1781,62 @@ where
             if ack.reason.is_empty() { "对方拒绝了连接".to_string() } else { ack.reason },
         ));
     }
-    if ack.device.is_empty() || ack.nonce.is_empty() {
+    if ack.device.is_empty() || ack.nonce.is_empty() || ack.eph.is_empty() {
         return Err(CoreError::validation("CLIPBOARD_BAD_HELLO", "握手应答缺少设备信息"));
     }
-    let key = session_key(&inner.group, &client_nonce, &ack.nonce);
-    let aad = session_aad(&client_nonce, &ack.nonce);
-    Ok(SessionInfo { key, aad, peer_id: ack.device, peer_name: ack.name })
-}
-
-async fn send_lan(
-    inner: &Arc<Inner>,
-    addr: SocketAddr,
-    content: &ClipboardContent,
-) -> CoreResult<(String, String)> {
-    let stream = tokio::time::timeout(Duration::from_secs(6), TcpStream::connect(addr))
-        .await
-        .map_err(|_| CoreError::execution("CLIPBOARD_TIMEOUT", "连接对方超时"))??;
-    let (mut reader, mut writer) = stream.into_split();
-    let session = client_handshake(inner, &mut reader, &mut writer).await?;
-    send_clipboard(inner, &mut reader, &mut writer, &session, content).await?;
-    if let Ok(mut peers) = inner.direct_peers.lock() {
-        peers.insert(
-            addr,
-            DirectPeer {
-                device_id: session.peer_id.clone(),
-                name: session.peer_name.clone(),
-                last_ok: Instant::now(),
-            },
-        );
+    verify_device_signature(
+        &ack.device,
+        &hello_message("ack", &ack.device, &ack.nonce, &ack.eph),
+        &ack.sig,
+    )?;
+    if ack.device == inner.device_id {
+        return Err(CoreError::validation("CLIPBOARD_SELF", "不能与自己同步"));
     }
-    Ok((session.peer_id, session.peer_name))
+    let eph_bytes = unhex(&ack.eph)
+        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+        .ok_or_else(|| CoreError::validation("CLIPBOARD_BAD_HELLO", "临时公钥不合法"))?;
+    let peer_public = XPublicKey::from(eph_bytes);
+    let shared = client_secret.diffie_hellman(&peer_public);
+    let key = session_key(
+        shared.as_bytes(),
+        &client_nonce,
+        &ack.nonce,
+        &inner.device_id,
+        &ack.device,
+    );
+    Ok(SessionInfo {
+        key,
+        aad: session_aad(&client_nonce, &ack.nonce),
+        peer_id: ack.device,
+        peer_name: if ack.name.is_empty() { "未命名设备".to_string() } else { ack.name },
+    })
 }
 
 // ---------------------------------------------------------------------------
 // 发送
 // ---------------------------------------------------------------------------
+
+async fn send_lan(
+    inner: &Arc<Inner>,
+    addr: SocketAddr,
+    content: &ClipboardContent,
+) -> CoreResult<()> {
+    let stream = tokio::time::timeout(Duration::from_secs(6), TcpStream::connect(addr))
+        .await
+        .map_err(|_| CoreError::execution("CLIPBOARD_TIMEOUT", "连接对方超时"))??;
+    let _ = stream.set_nodelay(true);
+    let (mut reader, mut writer) = stream.into_split();
+    let session = client_handshake(inner, &mut reader, &mut writer).await?;
+    send_clipboard(inner, &mut reader, &mut writer, &session, content).await?;
+    if let Ok(mut peers) = inner.lan_peers.lock() {
+        if let Some(peer) = peers.get_mut(&session.peer_id) {
+            peer.name = session.peer_name.clone();
+            peer.addr = addr;
+            peer.last_seen = Instant::now();
+        }
+    }
+    Ok(())
+}
 
 async fn send_clipboard<R, W>(
     inner: &Inner,
@@ -1398,8 +1912,6 @@ where
     for file in &outgoing.files {
         send_file(writer, session, file).await?;
     }
-    // 半关闭写方向：iroh 的 SendStream 不 finish 就 drop 会把在途数据重置成
-    // connection lost（TCP 上则让对端明确看到「我说完了」）。
     let _ = writer.shutdown().await;
     let ack = read_sealed_json::<R>(reader, session, MAX_CTRL_FRAME).await?;
     if ack["ok"].as_bool() != Some(true) {
@@ -1457,102 +1969,11 @@ where
     Ok(())
 }
 
-#[derive(Clone)]
-struct Target {
-    name: String,
-    direct: Option<SocketAddr>,
-    lan: Option<SocketAddr>,
-    p2p: Option<EndpointAddr>,
-}
-
 impl Inner {
-    fn targets(&self) -> Vec<Target> {
-        let mut map: BTreeMap<String, Target> = BTreeMap::new();
-        if let Ok(peers) = self.lan_peers.lock() {
-            for (id, peer) in peers.iter() {
-                if peer.last_seen.elapsed() > LAN_FRESH {
-                    continue;
-                }
-                let entry = map.entry(id.clone()).or_insert_with(|| Target {
-                    name: peer.name.clone(),
-                    direct: None,
-                    lan: None,
-                    p2p: None,
-                });
-                if entry.name.is_empty() {
-                    entry.name = peer.name.clone();
-                }
-                entry.lan = Some(peer.addr);
-            }
-        }
-        if let Ok(peers) = self.p2p_peers.lock() {
-            for (id, peer) in peers.iter() {
-                if peer.last_seen.elapsed() > P2P_FRESH {
-                    continue;
-                }
-                let entry = map.entry(id.clone()).or_insert_with(|| Target {
-                    name: peer.name.clone(),
-                    direct: None,
-                    lan: None,
-                    p2p: None,
-                });
-                if entry.name.is_empty() {
-                    entry.name = peer.name.clone();
-                }
-                entry.p2p = Some(peer.addr.clone());
-            }
-        }
-        if let Ok(peers) = self.direct_peers.lock() {
-            for (addr, peer) in peers.iter() {
-                if peer.last_ok.elapsed() > DIRECT_FRESH {
-                    continue;
-                }
-                let entry = map.entry(peer.device_id.clone()).or_insert_with(|| Target {
-                    name: peer.name.clone(),
-                    direct: None,
-                    lan: None,
-                    p2p: None,
-                });
-                if entry.name.is_empty() {
-                    entry.name = peer.name.clone();
-                }
-                entry.direct = Some(*addr);
-            }
-        }
-        // 填了 IP 但还没 ping 通：也照发一次，连上后握手会告诉我们它是谁。
-        // 先按「地址完全相同」把它并到已发现的 LAN/P2P 设备上——同一台机器同时被
-        // 广播和手填 IP 找到时，只能发一份。地址不同（例如对方换了端口）才作为
-        // 未知目标单列；接收端的消息 id 去重会兜住这类极端情况。
-        for addr in &self.direct_addrs {
-            let exact = self.lan_peers.lock().ok().and_then(|peers| {
-                peers
-                    .iter()
-                    .find(|(_, peer)| peer.addr == *addr)
-                    .map(|(id, _)| id.clone())
-            });
-            if let Some(id) = exact {
-                if let Some(target) = map.get_mut(&id) {
-                    target.direct = Some(*addr);
-                }
-                continue;
-            }
-            let known = self.direct_peers.lock().ok().map(|peers| peers.contains_key(addr)).unwrap_or(false);
-            if known {
-                continue;
-            }
-            map.entry(format!("direct:{addr}")).or_insert(Target {
-                name: addr.to_string(),
-                direct: Some(*addr),
-                lan: None,
-                p2p: None,
-            });
-        }
-        map.into_values().collect()
-    }
-
-    async fn send_all(self: Arc<Self>, content: ClipboardContent) {        let targets = self.targets();
+    async fn send_all(self: Arc<Self>, content: ClipboardContent) {
+        let targets = self.targets();
         if targets.is_empty() {
-            self.set_event("sent", "没有在线设备，内容未发送", "");
+            self.set_event("idle", "没有已勾选的在线设备", "");
             return;
         }
         let mut tasks = Vec::new();
@@ -1562,7 +1983,7 @@ impl Inner {
             tasks.push(tokio::spawn(async move {
                 let name = target.name.clone();
                 match send_target(inner, &target, &payload).await {
-                    Ok(()) => Ok(name),
+                    Ok(()) => Ok(()),
                     Err(error) => Err((name, error.message)),
                 }
             }));
@@ -1571,45 +1992,33 @@ impl Inner {
         let mut failures: Vec<String> = Vec::new();
         for task in tasks {
             match task.await {
-                Ok(Ok(_)) => sent += 1,
+                Ok(Ok(())) => sent += 1,
                 Ok(Err((name, error))) => failures.push(format!("{name}：{error}")),
                 Err(_) => failures.push("发送任务异常".to_string()),
             }
         }
         self.sent_count.fetch_add(sent as u64, Ordering::Relaxed);
         if sent > 0 {
+            self.clear_send_error();
             self.set_event("sent", format!("已发送到 {sent} 台设备"), "");
         }
         if !failures.is_empty() {
             self.set_error(failures.join("；"));
         }
     }
-
 }
 
-async fn send_target(
-    inner: Arc<Inner>,
-    target: &Target,
-    content: &ClipboardContent,
-) -> CoreResult<()> {
+async fn send_target(inner: Arc<Inner>, target: &Target, content: &ClipboardContent) -> CoreResult<()> {
     let mut last_error: Option<CoreError> = None;
-    if let Some(addr) = target.direct {
+    if let Some(addr) = target.lan {
         match send_lan(&inner, addr, content).await {
-            Ok(_) => return Ok(()),
+            Ok(()) => return Ok(()),
             Err(error) => last_error = Some(error),
         }
     }
-    if let Some(addr) = target.lan {
-        if Some(addr) != target.direct {
-            match send_lan(&inner, addr, content).await {
-                Ok(_) => return Ok(()),
-                Err(error) => last_error = Some(error),
-            }
-        }
-    }
-    if let Some(addr) = &target.p2p {
-        match send_p2p(&inner, addr.clone(), content).await {
-            Ok(_) => return Ok(()),
+    if let Some(addr) = &target.wan {
+        match send_wan(&inner, addr.clone(), content).await {
+            Ok(()) => return Ok(()),
             Err(error) => last_error = Some(error),
         }
     }
@@ -1618,7 +2027,19 @@ async fn send_target(
     }))
 }
 
-async fn send_p2p(
+fn direct_addrs(endpoint: &Endpoint) -> Vec<SocketAddr> {
+    endpoint
+        .addr()
+        .addrs
+        .iter()
+        .filter_map(|addr| match addr {
+            TransportAddr::Ip(socket) => Some(*socket),
+            _ => None,
+        })
+        .collect()
+}
+
+async fn send_wan(
     inner: &Inner,
     addr: EndpointAddr,
     content: &ClipboardContent,
@@ -1628,15 +2049,15 @@ async fn send_p2p(
         .lock()
         .ok()
         .and_then(|slot| slot.clone())
-        .ok_or_else(|| CoreError::execution("CLIPBOARD_P2P_OFFLINE", "P2P 端点未启动"))?;
-    let connection = tokio::time::timeout(Duration::from_secs(25), endpoint.connect(addr, ALPN))
+        .ok_or_else(|| CoreError::execution("CLIPBOARD_WAN_OFFLINE", "广域网端点未就绪"))?;
+    let connection = tokio::time::timeout(Duration::from_secs(20), endpoint.connect(addr, ALPN))
         .await
-        .map_err(|_| CoreError::execution("CLIPBOARD_TIMEOUT", "P2P 拨号超时"))?
-        .map_err(|error| CoreError::io(format!("P2P 拨号失败：{error:?}")))?;
+        .map_err(|_| CoreError::execution("CLIPBOARD_TIMEOUT", "广域网拨号超时"))?
+        .map_err(|error| CoreError::io(format!("广域网拨号失败：{error:?}")))?;
     let (mut send, mut recv) = connection
         .open_bi()
         .await
-        .map_err(|error| CoreError::io(format!("P2P 流打开失败：{error:?}")))?;
+        .map_err(|error| CoreError::io(format!("广域网流打开失败：{error:?}")))?;
     let session = client_handshake(inner, &mut recv, &mut send).await?;
     send_clipboard(inner, &mut recv, &mut send, &session, content).await?;
     let _ = send.finish();
@@ -1664,11 +2085,8 @@ where
         return Err(CoreError::validation("CLIPBOARD_BAD_FRAME", "消息缺少 id/指纹"));
     }
     if inner.recent_seen(&header.id) {
-        // 同一条消息从两条线路各来一遍：已经落过，直接回 ok。
         return Ok(0);
     }
-    // 先占位再读：两条线路并发到达时只有一个能写；读/写失败要撤回占位，
-    // 否则对方换一条线路重试会被当成「已经收过」。
     inner.remember_recent(&header.id);
     let result = receive_clipboard_claimed(inner, reader, session, header).await;
     if result.is_err() {
@@ -1832,7 +2250,6 @@ fn sanitize_file_name(raw: &str) -> String {
 
 impl Inner {
     async fn apply_remote(&self, content: ClipboardContent, peer_name: &str) -> CoreResult<()> {
-        // 总开关刚关掉时，可能还有一条已经握手完成的连接：不许它再改本机剪切板。
         if self.cancel.load(Ordering::SeqCst) {
             return Err(CoreError::execution("CLIPBOARD_DISABLED", "剪切板同步已关闭"));
         }
@@ -1847,15 +2264,10 @@ impl Inner {
             if backend.clipboard_available() {
                 backend.clipboard_write(&content)?;
                 self.received_count.fetch_add(1, Ordering::Relaxed);
-                self.set_event(
-                    "received",
-                    describe_content(&content),
-                    peer_name.to_string(),
-                );
+                self.set_event("received", describe_content(&content), peer_name.to_string());
                 return Ok(());
             }
         }
-        // 移动端：把图片写到缓存里交给 Kotlin 桥（避免 10MB 图片 base64 塞进事件）。
         let image_path = if let Some(image) = &content.image {
             let inbox = self.layout.runtime_dir().join("clipboard-inbox");
             tokio::fs::create_dir_all(&inbox)
@@ -1913,14 +2325,17 @@ fn describe_content(content: &ClipboardContent) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// P2P（iroh + pkarr）
+// 广域网：iroh 端点 + 统一服务器 + P2P 房间
 // ---------------------------------------------------------------------------
 
-fn room_secret(code: &str) -> SecretKey {
+fn clipboard_room(account: &str, password: &str) -> CoreResult<SecretKey> {
+    let keys = derive_keys(account, password)?;
     let mut hasher = Sha256::new();
-    hasher.update(b"kxtodo-clipboard/v1/room/");
-    hasher.update(code.as_bytes());
-    SecretKey::from_bytes(&hasher.finalize().into())
+    hasher.update(b"kxtodo-clipboard/2/room\0");
+    hasher.update(account.trim().to_lowercase().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(keys.dir_key);
+    Ok(SecretKey::from_bytes(&hasher.finalize().into()))
 }
 
 async fn bind_endpoint(secret: &SecretKey, relay: Option<&str>) -> CoreResult<Endpoint> {
@@ -1935,72 +2350,307 @@ async fn bind_endpoint(secret: &SecretKey, relay: Option<&str>) -> CoreResult<En
     builder
         .bind()
         .await
-        .map_err(|error| CoreError::io(format!("剪切板 P2P 端点启动失败：{error:?}")))
+        .map_err(|error| CoreError::io(format!("剪切板广域网端点启动失败：{error:?}")))
 }
 
-async fn p2p_loop(inner: Arc<Inner>) -> CoreResult<()> {
-    if inner.cancel.load(Ordering::SeqCst) {
-        return Ok(());
+async fn wan_loop(inner: Arc<Inner>) {
+    let account = inner.settings.account.clone();
+    let password = inner.settings.password.clone();
+    let keys = match tokio::task::spawn_blocking(move || derive_keys(&account, &password)).await {
+        Ok(Ok(keys)) => keys,
+        Ok(Err(error)) => {
+            inner.set_endpoint_error(format!("广域网账户密钥派生失败：{}", error.message));
+            return;
+        }
+        Err(_) => {
+            inner.set_endpoint_error("广域网账户密钥派生任务异常");
+            return;
+        }
+    };
+    let room = match clipboard_room(&inner.settings.account, &inner.settings.password) {
+        Ok(room) => room,
+        Err(error) => {
+            inner.set_endpoint_error(error.message);
+            return;
+        }
+    };
+    let relay = inner.net.relay.clone();
+    loop {
+        if inner.cancel.load(Ordering::SeqCst) {
+            return;
+        }
+        match bind_endpoint(&inner.secret, relay.as_deref()).await {
+            Ok(endpoint) => {
+                if let Ok(mut slot) = inner.endpoint.lock() {
+                    *slot = Some(endpoint.clone());
+                }
+                inner.set_endpoint_error("");
+                let accept_task = {
+                    let task = inner.clone();
+                    let endpoint = endpoint.clone();
+                    tokio::spawn(async move {
+                        accept_loop(task, endpoint).await;
+                    })
+                };
+                let mut extra = Vec::new();
+                if inner.settings.server_enabled {
+                    let task = inner.clone();
+                    let endpoint = endpoint.clone();
+                    let auth_key = keys.auth_key;
+                    extra.push(tokio::spawn(async move {
+                        server_presence_loop(task, endpoint, auth_key).await;
+                    }));
+                }
+                if inner.settings.p2p_enabled {
+                    let task = inner.clone();
+                    let endpoint = endpoint.clone();
+                    let room = room.clone();
+                    extra.push(tokio::spawn(async move {
+                        p2p_discovery_loop(task, endpoint, room).await;
+                    }));
+                }
+                tokio::select! {
+                    _ = inner.notify.notified() => {}
+                }
+                accept_task.abort();
+                for task in extra {
+                    task.abort();
+                }
+                if let Ok(mut slot) = inner.endpoint.lock() {
+                    *slot = None;
+                }
+                let _ = tokio::time::timeout(Duration::from_secs(3), endpoint.close()).await;
+                return;
+            }
+            Err(error) => {
+                inner.set_endpoint_error(error.message);
+                tokio::select! {
+                    _ = inner.notify.notified() => return,
+                    _ = tokio::time::sleep(Duration::from_secs(12)) => {}
+                }
+            }
+        }
     }
-    let endpoint = bind_endpoint(&inner.secret, inner.net.relay.as_deref()).await?;
-    if inner.cancel.load(Ordering::SeqCst) {
-        endpoint.close().await;
-        return Ok(());
-    }
-    if let Ok(mut slot) = inner.endpoint.lock() {
-        *slot = Some(endpoint.clone());
-    }
-    let client = Arc::new(directory::build_client(&endpoint, &inner.net.directory_url)?);
-    let room = room_secret(&inner.settings.code);
-    let self_id = endpoint.id();
-    directory::publish_name(&client, &inner.secret, &inner.name).await.ok();
-    directory::publish(&client, &room, self_id, &direct_addrs(&endpoint)).await?;
-    inner.emit_status();
-    let mut last_publish = Instant::now();
-    let mut names: HashMap<EndpointId, (String, Instant)> = HashMap::new();
-    let mut accept_future = Box::pin(endpoint.accept());
-    let mut poll = tokio::time::interval(PEER_POLL);
+}
+
+async fn accept_loop(inner: Arc<Inner>, endpoint: Endpoint) {
     loop {
         if inner.cancel.load(Ordering::SeqCst) {
             break;
         }
-        tokio::select! {
+        let incoming = tokio::select! {
             _ = inner.notify.notified() => break,
-            incoming = &mut accept_future => {
-                let Some(incoming) = incoming else { break };
-                accept_future = Box::pin(endpoint.accept());
-                let Ok(accepting) = incoming.accept() else { continue };
-                let Ok(connection) = accepting.await else { continue };
-                let task = inner.clone();
-                inner_runtime_spawn(async move {
-                    let Ok((mut send, mut recv)) = connection.accept_bi().await else { return };
-                    let _ = tokio::time::timeout(Duration::from_secs(300), async {
-                        if let Err(error) = serve_stream(&task, &mut recv, &mut send).await {
-                            let _ = write_json(&mut send, &json!({ "kind": "error", "message": error.message })).await;
-                        }
-                    }).await;
-                    // 等发送方读走最后一个 ack 再释放 Connection：QUIC 的流在
-                    // Connection drop 时会一起被重置，早一毫秒都可能变成 connection lost。
-                    let _ = tokio::time::timeout(Duration::from_secs(2), connection.closed()).await;
-                });
-            }
-            _ = poll.tick() => {
-                if last_publish.elapsed() >= Duration::from_secs(REPUBLISH_SECS) {
-                    let _ = directory::publish(&client, &room, self_id, &direct_addrs(&endpoint)).await;
-                    last_publish = Instant::now();
+            incoming = endpoint.accept() => incoming,
+        };
+        let Some(incoming) = incoming else { break };
+        let Ok(accepting) = incoming.accept() else { continue };
+        let Ok(connection) = accepting.await else { continue };
+        let task = inner.clone();
+        inner_runtime_spawn(async move {
+            let Ok((mut send, mut recv)) = connection.accept_bi().await else { return };
+            let _ = tokio::time::timeout(Duration::from_secs(300), async {
+                if let Err(error) = serve_stream(&task, &mut recv, &mut send).await {
+                    let _ = write_json(&mut send, &json!({ "kind": "error", "message": error.message })).await;
                 }
-                let entries = directory::fetch(&client, room.public()).await;
-                let now = directory::now_unix();
-                let mut peers = BTreeMap::new();
+            })
+            .await;
+            // 等发送方读走最后一个 ack 再释放 Connection（QUIC 流随 Connection drop 重置）。
+            let _ = tokio::time::timeout(Duration::from_secs(2), connection.closed()).await;
+        });
+    }
+}
+
+fn presence_body(inner: &Inner, endpoint: &Endpoint) -> PresenceBody {
+    PresenceBody {
+        device_id: inner.device_id.clone(),
+        name: inner.name.clone(),
+        endpoint_id: endpoint.id().to_z32(),
+        addrs: direct_addrs(endpoint).iter().map(ToString::to_string).collect(),
+    }
+}
+
+fn is_auth_error(error: &CoreError) -> bool {
+    error.code == "UNAUTHORIZED" || error.code == "SYNC_HTTP_401" || error.code == "CHALLENGE_INVALID"
+}
+
+fn server_step(
+    client: &SyncClient,
+    account: &str,
+    auth_key: &[u8; 32],
+    token: &mut Option<String>,
+    body: &PresenceBody,
+) -> CoreResult<Vec<ServerPeer>> {
+    for attempt in 0..2 {
+        if token.is_none() {
+            // 账户可能已存在：先 register 再 login，register 的「已注册」冲突直接忽略。
+            let _ = client.register(account, auth_key);
+            let (fresh, _, _) = client.login(account, auth_key)?;
+            *token = Some(fresh);
+        }
+        let current = token.clone().unwrap_or_default();
+        let payload = serde_json::to_value(body)?;
+        match client
+            .clipboard_presence(&current, &payload)
+            .and_then(|_| client.clipboard_peers(&current, &body.device_id))
+        {
+            Ok(value) => {
+                let parsed: ServerPeersResponse = serde_json::from_value(value).map_err(|error| {
+                    CoreError::io(format!("统一服务器设备列表格式不对：{error}"))
+                })?;
+                return Ok(parsed.peers);
+            }
+            Err(error) if attempt == 0 && is_auth_error(&error) => {
+                *token = None;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(CoreError::io("统一服务器认证失败"))
+}
+
+fn server_entries(peers: Vec<ServerPeer>) -> Vec<(String, String, EndpointAddr)> {
+    peers
+        .into_iter()
+        .filter_map(|peer| {
+            let id = EndpointId::from_z32(&peer.endpoint_id).ok()?;
+            let addrs: Vec<TransportAddr> = peer
+                .addrs
+                .iter()
+                .filter_map(|raw| raw.parse::<SocketAddr>().ok())
+                .map(TransportAddr::Ip)
+                .collect();
+            let addr = if addrs.is_empty() {
+                EndpointAddr::new(id)
+            } else {
+                EndpointAddr {
+                    id,
+                    addrs: addrs.into_iter().collect(),
+                }
+            };
+            Some((peer.device_id, peer.name, addr))
+        })
+        .collect()
+}
+
+async fn server_presence_loop(inner: Arc<Inner>, endpoint: Endpoint, auth_key: [u8; 32]) {
+    let Ok(client) = SyncClient::new_with_timeout(&inner.net.server_url, 10) else {
+        inner.set_server_error("统一服务器地址不合法");
+        return;
+    };
+    let client = Arc::new(client);
+    let account = inner.settings.account.clone();
+    loop {
+        if inner.cancel.load(Ordering::SeqCst) {
+            break;
+        }
+        let body = presence_body(&inner, &endpoint);
+        let task_inner = inner.clone();
+        let task_client = client.clone();
+        let task_account = account.clone();
+        let outcome = tokio::task::spawn_blocking(move || {
+            let mut token = task_inner.server_token.lock().ok().and_then(|slot| slot.clone());
+            let result = server_step(&task_client, &task_account, &auth_key, &mut token, &body);
+            if let Ok(mut slot) = task_inner.server_token.lock() {
+                *slot = token;
+            }
+            result
+        })
+        .await;
+        match outcome {
+            Ok(Ok(peers)) => {
+                inner.apply_wan_source(WanSource::Server, server_entries(peers));
+                inner.server_ok.store(true, Ordering::Relaxed);
+                inner.set_server_error("");
+            }
+            Ok(Err(error)) => {
+                inner.server_ok.store(false, Ordering::Relaxed);
+                inner.set_server_error(format!("统一服务器：{}", error.message));
+            }
+            Err(_) => {
+                inner.server_ok.store(false, Ordering::Relaxed);
+                inner.set_server_error("统一服务器请求任务异常");
+            }
+        }
+        if wait_tick(&inner, WAN_TICK).await {
+            break;
+        }
+    }
+    inner.server_ok.store(false, Ordering::Relaxed);
+}
+
+async fn wait_tick(inner: &Inner, duration: Duration) -> bool {
+    // true = 收到停止信号。刷新只提前结束等待，不视为停止。
+    tokio::select! {
+        _ = inner.notify.notified() => true,
+        _ = inner.refresh.notified() => false,
+        _ = tokio::time::sleep(duration) => false,
+    }
+}
+
+async fn p2p_discovery_loop(inner: Arc<Inner>, endpoint: Endpoint, room: SecretKey) {
+    let Ok(client) = directory::build_client(&endpoint, &inner.net.directory_url) else {
+        inner.set_p2p_error("P2P 目录客户端初始化失败");
+        return;
+    };
+    let client = Arc::new(client);
+    let self_id = endpoint.id();
+    // 不能用 `Instant::now() - 20s`：设备刚开机几秒就启动服务时单调时钟会下溢 panic。
+    let mut last_publish: Option<Instant> = None;
+    let mut names: HashMap<EndpointId, (String, Instant)> = HashMap::new();
+    loop {
+        if inner.cancel.load(Ordering::SeqCst) {
+            break;
+        }
+        let mut published_ok = true;
+        if last_publish.map_or(true, |at| at.elapsed() >= Duration::from_secs(REPUBLISH_SECS)) {
+            let result = tokio::time::timeout(Duration::from_secs(15), async {
+                // 名字记录必须用**设备私钥**签：pkarr 一个 key 只有一份包，
+                // 拿房间私钥发 _name 会把同一份包里的房间设备目录整个覆盖掉。
+                let _ = directory::publish_name(&client, &inner.secret, &inner.name).await;
+                directory::publish(&client, &room, self_id, &direct_addrs(&endpoint)).await
+            })
+            .await;
+            match result {
+                Ok(Ok(())) => {
+                    last_publish = Some(Instant::now());
+                }
+                Ok(Err(error)) => {
+                    published_ok = false;
+                    inner.set_p2p_error(format!("P2P 目录发布失败：{}", error.message));
+                }
+                Err(_) => {
+                    published_ok = false;
+                    inner.set_p2p_error("P2P 目录发布超时");
+                }
+            }
+        }
+        let fetch_client = client.clone();
+        let room_id = room.public();
+        let fetched = tokio::time::timeout(
+            Duration::from_secs(15),
+            directory::fetch_checked(&fetch_client, room_id),
+        )
+        .await;
+        match fetched {
+            Ok(Ok(entries)) => {
+                let mut resolved = Vec::new();
                 for entry in entries {
-                    if entry.id == self_id || now.saturating_sub(entry.published_at) > DEVICE_FRESH_SECS {
+                    if entry.id == self_id
+                        || directory::now_unix().saturating_sub(entry.published_at) > DIRECTORY_FRESH_SECS
+                    {
                         continue;
                     }
-                    let id = entry.id.to_z32();
                     let name = match names.get(&entry.id) {
-                        Some((name, at)) if at.elapsed() < Duration::from_secs(20) => name.clone(),
+                        Some((name, at)) if at.elapsed() < PEER_NAME_FRESH => name.clone(),
                         _ => {
-                            let name = directory::fetch_name(&client, entry.id).await.unwrap_or_default();
+                            let name = tokio::time::timeout(
+                                Duration::from_secs(5),
+                                directory::fetch_name(&fetch_client, entry.id),
+                            )
+                            .await
+                            .ok()
+                            .flatten()
+                            .unwrap_or_default();
                             names.insert(entry.id, (name.clone(), Instant::now()));
                             name
                         }
@@ -2013,80 +2663,34 @@ async fn p2p_loop(inner: Arc<Inner>) -> CoreResult<()> {
                             addrs: entry.addrs.into_iter().map(TransportAddr::Ip).collect(),
                         }
                     };
-                    peers.insert(id, P2pPeer { name, addr, last_seen: Instant::now() });
+                    resolved.push((entry.id.to_z32(), name, addr));
                 }
-                if let Ok(mut slot) = inner.p2p_peers.lock() {
-                    *slot = peers;
+                inner.apply_wan_source(WanSource::P2p, resolved);
+                inner.p2p_ok.store(published_ok, Ordering::Relaxed);
+                if published_ok {
+                    inner.set_p2p_error("");
                 }
-                inner.emit_status();
+            }
+            Ok(Err(error)) => {
+                inner.p2p_ok.store(false, Ordering::Relaxed);
+                inner.set_p2p_error(format!("P2P 目录解析失败：{}", error.message));
+            }
+            Err(_) => {
+                inner.p2p_ok.store(false, Ordering::Relaxed);
+                inner.set_p2p_error("P2P 目录解析超时");
             }
         }
-    }
-    directory::unpublish(&client, &room, self_id).await;
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// 直接 IP
-// ---------------------------------------------------------------------------
-
-async fn direct_loop(inner: Arc<Inner>) {
-    let mut interval = tokio::time::interval(DIRECT_POLL);
-    loop {
-        if inner.cancel.load(Ordering::SeqCst) {
+        if wait_tick(&inner, WAN_TICK).await {
             break;
         }
-        tokio::select! {
-            _ = inner.notify.notified() => break,
-            _ = interval.tick() => {
-                for addr in inner.direct_addrs.clone() {
-                    if inner.cancel.load(Ordering::SeqCst) { break; }
-                    if let Ok((device, name)) = ping_lan(&inner, addr).await {
-                        if let Ok(mut peers) = inner.direct_peers.lock() {
-                            peers.insert(addr, DirectPeer {
-                                device_id: device,
-                                name,
-                                last_ok: Instant::now(),
-                            });
-                        }
-                    }
-                }
-                inner.emit_status();
-            }
-        }
     }
+    inner.p2p_ok.store(false, Ordering::Relaxed);
+    let _ = tokio::time::timeout(
+        Duration::from_secs(5),
+        directory::unpublish(&client, &room, self_id),
+    )
+    .await;
 }
-
-async fn ping_lan(inner: &Arc<Inner>, addr: SocketAddr) -> CoreResult<(String, String)> {
-    let stream = tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(addr))
-        .await
-        .map_err(|_| CoreError::execution("CLIPBOARD_TIMEOUT", "连接对方超时"))??;
-    let (mut reader, mut writer) = stream.into_split();
-    let session = client_handshake(inner, &mut reader, &mut writer).await?;
-    let header = WireHeader {
-        v: PROTOCOL_VERSION,
-        app: APP.to_string(),
-        kind: "ping".to_string(),
-        id: random_hex(8),
-        origin: inner.device_id.clone(),
-        origin_name: inner.name.clone(),
-        at: 0,
-        text_size: 0,
-        html_size: 0,
-        image_size: 0,
-        files: Vec::new(),
-        total_size: 0,
-        sig: String::new(),
-    };
-    write_sealed_json(&mut writer, &session, &serde_json::to_value(&header)?).await?;
-    let _ = writer.shutdown().await;
-    let ack = read_sealed_json(&mut reader, &session, MAX_CTRL_FRAME).await?;
-    if ack["ok"].as_bool() != Some(true) {
-        return Err(CoreError::execution("CLIPBOARD_REJECTED", "对方未回应 ping"));
-    }
-    Ok((session.peer_id, session.peer_name))
-}
-
 
 #[cfg(test)]
 mod tests;

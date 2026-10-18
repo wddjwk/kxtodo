@@ -338,34 +338,58 @@ for (const mobile of [false, true]) {
 }
 
 // ---------------------------------------------------------------------------
-// 7. 剪切板同步工具页
+// 7. 剪切板同步工具页（v0.8.10 的新界面：开关 / 设备勾选 / ⓘ 说明）
 // ---------------------------------------------------------------------------
 for (const mobile of [false, true]) {
+  const label = mobile ? "移动" : "桌面";
   const { context, page } = await freshPage(mobile);
   if (mobile) await page.locator('.sidebar .nav-row[title="工具箱"]').click();
   else await page.locator('.nav-row[title="工具箱"]').click();
   await page.waitForTimeout(300);
   await page.locator(".toolbox-card", { hasText: "剪切板同步" }).click();
   await page.waitForTimeout(400);
-  check(`7（${mobile ? "移动" : "桌面"}）剪切板工具页可打开`, (await page.locator(".clipboard-page").count()) === 1);
-  await page.locator(".clipboard-code-row input").first().fill("12345678");
-  await page.locator(".clipboard-master input").check();
+  check(`7（${label}）剪切板工具页可打开`, (await page.locator(".clipboard-page").count()) === 1);
+  check(`7（${label}）界面没有内联说明段落`, (await page.locator(".clipboard-hint, .clipboard-note").count()) === 0);
+  check(`7（${label}）总开关是标准开关`, (await page.locator(".clipboard-hero .ui-switch input[type=checkbox]").count()) === 1);
+
+  await page.locator(".clipboard-hero .clipboard-icon-button[title='说明']").click();
+  check(`7（${label}）ⓘ 打开统一说明浮层`, (await page.locator(".clipboard-info").count()) === 1);
+  const infoInside = await page.locator(".clipboard-info").evaluate((el) => {
+    const rect = el.getBoundingClientRect();
+    return rect.left >= -1 && rect.right <= window.innerWidth + 1 && rect.top >= -1 && rect.bottom <= window.innerHeight + 1;
+  });
+  check(`7（${label}）说明浮层不超出屏幕`, infoInside);
+  await page.locator(".clipboard-info-backdrop").click({ position: { x: 2, y: 2 } });
+  check(`7（${label}）点空白关闭说明`, (await page.locator(".clipboard-info").count()) === 0);
+
+  // 开箱即用：默认只开局域网；打开总开关即可保存。
+  await page.locator(".clipboard-hero .ui-switch").click();
   await page.waitForTimeout(500);
   const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("todo-note-settings-v3")).clipboard);
-  check(`7（${mobile ? "移动" : "桌面"}）总开关一键落盘`, stored.enabled === true && stored.code === "12345678", J(stored));
-  check(`7（${mobile ? "移动" : "桌面"}）两类来源默认值正确`, stored.lanEnabled === true && stored.p2pEnabled === false && stored.directEnabled === false, J(stored));
-  await page.locator(".clipboard-code-row button", { hasText: "生成" }).click();
-  const generated = await page.locator(".clipboard-code-row input").first().inputValue();
-  check(`7（${mobile ? "移动" : "桌面"}）生成随机口令`, generated.length === 12 && generated !== "12345678", generated);
-  await page.locator(".clipboard-text-input").nth(1).fill("测试设备");
+  check(`7（${label}）总开关一键落盘（局域网默认开）`, stored.enabled === true && stored.lanEnabled === true && stored.serverEnabled === false && stored.wanP2pEnabled === false, J(stored));
+
+  await page.locator(".clipboard-field-inline .clipboard-text-input").first().fill("测试设备");
+  await page.locator(".clipboard-section-head", { hasText: "接收内容" }).click();
+  await page.waitForTimeout(200);
   await page.locator(".clipboard-limit").first().fill("3");
-  await page.locator(".clipboard-card").filter({ hasText: "接收类型与上限" }).locator('input[type="checkbox"]').nth(2).uncheck();
+  await page.locator(".clipboard-type-row").filter({ hasText: "图片" }).locator('input[type="checkbox"]').uncheck();
   await page.locator(".clipboard-actions button").click();
   await page.waitForTimeout(500);
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("todo-note-settings-v3")).clipboard);
-  check(`7（${mobile ? "移动" : "桌面"}）设备名/上限/类型保存`, saved.deviceName === "测试设备" && saved.limits.textMb === 3 && saved.types.image === false, J(saved));
-  const noOverflow = await page.locator(".clipboard-page").evaluate((el) => el.scrollWidth <= el.clientWidth + 1);
-  check(`7（${mobile ? "移动" : "桌面"}）工具页无横向溢出`, noOverflow);
+  check(`7（${label}）设备名/上限/类型保存`, saved.deviceName === "测试设备" && saved.limits.textMb === 3 && saved.types.image === false, J(saved));
+
+  const overflow = await page.evaluate(() => {
+    const viewport = window.innerWidth;
+    const bad = [];
+    for (const el of document.querySelectorAll(".clipboard-page, .clipboard-page *")) {
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0 && (rect.left < -1 || rect.right > viewport + 1)) {
+        bad.push(`${el.className || el.tagName}:${Math.round(rect.left)}..${Math.round(rect.right)}/${viewport}`);
+      }
+    }
+    return { pageOverflow: document.documentElement.scrollWidth > viewport + 1, bad: bad.slice(0, 5) };
+  });
+  check(`7（${label}）所有剪切板元素都在视口内`, !overflow.pageOverflow && overflow.bad.length === 0, J(overflow));
   await context.close();
 }
 

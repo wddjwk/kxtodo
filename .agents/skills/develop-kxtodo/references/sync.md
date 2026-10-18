@@ -206,15 +206,16 @@ iroh 1.1 承载（QUIC + 打洞 + n0 免费公共 relay；`sync.p2pRelay`/`sync.
 | iroh 1.1 要求 rust-version 1.91（四个 manifest 已抬） | 上面「踩坑记录」⑦ |
 | 更新下载多通道测速选路（应用内更新，不是同步） | `build-and-release.md` |
 
-## 剪切板同步（v0.8.9，`clipboard_sync.rs`）
+## 剪切板同步（v0.8.10，`clipboard_sync.rs`）
 
-工具箱里的「剪切板同步」与同步账户、文件传输的会话都无关，它只借用了**网络地基**：
+工具箱里的「剪切板同步」与同步账户、文件传输的会话都无关，它只借用了**网络地基**；v0.8.10 起配对模型改为「局域网全量发现 + 广域网账户房间 + 每设备勾选」。
 
-- **身份**：`runtime/clipboard-identity.json` 里持久化的 iroh `SecretKey`；`deviceId = EndpointId.to_z32()`，LAN 广播、P2P 房间条目、直接 IP 握手都用它。设备去重按 id，不按名字。
-- **三路**：直接 IP（用户填 `ip[:port]`，定时 ping 学回设备 id）→ 局域网（UDP 52178 广播+组播发现、TCP 52179 自建帧）→ iroh P2P（pkarr 房间，relay/目录沿用 `transfer.relay` → `sync.p2pRelay` / `sync.p2pDirectory`）。发送按这个优先级逐条降级，同一台设备只选一条成功线路；接收端再按消息 id 去重。
-- **加密**：同步口令（≥8 位）→ SHA-256 组密钥；LAN 每次连接用双 nonce 派生会话密钥，ChaCha20-Poly1305 加密每个帧；P2P 在 QUIC 之上再叠同一套帧。**没有明文回退**。
-- **ALPN / 房间前缀独立**：`kxtodo-clipboard/1`、`kxtodo-clipboard/v1/room/{code}`；绝不能复用同步的 `kxtodo-p2p/1` 或传输的 `kxtodo-transfer/1`——同一端点 ALPN 是唯一路由依据。
-- **内容与限制**：文字 / HTML / 图片 / 文件；接收端按 `textMb/htmlMb/imageMb/filesMb` 过滤，关闭或超限的类型丢弃；发送端也先裁剪。文件分块流式读写，收到后落在 `saveDir`（默认 `download_dir()/kxtodo-clipboard`）。不保存历史。
-- **Android**：10+ 只有前台能读剪贴板。`MainActivity` 在 `onResume` 注册监听、变化发 `kxtodo-native-clipboard`；前端经 Kotlin 桥读出内容后调 `clipboard_local_changed`；远端写回也经桥。首次读取只建基线不发送。后台进程可能延迟到前台才写。
-- **生命周期**：`HostCore::reconcile_clipboard_sync` 在启动和 `Settings` 域事件时按设置启停；`settings.clipboard.*` 是本机偏好，不进同步共享子集。`gui.clipboard-configure` 一次写整份，避免逐字段触发多次服务重启。
-- **测试**：`crates/core/src/clipboard_sync/tests.rs` 的 LAN/P2P 往返用临时目录与本地 iroh 端点，不依赖公网；`tests/gui_clipboard.rs` 测整份设置写入与短口令拒绝。
+- **身份**：`runtime/clipboard-identity.json` 里持久化的 iroh/Ed25519 `SecretKey`；`deviceId = EndpointId.to_z32()`，局域网与广域网共用。设备去重按 id，不按名字。显示名 = `kxtodo·平台(deviceId 前 8 位)`，用户填了前缀就是 `前缀·平台`。
+- **局域网**：UDP `52178` 每 2 秒**广播 + 组播**，收到新设备后**单播回一包**；TCP 默认 `52179`，被占退临时端口并在广播里带实际端口。广播不加密（只含设备 id/名字/端口）；真正的同步走 TCP 握手：双方用设备密钥对「角色|设备|nonce|临时 X25519 公钥」签名，会话密钥由临时 X25519 共享密钥 + 双方 nonce + 双方设备 id 派生，帧用 ChaCha20-Poly1305。**没有共享口令、没有明文回退**。
+- **广域网 · 统一服务器**：`settings.clipboard.{serverUrl,account,password}`。客户端用与同步相同的 `derive_keys(account, password)` 计算 auth_key，向服务器 login/register 拿 Bearer token，然后每 5 秒 `POST /api/v1/clipboard/presence` 登记 `{deviceId, name, endpointId, addrs}`、`GET /api/v1/clipboard/peers` 拉同账户在线设备（服务端 TTL 90 秒，只存发现元数据，**不存剪切板内容**）。连接仍然设备直连 iroh，端到端加密。
+- **广域网 · P2P**：同一个 account/password 派生房间密钥（`SHA256("kxtodo-clipboard/2/room" + account + dir_key)`），在 pkarr 目录发布房间条目 + 设备名记录（名字必须用**设备私钥**签，否则同一 key 的 `_name` 会覆盖房间目录），每 5 秒拉取并解析名字。relay/目录沿用 `transfer.relay` → `sync.p2pRelay` 与 `sync.p2pDirectory`。
+- **勾选**：状态里每台设备带 `selected`；勾选存 `runtime/clipboard-selection.json`（`gui.clipboard-peer` 立即更新运行中的服务，不重启），默认 `selected=true`（双方都默认勾选即可同步）。接收端也会检查来源设备是否被勾选，未勾选直接拒绝。
+- **传输与限制**：文字 / HTML / 图片 / 文件；接收端按 `textMb/htmlMb/imageMb/filesMb` 过滤，关闭或超限的类型丢弃；发送端也先裁剪。文件分块流式读写，收到后落在 `saveDir`（默认 `download_dir()/kxtodo-clipboard`）。不保存历史。
+- **Android**：10+ 只有前台能读剪贴板。`MainActivity` 在 `onResume` 注册监听、变化发 `kxtodo-native-clipboard`；前端经 Kotlin 桥读出内容后调 `clipboard_local_changed`；远端写回也经桥。首次读取只建基线不发送。
+- **生命周期与锁**：`HostCore::reconcile_clipboard_sync` 在启动和 `Settings` 域事件时按设置启停；`settings.clipboard.*` 是本机偏好，不进同步共享子集。`gui.clipboard-configure` 一次写整份。**后台服务绝不能持锁 emit_status**（v0.8.9 的死锁根因）；`clipboard_status` / `clipboard_refresh` 是 async 命令，不占 Tauri 主线程。
+- **测试**：`crates/core/src/clipboard_sync/tests.rs`（签名/设置/选择/死锁回归/LAN/P2P 往返）、`tests/gui_clipboard.rs`（整份设置、设备勾选持久化）、`crates/server/src/db.rs` 的 presence 测试；跨机用 `crates/core/examples/clipboard_probe.rs`（`--lan` / `--server ... --account ... --password ...` / `--p2p`），`KXTODO_CLIPBOARD_DISCOVERY_PORT` / `KXTODO_CLIPBOARD_LAN_PORT` 可改端口。

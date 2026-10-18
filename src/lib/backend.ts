@@ -562,20 +562,21 @@ export type ClipboardPeer = {
   id: string;
   name: string;
   transports: string[];
-  preferred: string;
-  online: boolean;
+  /** 本机是否勾选与它同步（两台设备都勾选才会真正同步） */
+  selected: boolean;
 };
 
 export type ClipboardStatus = {
   running: boolean;
   enabled: boolean;
-  codeReady: boolean;
   deviceId: string;
   deviceName: string;
   port: number;
   discoveryPort: number;
   localAddresses: string[];
-  transports: { direct: boolean; lan: boolean; p2p: boolean };
+  transports: { lan: boolean; server: boolean; p2p: boolean };
+  serverRegistered: boolean;
+  p2pActive: boolean;
   peers: ClipboardPeer[];
   lastError: string;
   lastEvent: { at: string; kind: string; detail: string; peer: string } | null;
@@ -597,6 +598,8 @@ export type ClipboardEvent =
 
 export const clipboardStatus = (): Promise<ClipboardStatus> => invoke("clipboard_status");
 export const clipboardDefaultDir = (): Promise<string | null> => invoke("clipboard_default_dir");
+/** 立刻触发一轮发现（局域网广播 + 服务器/P2P 拉取），不等待定时器。 */
+export const clipboardRefresh = (): Promise<ClipboardStatus> => invoke("clipboard_refresh");
 /** 移动端前台读到的剪切板（图片/文件已经由 Kotlin 桥落到缓存目录）。 */
 export const clipboardLocalChanged = (content: unknown): Promise<unknown> =>
   invoke("clipboard_local_changed", { content });

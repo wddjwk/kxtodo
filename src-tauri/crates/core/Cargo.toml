@@ -35,6 +35,12 @@ hkdf = "0.12"
 sha2 = "0.10"
 hmac = "0.12"
 chacha20poly1305 = "0.10"
+# 剪切板局域网会话密钥（v0.8.10）：每次连接一对临时 X25519 密钥，身份用 Ed25519 签名
+x25519-dalek = { version = "3", features = ["static_secrets"] }
+# 局域网发现：取各网卡广播地址（Windows/Linux/Android 同一套 getifaddrs）
+if-addrs = "0.15"
+# UDP 发现端口要求 SO_REUSEADDR/SO_BROADCAST（tokio 的 bind 不暴露这些选项）
+socket2 = "0.6"
 base64 = "0.22"
 # P2P 同步（v0.6.1）：iroh = QUIC + 打洞 + n0 公共 relay（免费公共服务，可换地址）；
 # iroh-dns = 内置的 pkarr 客户端（账户派生密钥签一条 TXT 就是「同账户设备目录」）；

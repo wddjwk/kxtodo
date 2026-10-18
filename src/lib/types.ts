@@ -307,18 +307,22 @@ export type Settings = {
     /** 自动接收：开着就不再弹接收确认卡（默认关） */
     autoAccept: boolean;
   };
-  /** 剪切板同步（v0.8.9）：本机设置，不参与同步 */
+  /** 剪切板同步（v0.8.10）：本机设置，不参与同步 */
   clipboard: {
     enabled: boolean;
-    /** 同步口令（≥8 位）：LAN / 直接 IP / P2P 共用的钥匙；空 = 网络层不启动 */
-    code: string;
-    /** 本机设备名；空 = KXToDo·平台 */
+    /** 设备名自定义前缀；空 = kxtodo。显示名统一追加 ·平台 */
     deviceName: string;
-    directEnabled: boolean;
-    /** 一行一个 ip 或 ip:port */
-    directAddresses: string;
     lanEnabled: boolean;
-    p2pEnabled: boolean;
+    /** 广域网：统一服务器发现 */
+    serverEnabled: boolean;
+    /** 广域网：P2P 账户房间发现 */
+    wanP2pEnabled: boolean;
+    /** 统一服务器地址；可省略 http:// 与端口 */
+    serverUrl: string;
+    /** 广域网共用账户名 */
+    account: string;
+    /** 广域网共用密码（只存本机） */
+    password: string;
     types: { text: boolean; html: boolean; image: boolean; files: boolean };
     limits: { textMb: number; htmlMb: number; imageMb: number; filesMb: number };
     /** 收到文件落盘目录；空 = 宿主下载目录下的 kxtodo-clipboard */

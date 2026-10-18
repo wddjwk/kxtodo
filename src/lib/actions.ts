@@ -836,6 +836,18 @@ export async function setConfig(path: string, value: unknown): Promise<boolean> 
   return true;
 }
 
+/** 勾选/取消一台剪切板设备：纯本机偏好，立刻作用于运行中的服务，不重启。 */
+export async function setClipboardPeer(deviceId: string, selected: boolean): Promise<boolean> {
+  if (!coreMode) return true;
+  try {
+    await coreDispatch("gui.clipboard-peer", { deviceId, selected });
+    return true;
+  } catch (error) {
+    await report(error, "保存设备选择失败");
+    return false;
+  }
+}
+
 /** 剪切板设置一次写整份：逐字段 config.set 会让后台服务按字段数重启多次。 */
 export async function configureClipboard(next: Settings["clipboard"]): Promise<boolean> {
   if (coreMode) {

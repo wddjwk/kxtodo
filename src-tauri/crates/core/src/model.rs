@@ -1532,33 +1532,42 @@ impl Default for TransferSettings {
 
 /// 剪切板同步（v0.8.9）的本机设置。
 ///
-/// 与传输/同步账户都无关：三台设备凭同一句「同步口令」在同一张局域网/同一个 P2P
-/// 房间里互认。**所有字段都不进设置同步**——IP、保存目录、启停开关本来就是每台机器
-/// 自己的事；把 A 的保存目录同步给 B 只会让文件落到错误的位置。
+/// 剪切板同步的本机设置。**所有字段都不进设置同步**——服务器地址、账户、
+/// 保存目录、启停开关本来就是每台机器自己的事。
+///
+/// 配对模型（v0.8.10）：没有跨设备的共享口令。
+/// - 局域网：广播发现所有开启该功能的设备，双方各自勾选后同步；
+/// - 广域网：同一账户（统一服务器 / P2P 房间）互相发现，同样各自勾选。
+/// 设备身份是持久化的 Ed25519 密钥，三种发现方式共用；握手签名验身份，
+/// 会话密钥由每次连接的 X25519 临时密钥协商。
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ClipboardSettings {
     /// 总开关：关掉后本机不再监听连接，也不再接受/写入远端剪切板。
     #[serde(default)]
     pub enabled: bool,
-    /// 同步口令（≥8 位）：局域网发现、直接 IP、P2P 三种方式共用同一把钥匙。
-    /// 空 = 还没配对，网络层不启动（不会退回明文）。
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub code: String,
-    /// 本机在设备列表里的名字；空 = KXToDo·平台。
+    /// 本机设备名的自定义前缀；空 = `kxtodo`。显示名统一追加「·平台」。
     #[serde(rename = "deviceName", default, skip_serializing_if = "String::is_empty")]
     pub device_name: String,
-    /// 直接 IP：填了就优先走它（仍要求同步口令一致）。
-    #[serde(rename = "directEnabled", default)]
-    pub direct_enabled: bool,
-    /// 一行一个 `ip` 或 `ip:port`；没写端口时用默认的 LAN 端口。
-    #[serde(rename = "directAddresses", default, skip_serializing_if = "String::is_empty")]
-    pub direct_addresses: String,
-    /// 局域网 UDP 广播发现（默认开）。
+    /// 局域网广播发现（默认开）。
     #[serde(rename = "lanEnabled", default = "default_true")]
     pub lan_enabled: bool,
-    /// iroh P2P（走 transfer.relay / sync.p2pRelay 的 relay 与 pkarr 目录）。
-    #[serde(rename = "p2pEnabled", default)]
+    /// 广域网：统一服务器发现。
+    #[serde(rename = "serverEnabled", default)]
+    pub server_enabled: bool,
+    /// 广域网：P2P 账户房间发现。
+    /// 注意 JSON 名是 `wanP2pEnabled`：v0.8.9 的 `p2pEnabled` 是旧口令模型的第三路，
+    /// 复用同名会让旧配置里的 `true` 被误读成「广域网已开但没账户」而把局域网也拖停。
+    #[serde(rename = "wanP2pEnabled", default)]
     pub p2p_enabled: bool,
+    /// 统一服务器地址；空 = 未配置。可省略 http:// 与端口。
+    #[serde(rename = "serverUrl", default, skip_serializing_if = "String::is_empty")]
+    pub server_url: String,
+    /// 广域网共用的账户名（统一服务器与 P2P 房间都按它配对）。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub account: String,
+    /// 广域网共用的密码；只存本机，不随设置同步。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub password: String,
     /// 接受的内容类型（默认全开）。
     #[serde(default)]
     pub types: ClipboardAcceptTypes,
@@ -1628,12 +1637,13 @@ impl Default for ClipboardSettings {
     fn default() -> Self {
         Self {
             enabled: false,
-            code: String::new(),
             device_name: String::new(),
-            direct_enabled: false,
-            direct_addresses: String::new(),
             lan_enabled: true,
+            server_enabled: false,
             p2p_enabled: false,
+            server_url: String::new(),
+            account: String::new(),
+            password: String::new(),
             types: ClipboardAcceptTypes::default(),
             limits: ClipboardLimits::default(),
             save_dir: String::new(),
