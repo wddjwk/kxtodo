@@ -3,12 +3,13 @@
   import type { Component } from "svelte";
   import { flip } from "svelte/animate";
   import {
-    ChevronsDownUp, ChevronsUpDown, FilePlus2, FolderInput, FolderPlus, NotebookPen, Pencil, PinOff, Search, Shapes, Toolbox, Trash2, Upload, Wallet
+    CalendarClock, ChevronsDownUp, ChevronsUpDown, FilePlus2, FolderInput, FolderPlus, NotebookPen, Pencil, PinOff, Search, Shapes, Toolbox, Trash2, Upload, Wallet
   } from "@lucide/svelte";
   import {
     appState, appSettings, showToast, showSettings,
     searchQuery, listCounts, isSearching,
-    now, safeFileName, appVersion, diaryOpen, diaryEditor, ledgerOpen, ledgerEditor, toolboxOpen
+    now, safeFileName, appVersion, diaryOpen, diaryEditor, ledgerOpen, ledgerEditor, toolboxOpen,
+    calendarOpen, calendarEditor
   } from "./stores";
   import {
     selectNode as selectNodeAction, toggleCategory as toggleCategoryAction,
@@ -31,7 +32,7 @@
   import ContextMenu from "./menu/ContextMenu.svelte";
   import MenuItem from "./menu/MenuItem.svelte";
   import MenuSeparator from "./menu/MenuSeparator.svelte";
-  import { isMobile, mobileView, showMobileContent, showMobileDiary, showMobileLedger, showMobileToolbox, createBackGuard } from "./platform";
+  import { isMobile, mobileView, showMobileContent, showMobileDiary, showMobileLedger, showMobileSchedule, showMobileToolbox, createBackGuard } from "./platform";
   import { caps } from "./capabilities";
   import type { NavItemId } from "./nav";
   import { NAV_ITEM_IDS, NAV_LAYOUTS, navIdToolId, navItemLabel, navToolId } from "./nav";
@@ -75,14 +76,16 @@
   $: diaryActive = $isMobile ? $mobileView === "diary" : $diaryOpen;
   // 记账同日记：不是节点，高亮跟着「谁占着主区域」走
   $: ledgerActive = $isMobile ? $mobileView === "ledger" : $ledgerOpen;
+  // 日程同日记/记账（v0.9.0）：不是节点，高亮跟着「谁占着主区域」走
+  $: calendarActive = $isMobile ? $mobileView === "schedule" : $calendarOpen;
   // 工具箱 v0.7.5 起两端都有，高亮同一条口径
   $: toolboxActive = $isMobile ? $mobileView === "toolbox" : $toolboxOpen;
   /**
-   * 被整页视图盖住（v0.8.6 需求 3）：三个整页层改成了不透明覆盖，底下的两栏仍在
+   * 被整页视图盖住（v0.8.6 需求 3）：整页层改成了不透明覆盖，底下的两栏仍在
    * 树上（返回零闪烁的代价）——加 `inert` 让它们不可聚焦、不可交互、从可访问性树
    * 摘除。旧 WebKit 不认 inert 时由 mobile.css 的 `visibility: hidden` 兜底。
    */
-  $: coveredByFullPage = $isMobile && ($mobileView === "diary" || $mobileView === "ledger" || $mobileView === "toolbox");
+  $: coveredByFullPage = $isMobile && ($mobileView === "diary" || $mobileView === "ledger" || $mobileView === "schedule" || $mobileView === "toolbox");
 
   /**
    * 固定导航的每一行：四个系统节点（我的一天/计划内/收藏/定时任务）与三条不是节点的
@@ -109,6 +112,10 @@
     }
     if (id === "ledger") {
       return [{ id, label: "记账", component: Wallet, selected: ledgerActive, count: 0, onSelect: openLedger }];
+    }
+    if (id === "calendar") {
+      // 日程（v0.9.0）：CalendarClock 与「计划内」的普通日历图标刻意区分开
+      return [{ id, label: "日程", component: CalendarClock, selected: calendarActive, count: 0, onSelect: openCalendar }];
     }
     if (id === "toolbox") {
       // 工具箱两端都有（v0.7.5）；caps 过滤保留着——将来某端不放工具箱时只动 capabilities
@@ -144,7 +151,7 @@
         label: node.name,
         glyph: node.icon,
         selected:
-          !diaryActive && !ledgerActive && !toolboxActive && $appState.selectedNodeId === node.id && !$isSearching,
+          !diaryActive && !ledgerActive && !calendarActive && !toolboxActive && $appState.selectedNodeId === node.id && !$isSearching,
         count: $listCounts[node.id] ?? 0,
         onSelect: () => selectNode(node.id)
       }
@@ -182,6 +189,8 @@
     diaryOpen.set(false);
     ledgerEditor.set(null);
     ledgerOpen.set(false);
+    calendarEditor.set(null);
+    calendarOpen.set(false);
     toolboxOpen.set(false);
     void selectNodeAction(id);
     treeMenu = null;
@@ -197,6 +206,8 @@
     iconPickerListId = null;
     ledgerEditor.set(null);
     ledgerOpen.set(false);
+    calendarEditor.set(null);
+    calendarOpen.set(false);
     toolboxOpen.set(false);
     if ($isMobile) {
       showMobileDiary();
@@ -212,12 +223,32 @@
     iconPickerListId = null;
     diaryEditor.set(null);
     diaryOpen.set(false);
+    calendarEditor.set(null);
+    calendarOpen.set(false);
     toolboxOpen.set(false);
     if ($isMobile) {
       showMobileLedger();
       return;
     }
     ledgerOpen.set(true);
+  }
+
+  /** 日程（v0.9.0）：与日记/记账/工具箱同一条互斥——谁占主区域，其它的收起。 */
+  function openCalendar(): void {
+    searchQuery.set("");
+    treeMenu = null;
+    emptyAreaMenu = null;
+    iconPickerListId = null;
+    diaryEditor.set(null);
+    diaryOpen.set(false);
+    ledgerEditor.set(null);
+    ledgerOpen.set(false);
+    toolboxOpen.set(false);
+    if ($isMobile) {
+      showMobileSchedule();
+      return;
+    }
+    calendarOpen.set(true);
   }
 
   /** 工具箱与日记/记账同一条互斥：谁占主区域，另外两个收起 */
@@ -231,6 +262,8 @@
     diaryOpen.set(false);
     ledgerEditor.set(null);
     ledgerOpen.set(false);
+    calendarEditor.set(null);
+    calendarOpen.set(false);
     if ($isMobile) {
       showMobileToolbox();
       return;

@@ -26,7 +26,13 @@ function compareDue(a: Task, b: Task, direction: 1 | -1): number {
   const left = dueMoment(a);
   const right = dueMoment(b);
   // 没日期的沉底（两个方向都沉底：它们是「没排期」，不是「最远」）
-  if (left === null && right === null) return 0;
+  if (left === null && right === null) {
+    // 沉底的那一组内部按创建时间由近及远（新建的排第一个，v0.9.0 bugfix 6）：
+    // 早先这里返回 0，顺序交给 Array.sort 的稳定性 = 交给插入顺序，
+    // 「刚建的那条没日期的任务」会埋在几年前的老任务下面找不到。
+    // 与方向无关：升序降序里这一块都在最下面、块内都是新在前。
+    return Date.parse(b.createdAt) - Date.parse(a.createdAt);
+  }
   if (left === null) return 1;
   if (right === null) return -1;
   return (left - right) * direction;

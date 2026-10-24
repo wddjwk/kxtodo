@@ -7,14 +7,17 @@
     appSettings, appState, showSettings, searchQuery, isSearching,
     taskEmojiPicker, editorTaskId, appVersion, showToast,
     diaryOpen, diaryEditor, editorDraftNode, ledgerOpen, ledgerEditor, ledgerData, toolboxOpen,
+    calendarOpen, calendarEditor,
     hydrate as hydrateStores
   } from "./lib/stores";
   import { replaceTaskEmojis, setConfig, syncNow as syncNowAction } from "./lib/actions";
   import { isMobile, mobileView, startMobileRouter } from "./lib/platform";
+  import { insertCalendarNavItem } from "./lib/nav";
   import { imeViewport, startImeViewport } from "./lib/imeViewport";
   import { startAutoSync } from "./lib/syncRunner";
   import { ensureTransferRuntime } from "./lib/transferStore";
   import { ensureClipboardRuntime } from "./lib/clipboardSyncStore";
+  import { reconcileKeepAlive } from "./lib/keepAlive";
   import { ensureCardOverlayRuntime } from "./lib/cardOverlays";
   import { revealMainWindow } from "./lib/backend";
   import { oversizedAvatarShrink } from "./lib/images";
@@ -25,6 +28,7 @@
   import Workspace from "./lib/Workspace.svelte";
   import DiaryView from "./lib/DiaryView.svelte";
   import LedgerView from "./lib/LedgerView.svelte";
+  import CalendarView from "./lib/CalendarView.svelte";
   import ToolboxView from "./lib/ToolboxView.svelte";
   import ColorPickerPanel from "./lib/ColorPickerPanel.svelte";
   import SettingsDrawer from "./lib/SettingsDrawer.svelte";
@@ -33,6 +37,7 @@
   let workspaceRef: Workspace;
   let diaryViewRef: DiaryView;
   let ledgerViewRef: LedgerView;
+  let calendarViewRef: CalendarView;
 
   $: appShellStyle = $isMobile
     ? buildMobileShellStyle($appSettings.appearance, $imeViewport)
@@ -42,12 +47,22 @@
   $: diaryVisible = $isMobile ? $mobileView === "diary" : $diaryOpen;
   /** 记账占着主区域：与日记同一条口径（移动端看历史栈，桌面看 ledgerOpen）。 */
   $: ledgerVisible = $isMobile ? $mobileView === "ledger" : $ledgerOpen;
+  /** 日程占着主区域（v0.9.0）：与日记/记账同一条口径。 */
+  $: calendarVisible = $isMobile ? $mobileView === "schedule" : $calendarOpen;
   /** 工具箱占着主区域（v0.7.5 起桌面也有）：同一条口径。 */
   $: toolboxVisible = $isMobile ? $mobileView === "toolbox" : $toolboxOpen;
 
   $: emojiPickerTask = $taskEmojiPicker
     ? $appState.tasks.find((t) => t.id === $taskEmojiPicker?.taskId) ?? null
     : null;
+
+  // 安卓后台常驻（v0.9.0）：设置是唯一真源，值一变就把 Kotlin 前台服务对齐过去。
+  // 标语留空 = 让服务侧回落默认标语，所以这里不需要默认值常量。
+  // 非安卓端 reconcileKeepAlive 内部直接返回（桌面 / 浏览器 dev 零副作用）。
+  $: reconcileKeepAlive(
+    $appSettings.features?.androidKeepAlive === true,
+    $appSettings.features?.keepAliveNotice ?? ""
+  );
 
   onMount(() => {
     // 移动端历史栈路由：必须在模块全部初始化后挂载（platform 与 stores 循环依赖）
@@ -62,6 +77,7 @@
       void shrunk.then((avatar) => {
         if (avatar) void setConfig("profile.avatar", avatar);
       });
+      seedCalendarNavItem();
     });
     void revealMainWindow();
     // 自动同步循环（全平台：配对后按 intervalSeconds 周期 pull+push）
@@ -96,7 +112,28 @@
     closeTaskEditor();
     diaryEditor.set(null);
     ledgerEditor.set(null);
+    calendarEditor.set(null);
     taskEmojiPicker.set(null);
+  }
+
+  /**
+   * v0.9.0 的一次性注入：老用户存量 navItems 里没有「日程」行，升级后照原名单渲染
+   * 就永远看不到新入口。每台设备只做一次（localStorage 标记）：注入后立即落盘，
+   * 之后用户再主动隐藏日程，不会被塞回来。
+   */
+  const NAV_CALENDAR_SEED_KEY = "kxtodo-nav-calendar-seeded-v1";
+  function seedCalendarNavItem(): void {
+    try {
+      if (localStorage.getItem(NAV_CALENDAR_SEED_KEY)) return;
+      localStorage.setItem(NAV_CALENDAR_SEED_KEY, "1");
+      const current = $appSettings.appearance.navItems;
+      const next = insertCalendarNavItem(current);
+      if (next.length !== current.length) {
+        void setConfig("appearance.navItems", next);
+      }
+    } catch {
+      // localStorage 不可用（隐私模式等）：宁可少注入一次，不阻塞启动
+    }
   }
 
   function closeOverlays(): void {
@@ -107,11 +144,12 @@
     workspaceRef?.closeOverlays();
     diaryViewRef?.closeOverlays();
     ledgerViewRef?.closeOverlays();
+    calendarViewRef?.closeOverlays();
     showSettings.set(false);
   }
 
   function handleShortcut(event: KeyboardEvent): void {
-    if ($editorTaskId || $editorDraftNode || $diaryEditor || $ledgerEditor) return;
+    if ($editorTaskId || $editorDraftNode || $diaryEditor || $ledgerEditor || $calendarEditor) return;
     if (matchesShortcut(event, $appSettings.shortcuts.focusSearch)) {
       event.preventDefault();
       sidebarRef?.focusSearch();
@@ -162,8 +200,10 @@
   class:view-toolbox={$isMobile && $mobileView === "toolbox"}
   class:view-diary={$isMobile && $mobileView === "diary"}
   class:view-ledger={$isMobile && $mobileView === "ledger"}
+  class:view-schedule={$isMobile && $mobileView === "schedule"}
   class:diary-open={!$isMobile && $diaryOpen}
   class:ledger-open={!$isMobile && $ledgerOpen}
+  class:calendar-open={!$isMobile && $calendarOpen}
   class:toolbox-open={!$isMobile && $toolboxOpen}
   class:searching={$isSearching}
   class:view-settings={$isMobile && $showSettings}
@@ -185,6 +225,10 @@
 
     {#if ledgerVisible}
       <LedgerView bind:this={ledgerViewRef} />
+    {/if}
+
+    {#if calendarVisible}
+      <CalendarView bind:this={calendarViewRef} />
     {/if}
 
     {#if toolboxVisible}
@@ -248,6 +292,23 @@
     {:catch error}
       <!-- 懒加载的 chunk 拉不到（网络/缓存出问题）时**必须说一声并收掉浮层**：
            早先只写了 `then`，失败就是无限空白——用户点开什么都没有，也退不出去。 -->
+      <div class="lazy-fallback" role="alert">
+        打开失败：{String(error)}
+        <button class="settings-button" type="button" on:click={dismissLazyFailure}>关闭</button>
+      </div>
+    {/await}
+  {/if}
+
+  {#if $calendarEditor}
+    {#await import("./lib/calendar/CalendarEditor.svelte") then module}
+      <svelte:component
+        this={module.default}
+        target={$calendarEditor}
+        onClose={() => calendarEditor.set(null)}
+        onOpenLink={(url, title) => workspaceRef?.openLinkUrl(url, title)}
+      />
+    {:catch error}
+      <!-- 懒加载失败必须说一声并收掉浮层（与上面几个编辑器同一条纪律） -->
       <div class="lazy-fallback" role="alert">
         打开失败：{String(error)}
         <button class="settings-button" type="button" on:click={dismissLazyFailure}>关闭</button>

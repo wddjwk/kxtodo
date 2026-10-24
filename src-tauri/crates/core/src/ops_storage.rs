@@ -20,7 +20,7 @@ use crate::core::{require_confirmation, ExecContext, Invocation};
 use crate::diary_archive::{is_image_name, is_safe_image_name};
 use crate::envelope::Meta;
 use crate::error::{CoreError, CoreResult};
-use crate::model::{DIARY_IMAGE_NODE, LEDGER_IMAGE_NODE};
+use crate::model::{CALENDAR_IMAGE_NODE, DIARY_IMAGE_NODE, LEDGER_IMAGE_NODE};
 use crate::repo::Domain;
 
 pub fn storage_dispatch(
@@ -158,6 +158,7 @@ fn scan(ctx: &ExecContext) -> CoreResult<Scan> {
     let data = ctx.repo.load_data()?;
     let diary = ctx.repo.load_diary()?;
     let ledger = ctx.repo.load_ledger()?;
+    let calendar = ctx.repo.load_calendar()?;
     let settings = ctx.repo.load_settings()?;
     let mut out = Scan::default();
 
@@ -169,6 +170,7 @@ fn scan(ctx: &ExecContext) -> CoreResult<Scan> {
         Domain::Schedule,
         Domain::Diary,
         Domain::Ledger,
+        Domain::Calendar,
     ]
     .iter()
     .map(|domain| domain.file_name())
@@ -227,6 +229,13 @@ fn scan(ctx: &ExecContext) -> CoreResult<Scan> {
                     .map(|entry| entry.markdown.as_str())
                     .collect();
                 crate::image_gc::referenced_basenames(markdowns)
+            } else if id == CALENDAR_IMAGE_NODE {
+                let markdowns: Vec<&str> = calendar
+                    .events
+                    .iter()
+                    .map(|event| event.details.as_str())
+                    .collect();
+                crate::image_gc::referenced_basenames(markdowns)
             } else if id == LEDGER_IMAGE_NODE {
                 ledger
                     .entries
@@ -254,7 +263,7 @@ fn scan(ctx: &ExecContext) -> CoreResult<Scan> {
                     out.orphan_images.push((path, len));
                 }
             }
-            if id != DIARY_IMAGE_NODE && id != LEDGER_IMAGE_NODE && !node_ids.contains(id.as_str()) {
+            if id != DIARY_IMAGE_NODE && id != LEDGER_IMAGE_NODE && id != CALENDAR_IMAGE_NODE && !node_ids.contains(id.as_str()) {
                 out.prunable_dirs.push(dir);
             }
         }
@@ -271,6 +280,7 @@ fn scan(ctx: &ExecContext) -> CoreResult<Scan> {
         &settings.appearance.new_node_defaults.background_image,
         &settings.diary.background_image,
         &settings.ledger.background_image,
+        &settings.calendar.background_image,
     ] {
         if let Some(name) = img_file_ref(raw) {
             bg_refs.insert(name.to_string());

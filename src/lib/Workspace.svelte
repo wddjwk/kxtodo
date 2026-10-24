@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import {
-    Calendar, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
+    Calendar, CalendarClock, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
     ChevronsDown, ChevronsUp, ExternalLink, FolderInput,
     Lightbulb, MoreHorizontal, PenLine, Pin, PinOff, Plus, RefreshCw, Search, Settings as SettingsIcon, SmilePlus, Star, Sun, Tag, Trash2, X
   } from "@lucide/svelte";
@@ -10,6 +10,7 @@
     searchQuery, searchHits, searchScanning, selectedNode, visibleTasks, selectedBackground,
     accent, isSearching, todayIso, yesterdayIso, dateOnly,
     taskEmojiPicker, editorTaskId, editorDraftNode, diaryEditor, diaryEntries, ledgerData, ledgerEditor,
+    calendarEditor, calendarEvents,
     fileToDataUrl, weekStart
   } from "./stores";
   import {
@@ -49,6 +50,7 @@
   import { filterPlannedTasks, plannedGroupOptions, plannedSections, type PlannedGroupKey } from "./plannedGroups";
   import { calendarWeekdayHeaders } from "./diary";
   import { createBackGuard, isMobile, mobileView } from "./platform";
+  import { closeSwipeRow, revealedSwipeRow } from "./cardOverlays";
   import { caps } from "./capabilities";
   import type { AppNode, CardStyle, ReminderRule, SearchHit, TagColor, Task } from "./types";
 
@@ -135,6 +137,19 @@
   let pullDistance = 0;
   let pullReady = false;
   let pullBusy = false;
+  /** 松手回收中（v0.9.0）：提示条弹回 0 而不是瞬间消失（业界标准的收尾动画） */
+  let pullReleasing = false;
+  let pullReleaseTimer: number | undefined;
+
+  function startPullRelease(): void {
+    if (pullBusy) return;
+    pullReleasing = true;
+    window.clearTimeout(pullReleaseTimer);
+    pullReleaseTimer = window.setTimeout(() => {
+      pullReleasing = false;
+      pullReleaseTimer = undefined;
+    }, 260);
+  }
 
   /** 同步功能开着（总开关 + 已配对且没暂停）才给下拉手势与「立即同步」入口 */
   $: syncAvailable =
@@ -157,7 +172,10 @@
     const dayTimer = window.setInterval(() => {
       dayTick += 1;
     }, 60_000);
-    return () => window.clearInterval(dayTimer);
+    return () => {
+      window.clearInterval(dayTimer);
+      window.clearTimeout(pullReleaseTimer);
+    };
   });
 
   // 离开内容视图（移动端回列表/设置/工具箱）时收起下拉，避免再进入时残留开面板
@@ -430,7 +448,7 @@
     );
   }
 
-  /** 这一页有没有浮层开着（链接预览 / 建议 / 日历 / 分组面板 / 三个菜单）。 */
+  /** 这一页有没有浮层开着（链接预览 / 建议 / 日历 / 分组面板 / 三个菜单 / 左滑露出的动作行）。 */
   $: workspaceOverlayOpen =
     showSuggestions ||
     showCalendar ||
@@ -439,6 +457,7 @@
     linkPreviewUrl !== "" ||
     taskMenu !== null ||
     diaryMenu !== null ||
+    $revealedSwipeRow !== null ||
     listMenuAt !== null;
 
   // 返回键先收掉本页浮层（与「点外面」同一个动作），再往下才轮到历史栈。
@@ -461,6 +480,8 @@
     linkPreviewUrl = "";
     linkPreviewTitle = "";
     taskEmojiPicker.set(null);
+    // 左滑露出的动作行（v0.9.0）：返回键与「点外面」同一个动作，先收回它
+    closeSwipeRow();
   }
 
   export function focusComposer(): void {
@@ -585,9 +606,43 @@
     editorTaskId.set(taskId);
   }
 
+  /**
+   * 右键「添加到日程」（v0.9.0）：没关联过 → 新建日程编辑器（预置任务的截止日期/时刻，
+   * 没有截止日期就落到今天的全天）；已关联 → 直接打开最近的那条日程。
+   * 编辑器里详情与任务内容双向同步（保存详情会连带写任务 markdown）。
+   */
+  function openTaskCalendar(task: Task): void {
+    taskMenu = null;
+    const linked = $calendarEvents.filter((event) => event.taskId === task.id);
+    if (linked.length > 0) {
+      const latest = linked.reduce((a, b) => ((a.updatedAt ?? a.createdAt) > (b.updatedAt ?? b.createdAt) ? a : b));
+      calendarEditor.set({ id: latest.id });
+      return;
+    }
+    const dueDate = dateOnly(task.dueDate) ?? todayIso();
+    calendarEditor.set({
+      startDate: dueDate,
+      startTime: task.dueTime ?? "",
+      allDay: !task.dueTime,
+      taskId: task.id
+    });
+  }
+
   function deleteTask(taskId: string): void {
     void deleteTaskAction(taskId);
     taskMenu = null;
+  }
+
+  /** 移动端右滑到位即删（v0.9.0）：与右键菜单「删除」同一条路径 */
+  function handleSwipeDelete(taskId: string): void {
+    closeSwipeRow();
+    void deleteTaskAction(taskId);
+  }
+
+  /** 移动端左滑露出的「置顶 / 取消置顶」（v0.9.0）：与右键菜单同一条路径 */
+  function handleSwipePin(detail: { id: string; pinned: boolean }): void {
+    closeSwipeRow();
+    void updateTaskAction(detail.id, { pinned: detail.pinned });
   }
 
   function addTagToTask(
@@ -1115,11 +1170,17 @@
         pullDistance = distance;
         pullReady = ready;
       },
-      onRelease: () => void runManualSyncNow()
+      onRelease: () => void runManualSyncNow(),
+      onCancel: () => startPullRelease()
     }}
   >
-    {#if $isMobile && syncAvailable && (pullDistance > 0 || pullBusy)}
-      <div class="pull-sync-zone" style={`height:${pullBusy ? 58 : Math.max(32, Math.round(pullDistance * 0.7))}px`}>
+    {#if $isMobile && syncAvailable && (pullDistance > 0 || pullBusy || pullReleasing)}
+      <div
+        class="pull-sync-zone"
+        class:dragging={!pullReleasing && !pullBusy && pullDistance > 0}
+        class:releasing={pullReleasing}
+        style={`height:${pullReleasing ? 0 : pullBusy ? 58 : Math.max(32, Math.round(pullDistance * 0.7))}px`}
+      >
         <span
           class="pull-sync-indicator"
           class:ready={pullReady || pullBusy}
@@ -1159,6 +1220,8 @@
               on:editTag={(e) => editTagAtTask(e.detail.id, e.detail.tagId, e.detail.text)}
               on:removeEmoji={(e) => removeEmojiFromTask(e.detail.id, e.detail.index)}
               on:pickEmoji={(e) => openEmojiPickerAt(e.detail.id, e.detail.index)}
+              on:swipeDelete={(e) => handleSwipeDelete(e.detail)}
+              on:swipePin={(e) => handleSwipePin(e.detail)}
             />
           {:else if hit.kind === "diary"}
             <DiaryCard
@@ -1218,6 +1281,8 @@
             on:editTag={(e) => editTagAtTask(e.detail.id, e.detail.tagId, e.detail.text)}
             on:removeEmoji={(e) => removeEmojiFromTask(e.detail.id, e.detail.index)}
             on:pickEmoji={(e) => openEmojiPickerAt(e.detail.id, e.detail.index)}
+            on:swipeDelete={(e) => handleSwipeDelete(e.detail)}
+            on:swipePin={(e) => handleSwipePin(e.detail)}
           />
         {/if}
       </svelte:fragment>
@@ -1247,6 +1312,8 @@
               on:editTag={(e) => editTagAtTask(e.detail.id, e.detail.tagId, e.detail.text)}
               on:removeEmoji={(e) => removeEmojiFromTask(e.detail.id, e.detail.index)}
               on:pickEmoji={(e) => openEmojiPickerAt(e.detail.id, e.detail.index)}
+              on:swipeDelete={(e) => handleSwipeDelete(e.detail)}
+              on:swipePin={(e) => handleSwipePin(e.detail)}
             />
           {/each}
         {/if}
@@ -1309,6 +1376,11 @@
         icon={Star}
         label={taskMenuTask.important ? "取消收藏" : "收藏"}
         onSelect={() => { void updateTaskAction(taskMenuTask.id, { important: !taskMenuTask.important }); taskMenu = null; }}
+      />
+      <MenuItem
+        icon={CalendarClock}
+        label={$calendarEvents.some((event) => event.taskId === taskMenuTask.id) ? "打开日程" : "添加到日程"}
+        onSelect={() => openTaskCalendar(taskMenuTask)}
       />
       <MenuItem
         icon={taskMenuTask.pinned ? PinOff : Pin}

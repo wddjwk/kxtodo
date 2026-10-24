@@ -2678,6 +2678,14 @@ async fn core_snapshot(
         if wanted("ledger") {
             put_snapshot_domain(&mut payload, &mut revisions, "ledger", host.repo.load_ledger())?;
         }
+        if wanted("calendar") {
+            put_snapshot_domain(
+                &mut payload,
+                &mut revisions,
+                "calendar",
+                host.repo.load_calendar(),
+            )?;
+        }
         payload.insert(
             "revisions".to_string(),
             Value::Object(revisions),
@@ -3370,12 +3378,13 @@ struct MobileBackend {
 
 #[cfg(not(desktop))]
 impl domain::host::HostBackend for MobileBackend {
-    /// 移动端没有自绘通知窗（桌面那套 `notification.html` 是独立的 always-on-top 窗口），
-    /// 所以把载荷交回前端：`stores.ts::showNotification` 已经是移动端通知的唯一出口
-    /// （系统通知插件 + 权限申请 + 失败降级 Toast），Rust 侧再抄一遍就会有两套口径。
+    /// 移动端没有自绘通知窗（桌面那套 `notification.html` 是独立的 always-on-top 窗口）。
     ///
-    /// 本期不做安卓保活，提醒只在应用进程活着时才可能触发——那时前端一定在，
-    /// 这条事件通路是可靠的。
+    /// **先原生投递，失败才交回前端**（v0.9.0）：开了后台常驻之后，提醒很可能在应用
+    /// 退到后台时触发——那时 WebView 的 JS 被冻结，`kxtodo://notification` 发出去没人
+    /// 接，提醒就静默丢了。通知插件的 Rust 侧在 Android 上是直接走 JNI 发系统通知的，
+    /// 不需要前端在场。权限没授予时原生投递会失败，于是回落到前端那条路（它负责申请
+    /// 权限并在失败时降级 Toast），两条路不会各发一次。
     fn show_notification(
         &self,
         payload: &Value,
@@ -3389,6 +3398,28 @@ impl domain::host::HostBackend for MobileBackend {
                 .unwrap_or_default()
                 .as_millis()
         );
+        let title = payload
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("KXToDo");
+        let body = payload
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        {
+            use tauri_plugin_notification::NotificationExt;
+            if self
+                .app
+                .notification()
+                .builder()
+                .title(title)
+                .body(body)
+                .show()
+                .is_ok()
+            {
+                return Ok(id);
+            }
+        }
         let mut forwarded = payload.clone();
         if let Some(map) = forwarded.as_object_mut() {
             map.insert("id".to_string(), Value::String(id.clone()));

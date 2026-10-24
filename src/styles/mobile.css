@@ -400,6 +400,19 @@
   justify-content: center;
   width: 100%;
   overflow: hidden;
+  /* 收尾动画（v0.9.0）：松手后高度弹回 0（或收到同步中的 58px），不是瞬间消失。
+     跟手的那一段由 .dragging 把 transition 关掉——高度必须实时等于手指的位置。 */
+  transition:
+    height 240ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 200ms linear;
+}
+
+.app-shell.mobile .pull-sync-zone.dragging {
+  transition: none;
+}
+
+.app-shell.mobile .pull-sync-zone.releasing {
+  opacity: 0;
 }
 
 .app-shell.mobile .pull-sync-indicator {
@@ -1052,4 +1065,237 @@
 
 .app-shell.mobile .context-menu.sub-deep .nav-fixed-editor > .menu-item.submenu-open > .menu-item-button {
   display: none;
+}
+
+/* ---------- 日程（v0.9.0）：整页覆盖 + 窄屏网格 ---------- */
+
+/* 日程同日记/记账：整页一层，由历史栈的 schedule 层驱动。覆盖而非 display:none，
+   返回主界面零闪烁、滚动位置保留。 */
+.app-shell.mobile.view-schedule .sidebar,
+.app-shell.mobile.view-schedule .workspace {
+  visibility: hidden;
+}
+
+.app-shell.mobile .calendar-view {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  padding:
+    calc(16px + env(safe-area-inset-top, 0px) * var(--safe-inv, 1))
+    10px
+    calc(16px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1))
+    10px;
+  border-radius: 0;
+}
+
+.app-shell.mobile .calendar-view-switch button {
+  width: 34px;
+  height: 32px;
+}
+
+.app-shell.mobile .calendar-fab-row {
+  right: 16px;
+  bottom: calc(24px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
+}
+
+.app-shell.mobile .calendar-fab {
+  width: 54px;
+  height: 54px;
+}
+
+.app-shell.mobile .calendar-range-bar {
+  gap: 8px;
+  margin: -6px 0 10px;
+}
+
+.app-shell.mobile .calendar-now-btn {
+  margin-left: 0;
+}
+
+.app-shell.mobile .calendar-range-step strong {
+  font-size: var(--font-control);
+}
+
+/* 窄屏网格：时刻槽收窄到 40px，列一律 minmax(0,1fr)，7 列也放得下 360px */
+.app-shell.mobile .cal-grid-head,
+.app-shell.mobile .cal-allday,
+.app-shell.mobile .cal-grid-body {
+  grid-template-columns: 40px repeat(var(--cal-days, 7), minmax(0, 1fr));
+}
+
+.app-shell.mobile .cal-day-head {
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 1px;
+}
+
+.app-shell.mobile .cal-day-head.today .cal-dom {
+  width: 20px;
+  height: 20px;
+}
+
+.app-shell.mobile .cal-hour-label {
+  padding-right: 4px;
+  font-size: calc(var(--font-control) - 8px);
+}
+
+.app-shell.mobile .cal-event {
+  padding: 2px 4px;
+  border-left-width: 2px;
+  font-size: calc(var(--font-control) - 7px);
+}
+
+/* 窄屏一块事件放不下时间 + 标题：只留标题（时间进 title 悬浮/编辑器） */
+.app-shell.mobile .cal-event-time {
+  display: none;
+}
+
+.app-shell.mobile .cal-resize {
+  display: none;
+}
+
+.app-shell.mobile .cal-allday-cell {
+  padding: 2px;
+}
+
+.app-shell.mobile .cal-chip {
+  padding: 1px 5px;
+  font-size: calc(var(--font-control) - 7px);
+}
+
+/* 月视图窄屏：格子紧凑、芯片只留标题 */
+.app-shell.mobile .cal-month-cell {
+  gap: 2px;
+  padding: 2px 3px;
+}
+
+.app-shell.mobile .cal-month-daynum {
+  width: 18px;
+  height: 18px;
+  font-size: calc(var(--font-control) - 7px);
+}
+
+.app-shell.mobile .cal-month-chip {
+  padding: 1px 4px;
+  font-size: calc(var(--font-control) - 8px);
+}
+
+.app-shell.mobile .cal-month-chip-time {
+  display: none;
+}
+
+.app-shell.mobile .cal-month-more {
+  font-size: calc(var(--font-control) - 9px);
+  padding: 0 4px;
+}
+
+/* 编辑器元数据行窄屏收拢：全天 + 起 + 止 + 时长换行排 */
+.app-shell.mobile .calendar-meta {
+  gap: 6px;
+}
+
+.app-shell.mobile .calendar-reminder-pop {
+  width: min(236px, calc(100vw - 48px));
+}
+
+/* 草稿纸标签页（v0.9.0）：触屏没有 hover，关闭叉常显（管理类动作不能藏） */
+.app-shell.mobile .scratchpad-tab-close {
+  opacity: 0.65;
+}
+
+.app-shell.mobile .scratchpad-tab-close:active {
+  opacity: 1;
+}
+
+.app-shell.mobile .scratchpad-tab {
+  min-width: 76px;
+  max-width: 168px;
+}
+
+/* ---------- 任务卡左右滑（v0.9.0 新特性 3） ----------
+   右滑露出红色「删除」（到位松手即删）；左滑同时露出「置顶」与「编辑」，两块随
+   滑动加深**一起**缩放（--swipe-reveal 一个数驱动两块的 opacity 与 scale）。
+   纵向手势一律不接管：方向锁在 swipeRow.ts，`touch-action: pan-y` 让浏览器继续
+   负责纵向滚动与下拉同步。 */
+.app-shell.mobile .task-swipe {
+  overflow: hidden;
+  border-radius: 6px;
+  touch-action: pan-y;
+}
+
+.app-shell.mobile .task-swipe-actions {
+  position: absolute;
+  inset: 0 0 7px;
+  border-radius: 6px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* 停在露出位时才接受点击（拖动途中点不到，也不该点到） */
+.app-shell.mobile .task-swipe.swipe-open .task-swipe-actions {
+  pointer-events: auto;
+}
+
+.app-shell.mobile .swipe-side {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+}
+
+/* 露出多宽，动作块就多宽：正好填满卡片让出来的那条 */
+.app-shell.mobile .swipe-side-left {
+  left: 0;
+  width: max(0px, var(--swipe-x));
+}
+
+.app-shell.mobile .swipe-side-right {
+  right: 0;
+  width: max(0px, calc(var(--swipe-x) * -1));
+}
+
+.app-shell.mobile .swipe-action {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 0;
+  color: #ffffff;
+  opacity: var(--swipe-reveal);
+  transform: scale(calc(0.62 + 0.38 * var(--swipe-reveal)));
+}
+
+.app-shell.mobile .swipe-action-label {
+  font-size: calc(var(--font-control) - 3px);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* 非活动侧的动作块彻底归零：--swipe-reveal 是全行共用的一个数，只靠侧容器宽度为 0
+   遮着的话，opacity 仍是「快露出来了」的值——换一行布局或宽度算错就会露馅。 */
+.app-shell.mobile .task-swipe[data-swipe="left"] .swipe-side-left .swipe-action,
+.app-shell.mobile .task-swipe[data-swipe="right"] .swipe-side-right .swipe-action {
+  opacity: 0;
+  transform: scale(0.62);
+}
+
+.app-shell.mobile .swipe-delete {
+  background: #d64545;
+}
+
+.app-shell.mobile .swipe-pin {
+  background: #d99a2b;
+}
+
+.app-shell.mobile .swipe-edit {
+  background: #3f7fd6;
+}
+
+/* 到位：红块加深一档，给「松手即删」一个明确的就绪信号 */
+.app-shell.mobile .task-swipe.swipe-ready .swipe-delete {
+  background: #bd3535;
 }

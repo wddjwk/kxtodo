@@ -364,11 +364,11 @@ fn ledger_and_diary_font_sizes_round_trip_within_range() {
 #[test]
 fn nav_items_and_layout_are_validated_and_local() {
     let env = TestEnv::fresh();
-    // 默认 = 全部七行，按显示顺序
+    // 默认 = 全部八行，按显示顺序
     let got = env.ok(&["config", "get", "appearance.navItems"]);
     assert_eq!(
         got["value"],
-        json!(["my-day", "planned", "important", "diary", "ledger", "scheduled", "toolbox"])
+        json!(["my-day", "planned", "important", "calendar", "diary", "ledger", "scheduled", "toolbox"])
     );
     assert_eq!(got["source"], "default");
     assert_eq!(env.ok(&["config", "get", "appearance.navLayout"])["value"], "list");
@@ -423,7 +423,7 @@ fn nav_items_and_layout_are_validated_and_local() {
     assert_eq!(env.ok(&["config", "get", "appearance.navLayout"])["value"], "list");
     assert_eq!(
         env.ok(&["config", "get", "appearance.navItems"])["value"],
-        json!(["my-day", "planned", "important", "diary", "ledger", "scheduled", "toolbox"])
+        json!(["my-day", "planned", "important", "calendar", "diary", "ledger", "scheduled", "toolbox"])
     );
 }
 

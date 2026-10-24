@@ -2,6 +2,7 @@
   import { onDestroy, onMount, tick } from "svelte";
   import { ChevronRight } from "@lucide/svelte";
   import { closingSubmenuDepth, submenuClosed, submenuOpened, submenuBack } from "./submenu";
+  import { popoverFrame } from "../popover";
   import type { Component } from "svelte";
 
   export let icon: Component | null = null;
@@ -24,13 +25,23 @@
   let itemEl: HTMLElement;
   let flipX = false;
   let flipY = false;
+  /**
+   * 三级及更深的子菜单改 **fixed 定位**（v0.9.0 bugfix 2）：二级面板是
+   * `overflow-y: auto` 的滚动容器，绝对定位的三级面板会被它裁掉——固定区
+   * 「添加固定 → 工具箱内的工具」的工具清单整块看不见就是这条。fixed 让面板脱离
+   * 裁剪祖先、浮到最前面；坐标按壳缩放换算（与日期浮层同一套 popoverFrame 口径）。
+   */
+  let nestedFixed = false;
+  let scrollAncestor: HTMLElement | null = null;
   /** 子菜单离视口边缘至少留这么多（视觉像素） */
   const MENU_EDGE_MARGIN = 8;
   /** 计数幂等：收起会被 onDestroy、点击别处、移动端「返回」多条路径触发，不能重复减 */
   let counted = false;
 
   $: hasSubmenu = Boolean($$slots.submenu);
-  $: submenuClass = `submenu-panel${flipX ? " flip-x" : ""}${flipY ? " flip-y" : ""}`;
+  $: submenuClass = `submenu-panel${flipX ? " flip-x" : ""}${flipY ? " flip-y" : ""}${
+    nestedFixed ? " submenu-fixed" : ""
+  }`;
 
   function openSubmenu(): void {
     let depth = 1;
@@ -56,6 +67,15 @@
       submenuClosed(submenuDepth);
     }
     window.removeEventListener("click", handleDocumentClick, true);
+    if (scrollAncestor) {
+      scrollAncestor.removeEventListener("scroll", handleAncestorScroll, true);
+      scrollAncestor = null;
+    }
+  }
+
+  /** 祖先面板一滚动，fixed 面板就会漂走：直接收起（与「点别处收回」同一条语义）。 */
+  function handleAncestorScroll(): void {
+    if (submenuOpen) closeSubmenu();
   }
 
   /** 点击菜单内其它位置（根菜单对 click stopPropagation，故用捕获阶段）时收起本子菜单。 */
@@ -79,6 +99,21 @@
   async function adjustSubmenu(): Promise<void> {
     await tick();
     if (!submenuEl) return;
+    // 三级面板：fixed 定位脱离裁剪祖先，几何走 placeFixedSubmenu（见下）
+    const ancestorPanel = itemEl?.closest(".submenu-panel") as HTMLElement | null;
+    const ancestorScrolls =
+      ancestorPanel !== null && getComputedStyle(ancestorPanel).position === "absolute";
+    nestedFixed = submenuDepth >= 2 && ancestorScrolls;
+    if (nestedFixed) {
+      if (ancestorPanel && scrollAncestor !== ancestorPanel) {
+        scrollAncestor?.removeEventListener("scroll", handleAncestorScroll, true);
+        scrollAncestor = ancestorPanel;
+        ancestorPanel.addEventListener("scroll", handleAncestorScroll, true);
+      }
+      await tick();
+      placeFixedSubmenu();
+      return;
+    }
     flipX = false;
     flipY = false;
     submenuEl.style.marginLeft = "";
@@ -95,6 +130,33 @@
     const logicalWidth = submenuEl.offsetWidth;
     const scale = logicalWidth > 0 ? shifted.width / logicalWidth : 1;
     submenuEl.style.marginLeft = `${Math.round(overflowLeft / scale)}px`;
+  }
+
+  /**
+   * fixed 三级面板的落位：贴父项右缘、右缘放不下翻到左缘、上下钳在壳内。
+   * 量到的 rect 是**视觉像素**（壳上有 `transform: scale`），写进 fixed 的 left/top
+   * 要换回**布局像素**——先减壳左上角再除缩放比（与日期浮层同一套口径）。
+   */
+  function placeFixedSubmenu(): void {
+    if (!submenuEl || !itemEl) return;
+    const logicalWidth = submenuEl.offsetWidth;
+    const visualWidth = submenuEl.getBoundingClientRect().width;
+    const scale = logicalWidth > 0 && visualWidth > 0 ? visualWidth / logicalWidth : 1;
+    const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+    const frame = popoverFrame(submenuEl, safeScale);
+    const margin = MENU_EDGE_MARGIN / safeScale;
+    const itemRect = itemEl.getBoundingClientRect();
+    const width = submenuEl.offsetWidth;
+    const height = submenuEl.offsetHeight;
+    let left = (itemRect.right - frame.x) / safeScale + 2;
+    if (left + width > frame.width - margin) {
+      left = (itemRect.left - frame.x) / safeScale - width - 2;
+    }
+    left = Math.max(margin, left);
+    let top = (itemRect.top - frame.y) / safeScale - 7;
+    top = Math.max(margin, Math.min(top, Math.max(margin, frame.height - height - margin)));
+    submenuEl.style.left = `${Math.round(left)}px`;
+    submenuEl.style.top = `${Math.round(top)}px`;
   }
 
   function handleClick(): void {

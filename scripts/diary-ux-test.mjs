@@ -28,7 +28,14 @@ await page.waitForTimeout(700);
 
 const navRows = await page.locator(".system-nav .nav-row").allInnerTexts();
 const diaryIndex = navRows.findIndex((t) => t.includes("日记"));
-check("侧栏有日记行，且在收藏下面", diaryIndex === navRows.findIndex((t) => t.includes("收藏")) + 1, JSON.stringify(navRows));
+// v0.9.0 起「日程」插在收藏与日记之间（seedCalendarNavItem 的注入口径）
+const starIndex = navRows.findIndex((t) => t.includes("收藏"));
+const calendarIndex = navRows.findIndex((t) => t.includes("日程"));
+check(
+  "侧栏有日记行，且在收藏下面（中间隔着 v0.9.0 的日程）",
+  diaryIndex > starIndex && calendarIndex === starIndex + 1 && diaryIndex === calendarIndex + 1,
+  JSON.stringify(navRows)
+);
 
 await page.locator(".system-nav .nav-row", { hasText: "日记" }).click();
 await page.waitForTimeout(350);

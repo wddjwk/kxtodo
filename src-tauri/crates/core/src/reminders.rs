@@ -197,13 +197,16 @@ pub fn normalize_metadata(
 
 /// 一条「已经算出瞬时、等着到点」的提醒。
 ///
-/// 刻意不携带规则本身：台账与去重都只认「哪个任务在哪一刻响」，
+/// 刻意不携带规则本身：台账与去重都只认「哪个实体在哪一刻响」，
 /// 规则改了（比如把「截止前 5 分钟」改成 10 分钟）自然算出新的瞬时、成为新的一条。
 #[derive(Debug, Clone)]
 pub struct PlannedReminder {
-    /// 台账键：任务 id + 瞬时
+    /// 台账键：实体 id + 瞬时
     pub key: String,
+    /// 归属实体 id（任务或日程事件；两类 id 都是 128-bit 随机，不会相撞）
     pub task_id: String,
+    /// true = 日程事件的提醒（calendar.json），false = 任务提醒（data.json）
+    pub calendar: bool,
     pub at: DateTime<Utc>,
 }
 
@@ -231,6 +234,36 @@ pub fn plan(data: &DataFile) -> Vec<PlannedReminder> {
             plans.push(PlannedReminder {
                 key: receipt_key(&item.id, at),
                 task_id: item.id.clone(),
+                calendar: false,
+                at,
+            });
+        }
+    }
+    plans
+}
+
+/// 日程事件的提醒清单（v0.9.0）：与任务提醒同一套台账与「不补发」纪律。
+/// `BeforeDue` 依附的是「事件开始时刻」——全天事件按当天 09:00 折算
+/// （`ops_calendar::effective_start_time`）。
+pub fn plan_calendar(calendar: &crate::model::CalendarFile) -> Vec<PlannedReminder> {
+    let mut plans = Vec::new();
+    for event in &calendar.events {
+        let mut seen = HashSet::new();
+        for rule in &event.reminders {
+            let Ok(at) = resolve(
+                rule,
+                Some(event.start_date.as_str()),
+                crate::ops_calendar::effective_start_time(event),
+            ) else {
+                continue;
+            };
+            if !seen.insert(at.timestamp_millis()) {
+                continue;
+            }
+            plans.push(PlannedReminder {
+                key: receipt_key(&event.id, at),
+                task_id: event.id.clone(),
+                calendar: true,
                 at,
             });
         }
@@ -310,11 +343,12 @@ impl Engine {
         let due = {
             let _lock = RepoLock::acquire(&core.repo.layout)?;
             let data = core.repo.load_data()?;
+            let calendar = core.repo.load_calendar()?;
             let mut receipts = load_receipts(&core.repo)?;
             let mut pending = HashSet::new();
             let mut due = Vec::new();
             let mut changed = false;
-            for planned in plan(&data) {
+            for planned in plan(&data).into_iter().chain(plan_calendar(&calendar)) {
                 if receipts.contains_key(&planned.key) {
                     continue;
                 }
@@ -342,28 +376,67 @@ impl Engine {
         };
         for planned in due {
             // 发通知可能耗时（建窗口 / 等系统通知服务），期间命令或同步可能已经
-            // 改掉了这条任务，所以每一条都在发之前重新核对一次。
-            let current = {
-                let _lock = RepoLock::acquire(&core.repo.layout)?;
-                core.repo.load_data()?.tasks.into_iter().find(|item| {
-                    item.id == planned.task_id
-                        && !item.completed
-                        && item.reminders.iter().any(|rule| {
-                            resolve(rule, item.due_date.as_deref(), &item.due_time).ok()
-                                == Some(planned.at)
-                        })
+            // 改掉了这条实体，所以每一条都在发之前重新核对一次。
+            let outcome = if planned.calendar {
+                let current = {
+                    let _lock = RepoLock::acquire(&core.repo.layout)?;
+                    core.repo.load_calendar()?.events.into_iter().find(|event| {
+                        event.id == planned.task_id
+                            && event.reminders.iter().any(|rule| {
+                                resolve(
+                                    rule,
+                                    Some(event.start_date.as_str()),
+                                    crate::ops_calendar::effective_start_time(event),
+                                )
+                                .ok() == Some(planned.at)
+                            })
+                    })
+                };
+                current.map(|event| {
+                    let message = if !event.title.trim().is_empty() {
+                        event.title.clone()
+                    } else {
+                        event
+                            .details
+                            .lines()
+                            .map(str::trim)
+                            .find(|line| !line.is_empty())
+                            .unwrap_or("有一条日程到点了")
+                            .to_string()
+                    };
+                    core.resolve_notification_payload(
+                        Some("日程提醒"),
+                        message.as_str(),
+                        None,
+                        None,
+                        None,
+                        false,
+                    )
+                    .and_then(|payload| core.show_notification_payload(payload))
+                })
+            } else {
+                let current = {
+                    let _lock = RepoLock::acquire(&core.repo.layout)?;
+                    core.repo.load_data()?.tasks.into_iter().find(|item| {
+                        item.id == planned.task_id
+                            && !item.completed
+                            && item.reminders.iter().any(|rule| {
+                                resolve(rule, item.due_date.as_deref(), &item.due_time).ok()
+                                    == Some(planned.at)
+                            })
+                    })
+                };
+                current.map(|item| {
+                    let message = item
+                        .markdown
+                        .lines()
+                        .map(str::trim)
+                        .find(|line| !line.is_empty())
+                        .unwrap_or("有一条任务到点了");
+                    core.resolve_notification_payload(Some("任务提醒"), message, None, None, None, false)
+                        .and_then(|payload| core.show_notification_payload(payload))
                 })
             };
-            let outcome = current.map(|item| {
-                let message = item
-                    .markdown
-                    .lines()
-                    .map(str::trim)
-                    .find(|line| !line.is_empty())
-                    .unwrap_or("有一条任务到点了");
-                core.resolve_notification_payload(Some("任务提醒"), message, None, None, None, false)
-                    .and_then(|payload| core.show_notification_payload(payload))
-            });
             let (status, error) = match outcome {
                 Some(Ok(_)) => ("sent", None),
                 Some(Err(error)) => ("failed", Some(error.message)),

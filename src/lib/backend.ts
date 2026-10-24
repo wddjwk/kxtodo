@@ -2,15 +2,16 @@ import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { caps } from "./capabilities";
 import { externalLinkUrl, normalizeLinkMeta, type LinkMeta } from "./linkMeta";
-import { defaultSettings, emptySchedulerState, emptyState, normalizeDiaryEntries, normalizeSchedulerState, normalizeSettings, normalizeState } from "./defaults";
+import { defaultSettings, emptySchedulerState, emptyState, normalizeCalendarEvents, normalizeDiaryEntries, normalizeSchedulerState, normalizeSettings, normalizeState } from "./defaults";
 import { androidToken } from "./androidBridge";
-import type { AppNotification, AppState, DiaryEntry, LedgerBook, SchedulerRuntimePaths, SchedulerState, Settings } from "./types";
+import type { AppNotification, AppState, CalendarEvent, DiaryEntry, LedgerBook, SchedulerRuntimePaths, SchedulerState, Settings } from "./types";
 
 const stateKey = "todo-note-state-v3";
 const settingsKey = "todo-note-settings-v3";
 const schedulerKey = "todo-note-scheduler-v8";
 const diaryKey = "todo-note-diary-v1";
 const ledgerKey = "todo-note-ledger-v1";
+const calendarKey = "todo-note-calendar-v1";
 
 export const isTauriRuntime = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -72,6 +73,14 @@ export async function loadLedger(): Promise<unknown> {
 
 export async function saveLedger(book: LedgerBook): Promise<void> {
   localStorage.setItem(ledgerKey, JSON.stringify(book));
+}
+
+export async function loadCalendar(): Promise<CalendarEvent[]> {
+  return normalizeCalendarEvents(readLocal(calendarKey, { events: [] }));
+}
+
+export async function saveCalendar(events: CalendarEvent[]): Promise<void> {
+  localStorage.setItem(calendarKey, JSON.stringify({ events }));
 }
 
 export async function resolveExecutorPaths(): Promise<SchedulerRuntimePaths> {
@@ -587,7 +596,6 @@ export type ClipboardStatus = {
 
 export type ClipboardRemoteContent = {
   text: string;
-  html: string;
   imagePath: string | null;
   files: Array<{ name: string; path: string | null }>;
 };
@@ -758,14 +766,15 @@ export type CoreSnapshot = {
   };
   diary?: unknown;
   ledger?: unknown;
+  calendar?: unknown;
   revisions?: Partial<
-    Record<"data" | "settings" | "schedule" | "diary" | "ledger", number>
+    Record<"data" | "settings" | "schedule" | "diary" | "ledger" | "calendar", number>
   >;
 };
 
 /**
  * 拉取核心快照。给了 `domains` 就只读那几个域——一次勾选任务不需要把整本账与全部日记
- * 序列化过 IPC。省略 = 全部五个域（首次水合）。
+ * 序列化过 IPC。省略 = 全部六个域（首次水合）。
  */
 export async function coreSnapshot(domains?: readonly string[]): Promise<CoreSnapshot> {
   const args = domains && domains.length > 0 ? { domains: [...domains] } : {};

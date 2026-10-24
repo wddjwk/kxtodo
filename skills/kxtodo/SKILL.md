@@ -72,6 +72,7 @@ kxtodo-cli diary list --from 2026-09-01 --to 2026-09-30 --jq '.data.total'
 | 待办、提醒、要勾选完成的事、清单 | `task` | 有完成状态，必须挂在某个 entry 下 |
 | 叙事记录、当天发生了什么、心情、补记某天 | `diary` | 无完成状态，不属于任何条目，按**归属日期**归档 |
 | 花了多少、收入、转账、账户余额、资产、消费结构 | `ledger` | 金额是钱，写操作一律要 `--yes` |
+| 日历上的时间安排：周会、出差、某天的事、到点提醒 | `calendar` | 有起止时间/全天/提醒，可关联一个 todo 条目 |
 | 到点自动跑脚本 / 弹通知 | `schedule` | 定义只能走 JSON spec |
 | 弹一条桌面通知 | `notify` | 需要常驻的 GUI 承担 Host |
 
@@ -188,7 +189,24 @@ ledger stats --from 2026-09-14 --to 2026-09-21 --jq '.data.series'
 
 ---
 
-## 7. schedule 定时任务
+## 7. calendar 日程
+
+- **写**：`calendar add --title "周会" --start "2026-10-25 09:00" --end 10:30`。
+  `--start` 接受 `YYYY-MM-DD`（= **全天事件**）或 `YYYY-MM-DD[ T]HH:MM`（缺省日期 = 今天）；
+  `--end` 同两种写法，且**可以只给 `HH:MM`**（沿用开始日期）；定时事件不给 `--end` 默认一小时（跨午夜自动进位）。
+  开始晚于结束报 `CALENDAR_RANGE_INVALID`。长详情用 `--details` / `--details-file`。
+- **提醒** `--reminder` 可重复：`due-<分钟>` = 开始前 N 分钟（全天事件按当天 09:00 折算），或绝对时刻（RFC3339 / `+30m` / `+1h` / `+2d`）。**过去的时刻会被拒**（`REMINDER_IN_PAST`）。
+- **关联 todo**：`--task <条目ID>`；条目上会显示日程图标，日程详情与条目内容**双向同步编辑**。解除关联 `calendar modify --task ""`。
+- **读**：`calendar list [--date 某天 | --from 起 --to 止 | --task 条目ID]`，按开始时间由早到晚（同刻全天在前）；区间按**交叠**判定（跨天事件命中区间内每一天）。分页口径与 diary 相同（不传 `--limit` 返回全部）。`calendar get --id ...` 读单条。
+- **改**：`calendar modify --id ... --title/--details/--start/--end/--all-day/--reminder/--task`。
+  **挪动语义**：只改开始而没给 `--end` 时结束跟着平移、保持原时长（与日历应用拖动事件一致）；要改时长就把 `--end` 一起给。
+  `--reminder` 给一组就**整体替换**（一个都不给 = 不动）；`--title/--details` 传空串 = 清除。
+- **删**：`calendar remove --id ... --yes`（high-risk-write，写同步墓碑；关联的 todo 条目不会被删）。
+- 视图偏好 `calendar.view`（month/week/threeday/day）是**本机状态不同步**；日程外观（主题色/背景）跟设置同步。
+
+---
+
+## 8. schedule 定时任务
 
 定义只走 JSON，五步：
 
@@ -207,13 +225,13 @@ kxtodo-cli schedule add --spec @schedule.json --yes --idempotency-key <唯一键
 
 ---
 
-## 8. 其余命令
+## 9. 其余命令
 
 - **`notify`** — 发桌面通知：`notify "构建完成" --title "CI" --tone success --duration 5s`，`--wait` 等窗口关闭。通知由与目标数据目录匹配的常驻 Host 持有；Host 不在会尝试拉起 GUI 同目录的程序，找不到报 `GUI_NOT_FOUND`。
 - **`storage`** — 用户问「占了多少空间 / 清理一下」：先 `storage usage`（只读盘点：总体积 + 插图/背景/头像各自的总量与**无引用量** + **领域文件 / 历史记录 / 运行时 / 同步服务器（含 WAL）/ 服务器日志 / 备份**分项 + 临时残留），报数字给用户并得到同意后再 `storage clean --yes`（删无引用图片与空目录、临时残留、旧日志；**保留最新两份日志且绝不删今天的**）。返回 `freedBytes` 与逐项计数，单个文件删不动只进 `warnings`。
   **它永远不碰**：五个领域 JSON（数据本体）、`runtime/`（同步状态）、`history/`、`backups/`、服务器数据库与账户令牌。删除不可恢复。
 - **`config`** — 读写设置：`config get appearance.uiScale`、`config list --prefix appearance`、`config set <路径> <值>`、`config unset`、`config reset`（高风险，先 `--dry-run`）、`config path`、`config validate`。动态 map（如 `appearance.uiColors`）必须带 `--map-key <entry-id>`。
-  常用：字号 `appearance.uiFontSize`(14-22) / `markdownFontSize` / `ledgerFontSize` / `diaryFontSize`(14-26)；固定导航 `appearance.navItems`（字符串数组，可选 `my-day`/`planned`/`important`/`diary`/`ledger`/`scheduled`/`toolbox`，顺序即显示顺序）与 `appearance.navLayout`（`list|grid|icons`）；一周起始 `features.weekStart`（`monday`（默认）|`sunday`）、超链接渲染样式 `features.linkRender`（`off|title|card`，默认 `card`）、临期高亮 `features.dueHighlight`（`off|solid|gradient`，默认 `off`）；预置标签 `appearance.tagPresets`（标签数组，跟设置一起同步），数组用 `config set appearance.navItems --json-value '["diary","my-day"]'`。
+  常用：字号 `appearance.uiFontSize`(14-22) / `markdownFontSize` / `ledgerFontSize` / `diaryFontSize`(14-26)；固定导航 `appearance.navItems`（字符串数组，可选 `my-day`/`planned`/`important`/`calendar`/`diary`/`ledger`/`scheduled`/`toolbox`，顺序即显示顺序）与 `appearance.navLayout`（`list|grid|icons`）；一周起始 `features.weekStart`（`monday`（默认）|`sunday`）、超链接渲染样式 `features.linkRender`（`off|title|card`，默认 `card`）、临期高亮 `features.dueHighlight`（`off|solid|gradient`，默认 `off`）；安卓后台常驻 `features.androidKeepAlive`（默认关）与常驻通知标语 `features.keepAliveNotice`（两者**本机不同步**）；预置标签 `appearance.tagPresets`（标签数组，跟设置一起同步），数组用 `config set appearance.navItems --json-value '["diary","my-day"]'`。
   **视图偏好是本机状态不跨设备同步**（`diary.view` / `ledger.view`），**外观是同步的**（日记与记账的主题色与背景）。
 - **`doctor`** — 体检：数据目录、五个领域文件的完整性与 schema 版本、常驻 Host、脚本环境。排查「数据好像不对」先跑它。
 - **`schema`** — 机读的命令与结构定义：`schema task.add`、`schema schedule.spec [--example <名>]`、`schema jq`、`schema notification`、`schema match`。**要字段清单就查它，别猜**。
@@ -222,7 +240,7 @@ kxtodo-cli schedule add --spec @schedule.json --yes --idempotency-key <唯一键
 
 ---
 
-## 9. sync 多端同步
+## 10. sync 多端同步
 
 只在用户明确要配同步或排查同步时才用；日常记录数据不需要碰它。
 
@@ -231,7 +249,7 @@ kxtodo-cli schedule add --spec @schedule.json --yes --idempotency-key <唯一键
 - **配对**：`sync pair --username <名> --secret <密码>`（自建服务加 `--server <url>`，局域网加 `--lan-peer <名字>` 或先 `--lan-host true`，P2P 只要账户凭据）。不分注册与登录：账户不存在就当场创建。**用户名 ≥4 位、密码 ≥6 位**。密码派生加密密钥，**丢失 = 数据不可恢复**，别替用户编密码。
 - **找主机**：`sync discover`（配对前的第一步，不需要数据目录已存在）。局域网方式把返回的 `name` 当 `--lan-peer`；自建服务方式把 `url` 当 `--server`。主机的身份是**名字**不是 ip:port（换 IP、端口上移都无感）；`--lan-peer` 也接受直接填 `ip` 或 `ip:port`。
 - **日常**：`sync now` 立即同步；`sync status` 是**纯本地读**（不联网，可随时调）；`sync probe` 才真联网并刷新在线状态。判断通不通看 `status` 的 `online`（`null` = 还没探测过），要最新结论先 `probe`。凭据默认不输出，`sync status --show-secrets` 才带。
-- **范围五选**：`sync configure --sync-data`（节点/任务/插图，默认开）/ `--sync-settings`（配置/配色/背景与头像，默认开）/ `--sync-schedules`（默认关）/ `--sync-diary`（默认开）/ `--sync-ledger`（默认开）。节奏：`--interval-seconds`（低于 5 按 5 生效，**这一项与其它设备共享**）与 `--reconnect-seconds`。改范围会自动全量重拉一次。
+- **范围六选**：`sync configure --sync-data`（节点/任务/插图，默认开）/ `--sync-settings`（配置/配色/背景与头像，默认开）/ `--sync-schedules`（默认关）/ `--sync-diary`（默认开）/ `--sync-ledger`（默认开）/ `--sync-calendar`（日程，默认开）。节奏：`--interval-seconds`（低于 5 按 5 生效，**这一项与其它设备共享**）与 `--reconnect-seconds`。改范围会自动全量重拉一次。
 - **暂停 ≠ 解除**：`sync configure --enabled false` 暂停（地址与凭据全保留，`sync now` 报 `SYNC_PAUSED`），`--enabled true` 恢复；`sync unpair` 才清 token 与密码（对端数据保留）。
 - **`sync peers`** 列出 P2P 目录里的在线设备与本机；报告里的 `peers` 是本轮真正对账过的名单 —— 「同步成功但数据没动」先看它。
 - **排障速查**：`SYNC_HOST_NOT_RUNNING`（本机该当主机但内置服务器没起 —— **内置服务器由常驻的 GUI/APK 启停，只有 CLI 在跑时勾这个开关不会真的起服务**，让用户打开应用）｜`SYNC_LAN_HOST_NOT_SELECTED` / `SYNC_LAN_HOST_NOT_FOUND`｜`SYNC_P2P_NO_PEER`（目录里没有在线设备，**对方不在线是正常情况**，按 `--reconnect-seconds` 静默重试，不是故障）｜`SYNC_PAUSED`｜`SYNC_FEATURE_DISABLED`（用户在设置里关掉了同步总开关）｜`AUTH_FAILED`（密码错）。
@@ -240,7 +258,7 @@ kxtodo-cli schedule add --spec @schedule.json --yes --idempotency-key <唯一键
 
 ---
 
-## 10. 典型流程
+## 11. 典型流程
 
 **「这周 / 这个月 / 今年做了些什么」**
 1. `task tree` 定位相关条目（或 `task find --type entry --query "关键词"`）。
@@ -267,7 +285,7 @@ kxtodo-cli schedule add --spec @schedule.json --yes --idempotency-key <唯一键
 
 ---
 
-## 11. 注意事项
+## 12. 注意事项
 
 - **不要重试写操作**，除非带了同一个 `--idempotency-key`；导入类命令重试会产生重复数据。
 - **不要把范围词当关键词**：「本周」不是 `--query` 的值，用 `--changed-from/--changed-to`。

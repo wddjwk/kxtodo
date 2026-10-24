@@ -1,15 +1,19 @@
 package com.wddjwk.kxtodo
 
+import android.app.NotificationManager
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
+import android.provider.MediaStore
 import android.webkit.JavascriptInterface
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
@@ -161,7 +165,7 @@ class ApkBridge(private val context: Context) {
         }
         val uri = item.uri
         if (uri != null) {
-          val mime = context.contentResolver.getType(uri) ?: ""
+          val mime = mimeOf(clip, uri)
           if (mime.startsWith("image/") && imagePath == null) {
             val copied = copyImage(uri) ?: continue
             imagePath = copied.path
@@ -176,14 +180,74 @@ class ApkBridge(private val context: Context) {
           item.text?.toString()?.let { if (it.isNotEmpty()) text = it }
         }
       }
+      // HTML 当文件处理（v0.9.0 bugfix 4.1）：折成一个固定路径的 .html 文件进 files
+      // 通道（路径固定 = 同一段剪切板的签名稳定，不会每轮轮询都重发）。
+      if (html.isNotEmpty()) {
+        spoolHtml(html)?.let { entry ->
+          files.put(JSONObject().put("name", entry.first).put("path", entry.second))
+        }
+      }
       val result = JSONObject()
       if (text.isNotEmpty()) result.put("text", text)
-      if (html.isNotEmpty()) result.put("html", html)
       if (imagePath != null) result.put("imagePath", imagePath)
       if (files.length() > 0) result.put("files", files)
       result.toString()
     } catch (error: Exception) {
       JSONObject().put("error", error.message ?: error.toString()).toString()
+    }
+  }
+
+  /**
+   * URI 的 mime 判定（v0.9.0 bugfix 4.1）：`getType` 对部分提供者为 null（某些
+   * FileProvider / 未登记的 media URI），早先 null 就落进文件分支——复制的图片被当成
+   * 文件发出去。四级兜底：resolver → 复制方在描述里登记的 mime → 扩展名 → 魔数。
+   */
+  private fun mimeOf(clip: ClipData, uri: Uri): String {
+    context.contentResolver.getType(uri)?.takeIf { it.isNotEmpty() }?.let { return it }
+    for (index in 0 until clip.description.mimeTypeCount) {
+      clip.description.getMimeType(index)?.takeIf { it.startsWith("image/") }?.let { return it }
+    }
+    val extension = File(displayName(uri)).extension.lowercase()
+    MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)?.let { return it }
+    return sniffImageMime(uri)
+  }
+
+  /** 读前 12 字节认魔数：PNG / JPEG / GIF / BMP / WebP。读不到就当普通文件。 */
+  private fun sniffImageMime(uri: Uri): String {
+    return try {
+      context.contentResolver.openInputStream(uri)?.use { input ->
+        val head = ByteArray(12)
+        var read = 0
+        while (read < head.size) {
+          val n = input.read(head, read, head.size - read)
+          if (n <= 0) break
+          read += n
+        }
+        when {
+          read >= 8 && head[0] == 0x89.toByte() && head[1] == 'P'.code.toByte() &&
+            head[2] == 'N'.code.toByte() && head[3] == 'G'.code.toByte() -> "image/png"
+          read >= 3 && head[0] == 0xFF.toByte() && head[1] == 0xD8.toByte() && head[2] == 0xFF.toByte() -> "image/jpeg"
+          read >= 6 && head[0] == 'G'.code.toByte() && head[1] == 'I'.code.toByte() && head[2] == 'F'.code.toByte() -> "image/gif"
+          read >= 2 && head[0] == 'B'.code.toByte() && head[1] == 'M'.code.toByte() -> "image/bmp"
+          read >= 12 && head[0] == 'R'.code.toByte() && head[8] == 'W'.code.toByte() &&
+            head[9] == 'E'.code.toByte() && head[10] == 'B'.code.toByte() && head[11] == 'P'.code.toByte() -> "image/webp"
+          else -> ""
+        }
+      } ?: ""
+    } catch (_: Exception) {
+      ""
+    }
+  }
+
+  /** HTML 折成文件：固定路径覆盖写，返回 (名字, 绝对路径)。写失败返回 null（宁可不发）。 */
+  private fun spoolHtml(html: String): Pair<String, String>? {
+    return try {
+      val dir = File(context.cacheDir, "clipboard-out").apply { mkdirs() }
+      val target = File(dir, "clipboard.html")
+      target.writeText(html, Charsets.UTF_8)
+      target.name to target.absolutePath
+    } catch (_: Exception) {
+      null
     }
   }
 
@@ -193,7 +257,6 @@ class ApkBridge(private val context: Context) {
     return try {
       val json = JSONObject(payload)
       val text = json.optString("text", "")
-      val html = json.optString("html", "")
       val imagePath = json.optString("imagePath", "")
       val items = mutableListOf<Pair<Uri, String>>()
       if (imagePath.isNotEmpty()) {
@@ -219,11 +282,156 @@ class ApkBridge(private val context: Context) {
           for (index in 1 until items.size) clip.addItem(ClipData.Item(items[index].first))
           manager.setPrimaryClip(clip)
         }
-        html.isNotEmpty() && Build.VERSION.SDK_INT >= 24 ->
-          manager.setPrimaryClip(ClipData.newHtmlText("KXToDo", text, html))
         text.isNotEmpty() -> manager.setPrimaryClip(ClipData.newPlainText("KXToDo", text))
       }
       ""
+    } catch (error: Exception) {
+      error.message ?: error.toString()
+    }
+  }
+
+  /**
+   * 后台常驻（v0.9.0）：把前台服务对齐到设置。开关与标语都由前端从设置里读出来传，
+   * 服务侧只是照办；这样「设置是唯一真源」，Kotlin 不重复存一份语义。
+   * 返回 "" 表示成功，非空为错误信息。
+   */  @JavascriptInterface
+  fun setKeepAlive(token: String, enabled: Boolean, notice: String): String {
+    if (!authorized(token)) return "未授权"
+    return try {
+      KeepAliveService.reconcile(context, enabled, notice)
+      ""
+    } catch (error: Exception) {
+      error.message ?: error.toString()
+    }
+  }
+
+  /** 常驻状态：{enabled, running, notice, notificationsAllowed}。JSON 字符串。 */
+  @JavascriptInterface
+  fun keepAliveState(token: String): String {
+    if (!authorized(token)) return JSONObject().put("error", "未授权").toString()
+    return try {
+      val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+      val allowed = if (Build.VERSION.SDK_INT >= 24) manager?.areNotificationsEnabled() == true else true
+      JSONObject()
+        .put("enabled", KeepAliveService.readEnabled(context))
+        .put("running", KeepAliveService.running)
+        .put("notice", KeepAliveService.readNotice(context))
+        .put("notificationsAllowed", allowed)
+        .toString()
+    } catch (error: Exception) {
+      JSONObject().put("error", error.message ?: error.toString()).toString()
+    }
+  }
+
+  /**
+   * 剪切板保存位置的候选目录（v0.9.0 bugfix 4.2）。Android 的作用域存储只允许应用
+   * 用**路径**写自己的外部文件目录，所以「选择路径」给的就是这几个真实可写的目录
+   * （文件管理器里也看得见），不给选不到的公共目录。JSON 数组 [{label, path}]。
+   */
+  @JavascriptInterface
+  fun listSaveDirs(token: String): String {
+    if (!authorized(token)) return JSONObject().put("error", "未授权").toString()
+    val out = JSONArray()
+    val entries = listOf(
+      "下载" to android.os.Environment.DIRECTORY_DOWNLOADS,
+      "文档" to android.os.Environment.DIRECTORY_DOCUMENTS,
+      "图片" to android.os.Environment.DIRECTORY_PICTURES,
+      "影片" to android.os.Environment.DIRECTORY_MOVIES
+    )
+    for ((label, kind) in entries) {
+      val dir = context.getExternalFilesDir(kind)?.resolve("kxtodo-clipboard") ?: continue
+      out.put(JSONObject().put("label", label).put("path", dir.absolutePath))
+    }
+    return out.toString()
+  }
+
+  /**
+   * 打开保存目录（v0.9.0 bugfix 4.2，尽力而为）：
+   * ① 图片目录直接开相册集合（MediaStore 的 Images 集合永远有 Activity 接，最稳）；
+   * ② 其余目录把 FileProvider 的目录 URI 交给 DocumentsUI / 文件管理器；
+   * ③ 没人接就返回错误文案，前端弹 Toast——安卓上「打开文件夹」没有桌面那种保证。
+   */
+  @JavascriptInterface
+  fun openFolder(token: String, path: String): String {
+    if (!authorized(token)) return "未授权"
+    return try {
+      val dir = File(path).canonicalFile
+      if (!dir.isDirectory) return "目录不存在"
+      if (dir.path.contains("${File.separator}Pictures${File.separator}")) {
+        val gallery = Intent(Intent.ACTION_VIEW, MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
+        context.startActivity(gallery.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        return ""
+      }
+      val uri = FileProvider.getUriForFile(
+        context,
+        context.packageName + ".fileprovider",
+        dir
+      )
+      val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, "vnd.android.document/directory")
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+      }
+      try {
+        context.startActivity(intent)
+        ""
+      } catch (missing: ActivityNotFoundException) {
+        "没有能打开目录的应用：${dir.absolutePath}"
+      }
+    } catch (error: Exception) {
+      error.message ?: error.toString()
+    }
+  }
+
+  /**
+   * 收到的图片另存一份进相册（v0.9.0 bugfix 4.2）：Android 10+ 走 MediaStore 插入
+   * `Pictures/kxtodo`（不需要任何权限，相册立刻可见）；9 及以下写公共 Pictures 目录，
+   * 需要运行时写存储权限——没给就返回「需要存储权限」，前端申请后重试。
+   */
+  @JavascriptInterface
+  fun exportImageToGallery(token: String, path: String): String {
+    if (!authorized(token)) return "未授权"
+    return try {
+      val source = File(path)
+      if (!source.isFile) return "图片不存在"
+      if (Build.VERSION.SDK_INT >= 29) {
+        val resolver = context.contentResolver
+        val values = ContentValues().apply {
+          put(MediaStore.Images.Media.DISPLAY_NAME, source.name)
+          put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+          put(
+            MediaStore.Images.Media.RELATIVE_PATH,
+            "${android.os.Environment.DIRECTORY_PICTURES}/kxtodo"
+          )
+          put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+          ?: return "相册写入失败"
+        resolver.openOutputStream(uri)?.use { out -> source.inputStream().use { it.copyTo(out) } }
+          ?: return "相册写入失败"
+        values.clear()
+        values.put(MediaStore.Images.Media.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
+        ""
+      } else {
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+            context,
+            android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+          ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+          return "需要存储权限"
+        }
+        @Suppress("DEPRECATION")
+        val dir = File(
+          android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES),
+          "kxtodo"
+        ).apply { mkdirs() }
+        source.copyTo(File(dir, source.name), overwrite = true)
+        // 让老系统的媒体扫描器看见新文件
+        context.sendBroadcast(
+          Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, Uri.fromFile(File(dir, source.name)))
+        )
+        ""
+      }
     } catch (error: Exception) {
       error.message ?: error.toString()
     }

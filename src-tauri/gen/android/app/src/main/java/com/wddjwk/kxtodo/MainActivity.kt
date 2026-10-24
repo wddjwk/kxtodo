@@ -80,9 +80,19 @@ class MainActivity : TauriActivity() {
     super.onResume()
     acquireMulticastLock()
     startClipboardListening()
+    // 常驻服务对账（v0.9.0）：进程被系统重建、或上次是「在后台想拉起前台服务」被
+    // Android 12+ 的规则挡掉，都靠回到前台这一次补上。状态存在 SharedPreferences 里，
+    // 不依赖 WebView 是否已经起来。
+    reconcileKeepAlive()
     injectBridgeToken(40)
     // 切回前台时补一次：后台期间复制的内容（Android 10+ 不让后台读）现在才读得到。
     mainHandler.postDelayed({ notifyClipboardChanged() }, 500)
+  }
+
+  private fun reconcileKeepAlive() {
+    val app = applicationContext
+    if (!KeepAliveService.readEnabled(app)) return
+    KeepAliveService.reconcile(app, true, KeepAliveService.readNotice(app))
   }
 
   override fun onPause() {

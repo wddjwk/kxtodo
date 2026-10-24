@@ -27,5 +27,15 @@ interface Window {
     shareFile(token: string, path: string, mime: string): string;
     readClipboard(token: string): string;
     writeClipboard(token: string, payload: string): string;
+    /** 后台常驻（v0.9.0）：把前台服务对齐到设置。返回 "" 表示成功 */
+    setKeepAlive(token: string, enabled: boolean, notice: string): string;
+    /** 常驻状态 JSON：{enabled, running, notice, notificationsAllowed} */
+    keepAliveState(token: string): string;
+    /** 剪切板保存位置候选目录 JSON：[{label, path}] */
+    listSaveDirs(token: string): string;
+    /** 打开保存目录（尽力而为）：返回 "" 表示成功 */
+    openFolder(token: string, path: string): string;
+    /** 收到的图片另存一份进相册 Pictures/kxtodo：返回 "" 表示成功 */
+    exportImageToGallery(token: string, path: string): string;
   };
 }

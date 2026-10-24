@@ -5,6 +5,15 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- 后台常驻（v0.9.0）：前台服务把进程留在前台组，同步与提醒才能在后台继续跑。
+         类型报 specialUse——它既不是播放器也不是导航，只是「让本地优先的同步引擎与
+         提醒调度不被冻结」，Google Play 的政策里没有更贴切的既有类型。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 仅 Android 9 及以下：收到的图片另存进公共 Pictures/kxtodo（10+ 走 MediaStore 不需要） -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
@@ -38,5 +47,15 @@
             android:name="android.support.FILE_PROVIDER_PATHS"
             android:resource="@xml/file_paths" />
         </provider>
+
+        <service
+            android:name=".KeepAliveService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the local-first sync engine and the reminder scheduler running while the app is in the background so that user reminders still fire." />
+        </service>
     </application>
 </manifest>

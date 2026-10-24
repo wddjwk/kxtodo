@@ -28,9 +28,10 @@
     type SyncPeers
   } from "./actions";
   import { checkForUpdate, startUpdate, updateProgress, type UpdateInfo } from "./updater";
-  import { createBackGuard, isMobile } from "./platform";
+  import { createBackGuard, hostOs, isMobile } from "./platform";
+  import { keepAliveState } from "./keepAlive";
   import { caps } from "./capabilities";
-  import { ArrowLeft, Eraser, Eye, EyeOff, History, Image as ImageIcon, RotateCcw, X } from "@lucide/svelte";
+  import { ArrowLeft, Eraser, Eye, EyeOff, History, Image as ImageIcon, Info, RotateCcw, X } from "@lucide/svelte";
   import {
     scalePercentValue, buildSettingsDrawerStyle, avatarStyle, avatarInitial
   } from "./styles";
@@ -110,6 +111,8 @@
 
   let storageUsage: StorageUsage | null = null;
   let storageBusy = false;
+  /** 存储说明浮层（v0.9.0 bugfix 5）：主视图精简，详细收在 ⓘ 里 */
+  let storageInfoOpen = false;
   let storageNote = "";
   let storageLoaded = false;
 
@@ -370,6 +373,7 @@
         traySupported = available;
       });
     }
+    refreshKeepAliveStatus();
     deepFrame = requestAnimationFrame(() => {
       deepFrame = requestAnimationFrame(() => {
         deepFrame = 0;
@@ -769,7 +773,8 @@
         syncSettings: $appSettings.sync?.syncSettings ?? true,
         syncSchedules: $appSettings.sync?.syncSchedules ?? false,
         syncDiary: $appSettings.sync?.syncDiary ?? true,
-        syncLedger: $appSettings.sync?.syncLedger ?? true
+        syncLedger: $appSettings.sync?.syncLedger ?? true,
+        syncCalendar: $appSettings.sync?.syncCalendar ?? true
       });
       if (ok) {
         syncFormPrefilled = false;
@@ -818,7 +823,7 @@
   }
 
   async function updateSyncScope(
-    field: "syncData" | "syncSettings" | "syncSchedules" | "syncDiary" | "syncLedger",
+    field: "syncData" | "syncSettings" | "syncSchedules" | "syncDiary" | "syncLedger" | "syncCalendar",
     value: boolean
   ): Promise<void> {
     await setSyncScopes({ [field]: value });
@@ -877,6 +882,39 @@
 
   function updateFeature<K extends keyof Settings["features"]>(field: K, value: Settings["features"][K]): void {
     void setConfigAction(`features.${field}`, value);
+  }
+
+  // ---- 安卓后台常驻（v0.9.0，只在 Android 上出现） ----
+
+  const isAndroid = hostOs === "android";
+  let keepAliveDraft = "";
+  let keepAliveFocused = false;
+  /** null = 桥不可用（不该发生在这块 UI 上，因为它只在安卓显示） */
+  let keepAliveStatus: ReturnType<typeof keepAliveState> = null;
+
+  // 正在编辑时不许被设置回写盖掉（与设备名草稿同一条口径）
+  $: if (!keepAliveFocused && keepAliveDraft !== ($appSettings.features.keepAliveNotice ?? "")) {
+    keepAliveDraft = $appSettings.features.keepAliveNotice ?? "";
+  }
+
+  function refreshKeepAliveStatus(): void {
+    if (!isAndroid) return;
+    keepAliveStatus = keepAliveState();
+  }
+
+  function openKeepAlive(value: boolean): void {
+    updateFeature("androidKeepAlive", value);
+    // 开关一拨就查一次：常驻通知在 Android 13+ 上没有通知权限是**看不见**的，
+    // 得当场告诉用户去开，否则「我明明打开了怎么没反应」无从排查。
+    window.setTimeout(refreshKeepAliveStatus, 600);
+  }
+
+  function commitKeepAliveNotice(): Promise<void> {
+    const next = keepAliveDraft.trim();
+    if (next === ($appSettings.features.keepAliveNotice ?? "")) return Promise.resolve();
+    return setConfigAction("features.keepAliveNotice", next).then(() => {
+      window.setTimeout(refreshKeepAliveStatus, 400);
+    });
   }
 
   async function uploadAvatar(): Promise<void> {
@@ -1262,6 +1300,52 @@
           on:change={(event) => updateFeature("mobileBack", event.currentTarget.checked)}
         />
       </label>
+      {#if isAndroid}
+        <!-- 后台常驻（v0.9.0）：只在安卓出现。开关 + 标语文本 + 一句实话（省电策略仍可能收掉进程） -->
+        <label
+          class="toggle-row"
+          title="开一条常驻通知把应用留在前台组，退到后台之后同步与提醒才可能继续跑。代价是通知栏一直挂着这条通知，并且比平时更耗电。"
+        >
+          <span>后台常驻</span>
+          <input
+            type="checkbox"
+            checked={$appSettings.features.androidKeepAlive}
+            on:change={(event) => openKeepAlive(event.currentTarget.checked)}
+          />
+        </label>
+        {#if $appSettings.features.androidKeepAlive}
+          <label class="settings-row" title="常驻通知上显示的那句话；留空 = 默认标语">
+            常驻通知标语
+            <input
+              bind:value={keepAliveDraft}
+              maxlength="60"
+              placeholder="今天有什么要做的吗~"
+              on:focus={() => (keepAliveFocused = true)}
+              on:blur={() => {
+                keepAliveFocused = false;
+                void commitKeepAliveNotice();
+              }}
+              on:keydown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  keepAliveFocused = false;
+                  void commitKeepAliveNotice();
+                }
+              }}
+            />
+          </label>
+          {#if keepAliveStatus && keepAliveStatus.notificationsAllowed === false}
+            <p class="muted keep-alive-hint">
+              系统没给通知权限，常驻通知显示不出来（服务仍在跑）。去系统设置 → 应用 → KXToDo → 通知里打开。
+            </p>
+          {:else}
+            <p class="muted keep-alive-hint">
+              {keepAliveStatus?.running ? "常驻通知已挂上。" : "常驻服务将在下一次回到前台时挂上。"}
+              厂商的省电策略仍可能收掉进程：把 KXToDo 加进电池优化的白名单能提高存活率。
+            </p>
+          {/if}
+        {/if}
+      {/if}
       <!-- 超链接渲染样式：**三档单选**（都选没有额外含义，所以不做成两个勾选框） -->
       <div
         class="toggle-row link-style-row"
@@ -1810,6 +1894,9 @@
         <label class="sync-scope" title="账本：账户、分类与记账流水">
           <input type="checkbox" checked={$appSettings.sync.syncLedger} on:change={(event) => updateSyncScope("syncLedger", event.currentTarget.checked)} />账本
         </label>
+        <label class="sync-scope" title="日程：日历上的时间安排与提醒">
+          <input type="checkbox" checked={$appSettings.sync.syncCalendar} on:change={(event) => updateSyncScope("syncCalendar", event.currentTarget.checked)} />日程
+        </label>
       </div>
       <div class="settings-row sync-rate-row">
         <label class="sync-rate">
@@ -1870,71 +1957,73 @@
 
   <SettingsSection title="存储空间" storageKey="storage">
     {#if storageUsage}
-      <div class="settings-row">
+      <div class="settings-row storage-head-row">
         <span>数据占用</span>
         <span class="muted">{formatBytes(storageUsage.totalBytes)}</span>
+        <!-- 说明精简 + ⓘ 看详细（v0.9.0 bugfix 5）：主视图只留「名字 + 字节数」，
+             每一项是什么、清理会动什么，都收进这个浮层里 -->
+        <button
+          class="icon-button"
+          type="button"
+          title="各项占用与清理范围的详细说明"
+          aria-label="存储说明"
+          on:click|stopPropagation={() => (storageInfoOpen = !storageInfoOpen)}
+        ><Info size={14} /></button>
       </div>
       <ul class="storage-parts">
-        <li>
-          <strong>插图</strong>
-          <em>记事 / 日记 / 记账条目里 markdown 引用的图片</em>
-          <b>{formatBytes(storageUsage.images.bytes)}</b>
-        </li>
+        <li><strong>插图</strong><b>{formatBytes(storageUsage.images.bytes)}</b></li>
         <li>
           <strong>背景与头像</strong>
-          <em>列表 / 日记 / 记账的背景图与个人资料头像</em>
           <b>{formatBytes(storageUsage.backgrounds.bytes + storageUsage.avatars.bytes)}</b>
         </li>
-        <li>
-          <strong>领域数据</strong>
-          <em>data / settings / tasks / diary / ledger 五个 JSON</em>
-          <b>{formatBytes(storageUsage.domainFiles.bytes)}</b>
-        </li>
-        <li>
-          <strong>历史记录</strong>
-          <em>写操作审计与定时任务执行历史</em>
-          <b>{formatBytes(storageUsage.historyDir.bytes)}</b>
-        </li>
-        <li>
-          <strong>运行时</strong>
-          <em>同步水位、配对凭据留档、网页标题缓存</em>
-          <b>{formatBytes(storageUsage.runtimeDir.bytes)}</b>
-        </li>
-        <li>
-          <strong>同步服务器</strong>
-          <em>本机作为服务器时的库（实体与图片中转缓存）{#if storageUsage.serverWalBytes > 0}，其中 WAL {formatBytes(storageUsage.serverWalBytes)}{/if}</em>
-          <b>{formatBytes(storageUsage.serverDir.bytes)}</b>
-        </li>
-        <li>
-          <strong>服务器日志</strong>
-          <em>本机作为同步服务器时的操作日志（按日轮转）</em>
-          <b>{formatBytes(storageUsage.serverLogs.bytes)}</b>
-        </li>
-        <li>
-          <strong>备份</strong>
-          <em>域数据写盘前的历史备份，自动保留最近几份</em>
-          <b>{formatBytes(storageUsage.backups.bytes)}</b>
-        </li>
+        <li><strong>领域数据</strong><b>{formatBytes(storageUsage.domainFiles.bytes)}</b></li>
+        <li><strong>历史记录</strong><b>{formatBytes(storageUsage.historyDir.bytes)}</b></li>
+        <li><strong>运行时</strong><b>{formatBytes(storageUsage.runtimeDir.bytes)}</b></li>
+        <li><strong>同步服务器</strong><b>{formatBytes(storageUsage.serverDir.bytes)}</b></li>
+        <li><strong>服务器日志</strong><b>{formatBytes(storageUsage.serverLogs.bytes)}</b></li>
+        <li><strong>备份</strong><b>{formatBytes(storageUsage.backups.bytes)}</b></li>
         {#if storageOtherBytes > 0}
-          <li>
-            <strong>其他</strong>
-            <em>未被上面几类盘点到的文件</em>
-            <b>{formatBytes(storageOtherBytes)}</b>
-          </li>
+          <li><strong>其他</strong><b>{formatBytes(storageOtherBytes)}</b></li>
         {/if}
       </ul>
-      <p class="muted storage-detail">
-        分项合计 {formatBytes(storageCountedBytes)}（应等于上面的数据占用；不等只会出现在磁盘正在被写入的瞬间）
-      </p>
+      {#if storageInfoOpen}
+        <div class="storage-info-pop">
+          <ul>
+            <li><strong>插图</strong><em>记事 / 日记 / 记账条目里 markdown 引用的图片</em></li>
+            <li><strong>背景与头像</strong><em>列表 / 日记 / 记账的背景图与个人资料头像</em></li>
+            <li><strong>领域数据</strong><em>data / settings / tasks / diary / ledger / calendar 六个 JSON</em></li>
+            <li><strong>历史记录</strong><em>写操作审计与定时任务执行历史</em></li>
+            <li><strong>运行时</strong><em>同步水位、配对凭据留档、网页标题缓存</em></li>
+            <li>
+              <strong>同步服务器</strong>
+              <em>本机作为服务器时的库（实体与图片中转缓存）{#if storageUsage.serverWalBytes > 0}，其中 WAL {formatBytes(storageUsage.serverWalBytes)}{/if}</em>
+            </li>
+            <li><strong>服务器日志</strong><em>本机作为同步服务器时的操作日志（按日轮转）</em></li>
+            <li><strong>备份</strong><em>域数据写盘前的历史备份，自动保留最近几份</em></li>
+            {#if storageOtherBytes > 0}
+              <li><strong>其他</strong><em>未被上面几类盘点到的文件</em></li>
+            {/if}
+          </ul>
+          <p>
+            分项合计 {formatBytes(storageCountedBytes)}（应等于数据占用；不等只会出现在磁盘正在被写入的瞬间）。
+          </p>
+          <p>
+            可释放 {formatBytes(cleanableBytes)}：无引用插图 {storageUsage.orphanImages.count} 张 ·
+            无引用背景 {storageUsage.orphanBackgrounds.count} 张 · 无引用头像
+            {storageUsage.orphanAvatars.count} 张 · 临时文件 {storageUsage.tempFiles.count} 个 ·
+            旧服务器日志 {storageUsage.cleanableLogs.count} 个。
+          </p>
+          <p>
+            清理只删确认没人再用的东西：markdown 里不再引用的插图、不再被任何条目/日记/记账/头像设置的
+            背景与头像、崩溃残留的临时文件、以及本机作为服务器时的旧日志（保留最近两份与今天的）。
+            笔记、日记、账目、账户、配对信息与同步水位一概不动。
+          </p>
+        </div>
+      {/if}
       <div class="settings-row">
         <span>可释放</span>
         <span class="muted">{formatBytes(cleanableBytes)}</span>
       </div>
-      <p class="muted storage-detail">
-        无引用插图 {storageUsage.orphanImages.count} 张 · 无引用背景 {storageUsage.orphanBackgrounds.count} 张 ·
-        无引用头像 {storageUsage.orphanAvatars.count} 张 · 临时文件 {storageUsage.tempFiles.count} 个 ·
-        旧服务器日志 {storageUsage.cleanableLogs.count} 个
-      </p>
     {:else}
       <p class="muted">浏览器预览没有数据目录，看不到占用。</p>
     {/if}
@@ -1944,10 +2033,7 @@
         {storageBusy ? "清理中…" : "释放空间"}
       </button>
     </div>
-    <p
-      class="muted"
-      title="只删确认没人再用的东西：markdown 里不再引用的插图、不再被任何条目/日记/记账/头像设置的背景与头像、崩溃残留的临时文件、以及本机作为服务器时的旧日志（保留最近两份与今天的）。笔记、日记、账目、账户、配对信息与同步水位一概不动。"
-    >只清没人引用的图片、崩溃残留的临时文件与旧服务器日志；笔记、日记、账目、账户与同步记录一概不动。</p>
+    <p class="muted">只清没人引用的图片、崩溃残留的临时文件与旧服务器日志；笔记、日记、账目、账户与同步记录一概不动。</p>
     {#if storageNote}
       <p class="update-status">{storageNote}</p>
     {/if}

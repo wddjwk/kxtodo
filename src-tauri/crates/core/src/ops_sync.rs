@@ -101,11 +101,13 @@ fn scopes_from_params(params: &Value) -> Option<Scopes> {
     let schedules = params.get("syncSchedules").and_then(Value::as_bool);
     let diary = params.get("syncDiary").and_then(Value::as_bool);
     let ledger = params.get("syncLedger").and_then(Value::as_bool);
+    let calendar = params.get("syncCalendar").and_then(Value::as_bool);
     if data.is_none()
         && settings.is_none()
         && schedules.is_none()
         && diary.is_none()
         && ledger.is_none()
+        && calendar.is_none()
     {
         return None;
     }
@@ -115,6 +117,7 @@ fn scopes_from_params(params: &Value) -> Option<Scopes> {
         schedules: schedules.unwrap_or(false),
         diary: diary.unwrap_or(true),
         ledger: ledger.unwrap_or(true),
+        calendar: calendar.unwrap_or(true),
     })
 }
 
@@ -266,6 +269,7 @@ fn sync_status(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
             "schedules": sync.sync_schedules,
             "diary": sync.sync_diary,
             "ledger": sync.sync_ledger,
+            "calendar": sync.sync_calendar,
         },
         "intervalSeconds": sync.interval_seconds,
         "reconnectSeconds": sync.reconnect_seconds,
@@ -341,6 +345,7 @@ fn sync_configure(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
     let schedules = params.get("syncSchedules").and_then(Value::as_bool);
     let diary_scope = params.get("syncDiary").and_then(Value::as_bool);
     let ledger_scope = params.get("syncLedger").and_then(Value::as_bool);
+    let calendar_scope = params.get("syncCalendar").and_then(Value::as_bool);
     let enabled = params.get("enabled").and_then(Value::as_bool);
     let interval = params.get("intervalSeconds").and_then(Value::as_u64);
     let reconnect = params.get("reconnectSeconds").and_then(Value::as_u64);
@@ -364,6 +369,7 @@ fn sync_configure(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
         && schedules.is_none()
         && diary_scope.is_none()
         && ledger_scope.is_none()
+        && calendar_scope.is_none()
         && enabled.is_none()
         && interval.is_none()
         && reconnect.is_none()
@@ -378,7 +384,7 @@ fn sync_configure(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
         return Err(CoreError::validation(
             "MISSING_PARAM",
             "至少提供一个配置项（mode/lanHost/lanName/lanPort/lanPeer/p2pRelay/p2pDirectory/\
-             syncData/syncSettings/syncSchedules/syncDiary/syncLedger/enabled/intervalSeconds/reconnectSeconds）",
+             syncData/syncSettings/syncSchedules/syncDiary/syncLedger/syncCalendar/enabled/intervalSeconds/reconnectSeconds）",
         ));
     }
     if let Some(value) = &lan_name {
@@ -421,6 +427,9 @@ fn sync_configure(inv: &Invocation, ctx: &ExecContext) -> CoreResult<Value> {
             }
             if let Some(value) = ledger_scope {
                 file.sync.sync_ledger = value;
+            }
+            if let Some(value) = calendar_scope {
+                file.sync.sync_calendar = value;
             }
             // 低于下限的间隔按下限生效（用户要的是「至少 5 秒」，不是报错）
             // 节奏是共享子集的一部分：真的改了就要刷新 syncUpdatedAt，否则推不出去，

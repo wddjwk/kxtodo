@@ -20,6 +20,19 @@ export const datePopoverTaskId = writable<string | null>(null);
 export const revealedTag = writable<{ taskId: string; tagId: string } | null>(null);
 /** 触屏第一下露出的表情删除叉 */
 export const revealedEmoji = writable<{ taskId: string; index: number } | null>(null);
+/**
+ * 左滑露出「置顶 / 编辑」的那一行（v0.9.0）：同一时刻只允许一行露出，所以宿主 id
+ * 住在模块级 store（与日期浮层、露出删除叉同一套收敛口径）。
+ */
+export const revealedSwipeRow = writable<string | null>(null);
+
+export function setSwipeRowOpen(taskId: string | null): void {
+  revealedSwipeRow.set(taskId);
+}
+
+export function closeSwipeRow(): void {
+  revealedSwipeRow.set(null);
+}
 
 /** 卡片点日期按钮：同一张再点一次 = 关闭；另一张点 = 先关旧的再开新的 */
 export function toggleDatePopover(taskId: string): void {
@@ -63,4 +76,7 @@ function handleDocumentPointerDown(event: PointerEvent): void {
   // 露出的删除叉：点标签/表情自身之外就收回
   if (get(revealedTag) && !target?.closest(".task-tag")) revealedTag.set(null);
   if (get(revealedEmoji) && !target?.closest(".task-emoji-badge")) revealedEmoji.set(null);
+  // 左滑露出的动作行：行内的点击由 `swipeRow` 自己收尾（点动作 = 执行并收回、
+  // 点卡片 = 只收回），这里只管「点了别的行/别的地方」
+  if (get(revealedSwipeRow) !== null && !target?.closest(".task-swipe")) closeSwipeRow();
 }

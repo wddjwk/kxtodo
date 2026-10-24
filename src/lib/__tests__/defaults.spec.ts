@@ -474,8 +474,8 @@ describe("normalizeSettings 剪切板同步（v0.8.10）", () => {
       serverUrl: "",
       account: "",
       password: "",
-      types: { text: true, html: true, image: true, files: true },
-      limits: { textMb: 1, htmlMb: 2, imageMb: 10, filesMb: 100 },
+      types: { text: true, image: true, files: true },
+      limits: { textMb: 1, imageMb: 10, filesMb: 100 },
       saveDir: ""
     });
   });
@@ -487,14 +487,14 @@ describe("normalizeSettings 剪切板同步（v0.8.10）", () => {
         deviceName: "  书房 ",
         account: "  user ",
         serverUrl: " http://192.168.1.10:52177 ",
-        limits: { textMb: 0, htmlMb: 999, imageMb: 2.7, filesMb: 4096 },
-        types: { text: false, html: true, image: false, files: true }
+        limits: { textMb: 0, imageMb: 2.7, filesMb: 4096 },
+        types: { text: false, image: false, files: true }
       }
     });
     expect(normalized.clipboard.deviceName).toBe("书房");
     expect(normalized.clipboard.account).toBe("user");
     expect(normalized.clipboard.serverUrl).toBe("http://192.168.1.10:52177");
-    expect(normalized.clipboard.limits).toEqual({ textMb: 1, htmlMb: 64, imageMb: 3, filesMb: 1024 });
-    expect(normalized.clipboard.types).toEqual({ text: false, html: true, image: false, files: true });
+    expect(normalized.clipboard.limits).toEqual({ textMb: 1, imageMb: 3, filesMb: 1024 });
+    expect(normalized.clipboard.types).toEqual({ text: false, image: false, files: true });
   });
 });

@@ -16,11 +16,11 @@ use crate::repo::Repository;
 use crate::sync::crypto::{derive_keys, open_entity, seal_entity, sha256_hex, SyncKeys};
 use crate::sync::endpoint;
 use crate::sync::merge::{
-    apply_data_record, apply_diary_record, apply_ledger_record, apply_record_settings,
-    apply_schedule_record, data_entity_stamp, diary_entity_stamp, ledger_entity_stamp,
-    normalize_data_orders, normalize_diary_orders, normalize_ledger_orders,
-    normalize_schedule_orders, remote_wins, schedule_entity_stamp, EntityRecord, Scopes,
-    SETTINGS_ENTITY_ID, SyncEnvelope,
+    apply_calendar_record, apply_data_record, apply_diary_record, apply_ledger_record,
+    apply_record_settings, apply_schedule_record, calendar_entity_stamp, data_entity_stamp,
+    diary_entity_stamp, ledger_entity_stamp, normalize_calendar_orders, normalize_data_orders,
+    normalize_diary_orders, normalize_ledger_orders, normalize_schedule_orders, remote_wins,
+    schedule_entity_stamp, EntityRecord, Scopes, SETTINGS_ENTITY_ID, SyncEnvelope,
 };
 use crate::sync::state::{load_state, save_state, PushedEntry, SyncStateFile};
 use crate::sync::transport::{ChangeItem, PutError, SyncClient, PAGE_LIMIT};
@@ -244,6 +244,37 @@ fn merge_diary_records(
     }
     if applied > 0 {
         normalize_diary_orders(file);
+    }
+    applied
+}
+
+/// 在 write_calendar 闭包内做 calendar 域的 LWW 应用；返回应用数。
+fn merge_calendar_records(
+    file: &mut crate::model::CalendarFile,
+    records: &[EntityRecord],
+    state: &SyncStateFile,
+    warnings: &mut Vec<String>,
+) -> usize {
+    let mut applied = 0;
+    for record in records {
+        let stamp = local_stamp(state, &record.id, calendar_entity_stamp(file, &record.id));
+        debug_log(format!(
+            "merge calendar {} remote=({},{}) local={:?} -> {}",
+            record.id,
+            record.updated_at,
+            record.updated_by,
+            stamp,
+            remote_wins(record, stamp_ref(&stamp))
+        ));
+        if remote_wins(record, stamp_ref(&stamp)) {
+            match apply_calendar_record(record, file) {
+                Ok(()) => applied += 1,
+                Err(error) => warnings.push(format!("日程 {} 应用失败：{error}", record.id)),
+            }
+        }
+    }
+    if applied > 0 {
+        normalize_calendar_orders(file);
     }
     applied
 }
@@ -478,8 +509,9 @@ fn run_sync_inner(
     // 所以签名一变就把实体与图片水位归零全量重拉（LWW 合并，重拉是安全的）。
     // 放在这里而不是 sync configure 里，是为了让 config set 改范围也同样生效。
     let scope_signature = format!(
-        "{}|{}|{}|{}|{}",
-        scopes.data, scopes.settings, scopes.schedules, scopes.diary, scopes.ledger
+        "{}|{}|{}|{}|{}|{}",
+        scopes.data, scopes.settings, scopes.schedules, scopes.diary, scopes.ledger,
+        scopes.calendar
     );
     if state.scope_signature != scope_signature {
         state.last_pulled_seq = 0;
@@ -534,6 +566,12 @@ fn run_sync_inner(
     let diary_records: Vec<EntityRecord> = records
         .iter()
         .filter(|record| record.kind == "diary" && scopes.diary)
+        .cloned()
+        .collect();
+    // 日程（v0.9.0）：与日记同构——独立文件、独立事务、独立范围勾选
+    let calendar_records: Vec<EntityRecord> = records
+        .iter()
+        .filter(|record| record.kind == "calendar" && scopes.calendar)
         .cloned()
         .collect();
     // 记账：流水/账户/分类三种实体一个事务、一个范围勾选
@@ -612,6 +650,25 @@ fn run_sync_inner(
                 file.entries.clear();
             }
             applied = merge_diary_records(file, &records_snapshot, &state_snapshot, &mut warnings);
+            Ok(json!({ "applied": applied, "pulled": records_snapshot.len() }))
+        })?;
+        report.applied += applied;
+        report.warnings.extend(warnings);
+    }
+
+    if !calendar_records.is_empty() {
+        let state_snapshot = state.clone();
+        let records_snapshot = calendar_records.clone();
+        let calendar_existed = repo.layout.calendar_file().exists();
+        let mut applied = 0usize;
+        let mut warnings: Vec<String> = Vec::new();
+        let (_file, _outcome) = repo.write_calendar(None, None, "sync.pull", |file| {
+            if !calendar_existed {
+                // 全新设备：丢掉内存里的默认（空）日程，直接落服务端内容
+                file.events.clear();
+            }
+            applied =
+                merge_calendar_records(file, &records_snapshot, &state_snapshot, &mut warnings);
             Ok(json!({ "applied": applied, "pulled": records_snapshot.len() }))
         })?;
         report.applied += applied;
@@ -697,12 +754,14 @@ fn run_sync_inner(
     let data_after = repo.load_data()?;
     let diary_after = repo.load_diary()?;
     let ledger_after = repo.load_ledger()?;
+    let calendar_after = repo.load_calendar()?;
     let settings_after = repo.load_settings()?;
     let schedule_after = repo.load_schedule()?;
     for record in &records {
         let local_ts = match record.kind.as_str() {
             "node" | "task" | "scratchpad" => data_entity_stamp(&data_after, &record.id),
             "diary" => diary_entity_stamp(&diary_after, &record.id),
+            "calendar" => calendar_entity_stamp(&calendar_after, &record.id),
             kind if crate::sync::merge::is_ledger_kind(kind) => {
                 ledger_entity_stamp(&ledger_after, &record.kind, &record.id)
             }
@@ -737,15 +796,18 @@ fn run_sync_inner(
     let data_existed = repo.layout.data_file().exists();
     let diary_existed = repo.layout.diary_file().exists();
     let ledger_existed = repo.layout.ledger_file().exists();
+    let calendar_existed = repo.layout.calendar_file().exists();
     let data = data_after;
     let diary = diary_after;
     let ledger = ledger_after;
+    let calendar = calendar_after;
     let settings_now = settings_after;
     let schedule = schedule_after;
     let local_entities = crate::sync::merge::extract_entities(
         &data,
         &diary,
         &ledger,
+        &calendar,
         &settings_now,
         &schedule,
         &scopes,
@@ -761,6 +823,9 @@ fn run_sync_inner(
             return false;
         }
         if !ledger_existed && crate::sync::merge::is_ledger_kind(&entity.kind) {
+            return false;
+        }
+        if !calendar_existed && entity.kind == "calendar" {
             return false;
         }
         true
@@ -904,6 +969,13 @@ fn resolve_conflict(
                 Ok(json!({}))
             });
         }
+        "calendar" => {
+            let records = vec![remote.clone()];
+            let _ = repo.write_calendar(None, None, "sync.conflict", |file| {
+                merge_calendar_records(file, &records, &state_snapshot, &mut warnings);
+                Ok(json!({}))
+            });
+        }
         kind if crate::sync::merge::is_ledger_kind(kind) => {
             let records = vec![remote.clone()];
             let _ = repo.write_ledger(None, None, "sync.conflict", |file| {
@@ -947,12 +1019,14 @@ fn resolve_conflict(
     let data = repo.load_data()?;
     let diary = repo.load_diary()?;
     let ledger = repo.load_ledger()?;
+    let calendar = repo.load_calendar()?;
     let settings = repo.load_settings()?;
     let schedule = repo.load_schedule()?;
     let entities = crate::sync::merge::extract_entities(
         &data,
         &diary,
         &ledger,
+        &calendar,
         &settings,
         &schedule,
         scopes,

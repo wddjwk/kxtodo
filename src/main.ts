@@ -13,6 +13,7 @@ import "./styles/shared.css";
 import "./styles/editor.css";
 import "./styles/diary.css";
 import "./styles/ledger.css";
+import "./styles/calendar.css";
 import "./styles/toolbox.css";
 import "./styles/colorpanel.css";
 import "./styles/markdown-ext.css";

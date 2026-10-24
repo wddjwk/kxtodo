@@ -1450,8 +1450,12 @@ for (const layout of ["list", "grid", "icons"]) {
   check("2 防抖期内不写盘（降频到秒级）", early === null, J(early));
   await page.waitForTimeout(5200);
   const late = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "{}").scratchpad ?? null, STATE_KEY);
-  check("2 停手后落进数据域（带 updatedAt，可同步）", late?.text === "第一行草稿" && Boolean(late?.updatedAt), J(late));
-  check("2 localStorage 仍留一份首帧缓存", (await page.evaluate(() => localStorage.getItem("kxtodo-scratchpad-v1"))) === "第一行草稿");
+  // v0.9.0 标签页化：数据域里是 {tabs, activeTabId}，正文在活动页上
+  const lateActive = late?.tabs?.find((tab) => tab.id === late?.activeTabId);
+  check("2 停手后落进数据域（带 updatedAt，可同步）", lateActive?.text === "第一行草稿" && Boolean(late?.updatedAt), J(late));
+  const cached = await page.evaluate(() => JSON.parse(localStorage.getItem("kxtodo-scratchpad-v2") ?? "null"));
+  const cachedActive = cached?.tabs?.find((tab) => tab.id === cached?.activeTabId);
+  check("2 localStorage 仍留一份首帧缓存", cachedActive?.text === "第一行草稿", J(cached));
 
   await page.reload({ waitUntil: "load" });
   await page.waitForTimeout(900);
@@ -1464,10 +1468,12 @@ for (const layout of ["list", "grid", "icons"]) {
 
   // 退出当前页面必保存（不等防抖）
   await page.locator(".scratchpad-area").fill("退出前最后一笔");
-  await page.locator(".toolbox-sub-bar button").first().click();
+  // v0.9.0：子页头部第一个按钮是草稿纸的「新建标签页」加号，离开要走返回箭头
+  await page.locator(".toolbox-sub-bar button[title='返回工具箱']").click();
   await page.waitForTimeout(700);
   const afterLeave = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "{}").scratchpad ?? null, STATE_KEY);
-  check("2 离开页面立即保存", afterLeave?.text === "退出前最后一笔", J(afterLeave));
+  const afterLeaveActive = afterLeave?.tabs?.find((tab) => tab.id === afterLeave?.activeTabId);
+  check("2 离开页面立即保存", afterLeaveActive?.text === "退出前最后一笔", J(afterLeave));
   check("2 无脚本报错", errors.length === 0, errors[0] ?? "");
   await page.close();
 }

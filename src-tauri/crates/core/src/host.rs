@@ -335,6 +335,8 @@ impl HostCore {
             Domain::Diary => {}
             // 记账同日记：纯数据域，没有宿主侧副作用
             Domain::Ledger => {}
+            // 日程同日记：提醒引擎每轮 tick 都从磁盘重读 calendar.json，不需要额外通知
+            Domain::Calendar => {}
         }
         if let Ok(backend) = self.backend.read() {
             if let Some(backend) = backend.as_ref() {

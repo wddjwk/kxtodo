@@ -20,6 +20,7 @@ pub mod ledger_archive;
 pub mod ledger_icons;
 pub mod linkmeta;
 pub mod model;
+pub mod ops_calendar;
 pub mod ops_config;
 pub mod ops_diary;
 pub mod ops_gui;

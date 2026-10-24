@@ -2,6 +2,8 @@ import { platform as tauriPlatform } from "@tauri-apps/plugin-os";
 import type {
   AppNode,
   AppState,
+  CalendarEvent,
+  CalendarViewMode,
   DiaryEntry,
   DiaryViewMode,
   LedgerAccount,
@@ -24,6 +26,7 @@ import type {
   SchedulerRuntimeKey,
   SchedulerRuntimePaths,
   SchedulerState,
+  ScratchpadTab,
   Settings,
   SyncMode,
   Tag,
@@ -39,6 +42,9 @@ import { normalizeSortMode } from "./sort";
 const now = () => new Date().toISOString();
 
 export const schemaVersion = 4;
+
+/** 安卓常驻通知的默认标语（core 的 `default_keep_alive_notice` 同口径） */
+export const DEFAULT_KEEP_ALIVE_NOTICE = "今天有什么要做的吗~";
 
 export const systemNodes: AppNode[] = [
   { id: "my-day", kind: "system", name: "我的一天", icon: "sun", parentId: null, createdAt: now() },
@@ -152,6 +158,7 @@ export const defaultSettings: Settings = {
     syncSchedules: false,
     syncDiary: true,
     syncLedger: true,
+    syncCalendar: true,
     intervalSeconds: 30,
     reconnectSeconds: 300
   },
@@ -171,8 +178,8 @@ export const defaultSettings: Settings = {
     serverUrl: "",
     account: "",
     password: "",
-    types: { text: true, html: true, image: true, files: true },
-    limits: { textMb: 1, htmlMb: 2, imageMb: 10, filesMb: 100 },
+    types: { text: true, image: true, files: true },
+    limits: { textMb: 1, imageMb: 10, filesMb: 100 },
     saveDir: ""
   },
   updates: {
@@ -189,6 +196,10 @@ export const defaultSettings: Settings = {
     dueHighlight: "off",
     // 「超链接渲染样式」的默认档（v0.7.8 起默认渲染为卡片）
     linkRender: "card",
+    // 安卓后台常驻（v0.9.0）：默认关——常驻通知是一条一直挂在通知栏的东西，
+    // 必须由用户自己决定要不要
+    androidKeepAlive: false,
+    keepAliveNotice: DEFAULT_KEEP_ALIVE_NOTICE,
   },
   diary: {
     view: "list",
@@ -201,6 +212,14 @@ export const defaultSettings: Settings = {
     view: "list",
     accent: "",
     backgroundColor: "#eef3ee",
+    backgroundImage: "",
+    backgroundOpacity: 0.28
+  },
+  calendar: {
+    view: "week",
+    accent: "",
+    // 与 core 的 default_calendar_background_color 同值
+    backgroundColor: "#eef1f5",
     backgroundImage: "",
     backgroundOpacity: 0.28
   },
@@ -348,7 +367,7 @@ export function emptyState(): AppState {
     backgrounds: {
       [inbox.id]: { ...defaultBackground }
     },
-    scratchpad: { text: "", updatedAt: "" },
+    scratchpad: { tabs: [], activeTabId: "", updatedAt: "" },
     scheduler: emptySchedulerState()
   };
 }
@@ -773,13 +792,42 @@ export function normalizeState(raw: unknown): AppState {
     tasks,
     selectedNodeId,
     backgrounds,
-    // 草稿纸（v0.8.4 需求 2）：纯文本 + 版本戳，跟着数据域同步
-    scratchpad: {
-      text: typeof source?.scratchpad?.text === "string" ? source.scratchpad.text : "",
-      updatedAt: typeof source?.scratchpad?.updatedAt === "string" ? source.scratchpad.updatedAt : ""
-    },
+    // 草稿纸（v0.8.4 需求 2；v0.9.0 标签页化）：多页纯文本 + 激活页，跟着数据域同步
+    scratchpad: normalizeScratchpad(source?.scratchpad),
     scheduler: normalizeSchedulerState(source?.scheduler)
   };
+}
+
+/**
+ * 规范化草稿纸（v0.9.0 标签页形状）。v0.8.x 的旧形状（整段 `text`）折进第一个
+ * 标签页——用户的便签是真内容，与 core `Scratchpad::fold_legacy_text` 同一条口径，
+ * 绝不静默丢掉。
+ */
+export function normalizeScratchpad(raw: unknown): { tabs: ScratchpadTab[]; activeTabId: string; updatedAt: string } {
+  const source = raw as { tabs?: unknown; activeTabId?: unknown; text?: unknown; updatedAt?: unknown } | undefined;
+  const updatedAt = typeof source?.updatedAt === "string" ? source.updatedAt : "";
+  let tabs: ScratchpadTab[] = [];
+  if (Array.isArray(source?.tabs)) {
+    for (const item of source.tabs) {
+      const tab = item as Partial<ScratchpadTab> | undefined;
+      if (!tab || typeof tab.id !== "string" || tab.id === "") continue;
+      if (tabs.some((existing) => existing.id === tab.id)) continue;
+      tabs.push({
+        id: tab.id,
+        name: typeof tab.name === "string" ? tab.name.slice(0, 40) : "",
+        text: typeof tab.text === "string" ? tab.text : "",
+        updatedAt: typeof tab.updatedAt === "string" ? tab.updatedAt : undefined
+      });
+    }
+  }
+  if (tabs.length === 0 && typeof source?.text === "string" && source.text.trim() !== "") {
+    tabs = [{ id: "tab-1", name: "1", text: source.text, updatedAt: updatedAt || undefined }];
+  }
+  const activeTabId =
+    typeof source?.activeTabId === "string" && tabs.some((tab) => tab.id === source.activeTabId)
+      ? source.activeTabId
+      : tabs[0]?.id ?? "";
+  return { tabs, activeTabId, updatedAt };
 }
 
 /**
@@ -790,6 +838,55 @@ export function normalizeDiaryEntries(raw: unknown): DiaryEntry[] {
   const source = raw as { entries?: unknown } | undefined;
   const list = Array.isArray(source?.entries) ? source?.entries : Array.isArray(raw) ? raw : [];
   return list.map(normalizeDiaryEntry).filter((entry): entry is DiaryEntry => entry !== null);
+}
+
+// ---------------------------------------------------------------------------
+// calendar.json（日程，v0.9.0）
+// ---------------------------------------------------------------------------
+
+const CALENDAR_TIME_RE = /^\d{2}:\d{2}$/;
+
+function normalizeCalendarView(raw: unknown): CalendarViewMode {
+  if (raw === "month" || raw === "week" || raw === "threeday" || raw === "day") {
+    return raw;
+  }
+  return "week";
+}
+
+/**
+ * 规范化一条日程事件（逐字段白名单，与 core 的 CalendarEvent 同构）。
+ * 与日记不同：**标题与详情都空的事件也保留**——拖选时间段快速建的事件常常
+ * 还没来得及起名，把它当空壳丢掉等于吃掉用户刚建的时间块。
+ */
+function normalizeCalendarEvent(raw: unknown): CalendarEvent | null {
+  const source = raw as Partial<CalendarEvent> | undefined;
+  if (!source || typeof source !== "object") return null;
+  if (typeof source.id !== "string" || source.id === "") return null;
+  const createdAt = typeof source.createdAt === "string" ? source.createdAt : now();
+  const fallbackDate = localDateOf(createdAt) || localDateOf(now());
+  const startDate = DIARY_DATE_RE.test(source.startDate ?? "") ? (source.startDate as string) : fallbackDate;
+  const endDate = DIARY_DATE_RE.test(source.endDate ?? "") ? (source.endDate as string) : startDate;
+  const allDay = source.allDay === true;
+  return {
+    id: source.id,
+    title: typeof source.title === "string" ? source.title.slice(0, 200) : "",
+    details: typeof source.details === "string" ? source.details : "",
+    startDate,
+    startTime: !allDay && CALENDAR_TIME_RE.test(source.startTime ?? "") ? (source.startTime as string) : "",
+    endDate,
+    endTime: !allDay && CALENDAR_TIME_RE.test(source.endTime ?? "") ? (source.endTime as string) : "",
+    allDay,
+    reminders: normalizeReminders(source.reminders),
+    taskId: typeof source.taskId === "string" ? source.taskId : "",
+    createdAt,
+    updatedAt: typeof source.updatedAt === "string" ? source.updatedAt : undefined
+  };
+}
+
+export function normalizeCalendarEvents(raw: unknown): CalendarEvent[] {
+  const source = raw as { events?: unknown } | undefined;
+  const list = Array.isArray(source?.events) ? source?.events : Array.isArray(raw) ? raw : [];
+  return list.map(normalizeCalendarEvent).filter((event): event is CalendarEvent => event !== null);
 }
 
 function normalizeLedgerView(raw: unknown): LedgerViewMode {
@@ -1106,6 +1203,13 @@ export function normalizeSettings(raw: unknown): Settings {
   const normalizeDueHighlight = (value: unknown): Settings["features"]["dueHighlight"] =>
     value === "solid" || value === "gradient" ? value : "off";
 
+  // 常驻通知不能没有文字：空串回落默认标语；长度截到 60（core 同口径）
+  const normalizeKeepAliveNotice = (value: unknown): string => {
+    if (typeof value !== "string") return DEFAULT_KEEP_ALIVE_NOTICE;
+    const trimmed = value.trim().slice(0, 60);
+    return trimmed === "" ? DEFAULT_KEEP_ALIVE_NOTICE : trimmed;
+  };
+
   const normalizeLinkRender = (value: unknown): Settings["features"]["linkRender"] =>
     value === "off" || value === "title" || value === "card" ? value : defaultSettings.features.linkRender;
   const normalizeUiScale = (value: unknown): number | null =>
@@ -1261,6 +1365,7 @@ export function normalizeSettings(raw: unknown): Settings {
       syncSchedules: Boolean(source?.sync?.syncSchedules),
       syncDiary: typeof source?.sync?.syncDiary === "boolean" ? source.sync.syncDiary : true,
       syncLedger: typeof source?.sync?.syncLedger === "boolean" ? source.sync.syncLedger : true,
+      syncCalendar: typeof source?.sync?.syncCalendar === "boolean" ? source.sync.syncCalendar : true,
       // 低于下限的间隔按下限生效（用户要的是「至少 5 秒」）
       intervalSeconds:
         typeof source?.sync?.intervalSeconds === "number" && Number.isFinite(source.sync.intervalSeconds)
@@ -1287,13 +1392,11 @@ export function normalizeSettings(raw: unknown): Settings {
       password: typeof source?.clipboard?.password === "string" ? source.clipboard.password : "",
       types: {
         text: typeof source?.clipboard?.types?.text === "boolean" ? source.clipboard.types.text : true,
-        html: typeof source?.clipboard?.types?.html === "boolean" ? source.clipboard.types.html : true,
         image: typeof source?.clipboard?.types?.image === "boolean" ? source.clipboard.types.image : true,
         files: typeof source?.clipboard?.types?.files === "boolean" ? source.clipboard.types.files : true
       },
       limits: {
         textMb: normalizePositiveInteger(source?.clipboard?.limits?.textMb, 1, 1, 64),
-        htmlMb: normalizePositiveInteger(source?.clipboard?.limits?.htmlMb, 2, 1, 64),
         imageMb: normalizePositiveInteger(source?.clipboard?.limits?.imageMb, 10, 1, 256),
         filesMb: normalizePositiveInteger(source?.clipboard?.limits?.filesMb, 100, 1, 1024)
       },
@@ -1321,6 +1424,11 @@ export function normalizeSettings(raw: unknown): Settings {
       weekStart: source?.features?.weekStart === "sunday" ? "sunday" : "monday",
       dueHighlight: normalizeDueHighlight(source?.features?.dueHighlight),
       linkRender: normalizeLinkRender(source?.features?.linkRender),
+      androidKeepAlive:
+        typeof source?.features?.androidKeepAlive === "boolean"
+          ? source.features.androidKeepAlive
+          : defaultSettings.features.androidKeepAlive,
+      keepAliveNotice: normalizeKeepAliveNotice(source?.features?.keepAliveNotice),
     },
     diary: {
       view: normalizeDiaryView(source?.diary?.view),
@@ -1341,6 +1449,16 @@ export function normalizeSettings(raw: unknown): Settings {
         typeof source?.ledger?.backgroundOpacity === "number" && Number.isFinite(source.ledger.backgroundOpacity)
           ? Math.min(1, Math.max(0, source.ledger.backgroundOpacity))
           : defaultSettings.ledger.backgroundOpacity
+    },
+    calendar: {
+      view: normalizeCalendarView(source?.calendar?.view),
+      accent: normalizeHexColor(source?.calendar?.accent ?? "", ""),
+      backgroundColor: normalizeHexColor(source?.calendar?.backgroundColor, defaultSettings.calendar.backgroundColor),
+      backgroundImage: typeof source?.calendar?.backgroundImage === "string" ? source.calendar.backgroundImage : "",
+      backgroundOpacity:
+        typeof source?.calendar?.backgroundOpacity === "number" && Number.isFinite(source.calendar.backgroundOpacity)
+          ? Math.min(1, Math.max(0, source.calendar.backgroundOpacity))
+          : defaultSettings.calendar.backgroundOpacity
     },
     toolbox: {
       accent: normalizeHexColor(source?.toolbox?.accent ?? "", ""),

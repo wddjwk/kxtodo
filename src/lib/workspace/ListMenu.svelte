@@ -64,6 +64,8 @@
   export let diaryMode = false;
   /** 记账模式：与日记同一条套路——外观在 settings.ledger，导出导入走 Excel 压缩包。 */
   export let ledgerMode = false;
+  /** 日程模式（v0.9.0）：外观在 settings.calendar；没有导出导入，菜单直奔外观。 */
+  export let calendarMode = false;
   export let background: ListBackground | null = null;
   export let accentColor: string | null = null;
 
@@ -99,8 +101,8 @@
   $: linkCommitted = isLocalImageRef(bg.image) ? "" : (bg.image ?? "");
   $: if (!linkLive) linkValue = linkCommitted;
 
-  /** 预览作用域：条目页是节点 id，日记/记账是各自的 settings 前缀 */
-  $: colorScope = diaryMode ? "diary" : ledgerMode ? "ledger" : (node?.id ?? "");
+  /** 预览作用域：条目页是节点 id，日记/记账/日程是各自的 settings 前缀 */
+  $: colorScope = diaryMode ? "diary" : ledgerMode ? "ledger" : calendarMode ? "calendar" : (node?.id ?? "");
   $: accentShown = colorDraft.accent ?? accentValue;
   $: backgroundShown = colorDraft.background ?? bg.color;
 
@@ -181,8 +183,8 @@
   /** 生效的背景与主题色：日记模式用传进来的覆盖值，否则跟着当前选中的条目 */
   $: bg = background ?? $selectedBackground;
   $: accentValue = accentColor ?? $accent;
-  /** 日记/记账模式的外观写在 settings 的扁平配置项上，前缀不同其余同构 */
-  $: settingsPrefix = diaryMode ? "diary" : ledgerMode ? "ledger" : "";
+  /** 日记/记账/日程模式的外观写在 settings 的扁平配置项上，前缀不同其余同构 */
+  $: settingsPrefix = diaryMode ? "diary" : ledgerMode ? "ledger" : calendarMode ? "calendar" : "";
 
   function setBackground(patch: Partial<ListBackground>): void {
     if (settingsPrefix) {
@@ -857,7 +859,7 @@
       </div>
     </MenuItem>
   {/if}
-  {#if !isScheduled && !diaryMode && !ledgerMode}
+  {#if !isScheduled && !diaryMode && !ledgerMode && !calendarMode}
     <MenuItem icon={ArrowUpDown} label="排序方式">
       <div slot="submenu" class="submenu-list">
         {#each Object.entries(sortLabels) as [mode, label]}
@@ -902,6 +904,7 @@
     <MenuItem icon={Trash2} danger label="删除当前条目" onSelect={deleteCurrentNode} />
   {/if}
 
+  {#if !calendarMode}
   <MenuSeparator />
   {#if diaryMode}
     <MenuItem icon={FileArchive} label="导出全部日记" onSelect={() => void exportAllDiary()} />
@@ -952,6 +955,7 @@
         <MenuItem icon={FolderInput} label="导入 Markdown 文件夹" onSelect={() => void importCardsMdFolder()} />
       {/if}
     {/if}
+  {/if}
   {/if}
 
   <MenuSeparator />

@@ -139,6 +139,17 @@
   bottom: -7px;
 }
 
+/* 三级及更深的子菜单（v0.9.0 bugfix 2）：二级面板是滚动容器，绝对定位的三级面板
+   会被它裁掉（固定区「添加固定 → 工具箱内的工具」整块看不见）。fixed 让面板脱离
+   裁剪祖先、浮到最前面；left/top 由 MenuItem::placeFixedSubmenu 按壳缩放换算写入。
+   限高态（.capped 的手风琴）与移动端钻入式的特异性都比这条高，不受影响。 */
+.submenu-panel.submenu-fixed {
+  position: fixed;
+  left: 0;
+  top: 0;
+  margin: 0;
+}
+
 /* 限高菜单是滚动容器，会裁剪绝对定位的子面板；限高态子菜单改行内手风琴展开。 */
 .context-menu.capped .submenu-panel,
 .context-menu.capped .submenu-panel.flip-x,

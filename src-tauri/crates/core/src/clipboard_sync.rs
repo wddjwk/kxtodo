@@ -550,7 +550,6 @@ fn normalized(settings: &ClipboardSettings) -> ClipboardSettings {
     value.password = value.password.trim().to_string();
     value.save_dir = value.save_dir.trim().to_string();
     value.limits.text_mb = value.limits.text_mb.clamp(1, 64);
-    value.limits.html_mb = value.limits.html_mb.clamp(1, 64);
     value.limits.image_mb = value.limits.image_mb.clamp(1, 256);
     value.limits.files_mb = value.limits.files_mb.clamp(1, 1024);
     value
@@ -574,10 +573,9 @@ fn wan_ready(value: &ClipboardSettings) -> bool {
     requires_wan(value) && !value.account.is_empty() && !value.password.is_empty()
 }
 
-fn limit_bytes(limits: &ClipboardLimits) -> (u64, u64, u64, u64) {
+fn limit_bytes(limits: &ClipboardLimits) -> (u64, u64, u64) {
     (
         limits.text_mb as u64 * MAX_MB,
-        limits.html_mb as u64 * MAX_MB,
         limits.image_mb as u64 * MAX_MB,
         limits.files_mb as u64 * MAX_MB,
     )
@@ -1849,21 +1847,31 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let (text_limit, html_limit, image_limit, files_limit) = limit_bytes(&inner.settings.limits);
+    let (text_limit, image_limit, files_limit) = limit_bytes(&inner.settings.limits);
     let mut outgoing = ClipboardContent::default();
     if !content.text.is_empty() && content.text.len() as u64 <= text_limit {
         outgoing.text = content.text.clone();
     }
-    if !content.html.is_empty() && content.html.len() as u64 <= html_limit {
-        outgoing.html = content.html.clone();
-    }
+    // HTML 不再是独立通道（v0.9.0 bugfix 4.1）：读取端已经把 html 折成文件，
+    // 这里即使有残留也按文件走，接收端落盘成一个 .html 文件
     if let Some(image) = &content.image {
         if image.len() as u64 <= image_limit {
             outgoing.image = Some(image.clone());
         }
     }
     let mut total_files = 0u64;
-    for file in &content.files {
+    // HTML 折成文件（v0.9.0 bugfix 4.1）：读取端一般已经折过，这里是兜底（老前端、
+    // 或 CLI 直接喂 content 的路径），保证线上永远只有「文本 / 图片 / 文件」三档。
+    let html_as_file = if content.html.is_empty() {
+        None
+    } else {
+        Some(ClipboardFile {
+            name: "clipboard.html".to_string(),
+            path: None,
+            bytes: Some(content.html.clone().into_bytes()),
+        })
+    };
+    for file in content.files.iter().chain(html_as_file.iter()) {
         let Some(size) = file_size(file) else { continue };
         if total_files.saturating_add(size) > files_limit {
             break;
@@ -2104,8 +2112,8 @@ async fn receive_clipboard_claimed<R>(
 where
     R: AsyncRead + Unpin,
 {
-    let (text_limit, html_limit, image_limit, files_limit) = limit_bytes(&inner.settings.limits);
-    let hard_cap = files_limit.max(image_limit).max(text_limit).max(html_limit).saturating_mul(2);
+    let (text_limit, image_limit, files_limit) = limit_bytes(&inner.settings.limits);
+    let hard_cap = files_limit.max(image_limit).max(text_limit).saturating_mul(2);
     let total = header
         .text_size
         .saturating_add(header.html_size)
@@ -2116,29 +2124,46 @@ where
     }
     let types = &inner.settings.types;
     let accept_text = types.text && header.text_size > 0 && header.text_size <= text_limit;
-    let accept_html = types.html && header.html_size > 0 && header.html_size <= html_limit;
+    // HTML 当文件处理（v0.9.0 bugfix 4.1）：新对端的 html_size 恒为 0；老对端仍可能
+    // 发 html 段，收到就落盘成一个 .html 文件进 files 通道——类型勾选里已经没有
+    // HTML 这一档，它归「文件」管（大小也吃 files 的上限）。
+    let accept_html_as_file = types.files && header.html_size > 0 && header.html_size <= files_limit;
     let accept_image = types.image && header.image_size > 0 && header.image_size <= image_limit;
     let files_total: u64 = header.files.iter().map(|file| file.size).sum();
     let accept_files = types.files && !header.files.is_empty() && files_total <= files_limit;
 
     let mut content = ClipboardContent::default();
+    let mut files: Vec<ClipboardFile> = Vec::new();
+    if accept_files || accept_html_as_file {
+        tokio::fs::create_dir_all(&inner.save_dir)
+            .await
+            .map_err(|error| CoreError::io(format!("创建保存目录失败：{error}")))?;
+    }
     let text_bytes = read_blob(reader, session, header.text_size, accept_text).await?;
     if let Some(bytes) = text_bytes {
         content.text = String::from_utf8_lossy(&bytes).to_string();
     }
-    let html_bytes = read_blob(reader, session, header.html_size, accept_html).await?;
+    let html_bytes = read_blob(reader, session, header.html_size, accept_html_as_file).await?;
     if let Some(bytes) = html_bytes {
-        content.html = String::from_utf8_lossy(&bytes).to_string();
+        if !bytes.is_empty() {
+            let target = unique_target(&inner.save_dir, &sanitize_file_name("clipboard.html")).await?;
+            tokio::fs::write(&target, &bytes)
+                .await
+                .map_err(|error| CoreError::io(format!("写入接收文件失败：{error}")))?;
+            let name = target
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "clipboard.html".to_string());
+            files.push(ClipboardFile {
+                name,
+                path: Some(target),
+                bytes: None,
+            });
+        }
     }
     let image_bytes = read_blob(reader, session, header.image_size, accept_image).await?;
     if let Some(bytes) = image_bytes {
         content.image = Some(bytes);
-    }
-    let mut files = Vec::new();
-    if accept_files {
-        tokio::fs::create_dir_all(&inner.save_dir)
-            .await
-            .map_err(|error| CoreError::io(format!("创建保存目录失败：{error}")))?;
     }
     for file in &header.files {
         let target = if accept_files {
@@ -2295,7 +2320,6 @@ impl Inner {
             "kind": "remote",
             "content": {
                 "text": content.text,
-                "html": content.html,
                 "imagePath": image_path,
                 "files": files,
             },
@@ -2311,9 +2335,6 @@ fn describe_content(content: &ClipboardContent) -> String {
     let mut parts = Vec::new();
     if !content.text.is_empty() {
         parts.push("文本");
-    }
-    if !content.html.is_empty() {
-        parts.push("HTML");
     }
     if content.image.is_some() {
         parts.push("图片");

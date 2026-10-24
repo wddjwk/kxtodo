@@ -1,11 +1,11 @@
 /**
- * 固定导航（我的一天 / 计划内 / 收藏 / 日记 / 记账 / 定时任务 / 工具箱 / 钉住的工具）的目录。
+ * 固定导航（我的一天 / 计划内 / 收藏 / 日程 / 日记 / 记账 / 定时任务 / 工具箱 / 钉住的工具）的目录。
  *
- * 前四个是 `kind:"system"` 的节点（id 与 defaults.ts 的种子节点一致），日记/记账各是一个
- * 领域，工具箱是注册表驱动的整页视图（v0.7.5 起两端都有）。v0.8.3 起**工具也可以钉进来**
- * （`tool:<id>`）：右键工具箱条目「固定此工具」，就在这一块多一行直达该工具子视图。
- * 它们共用一套可见性与展示方式配置（`appearance.navItems` / `appearance.navLayout`），
- * 所以 id 必须在这一处对齐。
+ * my-day/planned/important/scheduled 是 `kind:"system"` 的节点（id 与 defaults.ts 的种子节点
+ * 一致），日程/日记/记账各是一个领域，工具箱是注册表驱动的整页视图（v0.7.5 起两端都有）。
+ * v0.8.3 起**工具也可以钉进来**（`tool:<id>`）：右键工具箱条目「固定此工具」，就在这一块
+ * 多一行直达该工具子视图。它们共用一套可见性与展示方式配置（`appearance.navItems` /
+ * `appearance.navLayout`），所以 id 必须在这一处对齐。
  */
 import { TOOL_CATALOG, type ToolId } from "./tools/catalog";
 
@@ -13,6 +13,7 @@ export type NavBaseId =
   | "my-day"
   | "planned"
   | "important"
+  | "calendar"
   | "diary"
   | "ledger"
   | "scheduled"
@@ -30,6 +31,7 @@ export const NAV_ITEM_IDS: readonly NavBaseId[] = [
   "my-day",
   "planned",
   "important",
+  "calendar",
   "diary",
   "ledger",
   "scheduled",
@@ -40,6 +42,7 @@ export const NAV_ITEM_LABELS: Record<NavBaseId, string> = {
   "my-day": "我的一天",
   planned: "计划内",
   important: "收藏",
+  calendar: "日程",
   diary: "日记",
   ledger: "记账",
   scheduled: "定时任务",
@@ -88,4 +91,18 @@ export function normalizeNavItems(raw: unknown): NavItemId[] {
 
 export function normalizeNavLayout(raw: unknown): NavLayout {
   return raw === "grid" || raw === "icons" ? raw : "list";
+}
+
+/**
+ * v0.9.0 的一次性注入：把新增的「日程」行插进**已存在的** navItems（默认位置在
+ * 「收藏」之后）。navItems 是本机设置、不同步，老用户的存量列表里没有 calendar——
+ * 不补这一笔，升级上来就看不到日程入口。只在水合后跑一次（localStorage 标记），
+ * 之后用户主动隐藏「日程」不会再被塞回来。
+ */
+export function insertCalendarNavItem(items: NavItemId[]): NavItemId[] {
+  if (items.includes("calendar")) return items;
+  const out = [...items];
+  const at = out.indexOf("important");
+  out.splice(at >= 0 ? at + 1 : out.length, 0, "calendar");
+  return out;
 }

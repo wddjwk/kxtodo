@@ -14,9 +14,9 @@
    * 子视图的头部（v0.8.4 需求 7）：不再有「返回工具箱」那一行——工具该拿到一块干净的
    * 画布；改成右上角两个按钮：左 = 回到工具箱，右 = ⋯ 菜单（只提供更换背景色 / 主题色）。
    */
-  import { ArrowLeft, MoreHorizontal, Pin, PinOff, Radio, RotateCcw, Toolbox } from "@lucide/svelte";
+  import { ArrowLeft, MoreHorizontal, Pin, PinOff, Plus, Radio, RotateCcw, Toolbox } from "@lucide/svelte";
   import MobileBack from "./MobileBack.svelte";
-  import { appSettings } from "./stores";
+  import { appSettings, scratchpadNewTab } from "./stores";
   import { setConfig } from "./actions";
   import { createBackGuard } from "./platform";
   import { setToolPinned } from "./actions";
@@ -276,6 +276,18 @@
         <strong class="toolbox-header-title">{activeTool.name}</strong>
       </span>
       <span class="toolbox-sub-bar-actions">
+        {#if activeToolId === "scratchpad"}
+          <!-- 草稿纸专属（v0.9.0）：⋯ 左侧的加号 = 新建标签页（状态住在 ScratchpadTool 里，经 store 递话） -->
+          <button
+            class="toolbox-icon-button"
+            type="button"
+            title="新建标签页"
+            aria-label="新建标签页"
+            on:click={() => scratchpadNewTab.update((count) => count + 1)}
+          >
+            <Plus size={19} />
+          </button>
+        {/if}
         <button
           class="toolbox-icon-button"
           type="button"

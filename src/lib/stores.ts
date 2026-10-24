@@ -1,9 +1,9 @@
 import { writable, derived, get } from "svelte/store";
-import type { AppNotification, AppState, AppNode, DiaryEditorTarget, DiaryEntry, EmojiPickerTarget, LedgerBook, LedgerEditorTarget, LedgerSide, NotificationTone, SchedulerState, SearchHit, Settings, Task } from "./types";
-import { cachedAppearance, cachedFeatures, cachedProfile, cachedState, defaultSchedulerRuntimes, defaultSettings, emptyState, normalizeDiaryEntries, normalizeLedger, normalizeState, normalizeSettings, schedulerRuntimeKeys, seedLedgerBook, writeAppearanceCache, writeFeaturesCache, writeProfileCache, writeStateCache } from "./defaults";
+import type { AppNotification, AppState, AppNode, CalendarEditorTarget, CalendarEvent, DiaryEditorTarget, DiaryEntry, EmojiPickerTarget, LedgerBook, LedgerEditorTarget, LedgerSide, NotificationTone, SchedulerState, SearchHit, Settings, Task } from "./types";
+import { cachedAppearance, cachedFeatures, cachedProfile, cachedState, defaultSchedulerRuntimes, defaultSettings, emptyState, normalizeCalendarEvents, normalizeDiaryEntries, normalizeLedger, normalizeState, normalizeSettings, schedulerRuntimeKeys, seedLedgerBook, writeAppearanceCache, writeFeaturesCache, writeProfileCache, writeStateCache } from "./defaults";
 import {
   loadState, saveState, loadSettings, saveSettings, loadScheduler, saveScheduler,
-  loadDiary, saveDiary, loadLedger, saveLedger,
+  loadDiary, saveDiary, loadLedger, saveLedger, loadCalendar, saveCalendar,
   registerGlobalShortcut, setCloseToTray, setAutostart,
   setWebviewZoom, isTauriRuntime, resolveExecutorPaths, sendNativeNotification,
   hasCoreDispatch, coreSnapshot, getAppVersion
@@ -140,6 +140,11 @@ export const weekStart = derived(appSettings, ($settings) => weekStartIndex($set
  * 它有自己的 revision 与域事件，塞进 appState 会让「只刷新日记」变成刷新整个数据域。
  */
 export const diaryEntries = writable<DiaryEntry[]>([]);
+/**
+ * 日程（calendar.json，独立的第六个领域，v0.9.0）。与日记同一待遇：自己的
+ * revision 与域事件，单独成 store——改一条日程不该惊动数据域。
+ */
+export const calendarEvents = writable<CalendarEvent[]>([]);
 export const isHydrated = writable(false);
 
 /**
@@ -230,6 +235,8 @@ export const ledgerData = writable<LedgerBook>({
 });
 /** 记账视图是否打开（桌面端）。移动端由 `mobileView === "ledger"` 驱动，见 platform.ts。 */
 export const ledgerOpen = writable(false);
+/** 日程视图是否打开（桌面端）。移动端由 `mobileView === "schedule"` 驱动，见 platform.ts。 */
+export const calendarOpen = writable(false);
 /** 工具箱是否占着主区域（桌面端，v0.7.5）。移动端由 `mobileView === "toolbox"` 驱动。 */
 export const toolboxOpen = writable(false);
 /**
@@ -238,10 +245,22 @@ export const toolboxOpen = writable(false);
  */
 export const ledgerEditor = writable<LedgerEditorTarget | null>(null);
 /**
+ * 正在编辑的日程（v0.9.0）：`{ id }` 改已有的一条，其余形状是新建（预置起止/全天/
+ * 关联任务，**保存时才落盘**——拖选时间后改主意直接关掉，不留空日程）。null = 关闭。
+ */
+export const calendarEditor = writable<CalendarEditorTarget | null>(null);
+/**
  * 记账面板里点了分类加号：请记账页打开分类管理的新增表单（可带预置的大类）。
  * 面板挂在 App 层、分类管理长在 LedgerView 上，两棵不相干的子树只能靠 store 递话。
  */
 export const ledgerCategoryDraft = writable<{ side: LedgerSide; parentId: string } | null>(null);
+
+/**
+ * 草稿纸「新建标签页」的请求计数（v0.9.0）：加号按钮长在 ToolboxView 的子页头部，
+ * 标签页状态住在 ScratchpadTool 里，两棵不相干的子树靠 store 递话（与
+ * ledgerCategoryDraft 同一套路）。计数增加 = 请求新建一个标签页。
+ */
+export const scratchpadNewTab = writable(0);
 
 // ---------------------------------------------------------------------------
 // Toast
@@ -320,6 +339,18 @@ export const selectedNode = derived(
 );
 
 export const listCounts = derived(appState, ($s) => buildListCounts($s));
+
+/**
+ * 「已加入日程」的 todo 条目 id 集合（v0.9.0）：任务卡片左侧的日程图标与
+ * 右键菜单的文案都查它。日程域一变（增删改/同步）自动重算。
+ */
+export const calendarTaskIds = derived(calendarEvents, ($events) => {
+  const ids = new Set<string>();
+  for (const event of $events) {
+    if (event.taskId) ids.add(event.taskId);
+  }
+  return ids;
+});
 
 /** 搜索的防抖副本。
  *  全局搜索每敲一个键都要扫任务 + 日记全文 + 全部流水，而 `visibleTasks` 与 `searchHits`
@@ -448,6 +479,7 @@ let settingsSaveTimer: number | undefined;
 let schedulerSaveTimer: number | undefined;
 let diarySaveTimer: number | undefined;
 let ledgerSaveTimer: number | undefined;
+let calendarSaveTimer: number | undefined;
 
 export function commit(next: AppState): void {
   appState.set(next);
@@ -473,6 +505,15 @@ export function commitLedger(next: LedgerBook): void {
   window.clearTimeout(ledgerSaveTimer);
   ledgerSaveTimer = window.setTimeout(() => {
     saveLedger(next).catch((error) => showToast(`保存账本失败：${String(error)}`));
+  }, 180);
+}
+
+export function commitCalendar(next: CalendarEvent[]): void {
+  calendarEvents.set(next);
+  if (!get(isHydrated)) return;
+  window.clearTimeout(calendarSaveTimer);
+  calendarSaveTimer = window.setTimeout(() => {
+    saveCalendar(next).catch((error) => showToast(`保存日程失败：${String(error)}`));
   }, 180);
 }
 
@@ -590,7 +631,7 @@ function applySnapshot(snapshot: Awaited<ReturnType<typeof coreSnapshot>>, domai
   // 这一份快照整体跳过——身份不变，订阅者一个都不惊动。
   const previous = new Map(appliedRevisions);
   noteRevisions(snapshot);
-  const advanced = (domain: "data" | "settings" | "diary" | "ledger" | "schedule"): boolean => {
+  const advanced = (domain: "data" | "settings" | "diary" | "ledger" | "schedule" | "calendar"): boolean => {
     const incoming = snapshot.revisions?.[domain];
     // 快照没带这个域的 revision（不该发生）就保守照旧应用
     if (typeof incoming !== "number") return true;
@@ -613,6 +654,9 @@ function applySnapshot(snapshot: Awaited<ReturnType<typeof coreSnapshot>>, domai
   }
   if ((wantAll || domains?.has("ledger")) && snapshot.ledger !== undefined && advanced("ledger")) {
     ledgerData.set(normalizeLedger(snapshot.ledger));
+  }
+  if ((wantAll || domains?.has("calendar")) && snapshot.calendar !== undefined && advanced("calendar")) {
+    calendarEvents.set(normalizeCalendarEvents(snapshot.calendar));
   }
   if ((wantAll || domains?.has("schedule")) && snapshot.schedule && advanced("schedule")) {
     const current = get(appState);
@@ -787,15 +831,17 @@ export async function hydrate(): Promise<void> {
   // 浏览器预览路径（移动端已是 core 模式）
   let loadedSettings = clone(defaultSettings);
   try {
-    const [storedState, storedScheduler, storedSettings, storedDiary, storedLedger, resolvedExecutors] = await Promise.all([
+    const [storedState, storedScheduler, storedSettings, storedDiary, storedLedger, storedCalendar, resolvedExecutors] = await Promise.all([
       loadState(),
       loadScheduler(),
       loadSettings(),
       loadDiary(),
       loadLedger(),
+      loadCalendar(),
       resolveExecutorPaths().catch(() => defaultSchedulerRuntimes)
     ]);
     diaryEntries.set(storedDiary);
+    calendarEvents.set(storedCalendar);
     const storedLedgerBook = normalizeLedger(storedLedger);
     if (storedLedgerBook.accounts.length === 0 && storedLedgerBook.entries.length === 0) {
       // 浏览器预览的首跑也要有种子账户/分类，与 core 的 ensure_initialized 同口径

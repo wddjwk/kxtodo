@@ -16,7 +16,7 @@ import {
   clipboardLocalChanged, clipboardStatus, listenClipboard,
   type ClipboardEvent, type ClipboardStatus
 } from "./backend";
-import { readNativeClipboard, writeNativeClipboard } from "./androidBridge";
+import { exportNativeImageToGallery, readNativeClipboard, writeNativeClipboard } from "./androidBridge";
 
 export const clipboardSyncStatus = writable<ClipboardStatus | null>(null);
 
@@ -57,10 +57,9 @@ function handleNativeClipboard(): void {
   }
   const content = readNativeClipboard();
   if (!content) return;
-  if (!content.text && !content.html && !content.imagePath && content.files.length === 0) return;
+  if (!content.text && !content.imagePath && content.files.length === 0) return;
   const signature = [
     content.text,
-    content.html,
     content.imagePath ? "image" : "",
     ...content.files.map((file) => `${file.name}:${file.path}`)
   ].join("\u0000");
@@ -82,6 +81,14 @@ async function handleEvent(event: ClipboardEvent): Promise<void> {
   if (error) {
     showToast(`写入本机剪切板失败：${error}`, 5000);
     return;
+  }
+  // 收到的图片另存一份进相册（v0.9.0 bugfix 4.2）：Pictures/kxtodo，相册里直接可见。
+  // 失败只提示不打断——剪切板里那一份已经写好了。
+  if (event.content.imagePath) {
+    const galleryError = exportNativeImageToGallery(event.content.imagePath);
+    if (galleryError && galleryError !== "需要存储权限") {
+      showToast(`图片没能存进相册：${galleryError}`, 5000);
+    }
   }
   await refreshClipboardStatus();
 }

@@ -1,7 +1,7 @@
 import { get, writable } from "svelte/store";
 import { onDestroy } from "svelte";
 import { platform as tauriPlatform } from "@tauri-apps/plugin-os";
-import { diaryEditor, editorDraftNode, editorTaskId, ledgerEditor, searchQuery, showSettings, taskEmojiPicker } from "./stores";
+import { calendarEditor, diaryEditor, editorDraftNode, editorTaskId, ledgerEditor, searchQuery, showSettings, taskEmojiPicker } from "./stores";
 
 /**
  * Mobile detection is intentionally user-agent based so the Windows desktop
@@ -61,7 +61,7 @@ export const hostOs: HostOs = detectHostOs();
  * Microsoft To-Do style mobile navigation: the app opens on the category list
  * and tapping an entry pushes the content view. The back button returns here.
  */
-export type MobileView = "list" | "content" | "toolbox" | "diary" | "ledger";
+export type MobileView = "list" | "content" | "toolbox" | "diary" | "ledger" | "schedule";
 
 export const mobileView = writable<MobileView>("list");
 
@@ -73,7 +73,9 @@ type MobileLayer =
   | "diary"
   | "diary-editor"
   | "ledger"
-  | "ledger-editor";
+  | "ledger-editor"
+  | "schedule"
+  | "schedule-editor";
 
 function currentLayer(): string | undefined {
   if (typeof history === "undefined") return undefined;
@@ -141,6 +143,19 @@ function handlePopState(event: PopStateEvent): void {
     case "ledger-editor":
       // 面板仍在顶层，由 ledgerEditor 订阅驱动，这里不回写 store
       break;
+    case "schedule":
+      // 也是「日程编辑器被返回键关掉」时落到的那一层
+      mobileView.set("schedule");
+      showSettings.set(false);
+      editorTaskId.set(null);
+      editorDraftNode.set(null);
+      diaryEditor.set(null);
+      ledgerEditor.set(null);
+      calendarEditor.set(null);
+      break;
+    case "schedule-editor":
+      // 编辑器仍在顶层，由 calendarEditor 订阅驱动，这里不回写 store
+      break;
     case "settings":
       // 设置页覆盖在列表之上：底层固定回列表视图
       mobileView.set("list");
@@ -160,6 +175,7 @@ function handlePopState(event: PopStateEvent): void {
       editorDraftNode.set(null);
       diaryEditor.set(null);
       ledgerEditor.set(null);
+      calendarEditor.set(null);
       break;
   }
   releaseGuardLater();
@@ -211,6 +227,16 @@ export function startMobileRouter(): void {
     if (target !== null) {
       if (currentLayer() !== "ledger-editor") pushLayer("ledger-editor");
     } else if (currentLayer() === "ledger-editor") {
+      history.back();
+    }
+  });
+
+  // 日程编辑器同一套路（v0.9.0；与其它编辑器互斥，不会同时开着）
+  calendarEditor.subscribe((target) => {
+    if (!get(isMobile) || applyingHistory) return;
+    if (target !== null) {
+      if (currentLayer() !== "schedule-editor") pushLayer("schedule-editor");
+    } else if (currentLayer() === "schedule-editor") {
       history.back();
     }
   });
@@ -404,10 +430,21 @@ export function showMobileLedger(): void {
   }
 }
 
+export function showMobileSchedule(): void {
+  if (!get(isMobile)) {
+    return;
+  }
+  mobileView.set("schedule");
+  // 已在日程层时不重复压栈（硬件返回键经 popstate 回列表）。
+  if (currentLayer() !== "schedule") {
+    pushLayer("schedule");
+  }
+}
+
 export function showMobileList(): void {
   if (get(isMobile) && typeof history !== "undefined") {
     const layer = currentLayer();
-    if (layer === "content" || layer === "toolbox" || layer === "diary" || layer === "ledger") {
+    if (layer === "content" || layer === "toolbox" || layer === "diary" || layer === "ledger" || layer === "schedule") {
       // Let popstate drive the state change so browser history stays in sync.
       history.back();
       return;

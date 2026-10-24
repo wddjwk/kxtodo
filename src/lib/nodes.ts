@@ -100,7 +100,9 @@ export function buildListCounts(state: AppState): Record<string, number> {
     } else if (node.id === "important") {
       counts[node.id] = important;
     } else if (node.id === "scheduled") {
-      counts[node.id] = state.scheduler.tasks.length;
+      // 角标只统计「调度中」的（v0.9.0 bugfix 3）：停用着的定时任务不该顶着一个
+      // 数字让人以为还有东西在跑
+      counts[node.id] = state.scheduler.tasks.filter((item) => item.enabled).length;
     } else if (node.kind === "entry") {
       counts[node.id] = plainEntryIds.has(node.id) ? 0 : byNode.get(node.id) ?? 0;
     } else if (node.kind === "category") {

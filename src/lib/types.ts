@@ -105,6 +105,48 @@ export type DiaryEntry = {
 /** 日记编辑器的目标：改已有的一篇（id），或新建一篇归到某天（date）。 */
 export type DiaryEditorTarget = { id: string } | { date: string };
 
+/** 日程视图（v0.9.0）：月 / 周 / 三日 / 日，默认周视图。 */
+export type CalendarViewMode = "month" | "week" | "threeday" | "day";
+
+/**
+ * 日程事件（calendar.json 的前端形态，与 core `model::CalendarEvent` 同构）。
+ * 时间是本地墙上时间：startDate/endDate 是 YYYY-MM-DD，startTime/endTime 是 HH:MM
+ * （全天事件为空）。`taskId` 非空 = 从 todo 条目「添加到日程」创建的关联事件，
+ * 详情与条目内容双向编辑。
+ */
+export type CalendarEvent = {
+  id: string;
+  title: string;
+  /** 详细信息（Markdown） */
+  details: string;
+  startDate: string;
+  startTime: string;
+  endDate: string;
+  endTime: string;
+  allDay: boolean;
+  /** 提醒规则（与任务共用一套）；beforeDue = 开始前 N 分钟（全天按 09:00 折算） */
+  reminders: ReminderRule[];
+  /** 关联的 todo 条目 id；空 = 独立日程 */
+  taskId: string;
+  createdAt: string;
+  updatedAt?: string;
+};
+
+/**
+ * 日程编辑器的目标：改已有的一条（id），或新建（预置起止/全天/关联任务）。
+ * 新建**保存时才落盘**——拖选时间后改主意直接关掉，不留空日程。
+ */
+export type CalendarEditorTarget =
+  | { id: string }
+  | {
+      startDate: string;
+      startTime?: string;
+      endDate?: string;
+      endTime?: string;
+      allDay?: boolean;
+      taskId?: string;
+    };
+
 /** 记账条目类型：转账不计入收支统计，只改两个账户的余额。 */
 export type LedgerKind = "expense" | "income" | "transfer";
 /** 分类归属侧：支出与收入各有一套分类。 */
@@ -295,6 +337,7 @@ export type Settings = {
     syncSchedules: boolean;
     syncDiary: boolean;
     syncLedger: boolean;
+    syncCalendar: boolean;
     intervalSeconds: number;
     reconnectSeconds: number;
   };
@@ -323,8 +366,9 @@ export type Settings = {
     account: string;
     /** 广域网共用密码（只存本机） */
     password: string;
-    types: { text: boolean; html: boolean; image: boolean; files: boolean };
-    limits: { textMb: number; htmlMb: number; imageMb: number; filesMb: number };
+    /** HTML 不再是独立一档（v0.9.0 bugfix 4.1）：剪切板里的 html 折成文件走 files */
+    types: { text: boolean; image: boolean; files: boolean };
+    limits: { textMb: number; imageMb: number; filesMb: number };
     /** 收到文件落盘目录；空 = 宿主下载目录下的 kxtodo-clipboard */
     saveDir: string;
   };
@@ -348,6 +392,10 @@ export type Settings = {
     weekStart: "monday" | "sunday";
     /** 临期高亮：off 不画；solid 按档取整色；gradient 按剩余时间在三个锚点间插值 */
     dueHighlight: "off" | "solid" | "gradient";
+    /** 安卓后台常驻（v0.9.0，本机设置不同步）：前台服务保活，同步与提醒在后台继续跑 */
+    androidKeepAlive: boolean;
+    /** 常驻通知的标语文本（默认「今天有什么要做的吗~」） */
+    keepAliveNotice: string;
   };
   /** 日记偏好。view 是本机状态；主题色与背景跟着设置同步走（外观该多端一致）。 */
   diary: {
@@ -362,6 +410,14 @@ export type Settings = {
   /** 记账偏好。与日记同一条口径：view 本机状态，外观跟着设置同步走。 */
   ledger: {
     view: LedgerViewMode;
+    accent: string;
+    backgroundColor: string;
+    backgroundImage: string;
+    backgroundOpacity: number;
+  };
+  /** 日程偏好（v0.9.0）。与日记/记账同一条口径：view 本机状态，外观跟着设置同步走。 */
+  calendar: {
+    view: CalendarViewMode;
     accent: string;
     backgroundColor: string;
     backgroundImage: string;
@@ -386,6 +442,14 @@ export type ListBackground = {
 };
 
 export type SchedulerRuntimeKey = "python" | "node" | "pwsh" | "bash" | "make";
+
+/** 草稿纸的一个标签页（v0.9.0）：名字默认 "1"/"2"/"3"…，正文纯文本。 */
+export type ScratchpadTab = {
+  id: string;
+  name: string;
+  text: string;
+  updatedAt?: string;
+};
 
 export type SchedulerRuntimePaths = Record<SchedulerRuntimeKey, string>;
 
@@ -500,7 +564,7 @@ export type AppState = {
   tasks: Task[];
   selectedNodeId: string;
   backgrounds: Record<string, ListBackground>;
-  /** 工具箱草稿纸（v0.8.4）：一段纯文本 + 版本戳，跟着数据域同步（LWW 整段覆盖） */
-  scratchpad: { text: string; updatedAt: string };
+  /** 工具箱草稿纸（v0.8.4；v0.9.0 标签页化）：多页纯文本 + 激活页，跟着数据域同步（LWW 整份覆盖） */
+  scratchpad: { tabs: ScratchpadTab[]; activeTabId: string; updatedAt: string };
   scheduler: SchedulerState;
 };

@@ -11,6 +11,7 @@ pub const SETTINGS_SCHEMA_VERSION: u32 = 1;
 pub const SCHEDULE_SCHEMA_VERSION: u32 = 2;
 pub const DIARY_SCHEMA_VERSION: u32 = 1;
 pub const LEDGER_SCHEMA_VERSION: u32 = 1;
+pub const CALENDAR_SCHEMA_VERSION: u32 = 1;
 
 /// 日记插图复用「按条目分目录」的图片通道（`img/data/<nodeId>/`），伪条目 id 固定为
 /// `diary`——与前端 `diary.ts` 的 DIARY_IMAGE_NODE 同名，图片存储与同步一行都不用改。
@@ -19,6 +20,10 @@ pub const DIARY_IMAGE_NODE: &str = "diary";
 /// 记账条目的附图（v0.7.4）走同一条图片通道，伪条目 id 固定为 `ledger`——与前端同名，
 /// 于是图片的存储/同步（entry 类别随「同步数据」范围）/释放空间盘点一行都不用改。
 pub const LEDGER_IMAGE_NODE: &str = "ledger";
+
+/// 日程事件的详情附图（v0.9.0）走同一条图片通道，伪条目 id 固定为 `calendar`——
+/// 与前端 `calendar.ts` 的 CALENDAR_IMAGE_NODE 同名。
+pub const CALENDAR_IMAGE_NODE: &str = "calendar";
 
 pub const SYSTEM_NODE_IDS: [&str; 4] = ["my-day", "planned", "important", "scheduled"];
 
@@ -96,7 +101,7 @@ pub struct DataFile {
     pub selected_node_id: String,
     #[serde(default)]
     pub backgrounds: Map<String, Value>,
-    /// 工具箱草稿纸（v0.8.4）：整篇一段纯文本，改了整段覆盖（LWW）。
+    /// 工具箱草稿纸（v0.8.4，v0.9.0 起带标签页）：多页纯文本，整体一个 LWW 实体。
     /// 住在数据域而不是 independent 的运行时文件里，因为它是**内容**——
     /// 换台设备该带着走（同步走 data 范围，实体 kind = scratchpad）。
     #[serde(default)]
@@ -106,13 +111,65 @@ pub struct DataFile {
     pub extra: Map<String, Value>,
 }
 
-/// 草稿纸：一段纯文本 + 它的版本戳（LWW 的实体时间戳就是 updatedAt）。
+/// 草稿纸（v0.9.0 标签页化）：多页纯文本 + 当前激活页，整体一个版本戳。
+///
+/// 两台设备各改**不同标签页**时整份互相覆盖——粒度是粗的，但与「同一份 markdown
+/// 整段覆盖」是同一个取舍谱系：草稿纸是便签不是协同文档，LWW 整份足够。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct Scratchpad {
+    #[serde(default)]
+    pub tabs: Vec<ScratchpadTab>,
+    /// 当前激活的标签页 id；空/失效 = 前端回落到第一页
+    #[serde(rename = "activeTabId", default)]
+    pub active_tab_id: String,
+    #[serde(rename = "updatedAt", default)]
+    pub updated_at: String,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
+}
+
+/// 草稿纸的一个标签页：名字默认 "1"/"2"/"3"…（用户可改），正文纯文本。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ScratchpadTab {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
     #[serde(default)]
     pub text: String,
     #[serde(rename = "updatedAt", default)]
     pub updated_at: String,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
+}
+
+impl Scratchpad {
+    /// 加载归一（v0.9.0，与 ledger 的 `fold_legacy_images` 同一性质）：v0.8.x 的旧形状
+    /// 是整篇一段 `text`——标签页化后旧键落进 extra。用户的便签是真内容，加载时折进
+    /// 第一个标签页（只读不写，重写后旧键自然消失），绝不静默丢掉。
+    pub fn fold_legacy_text(&mut self) {
+        if !self.tabs.is_empty() {
+            return;
+        }
+        let text = match self.extra.remove("text").and_then(|value| match value {
+            Value::String(text) => Some(text),
+            _ => None,
+        }) {
+            Some(text) if !text.trim().is_empty() => text,
+            _ => return,
+        };
+        self.tabs.push(ScratchpadTab {
+            id: "tab-1".to_string(),
+            name: "1".to_string(),
+            text,
+            updated_at: self.updated_at.clone(),
+            extra: Map::new(),
+        });
+        if self.active_tab_id.is_empty() {
+            self.active_tab_id = "tab-1".to_string();
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -379,6 +436,71 @@ pub struct DiaryFile {
     pub meta: DomainMeta,
     #[serde(default)]
     pub entries: Vec<DiaryEntry>,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
+}
+
+// ---------------------------------------------------------------------------
+// calendar.json
+// ---------------------------------------------------------------------------
+
+/// 日程事件（v0.9.0）：日历上的一段时间块。
+///
+/// 与「定时任务」（tasks.json / ScheduleEntry）是两回事——那个是「到点跑一段脚本」，
+/// 这个是「日历上的安排」。代码里一律用 calendar 命名，界面上叫「日程」。
+///
+/// 时间是**本地墙上时间**（与 dueDate/dueTime 同一口径）：`startDate`/`endDate` 是
+/// YYYY-MM-DD，`startTime`/`endTime` 是 HH:MM（空 = 没有时刻）。跨时区同步不做换算——
+/// 9 点的日程到哪台设备都是 9 点，这对个人日程是更符合直觉的语义。
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CalendarEvent {
+    pub id: String,
+    /// 标题；空 = 界面显示「(无标题)」
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    /// 详细信息（Markdown）。关联任务时与任务的 markdown **双向同步**
+    /// （改任何一边都写两边，见前端 actions 层的 linkedDetails 链）。
+    #[serde(default)]
+    pub details: String,
+    #[serde(rename = "startDate")]
+    pub start_date: String,
+    /// 开始时刻 HH:MM；全天事件为空
+    #[serde(rename = "startTime", default, skip_serializing_if = "String::is_empty")]
+    pub start_time: String,
+    #[serde(rename = "endDate")]
+    pub end_date: String,
+    /// 结束时刻 HH:MM；全天事件为空
+    #[serde(rename = "endTime", default, skip_serializing_if = "String::is_empty")]
+    pub end_time: String,
+    /// 全天事件：不占时间网格，显示在日/周视图顶部的全天栏
+    #[serde(rename = "allDay", default)]
+    pub all_day: bool,
+    /// 提醒规则（与任务共用 [`Reminder`]）：`BeforeDue` 的语义是「**开始前** N 分钟」，
+    /// 全天事件按当天 09:00 开始折算（业界通行做法）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reminders: Vec<Reminder>,
+    /// 关联的 todo 条目 id（右键「添加到日程」创建）；空 = 独立日程
+    #[serde(rename = "taskId", default, skip_serializing_if = "String::is_empty")]
+    pub task_id: String,
+    #[serde(rename = "createdAt", default)]
+    pub created_at: String,
+    #[serde(rename = "updatedAt", skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
+}
+
+/// calendar.json：日程是独立的领域文件（与日记同一条理由：写路径互不干扰）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct CalendarFile {
+    #[serde(rename = "schemaVersion", default)]
+    pub schema_version: u32,
+    #[serde(rename = "_meta", default)]
+    pub meta: DomainMeta,
+    #[serde(default)]
+    pub events: Vec<CalendarEvent>,
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
@@ -932,6 +1054,8 @@ pub struct SettingsFile {
     #[serde(default)]
     pub ledger: LedgerSettings,
     #[serde(default)]
+    pub calendar: CalendarSettings,
+    #[serde(default)]
     pub toolbox: ToolboxSettings,
     /// 设置同步实体的 LWW 时间戳（仅共享子集变化时刷新）。
     #[serde(rename = "syncUpdatedAt", default, skip_serializing_if = "Option::is_none")]
@@ -1145,11 +1269,12 @@ fn default_diary_font_size() -> u32 {
     18
 }
 
-/// 固定导航行的合法 id：前四个是 `kind:"system"` 的内置节点（注意是 `my-day` 不是
-/// `today`），后三个是前端渲染的伪行（日记/记账/工具箱）。`config set appearance.navItems`
-/// 拒绝这个集合之外的值——CLI/Agent 写进去一个不存在的 id 只会让那一行凭空消失。
-pub const NAV_ITEM_IDS: [&str; 7] = [
-    "my-day", "planned", "important", "diary", "ledger", "scheduled", "toolbox",
+/// 固定导航行的合法 id：其中 my-day/planned/important/scheduled 是 `kind:"system"` 的
+/// 内置节点（注意是 `my-day` 不是 `today`），calendar/diary/ledger/toolbox 是前端渲染的
+/// 伪行。`config set appearance.navItems` 拒绝这个集合之外的值——CLI/Agent 写进去一个
+/// 不存在的 id 只会让那一行凭空消失。
+pub const NAV_ITEM_IDS: [&str; 8] = [
+    "my-day", "planned", "important", "calendar", "diary", "ledger", "scheduled", "toolbox",
 ];
 
 /// 可以钉进固定导航的工具 id（v0.8.3，navItems 里写作 `tool:<id>`）。
@@ -1480,6 +1605,9 @@ pub struct SyncSettings {
     /// 同步账本（账户/分类/记账流水，默认开）
     #[serde(rename = "syncLedger", default = "default_true")]
     pub sync_ledger: bool,
+    /// 同步日程（calendar.json 的事件，默认开）
+    #[serde(rename = "syncCalendar", default = "default_true")]
+    pub sync_calendar: bool,
     /// 自动同步间隔（秒）
     #[serde(rename = "intervalSeconds", default = "default_sync_interval_seconds")]
     pub interval_seconds: u32,
@@ -1584,8 +1712,6 @@ pub struct ClipboardAcceptTypes {
     #[serde(default = "default_true")]
     pub text: bool,
     #[serde(default = "default_true")]
-    pub html: bool,
-    #[serde(default = "default_true")]
     pub image: bool,
     #[serde(default = "default_true")]
     pub files: bool,
@@ -1595,8 +1721,6 @@ pub struct ClipboardAcceptTypes {
 pub struct ClipboardLimits {
     #[serde(rename = "textMb", default = "default_clipboard_text_mb")]
     pub text_mb: u32,
-    #[serde(rename = "htmlMb", default = "default_clipboard_html_mb")]
-    pub html_mb: u32,
     #[serde(rename = "imageMb", default = "default_clipboard_image_mb")]
     pub image_mb: u32,
     #[serde(rename = "filesMb", default = "default_clipboard_files_mb")]
@@ -1605,9 +1729,6 @@ pub struct ClipboardLimits {
 
 fn default_clipboard_text_mb() -> u32 {
     1
-}
-fn default_clipboard_html_mb() -> u32 {
-    2
 }
 fn default_clipboard_image_mb() -> u32 {
     10
@@ -1618,7 +1739,7 @@ fn default_clipboard_files_mb() -> u32 {
 
 impl Default for ClipboardAcceptTypes {
     fn default() -> Self {
-        Self { text: true, html: true, image: true, files: true }
+        Self { text: true, image: true, files: true }
     }
 }
 
@@ -1626,7 +1747,6 @@ impl Default for ClipboardLimits {
     fn default() -> Self {
         Self {
             text_mb: default_clipboard_text_mb(),
-            html_mb: default_clipboard_html_mb(),
             image_mb: default_clipboard_image_mb(),
             files_mb: default_clipboard_files_mb(),
         }
@@ -1748,6 +1868,7 @@ impl Default for SyncSettings {
             sync_schedules: false,
             sync_diary: default_true(),
             sync_ledger: default_true(),
+            sync_calendar: default_true(),
             interval_seconds: default_sync_interval_seconds(),
             reconnect_seconds: default_sync_reconnect_seconds(),
             extra: Map::new(),
@@ -1807,9 +1928,22 @@ pub struct FeatureSettings {
     /// 临期高亮（v0.8.1）："off"（默认）/"solid" 按档取整色 /"gradient" 按剩余时间插值
     #[serde(rename = "dueHighlight", default = "default_due_highlight")]
     pub due_highlight: String,
+    /// 安卓后台常驻（v0.9.0，**本机设置不参与同步**）：开一个前台服务把进程留在
+    /// 前台组，同步与提醒才可能在应用退到后台后继续跑。默认关——常驻通知是一条
+    /// 一直挂在通知栏的东西，必须由用户自己决定要不要。
+    #[serde(rename = "androidKeepAlive", default)]
+    pub android_keep_alive: bool,
+    /// 常驻通知的标语文本（v0.9.0，本机设置）
+    #[serde(rename = "keepAliveNotice", default = "default_keep_alive_notice")]
+    pub keep_alive_notice: String,
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
+}
+
+/// 常驻通知的默认标语
+pub fn default_keep_alive_notice() -> String {
+    "今天有什么要做的吗~".to_string()
 }
 
 impl Default for FeatureSettings {
@@ -1824,6 +1958,8 @@ impl Default for FeatureSettings {
             week_start: default_week_start(),
             due_highlight: default_due_highlight(),
             link_render: default_link_render(),
+            android_keep_alive: false,
+            keep_alive_notice: default_keep_alive_notice(),
             extra: Map::new(),
         }
     }
@@ -1984,6 +2120,87 @@ impl Default for LedgerSettings {
             background_color: default_ledger_background_color(),
             background_image: String::new(),
             background_opacity: default_ledger_background_opacity(),
+            extra: Map::new(),
+        }
+    }
+}
+
+/// 日程视图（v0.9.0）：月 / 周 / 三日 / 日，默认周视图（业界主流日历的默认口径）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum CalendarView {
+    Month,
+    Week,
+    #[serde(rename = "threeday")]
+    ThreeDay,
+    Day,
+}
+
+impl Default for CalendarView {
+    fn default() -> Self {
+        CalendarView::Week
+    }
+}
+
+impl CalendarView {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CalendarView::Month => "month",
+            CalendarView::Week => "week",
+            CalendarView::ThreeDay => "threeday",
+            CalendarView::Day => "day",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "month" => Some(CalendarView::Month),
+            "week" => Some(CalendarView::Week),
+            "threeday" | "3day" | "three-day" => Some(CalendarView::ThreeDay),
+            "day" => Some(CalendarView::Day),
+            _ => None,
+        }
+    }
+}
+
+/// 日程偏好。与日记/记账同一条口径：`view` 是**本机 UI 状态**不进同步共享子集，
+/// 主题色与背景是**外观**跟着共享子集走。
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CalendarSettings {
+    #[serde(default)]
+    pub view: CalendarView,
+    /// 主题色（#rrggbb）；空 = 用默认日程色
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub accent: String,
+    /// 背景色（#rrggbb）
+    #[serde(rename = "backgroundColor", default = "default_calendar_background_color")]
+    pub background_color: String,
+    /// 背景图片：`img:<文件名>` 或 http(s)/data URL；空 = 无图
+    #[serde(rename = "backgroundImage", default, skip_serializing_if = "String::is_empty")]
+    pub background_image: String,
+    #[serde(rename = "backgroundOpacity", default = "default_calendar_background_opacity")]
+    pub background_opacity: f64,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
+}
+
+fn default_calendar_background_color() -> String {
+    "#eef1f5".to_string()
+}
+
+fn default_calendar_background_opacity() -> f64 {
+    0.28
+}
+
+impl Default for CalendarSettings {
+    fn default() -> Self {
+        Self {
+            view: CalendarView::default(),
+            accent: String::new(),
+            background_color: default_calendar_background_color(),
+            background_image: String::new(),
+            background_opacity: default_calendar_background_opacity(),
             extra: Map::new(),
         }
     }

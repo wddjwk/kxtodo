@@ -10,7 +10,7 @@
 //! 消费者，必须给 apply-tree-order 与 import-state 这两个实质业务写补 `notify_host`**，
 //! 否则另一个进程改了树、正在跑的 GUI 永远不会回刷。
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::core::{ExecContext, Invocation};
 use crate::envelope::Meta;
@@ -261,25 +261,46 @@ pub fn gui_dispatch(
             Ok(json!({ "nodeId": node_id }))
         }
         "set-scratchpad" => {
-            // 草稿纸（v0.8.4 需求 2）：整篇一段纯文本，写一次就是一条审计 + 一次
-            // revision（前端把防抖拉长到秒级，台账不会被逐键输入灌爆）。
-            let text = inv
+            // 草稿纸（v0.8.4 需求 2；v0.9.0 标签页化）：tabs + activeTabId 一次整份覆盖，
+            // 写一次就是一条审计 + 一次 revision（前端把防抖拉长到秒级，台账不会被
+            // 逐键输入灌爆）。结构校验只做底线：id 非空且不重复、名字截断。
+            let raw_tabs = inv
                 .params
-                .get("text")
+                .get("tabs")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let mut tabs: Vec<crate::model::ScratchpadTab> = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            for raw in raw_tabs {
+                let Ok(mut tab) = serde_json::from_value::<crate::model::ScratchpadTab>(raw) else {
+                    continue;
+                };
+                if tab.id.trim().is_empty() || !seen.insert(tab.id.clone()) {
+                    continue;
+                }
+                tab.name = tab.name.chars().take(40).collect();
+                tabs.push(tab);
+            }
+            let active_tab_id = inv
+                .params
+                .get("activeTabId")
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
             let stamp = crate::time::now_iso();
             let (_file, outcome) = ctx.repo.write_data(None, None, &inv.command, |file| {
                 file.scratchpad = crate::model::Scratchpad {
-                    text: text.clone(),
+                    tabs: tabs.clone(),
+                    active_tab_id: active_tab_id.clone(),
                     updated_at: stamp.clone(),
+                    extra: Map::new(),
                 };
-                Ok(json!({ "updatedAt": stamp }))
+                Ok(json!({ "updatedAt": stamp, "tabs": tabs.len() }))
             })?;
             meta.revision_domain = Some(Domain::Data);
             meta.revision = Some(outcome.revision);
-            Ok(json!({ "text": text, "updatedAt": stamp }))
+            Ok(json!({ "tabs": tabs.len(), "activeTabId": active_tab_id, "updatedAt": stamp }))
         }
         "apply-tree-order" => {
             let ordered_ids: Vec<String> = inv

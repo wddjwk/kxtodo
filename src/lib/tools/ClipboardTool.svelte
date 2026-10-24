@@ -11,6 +11,7 @@
     ChevronDown,
     ClipboardCopy,
     FolderOpen,
+    FolderOutput,
     Info,
     RefreshCw,
     Save,
@@ -18,9 +19,12 @@
   } from "@lucide/svelte";
   import { appSettings, showToast } from "../stores";
   import { configureClipboard, setClipboardPeer } from "../actions";
-  import { isMobile, createBackGuard } from "../platform";
-  import { clipboardDefaultDir, clipboardRefresh, pickDirectory } from "../backend";
+  import { isMobile, createBackGuard, hostOs } from "../platform";
+  import { clipboardDefaultDir, clipboardRefresh, pickDirectory, transferOpenPath } from "../backend";
   import { clipboardSyncStatus, refreshClipboardStatus } from "../clipboardSyncStore";
+  import { listNativeSaveDirs, openNativeFolder, type NativeSaveDir } from "../androidBridge";
+  import ContextMenu from "../menu/ContextMenu.svelte";
+  import MenuItem from "../menu/MenuItem.svelte";
   import type { ClipboardPeer } from "../backend";
   import type { Settings } from "../types";
 
@@ -97,7 +101,6 @@
       ...next,
       limits: {
         textMb: Math.min(64, Math.max(1, Math.round(Number(next.limits.textMb) || 1))),
-        htmlMb: Math.min(64, Math.max(1, Math.round(Number(next.limits.htmlMb) || 1))),
         imageMb: Math.min(256, Math.max(1, Math.round(Number(next.limits.imageMb) || 1))),
         filesMb: Math.min(1024, Math.max(1, Math.round(Number(next.limits.filesMb) || 1)))
       }
@@ -166,6 +169,49 @@
 
   function resetDir(): void {
     draft = { ...draft, saveDir: "" };
+  }
+
+  // ---- 保存位置三件事（v0.9.0 bugfix 4.2）：打开文件夹 / 选择路径 / 设置默认 ----
+
+  const isAndroid = hostOs === "android";
+  let dirMenu: { x: number; y: number; anchor: HTMLElement } | null = null;
+  let nativeDirs: NativeSaveDir[] = [];
+  const backGuardDirMenu = createBackGuard();
+  $: backGuardDirMenu(dirMenu !== null, () => (dirMenu = null));
+
+  /** 打开文件夹：桌面走系统资源管理器；安卓尽力而为（相册集合 / DocumentsUI）。 */
+  async function openSaveDir(): Promise<void> {
+    const target = draft.saveDir.trim() || defaultDir;
+    if (!target) {
+      showToast("保存位置还没确定，先保存一次设置", 3500);
+      return;
+    }
+    if (isAndroid) {
+      const error = openNativeFolder(target);
+      if (error) showToast(error, 6000);
+      return;
+    }
+    try {
+      await transferOpenPath(target);
+    } catch (error) {
+      showToast(`打开文件夹失败：${String(error)}`, 5000);
+    }
+  }
+
+  /** 选择路径：桌面是系统目录对话框；安卓给一份真实可写的候选目录菜单。 */
+  function openDirPicker(event: MouseEvent): void {
+    const button = event.currentTarget as HTMLElement;
+    if (!isAndroid) {
+      void chooseDir();
+      return;
+    }
+    nativeDirs = listNativeSaveDirs();
+    if (nativeDirs.length === 0) {
+      showToast("拿不到可选目录", 4000);
+      return;
+    }
+    const rect = button.getBoundingClientRect();
+    dirMenu = { x: rect.right, y: rect.bottom + 6, anchor: button };
   }
 </script>
 
@@ -271,24 +317,54 @@
           (draft = { ...draft, deviceName: (event.currentTarget as HTMLInputElement).value })}
       />
     </label>
-    <div class="clipboard-field-inline">
+    <div class="clipboard-field-inline clipboard-dir-field">
       <span>文件保存位置</span>
       <div class="clipboard-dir-row">
-        <input
-          class="clipboard-text-input"
+        <!-- 路径要完整看得见（v0.9.0 bugfix 4.2）：单行 input 只能省略号截断，
+             换成两行可折行的 textarea（仍可手改），安卓的长路径不再藏头露尾 -->
+        <textarea
+          class="clipboard-text-input clipboard-dir-input"
+          rows="2"
           value={draft.saveDir}
           spellcheck="false"
           placeholder={defaultDir || "下载目录 / kxtodo-clipboard"}
           on:input={(event) =>
-            (draft = { ...draft, saveDir: (event.currentTarget as HTMLInputElement).value })}
-        />
-        <button class="menu-action-button" type="button" title="选择目录" on:click={() => void chooseDir()}>
-          <FolderOpen size={13} />
-        </button>
-        <button class="menu-action-button" type="button" title="恢复默认" on:click={resetDir}>默认</button>
+            (draft = { ...draft, saveDir: (event.currentTarget as HTMLTextAreaElement).value })}
+        ></textarea>
+        <span class="clipboard-dir-actions">
+          <button class="menu-action-button" type="button" title="打开文件夹" on:click={() => void openSaveDir()}>
+            <FolderOutput size={13} />
+          </button>
+          <button class="menu-action-button" type="button" title="选择路径" on:click={openDirPicker}>
+            <FolderOpen size={13} />
+          </button>
+          <button class="menu-action-button" type="button" title="恢复默认保存位置" on:click={resetDir}>默认</button>
+        </span>
       </div>
     </div>
   </section>
+
+  {#if dirMenu}
+    <ContextMenu
+      x={dirMenu.x}
+      y={dirMenu.y}
+      xAlign="right"
+      anchor={dirMenu.anchor}
+      minWidth={220}
+      onClose={() => (dirMenu = null)}
+    >
+      {#each nativeDirs as dir (dir.path)}
+        <MenuItem
+          label={dir.label}
+          active={draft.saveDir === dir.path}
+          onSelect={() => {
+            draft = { ...draft, saveDir: dir.path };
+            dirMenu = null;
+          }}
+        />
+      {/each}
+    </ContextMenu>
+  {/if}
 
   <section class="clipboard-card">
     <button class="clipboard-section-head" type="button" on:click={() => (methodsOpen = !methodsOpen)}>
@@ -426,10 +502,8 @@
           <label class="checkbox-line"><input type="checkbox" bind:checked={draft.types.text} />文字</label>
           <input class="clipboard-limit" type="number" min="1" max="64" bind:value={draft.limits.textMb} /><span>MB</span>
         </div>
-        <div class="clipboard-type-row">
-          <label class="checkbox-line"><input type="checkbox" bind:checked={draft.types.html} />HTML</label>
-          <input class="clipboard-limit" type="number" min="1" max="64" bind:value={draft.limits.htmlMb} /><span>MB</span>
-        </div>
+        <!-- HTML 不再是独立一档（v0.9.0 bugfix 4.1）：剪切板里的 html 折成 .html 文件
+             走「文件」这一档（大小也吃文件的上限），界面上不再单列 -->
         <div class="clipboard-type-row">
           <label class="checkbox-line"><input type="checkbox" bind:checked={draft.types.image} />图片</label>
           <input class="clipboard-limit" type="number" min="1" max="256" bind:value={draft.limits.imageMb} /><span>MB</span>

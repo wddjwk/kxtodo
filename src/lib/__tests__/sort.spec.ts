@@ -87,6 +87,17 @@ describe("截止排序（需求 7：时刻要参与比较）", () => {
     expect(names(sortTasks([undated, timed], "due-desc"))).toEqual(["带时刻", "没日期"]);
   });
 
+  it("没日期的一组内部按创建时间由近及远（新建的排第一个，v0.9.0 bugfix 6）", () => {
+    const old = { ...task("老"), createdAt: "2024-03-01T00:00:00Z" };
+    const mid = { ...task("中"), createdAt: "2025-06-01T00:00:00Z" };
+    const fresh = { ...task("新"), createdAt: "2026-09-01T00:00:00Z" };
+    // 两个方向都一样：沉底块内永远是新在前
+    expect(names(sortTasks([old, fresh, mid], "due-asc"))).toEqual(["新", "中", "老"]);
+    expect(names(sortTasks([mid, old, fresh], "due-desc"))).toEqual(["新", "中", "老"]);
+    // 有日期的仍然整块在上面
+    expect(names(sortTasks([old, timed, fresh], "due-asc"))).toEqual(["带时刻", "新", "老"]);
+  });
+
   it("完全同刻平手（交给稳定性，不瞎排）", () => {
     const a = task("甲", today, "09:00");
     const b = task("乙", today, "09:00");

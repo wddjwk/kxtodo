@@ -242,13 +242,13 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   const transferAmount = await page.textContent(".ledger-entry:has-text('转账') .ledger-entry-amount");
   check("转账金额不带正负号", transferAmount?.trim() === "12.34", transferAmount ?? "");
 
-  // 设置页同步内容：五个勾选框（数据/设置/任务/日记/账本）
+  // 设置页同步内容：六个勾选框（数据/设置/任务/日记/账本/日程，v0.9.0 加日程）
   await page.keyboard.press("Control+,");
   await page.waitForSelector("aside.settings-drawer", { timeout: 8000 });
   const scopes = await page.$$eval(".sync-scope", (els) => els.map((el) => el.textContent?.trim() ?? ""));
   check(
-    "同步内容含日记与账本勾选框",
-    scopes.length === 5 && scopes.includes("日记") && scopes.includes("账本"),
+    "同步内容含日记、账本与日程勾选框",
+    scopes.length === 6 && scopes.includes("日记") && scopes.includes("账本") && scopes.includes("日程"),
     scopes.join(",")
   );
 

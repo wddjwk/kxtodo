@@ -156,6 +156,14 @@ pub enum Commands {
         #[command(subcommand)]
         action: DiaryAction,
     },
+    /// 读写日程（日历上的时间安排，支持提醒与关联任务）
+    #[command(
+        long_about = "日程与「定时任务」（schedule）是两回事：schedule 是「到点跑一段脚本」，\ncalendar 是「日历上的安排」（界面上叫「日程」）。日程住在自己的 calendar.json 里\n（独立领域文件，独立 revision 与域事件，参与同步）。\n\n时间是本地墙上时间：--start/--end 接受 `YYYY-MM-DD`（= 全天）或 `YYYY-MM-DD[ T]HH:MM`；\n--end 只给 `HH:MM` 时沿用 --start 的日期；定时事件不给 --end 默认一小时。\n\n动作：\n  add      新建日程（--title 标题、--details 详情 Markdown、--reminder 提醒，可重复）\n  get      按稳定 ID 读取\n  list     列出（--date 某天 / --from --to 区间（交叠即命中）/ --task 只看某任务的日程；\n           另有 --limit/--cursor/--all，不传 --limit 返回全部）\n  modify   修改（时间、标题、详情、提醒、关联任务）\n  remove   删除（high-risk-write）\n\n示例：\n  kxtodo-cli calendar add --title \"周会\" --start \"2026-10-25 09:00\" --end 10:30 --reminder due-15\n  kxtodo-cli calendar add --title \"出差\" --start 2026-11-01 --end 2026-11-03 --reminder \"2026-10-31T20:00:00+08:00\"\n  kxtodo-cli calendar list --from 2026-10-01 --to 2026-10-31\n  kxtodo-cli calendar modify --id cal-xxxx --start \"2026-10-25 14:00\"\n  kxtodo-cli calendar remove --id cal-xxxx --yes"
+    )]
+    Calendar {
+        #[command(subcommand)]
+        action: CalendarAction,
+    },
     /// 记账：收支流水、资金账户、两级分类、统计与 Excel 导入导出
     #[command(
         long_about = "记账与 diary 平行但自成一域：账本住在自己的 ledger.json 里（第五个领域文件）。\n金额一律按「元」输入（CLI 与 Excel 都是两位小数的元），core 内部存整数分。\n转账（transfer）不计入收支统计，只改两个账户的余额。\n\n**金融数据敏感**：所有写动作（add/transfer/modify/remove/account-add/account-modify/account-remove/\ncategory-add/category-modify/category-remove/import）一律 high-risk-write——必须先向用户说明这次改动\n并得到明确同意，再带 --yes 执行；未带 --yes 返回退出码 10。\n读动作（get/list/accounts/categories/stats/balance/export）永远不需要确认。\n\n动作：\n  add            记一笔（--kind expense|income，--amount 元，--account 账户名或 ID）\n  transfer       账户间转账（--from --to --amount）\n  get / list     读取 / 列出（--date 某天、--from --to 区间、--kind、--account、--category；list 另有 --limit/--cursor/--all，不传 --limit 返回全部）\n  modify         修改一笔\n  remove         删除一笔\n  accounts       列出账户与各自余额、净资产\n  account-add / account-modify / account-remove   账户管理（名下有账的账户不让删）\n  categories     列出分类（--side expense|income）：平铺数组按树序排列——大类后面紧跟它自己的子分类，\n                 每项带 depth（0 大类 / 1 子分类）与 parentId，不必自己聚合\n  category-add / category-modify / category-remove 分类管理（删大类连带子分类）\n  stats          统计：--month 2026-09 或 --year 2026 或 --from --to；输出合计、逐日/逐月序列（区间 ≤62 天按天且 series 严格跟着 --from/--to，更长按月）、大类占比\n                 （不带 --side 时收入与支出混在同一个 categories 数组里，percent 按侧各自合计 100%，别相加）\n  balance        资产：各账户余额 + 净资产/总资产/总负债\n  export         导出 zip（内含 kxtodo-ledger.xlsx：说明/账户/分类/账目 四张表）\n  import         从导出的 zip 或裸 xlsx 导入（账户/分类按名字合并，缺的自动建）\n\n示例：\n  kxtodo-cli ledger add --amount 30 --account 微信 --category 午餐 --note 小面 --yes\n  kxtodo-cli ledger add --kind income --amount 18155 --account 储蓄卡 --category 工资薪金 --yes\n  kxtodo-cli ledger transfer --from 储蓄卡 --to 微信 --amount 2000 --yes\n  kxtodo-cli ledger list --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli ledger stats --month 2026-09\n  kxtodo-cli ledger balance\n  kxtodo-cli ledger export --out kxtodo-ledger.zip\n  kxtodo-cli ledger export --out 2026-09.zip --from 2026-09-01 --to 2026-09-30\n  kxtodo-cli ledger import --file kxtodo-ledger.zip --yes"
@@ -770,6 +778,131 @@ pub struct DiaryImportArgs {
     /// 要导入的压缩包路径
     #[arg(long, value_name = "path")]
     pub zip: String,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CalendarAction {
+    /// 新建日程（Risk: write）
+    #[command(
+        visible_alias = "create",
+        long_about = "Risk: write\n\n新建一条日程。--start 接受 `YYYY-MM-DD`（= 全天事件）或 `YYYY-MM-DD[ T]HH:MM`；\n--end 同样两种写法，且可以只给 `HH:MM`（沿用 --start 的日期）；定时事件不给 --end\n默认一小时（跨午夜自动进位）。--reminder 可重复：`due-<分钟>` = 开始前 N 分钟\n（全天事件按当天 09:00 折算），或绝对时刻（RFC3339 / +30m / +1h / +2d）。\n--task 关联一个 todo 条目（条目上会显示日程图标，详情与条目内容双向编辑）。\n\n输出：创建后的完整资源（含系统生成的 ID）。\n\n示例：\n  kxtodo-cli calendar add --title \"周会\" --start \"2026-10-25 09:00\" --end 10:30 --reminder due-15\n  kxtodo-cli calendar add --title \"出差\" --start 2026-11-01 --end 2026-11-03\n\n建议：Agent 调用使用 --idempotency-key 防重试重复创建。"
+    )]
+    Add(CalendarAddArgs),
+    /// 按稳定 ID 获取一条日程（Risk: read）
+    #[command(long_about = "Risk: read\n\n按 --id 精确读取，输出含详情 Markdown 全文与提醒规则。")]
+    Get(CalendarIdArgs),
+    /// 列出日程（Risk: read）
+    #[command(
+        long_about = "Risk: read\n\n按开始时间由早到晚输出（同刻全天在前）。--date 只看与某天交叠的日程；\n--from/--to 限定日期区间（事件的 [startDate, endDate] 与区间有交集即命中）；\n--task 只列某个 todo 条目关联的日程。\n分页：--limit 截断条数（不传则返回全部）、--cursor 翻页、--all 强制全部。\ndata.total 是**过滤后**命中的条数（同一个值也写进 meta.count），data.returned 是本页条数。\n\n示例：\n  kxtodo-cli calendar list --date 2026-10-25\n  kxtodo-cli calendar list --from 2026-10-01 --to 2026-10-31\n  kxtodo-cli calendar list --task item-xxxx"
+    )]
+    List(CalendarListArgs),
+    /// 修改一条日程（Risk: write）
+    #[command(
+        visible_alias = "update",
+        long_about = "Risk: write\n\n按稳定 ID 修改。时间字段的口径与 add 相同（--end 只给 HH:MM 时沿用开始日期）。\n**挪动语义**：只改开始（日期或时刻）而没给 --end 时，结束跟着平移、保持原时长\n（与日历应用拖动事件一致）；要改时长就把 --end 一起给。\n--all-day true|false 切换全天；--title/--details 传空串即清除；\n--reminder 给一组就整体替换提醒（一组都不给 = 不动，给空 = 清空）；\n--task 传空串解除关联。\n\n示例：\n  kxtodo-cli calendar modify --id cal-xxxx --start \"2026-10-25 14:00\"\n  kxtodo-cli calendar modify --id cal-xxxx --start \"2026-10-25 14:00\" --end 15:30\n  kxtodo-cli calendar modify --id cal-xxxx --reminder due-30\n  kxtodo-cli calendar modify --id cal-xxxx --task \"\""
+    )]
+    Modify(CalendarModifyArgs),
+    /// 删除一条日程（Risk: high-risk-write）
+    #[command(
+        visible_alias = "delete",
+        long_about = "Risk: high-risk-write\n\n删除一条日程并写同步墓碑（删除会传播到其它设备）。关联的 todo 条目**不会**被删。\n未带 --yes 返回退出码 10。\n\n示例：kxtodo-cli calendar remove --id cal-xxxx --yes"
+    )]
+    Remove(CalendarIdArgs),
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarIdArgs {
+    /// 稳定 ID
+    #[arg(long, value_name = "id")]
+    pub id: String,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarAddArgs {
+    /// 标题
+    #[arg(long, value_name = "text", allow_hyphen_values = true)]
+    pub title: Option<String>,
+    /// 详情 Markdown（与 --details-file 二选一）
+    #[arg(long, value_name = "text", conflicts_with = "details_file", allow_hyphen_values = true)]
+    pub details: Option<String>,
+    /// 从文件或标准输入读取详情 Markdown
+    #[arg(long, value_name = "path|-")]
+    pub details_file: Option<String>,
+    /// 开始：YYYY-MM-DD（全天）或 YYYY-MM-DD[ T]HH:MM（缺省为今天）
+    #[arg(long, value_name = "datetime")]
+    pub start: Option<String>,
+    /// 结束：同 --start，也可以只给 HH:MM（沿用开始日期；缺省 = 开始 + 1 小时）
+    #[arg(long, value_name = "datetime")]
+    pub end: Option<String>,
+    /// 全天事件（--start 只给日期时自动视为全天）
+    #[arg(long)]
+    pub all_day: bool,
+    /// 提醒（可重复）：due-<分钟> 或绝对时刻（RFC3339 / +30m / +1h / +2d）
+    #[arg(long = "reminder", value_name = "spec")]
+    pub reminders: Vec<String>,
+    /// 关联的 todo 条目 ID
+    #[arg(long, value_name = "id")]
+    pub task: Option<String>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarListArgs {
+    /// 只看与某一天交叠的日程
+    #[arg(long, value_name = "date")]
+    pub date: Option<String>,
+    /// 起始日期（含）
+    #[arg(long, value_name = "date")]
+    pub from: Option<String>,
+    /// 结束日期（含）
+    #[arg(long, value_name = "date")]
+    pub to: Option<String>,
+    /// 只列某个 todo 条目关联的日程
+    #[arg(long, value_name = "id")]
+    pub task: Option<String>,
+    /// 最多返回条数（不传则返回全部）
+    #[arg(long, value_name = "n")]
+    pub limit: Option<u64>,
+    /// 分页游标（取上一页 meta.nextCursor）
+    #[arg(long, value_name = "cursor")]
+    pub cursor: Option<String>,
+    /// 输出全部（忽略分页）
+    #[arg(long)]
+    pub all: bool,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarModifyArgs {
+    /// 稳定 ID
+    #[arg(long, value_name = "id")]
+    pub id: String,
+    /// 新标题（空串清除）
+    #[arg(long, value_name = "text", allow_hyphen_values = true)]
+    pub title: Option<String>,
+    /// 替换详情 Markdown（空串清除；与 --details-file 二选一）
+    #[arg(long, value_name = "text", conflicts_with = "details_file", allow_hyphen_values = true)]
+    pub details: Option<String>,
+    /// 从文件或标准输入读取详情 Markdown
+    #[arg(long, value_name = "path|-")]
+    pub details_file: Option<String>,
+    /// 新开始：YYYY-MM-DD 或 YYYY-MM-DD[ T]HH:MM
+    #[arg(long, value_name = "datetime")]
+    pub start: Option<String>,
+    /// 新结束：同 --start，也可以只给 HH:MM（沿用开始日期）
+    #[arg(long, value_name = "datetime")]
+    pub end: Option<String>,
+    /// 切换全天
+    #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
+    pub all_day: Option<bool>,
+    /// 整体替换提醒列表（给了就替换；一个都不给 = 不动）
+    #[arg(long = "reminder", value_name = "spec", num_args = 0..)]
+    pub reminders: Option<Vec<String>>,
+    /// 关联/解除关联 todo 条目（空串解除）
+    #[arg(long, value_name = "id")]
+    pub task: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1547,6 +1680,9 @@ pub struct SyncPairArgs {
     /// 同步账本（账户/分类/记账流水，默认开）
     #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
     pub sync_ledger: Option<bool>,
+    /// 同步日程（默认开）
+    #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
+    pub sync_calendar: Option<bool>,
 }
 
 #[derive(Debug, Args, Serialize)]
@@ -1599,6 +1735,9 @@ pub struct SyncConfigureArgs {
     /// 同步账本（账户/分类/记账流水）
     #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
     pub sync_ledger: Option<bool>,
+    /// 同步日程
+    #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
+    pub sync_calendar: Option<bool>,
     /// 自动同步间隔（秒）
     #[arg(long, value_name = "5-86400")]
     pub interval_seconds: Option<u64>,
@@ -1893,6 +2032,9 @@ fn supports_idempotency(command: &str) -> bool {
             | "diary.modify"
             | "diary.remove"
             | "diary.import"
+            | "calendar.add"
+            | "calendar.modify"
+            | "calendar.remove"
             | "ledger.add"
             | "ledger.transfer"
             | "ledger.modify"
@@ -2041,6 +2183,7 @@ fn version_data() -> Value {
             "schedule": crate::model::SCHEDULE_SCHEMA_VERSION,
             "diary": crate::model::DIARY_SCHEMA_VERSION,
             "ledger": crate::model::LEDGER_SCHEMA_VERSION,
+            "calendar": crate::model::CALENDAR_SCHEMA_VERSION,
         }
     })
 }
@@ -2074,6 +2217,7 @@ fn build_invocation(cli: &Cli, cwd: &Path) -> CoreResult<Option<(Invocation, Opt
         }
         Commands::Task { action } => build_task_invocation(action)?,
         Commands::Diary { action } => build_diary_invocation(action)?,
+        Commands::Calendar { action } => build_calendar_invocation(action)?,
         Commands::Ledger { action } => build_ledger_invocation(action)?,
         Commands::Storage { action } => build_storage_invocation(action)?,
         Commands::Schedule { action } => build_schedule_invocation(action)?,
@@ -2326,6 +2470,161 @@ fn build_diary_invocation(action: &DiaryAction) -> CoreResult<Invocation> {
                 }),
             )
         }
+    };
+    Ok(Invocation::new(name, params))
+}
+
+/// `--start`/`--end` 的组合写法拆开：`YYYY-MM-DD` / `YYYY-MM-DD[ T]HH:MM` / 纯 `HH:MM`。
+/// 返回 (日期段, 时刻段)——哪段没给就是 None，由调用方决定缺省语义。
+fn split_calendar_datetime(raw: &str) -> CoreResult<(Option<String>, Option<String>)> {
+    let text = raw.trim();
+    if text.is_empty() {
+        return Err(CoreError::validation(
+            "INVALID_DATETIME",
+            "--start/--end 不能是空串（要清除时刻用 --all-day）",
+        ));
+    }
+    // 纯时刻：HH:MM（长度 ≤5 且带冒号；日期至少 8 位不会误判）
+    if text.len() <= 5 && text.contains(':') {
+        return Ok((None, Some(text.to_string())));
+    }
+    match text.split_once(['T', 't', ' ']) {
+        Some((date, time)) => {
+            let time = time.trim();
+            Ok((
+                Some(date.trim().to_string()),
+                if time.is_empty() { None } else { Some(time.to_string()) },
+            ))
+        }
+        None => Ok((Some(text.to_string()), None)),
+    }
+}
+
+/// 把 CLI 的 --start/--end/--all-day/--task 折成 core 认的离散参数。
+/// `for_add`：日期段缺省由 core 补今天，只给日期 = 全天（startTime 清空）；
+/// modify 语义更保守——只给日期就只改日期（不动时刻），切换全天走 --all-day。
+fn apply_calendar_range(
+    params: &mut serde_json::Map<String, serde_json::Value>,
+    start: &Option<String>,
+    end: &Option<String>,
+    all_day: Option<bool>,
+    for_add: bool,
+) -> CoreResult<()> {
+    let mut start_date: Option<String> = None;
+    if let Some(raw) = start {
+        let (date, time) = split_calendar_datetime(raw)?;
+        if let Some(date) = date {
+            params.insert("startDate".to_string(), Value::String(date.clone()));
+            start_date = Some(date);
+        }
+        match time {
+            Some(time) => {
+                params.insert("startTime".to_string(), Value::String(time));
+            }
+            // add：只给日期 = 全天（core 见到空时刻自动置 allDay）；
+            // modify：只改日期不动时刻
+            None if for_add => {
+                params.insert("startTime".to_string(), Value::String(String::new()));
+            }
+            None => {}
+        }
+    }
+    if let Some(raw) = end {
+        let (date, time) = split_calendar_datetime(raw)?;
+        match date {
+            Some(date) => {
+                params.insert("endDate".to_string(), Value::String(date));
+            }
+            // 只给时刻：沿用开始日期（add 是显式补，modify 只在同给了 --start 时补，
+            // 否则不动 endDate——core 保留事件原来的结束日期）
+            None => {
+                if let Some(date) = &start_date {
+                    params.insert("endDate".to_string(), Value::String(date.clone()));
+                }
+            }
+        }
+        match time {
+            Some(time) => {
+                params.insert("endTime".to_string(), Value::String(time));
+            }
+            None if for_add => {
+                params.insert("endTime".to_string(), Value::String(String::new()));
+            }
+            None => {}
+        }
+    }
+    if let Some(all_day) = all_day {
+        params.insert("allDay".to_string(), serde_json::json!(all_day));
+    }
+    Ok(())
+}
+
+fn build_calendar_invocation(action: &CalendarAction) -> CoreResult<Invocation> {
+    /// `--details` / `--details-file` → 单一 details 参数（执行器只认后者）。
+    fn with_details(
+        mut params: Value,
+        args_details: &Option<String>,
+        file: &Option<String>,
+    ) -> CoreResult<Value> {
+        if let Some(details) = resolve_markdown(args_details.clone(), file.clone())? {
+            params["details"] = Value::String(details);
+        }
+        params
+            .as_object_mut()
+            .map(|map| map.remove("detailsFile"));
+        Ok(params)
+    }
+    fn finish(mut params: Value) -> Value {
+        if let Some(map) = params.as_object_mut() {
+            // --task → taskId（执行器认 taskId；空串 = 解除关联）
+            if let Some(task) = map.remove("task") {
+                map.insert("taskId".to_string(), task);
+            }
+        }
+        params
+    }
+    let (name, params) = match action {
+        CalendarAction::Add(args) => {
+            let mut params = with_details(serialize_args(args), &args.details, &args.details_file)?;
+            let map = params.as_object_mut().expect("serialize_args 产出对象");
+            map.remove("start");
+            map.remove("end");
+            map.remove("allDay");
+            apply_calendar_range(map, &args.start, &args.end, Some(args.all_day), true)?;
+            ("calendar.add", finish(params))
+        }
+        CalendarAction::Get(args) => ("calendar.get", serialize_args(args)),
+        CalendarAction::List(args) => {
+            let mut params = serialize_args(args);
+            if let Some(map) = params.as_object_mut() {
+                // --task → taskId（list 的过滤器）
+                if let Some(task) = map.remove("task") {
+                    map.insert("taskId".to_string(), task);
+                }
+            }
+            ("calendar.list", params)
+        }
+        CalendarAction::Modify(args) => {
+            let mut params = with_details(serialize_args(args), &args.details, &args.details_file)?;
+            let map = params.as_object_mut().expect("serialize_args 产出对象");
+            map.remove("start");
+            map.remove("end");
+            apply_calendar_range(map, &args.start, &args.end, args.all_day, false)?;
+            // --reminder：给了就整体替换（含空数组 = 清空）；没给保持缺省（core 不动提醒）
+            match &args.reminders {
+                Some(list) => {
+                    map.insert(
+                        "reminders".to_string(),
+                        serde_json::json!(list.iter().map(|s| s.as_str()).collect::<Vec<_>>()),
+                    );
+                }
+                None => {
+                    map.remove("reminders");
+                }
+            }
+            ("calendar.modify", finish(params))
+        }
+        CalendarAction::Remove(args) => ("calendar.remove", serialize_args(args)),
     };
     Ok(Invocation::new(name, params))
 }

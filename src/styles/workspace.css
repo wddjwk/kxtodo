@@ -342,6 +342,35 @@ h1 {
   box-shadow: 0 1px 1px rgb(0 0 0 / 2%);
 }
 
+/* 滑动行的外壳（v0.9.0 新特性 3）：`display: flow-root` 与 `.virtual-item` 同一条理由
+   ——卡片的 margin-bottom 不许逃逸出外壳，否则量出来的行高比实际占位小 7px，
+   窗口化的占位高度越往后越偏。桌面端这层是个惰性壳（手势只在移动端接管）。 */
+.task-swipe {
+  position: relative;
+  display: flow-root;
+  --swipe-x: 0px;
+  --swipe-reveal: 0;
+}
+
+/* 卡片自己抬到露出层之上（显式列举，不写 `.task-swipe > *`） */
+.task-swipe .task-card {
+  z-index: 1;
+}
+
+/* **位移只在手势真的进行中/停开着时挂**：`transform` 即便值是 0 也会让卡片成为
+   fixed 后代的包含块，而「日期与提醒」浮层正是卡片里的 fixed 元素（v0.8.6 起
+   走 popoverFrame 的视口坐标）——常驻一个 transform 会把它的落位整体挪走。 */
+.task-swipe[data-swipe="left"] .task-card,
+.task-swipe[data-swipe="right"] .task-card {
+  transform: translateX(var(--swipe-x));
+  transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.task-swipe.dragging .task-card {
+  transition: none;
+  will-change: transform;
+}
+
 .task-card.compact {
   min-height: 56px;
   padding-top: 10px;
@@ -408,10 +437,68 @@ h1 {
   grid-column: 3;
 }
 
+/* 「已加入日程」图标（v0.9.0）：与置顶图钉同一套网格列戏法。
+   两个图标可以同时在（置顶 + 日程），列数与 grid-column 各组合都要点名。 */
+.task-card.compact.task-calendar-icon .task-title-grid {
+  grid-template-columns: 34px auto minmax(0, 1fr) 34px;
+}
+
+.task-card.task-calendar-icon .task-body {
+  grid-column: 3;
+}
+
+.task-card.task-calendar-icon .edit-button {
+  grid-column: 4;
+}
+
+.task-card.compact.task-pinned-icon.task-calendar-icon .task-title-grid {
+  grid-template-columns: 34px auto auto minmax(0, 1fr) 34px;
+}
+
+.task-card.task-pinned-icon.task-calendar-icon .task-body {
+  grid-column: 4;
+}
+
+.task-card.task-pinned-icon.task-calendar-icon .edit-button {
+  grid-column: 5;
+}
+
+.task-card.plain.compact.task-calendar-icon .task-title-grid {
+  grid-template-columns: auto minmax(0, 1fr) 34px;
+}
+
+.task-card.plain.task-calendar-icon .task-body {
+  grid-column: 2;
+}
+
+.task-card.plain.task-calendar-icon .edit-button {
+  grid-column: 3;
+}
+
+.task-card.plain.compact.task-pinned-icon.task-calendar-icon .task-title-grid {
+  grid-template-columns: auto auto minmax(0, 1fr) 34px;
+}
+
+.task-card.plain.task-pinned-icon.task-calendar-icon .task-body {
+  grid-column: 3;
+}
+
+.task-card.plain.task-pinned-icon.task-calendar-icon .edit-button {
+  grid-column: 4;
+}
+
 .task-pin {
   display: flex;
   align-self: center;
   color: var(--accent);
+}
+
+/* 日程图标用日程域自己的黛紫（styles.ts::CALENDAR_ACCENT 同值）：它是「属于日程域」
+   的标记，跟着页面主题色走会在不同条目里变色、失去识别度 */
+.task-calendar-badge {
+  display: flex;
+  align-self: center;
+  color: #7c5cbf;
 }
 
 /* 一般卡片没有「已完成」语义：不画删除线、文字不灰 */
@@ -1372,11 +1459,23 @@ h1 {
 .markdown-body pre code.hljs {
   border-radius: 6px;
   background: #f6f8fa;
+  /* highlight.js 自带 `.hljs { overflow-x: auto }`，于是真正滚的是 code、滚动条画在
+     code 上（全局 ::-webkit-scrollbar 还会给它一条灰轨）。把滚动交还给 pre：
+     单一滚动容器，滚动条由下面那条规则藏掉（v0.9.0 bugfix 1）。 */
+  overflow-x: visible;
 }
 
 .markdown-body pre {
   max-width: 100%;
   overflow-x: auto;
+  /* 代码块要能横向滚，但不显示滚动条（v0.9.0 bugfix 1）：全局的 ::-webkit-scrollbar
+     样式会把一条灰轨画进代码块里，窄卡片上尤其难看。滚动能力保留，轨道藏掉。 */
+  scrollbar-width: none;
+}
+
+.markdown-body pre::-webkit-scrollbar,
+.markdown-body pre code::-webkit-scrollbar {
+  display: none;
 }
 
 .edit-button {

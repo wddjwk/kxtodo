@@ -8,9 +8,9 @@ use serde_json::{Map, Value};
 
 use crate::error::{CoreError, CoreResult};
 use crate::model::{
-    DataFile, DiaryFile, DomainMeta, IdempotencyRecord, LedgerFile, ScheduleFile, SettingsFile,
-    DATA_SCHEMA_VERSION, DIARY_SCHEMA_VERSION, LEDGER_SCHEMA_VERSION, SCHEDULE_SCHEMA_VERSION,
-    SETTINGS_SCHEMA_VERSION,
+    CalendarFile, DataFile, DiaryFile, DomainMeta, IdempotencyRecord, LedgerFile, ScheduleFile,
+    SettingsFile, CALENDAR_SCHEMA_VERSION, DATA_SCHEMA_VERSION, DIARY_SCHEMA_VERSION,
+    LEDGER_SCHEMA_VERSION, SCHEDULE_SCHEMA_VERSION, SETTINGS_SCHEMA_VERSION,
 };
 use crate::time::now_iso;
 
@@ -20,6 +20,7 @@ pub const SETTINGS_FILE: &str = "settings.json";
 pub const SCHEDULE_FILE: &str = "tasks.json";
 pub const DIARY_FILE: &str = "diary.json";
 pub const LEDGER_FILE: &str = "ledger.json";
+pub const CALENDAR_FILE: &str = "calendar.json";
 pub const HISTORY_DIR: &str = "history";
 pub const SCHEDULE_HISTORY: &str = "schedule.ndjson";
 pub const AUDIT_HISTORY: &str = "audit.ndjson";
@@ -100,17 +101,19 @@ pub enum Domain {
     Schedule,
     Diary,
     Ledger,
+    Calendar,
 }
 
 impl Domain {
-    /// 全部五个领域。发「说不清具体是哪个域」的事件时用（同步一轮可能改了任何一域）：
+    /// 全部六个领域。发「说不清具体是哪个域」的事件时用（同步一轮可能改了任何一域）：
     /// 前端按域拉快照，多报一个域只是多带一份载荷，漏报一个域就是界面停在旧数据上。
-    pub const ALL: [Domain; 5] = [
+    pub const ALL: [Domain; 6] = [
         Domain::Data,
         Domain::Settings,
         Domain::Schedule,
         Domain::Diary,
         Domain::Ledger,
+        Domain::Calendar,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -120,6 +123,7 @@ impl Domain {
             Domain::Schedule => "schedule",
             Domain::Diary => "diary",
             Domain::Ledger => "ledger",
+            Domain::Calendar => "calendar",
         }
     }
 
@@ -130,6 +134,7 @@ impl Domain {
             Domain::Schedule => SCHEDULE_FILE,
             Domain::Diary => DIARY_FILE,
             Domain::Ledger => LEDGER_FILE,
+            Domain::Calendar => CALENDAR_FILE,
         }
     }
 }
@@ -158,6 +163,9 @@ impl Layout {
     }
     pub fn ledger_file(&self) -> PathBuf {
         self.root.join(LEDGER_FILE)
+    }
+    pub fn calendar_file(&self) -> PathBuf {
+        self.root.join(CALENDAR_FILE)
     }
     pub fn lock_file(&self) -> PathBuf {
         self.root.join(LOCK_FILE)
@@ -477,6 +485,11 @@ impl Repository {
                 Ok(serde_json::json!({ "initialized": true }))
             })?;
         }
+        if !self.layout.calendar_file().exists() {
+            self.write_calendar(None, None, "host.init", |_file| {
+                Ok(serde_json::json!({ "initialized": true }))
+            })?;
+        }
         Ok(())
     }
 
@@ -485,13 +498,16 @@ impl Repository {
         if value.is_null() {
             return Ok(default_data_file());
         }
-        serde_json::from_value(value).map_err(|error| {
+        let mut file: DataFile = serde_json::from_value(value).map_err(|error| {
             CoreError::new(
                 crate::error::ErrorKind::Io,
                 "DATA_CORRUPTED",
                 format!("data.json 结构无效：{error}"),
             )
-        })
+        })?;
+        // 加载归一的唯一点：v0.8.x 的草稿纸整篇文本折进第一个标签页（只读不写）
+        file.scratchpad.fold_legacy_text();
+        Ok(file)
     }
 
     pub fn load_settings(&self) -> CoreResult<SettingsFile> {
@@ -593,6 +609,29 @@ impl Repository {
         Ok(file)
     }
 
+    pub fn load_calendar(&self) -> CoreResult<CalendarFile> {
+        let value = read_json_value(&self.layout.calendar_file())?;
+        if value.is_null() {
+            return Ok(CalendarFile {
+                meta: DomainMeta {
+                    revision: 0,
+                    schema_version: Some(CALENDAR_SCHEMA_VERSION),
+                    idempotency: Vec::new(),
+                    tombstones: Vec::new(),
+                    extra: Map::new(),
+                },
+                ..Default::default()
+            });
+        }
+        serde_json::from_value(value).map_err(|error| {
+            CoreError::new(
+                crate::error::ErrorKind::Io,
+                "DATA_CORRUPTED",
+                format!("calendar.json 结构无效：{error}"),
+            )
+        })
+    }
+
     pub fn lookup_schedule_idempotency(
         &self,
         command: &str,
@@ -675,6 +714,24 @@ impl Repository {
         };
         let _lock = RepoLock::acquire(&self.layout)?;
         let file = self.load_ledger()?;
+        Ok(file
+            .meta
+            .idempotency
+            .iter()
+            .find(|record| record.command == command && record.key == key)
+            .map(|record| (file.meta.revision, record.summary.clone())))
+    }
+
+    pub fn lookup_calendar_idempotency(
+        &self,
+        command: &str,
+        key: Option<&str>,
+    ) -> CoreResult<Option<(u64, Value)>> {
+        let Some(key) = key else {
+            return Ok(None);
+        };
+        let _lock = RepoLock::acquire(&self.layout)?;
+        let file = self.load_calendar()?;
         Ok(file
             .meta
             .idempotency
@@ -1000,6 +1057,43 @@ impl Repository {
         Ok((file, outcome))
     }
 
+    pub fn write_calendar<F>(
+        &self,
+        expected_revision: Option<u64>,
+        idempotency_key: Option<&str>,
+        command: &str,
+        mutate: F,
+    ) -> CoreResult<(CalendarFile, WriteOutcome)>
+    where
+        F: FnOnce(&mut CalendarFile) -> CoreResult<Value>,
+    {
+        let _lock = RepoLock::acquire(&self.layout)?;
+        let mut file = self.load_calendar()?;
+        let outcome = self.prepare_write(
+            Domain::Calendar,
+            &file.meta,
+            expected_revision,
+            idempotency_key,
+            command,
+        )?;
+        if let Some(summary) = outcome.replay_summary.clone() {
+            return Ok((file, outcome.with_summary(summary)));
+        }
+        let summary = mutate(&mut file)?;
+        file.schema_version = CALENDAR_SCHEMA_VERSION;
+        file.meta.revision += 1;
+        file.meta.schema_version = Some(CALENDAR_SCHEMA_VERSION);
+        finalize_meta(&mut file.meta, idempotency_key, command, summary.clone());
+        let raw = serde_json::to_string_pretty(&file)?;
+        atomic_write(&self.layout.calendar_file(), &raw)?;
+        let revision = file.meta.revision;
+        let mut outcome = outcome.finish(revision);
+        if let Err(error) = self.audit(command, Domain::Calendar, revision, &summary) {
+            outcome.warnings.push(audit_warning(&error));
+        }
+        Ok((file, outcome))
+    }
+
     pub fn write_schedule<F>(
         &self,
         expected_revision: Option<u64>,
@@ -1150,7 +1244,7 @@ impl Repository {
         )
     }
 
-    /// Full JSON backup set of **all five** domain files (§4.2.3).
+    /// Full JSON backup set of **all six** domain files (§4.2.3).
     /// 日记与账本必须在内：账本是金融数据，早先只备三个域，`ledger.json` 写坏了根本没有回退。
     pub fn backup(&self, reason: &str) -> CoreResult<PathBuf> {
         let _lock = RepoLock::acquire(&self.layout)?;
@@ -1167,6 +1261,7 @@ impl Repository {
             SCHEDULE_FILE,
             DIARY_FILE,
             LEDGER_FILE,
+            CALENDAR_FILE,
         ] {
             let src = self.layout.root.join(file);
             if src.exists() {

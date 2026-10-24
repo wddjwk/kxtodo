@@ -79,20 +79,30 @@ pub fn read() -> Result<Option<ClipboardContent>, String> {
     // 文件列表优先：资源管理器复制文件时同时带 CF_HDROP 与文本，文本只是路径串。
     if let Some(files) = read_file_list() {
         if !files.is_empty() {
-            return Ok(Some(ClipboardContent {
-                files: files
-                    .into_iter()
-                    .map(|path| ClipboardFile {
-                        name: path
-                            .file_name()
-                            .map(|name| name.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "file".to_string()),
-                        path: Some(path),
-                        bytes: None,
-                    })
-                    .collect(),
-                ..Default::default()
-            }));
+            // 「复制的是图片」与「复制的是图片文件」的区分（v0.9.0 bugfix 4.1）：
+            // 截图工具 / 看图软件复制图片时会连一个临时文件一起塞进 CF_HDROP，
+            // 早先一律走文件分支，手机上收到的就是一个文件而不是一张图。
+            // 资源管理器复制文件**不带位图表示**，所以「单一图片文件 + 剪切板有位图」
+            // 才改按图片同步；其余情形（多文件、非图片、无位图）照旧走文件。
+            let as_image = files.len() == 1
+                && is_image_file_name(&files[0])
+                && clipboard_has_bitmap();
+            if !as_image {
+                return Ok(Some(ClipboardContent {
+                    files: files
+                        .into_iter()
+                        .map(|path| ClipboardFile {
+                            name: path
+                                .file_name()
+                                .map(|name| name.to_string_lossy().to_string())
+                                .unwrap_or_else(|| "file".to_string()),
+                            path: Some(path),
+                            bytes: None,
+                        })
+                        .collect(),
+                    ..Default::default()
+                }));
+            }
         }
     }
     let text = {
@@ -138,8 +148,24 @@ pub fn read() -> Result<Option<ClipboardContent>, String> {
         }
         None => None,
     };
-    if !text.is_empty() || !html.is_empty() || image_png.is_some() {
-        return Ok(Some(ClipboardContent { text, html, image: image_png, ..Default::default() }));
+    // HTML 当文件处理（v0.9.0 bugfix 4.1）：富文本剪切板折成一个 .html 文件走文件
+    // 通道（接收端落盘），设置里不再有 HTML 这一档。bytes 直传，发送端不落盘。
+    let files: Vec<ClipboardFile> = if html.is_empty() {
+        Vec::new()
+    } else {
+        vec![ClipboardFile {
+            name: "clipboard.html".to_string(),
+            path: None,
+            bytes: Some(html.into_bytes()),
+        }]
+    };
+    if !text.is_empty() || !files.is_empty() || image_png.is_some() {
+        return Ok(Some(ClipboardContent {
+            text,
+            files,
+            image: image_png,
+            ..Default::default()
+        }));
     }
     Ok(None)
 }
@@ -186,21 +212,31 @@ pub fn write(content: &ClipboardContent) -> Result<(), String> {
             .map_err(|error| error.to_string())?;
         return Ok(());
     }
-    if !content.html.is_empty() {
-        clipboard
-            .set_html(
-                content.html.as_str(),
-                if content.text.is_empty() { None } else { Some(content.text.as_str()) },
-            )
-            .map_err(|error| error.to_string())?;
-        return Ok(());
-    }
     if !content.text.is_empty() {
         clipboard
             .set_text(&content.text)
             .map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+/// 扩展名判图片（CF_HDROP 分支用）：只看名字，不读文件内容。
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn is_image_file_name(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension()
+            .map(|ext| ext.to_string_lossy().to_ascii_lowercase())
+            .as_deref(),
+        Some("png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp")
+    )
+}
+
+/// 剪切板当前有没有位图表示（CF_BITMAP / DIB）。读失败一律当没有。
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn clipboard_has_bitmap() -> bool {
+    arboard::Clipboard::new()
+        .and_then(|mut clipboard| clipboard.get_image())
+        .is_ok()
 }
 
 

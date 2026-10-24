@@ -1,0 +1,777 @@
+/* ---------------------------------------------------------------------------
+ * 日程（v0.9.0）：整页视图 + 月/周/三日/日网格 + 编辑器补充。
+ * 页面骨架与日记/记账同一条口径（.list-header / 段控 / FAB / 背景层）。
+ * 字号一律 calc(var(--font-control) ± N)；网格类名统一 cal- 前缀（全应用唯一，
+ * 与 workspace.css 的 .calendar-panel——任务日期面板——不共享任何选择器）。
+ * --------------------------------------------------------------------------- */
+
+.calendar-view {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  padding: 44px 56px 54px 56px;
+  border-radius: 12px 0 0 0;
+  color: #292929;
+  transition: background 160ms ease;
+  overflow: hidden;
+}
+
+/* 日程占着主区域时把任务工作区藏起来——它仍然挂着（不销毁），与日记/记账同一条口径。 */
+.app-shell.calendar-open .workspace {
+  display: none;
+}
+
+/* 全局搜索的混排结果只渲染在工作区里：日程开着时搜索态要把主区域让回工作区。 */
+.app-shell.calendar-open.searching .workspace {
+  display: flex;
+}
+
+.app-shell.calendar-open.searching .calendar-view {
+  display: none;
+}
+
+.calendar-view::before {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-image: var(--bg-image);
+  background-position: center;
+  background-size: cover;
+  content: "";
+  opacity: var(--bg-opacity);
+  pointer-events: none;
+}
+
+/* 只抬正文流里的直接子元素（绝不写 .calendar-view > *，diary.css 有事故记录） */
+.calendar-view > .calendar-range-bar,
+.calendar-view > .calendar-body {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---------- 段控（与记账的 .ledger-view-switch 同一套观感） ---------- */
+
+.calendar-view-switch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding: 3px;
+  border: 1px solid rgb(0 0 0 / 7%);
+  border-radius: 9px;
+  background: rgb(255 255 255 / 62%);
+}
+
+.calendar-view-switch button {
+  display: grid;
+  width: 30px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  padding: 0;
+  background: transparent;
+  color: var(--accent);
+  opacity: 0.5;
+  cursor: pointer;
+  transition: background 0.12s ease, opacity 0.12s ease;
+}
+
+.calendar-view-switch button:hover {
+  opacity: 0.85;
+}
+
+.calendar-view-switch button.active {
+  background: var(--accent);
+  color: #ffffff;
+  opacity: 1;
+}
+
+/* ---------- 区间工具行：今天 / 翻页 / 标题 / 现在 ---------- */
+
+.calendar-range-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  flex-wrap: wrap;
+  margin: -10px 0 14px;
+}
+
+.calendar-today-btn,
+.calendar-now-btn {
+  flex: 0 0 auto;
+  padding: 5px 14px;
+  border: 1px solid rgb(0 0 0 / 10%);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 78%);
+  color: #3c424c;
+  font-size: calc(var(--font-control) - 3px);
+  cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+
+.calendar-today-btn:hover,
+.calendar-now-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.calendar-today-btn.away {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.calendar-range-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.calendar-range-step button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  padding: 0;
+  background: transparent;
+  color: #5c6470;
+  cursor: pointer;
+}
+
+.calendar-range-step button:hover {
+  background: rgb(0 0 0 / 6%);
+  color: var(--accent);
+}
+
+.calendar-range-step strong {
+  min-width: 0;
+  color: #23272f;
+  font-size: calc(var(--font-control) + 1px);
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+}
+
+.calendar-range-step strong.month-pop-anchor {
+  cursor: pointer;
+}
+
+.calendar-range-step strong:hover {
+  color: var(--accent);
+}
+
+.calendar-now-btn {
+  margin-left: auto;
+}
+
+/* ---------- 网格主体 ---------- */
+
+.calendar-body {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.cal-grid {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  border: 1px solid rgb(0 0 0 / 8%);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 66%);
+  overflow: hidden;
+}
+
+.cal-grid-head,
+.cal-allday,
+.cal-grid-body {
+  display: grid;
+  grid-template-columns: var(--cal-gutter, 56px) repeat(var(--cal-days, 7), minmax(0, 1fr));
+  min-width: 0;
+}
+
+.cal-gutter {
+  min-width: 0;
+  border-right: 1px solid rgb(0 0 0 / 6%);
+}
+
+.cal-grid-head {
+  flex: 0 0 auto;
+  border-bottom: 1px solid rgb(0 0 0 / 8%);
+  background: rgb(255 255 255 / 82%);
+}
+
+.cal-gutter-head {
+  border-right: 1px solid rgb(0 0 0 / 6%);
+}
+
+.cal-day-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  justify-content: center;
+  min-width: 0;
+  padding: 8px 4px;
+  border: 0;
+  border-left: 1px solid rgb(0 0 0 / 5%);
+  background: transparent;
+  cursor: pointer;
+  font-size: calc(var(--font-control) - 4px);
+  color: #6b7280;
+}
+
+.cal-day-head .cal-dow {
+  font-weight: 500;
+}
+
+.cal-day-head .cal-dom {
+  color: #23272f;
+  font-size: calc(var(--font-control) - 1px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-day-head.today .cal-dow,
+.cal-day-head.today .cal-dom {
+  color: var(--accent);
+}
+
+.cal-day-head.today .cal-dom {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+}
+
+/* 全天栏 */
+
+.cal-allday {
+  flex: 0 0 auto;
+  border-bottom: 1px solid rgb(0 0 0 / 8%);
+  background: rgb(255 255 255 / 72%);
+}
+
+.cal-gutter-label {
+  display: grid;
+  place-items: center;
+  padding: 4px 2px;
+  color: #9aa1ac;
+  font-size: calc(var(--font-control) - 6px);
+}
+
+.cal-allday-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 4px;
+  border-left: 1px solid rgb(0 0 0 / 5%);
+  cursor: copy;
+}
+
+.cal-chip {
+  min-width: 0;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-size: calc(var(--font-control) - 5px);
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.cal-chip.past {
+  background: #a8aeb8;
+}
+
+.cal-chip-title {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 滚动的时间网格 */
+
+.cal-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.cal-grid-body {
+  position: relative;
+}
+
+.cal-time-gutter {
+  position: relative;
+}
+
+.cal-hour-label {
+  display: block;
+  padding-right: 8px;
+  color: #9aa1ac;
+  font-size: calc(var(--font-control) - 6px);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  transform: translateY(-7px);
+}
+
+.cal-day-col {
+  position: relative;
+  height: calc(var(--cal-hour-h, 48px) * 24);
+  min-width: 0;
+  border-left: 1px solid rgb(0 0 0 / 5%);
+  cursor: crosshair;
+}
+
+.cal-hour-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px solid rgb(0 0 0 / 5%);
+  pointer-events: none;
+}
+
+/* 事件块：白底 + 主题色左轨（任何主题色/背景图下都可读，不做颜色数学） */
+
+.cal-event {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  padding: 3px 7px;
+  border: 1px solid rgb(0 0 0 / 8%);
+  border-left: 3px solid var(--accent);
+  border-radius: 7px;
+  background: rgb(255 255 255 / 94%);
+  color: #23272f;
+  font-size: calc(var(--font-control) - 5px);
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgb(31 41 55 / 10%);
+  touch-action: manipulation;
+}
+
+.cal-event:hover {
+  border-color: var(--accent);
+  box-shadow: 0 3px 10px rgb(31 41 55 / 16%);
+}
+
+.cal-event.past {
+  border-left-color: #b6bcc6;
+  color: #8b929e;
+}
+
+.cal-event.past .cal-event-time {
+  color: #a8aeb8;
+}
+
+.cal-event.ghost {
+  opacity: 0.75;
+  box-shadow: 0 6px 18px rgb(31 41 55 / 24%);
+}
+
+.cal-event.short {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
+  padding-top: 1px;
+  padding-bottom: 1px;
+}
+
+.cal-event-time {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-size: calc(var(--font-control) - 7px);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cal-event-title {
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 上下边缘的改时长手柄（桌面） */
+
+.cal-resize {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: ns-resize;
+}
+
+.cal-resize-top {
+  top: 0;
+}
+
+.cal-resize-bottom {
+  bottom: 0;
+}
+
+/* 空白拖动框选的预览块 */
+
+.cal-drag-preview {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  z-index: 5;
+  padding: 2px 8px;
+  border: 1px dashed var(--accent);
+  border-radius: 7px;
+  background: rgb(255 255 255 / 70%);
+  color: var(--accent);
+  font-size: calc(var(--font-control) - 6px);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+/* 「现在」红线 */
+
+.cal-now {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 6;
+  height: 0;
+  border-top: 2px solid #e5484d;
+  pointer-events: none;
+}
+
+.cal-now::before {
+  position: absolute;
+  top: -4px;
+  left: -3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #e5484d;
+  content: "";
+}
+
+/* ---------- 月视图 ---------- */
+
+.cal-month {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  border: 1px solid rgb(0 0 0 / 8%);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 66%);
+  overflow: hidden;
+}
+
+.cal-month-head {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  border-bottom: 1px solid rgb(0 0 0 / 8%);
+  background: rgb(255 255 255 / 82%);
+}
+
+.cal-month-head-cell {
+  padding: 7px 4px;
+  color: #6b7280;
+  font-size: calc(var(--font-control) - 5px);
+  text-align: center;
+}
+
+.cal-month-grid {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+}
+
+.cal-month-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  min-height: 0;
+  padding: 4px 6px;
+  border-left: 1px solid rgb(0 0 0 / 5%);
+  border-top: 1px solid rgb(0 0 0 / 5%);
+  cursor: copy;
+  overflow: hidden;
+}
+
+.cal-month-cell:nth-child(7n + 1) {
+  border-left: 0;
+}
+
+.cal-month-cell.other-month {
+  background: rgb(0 0 0 / 2.5%);
+}
+
+.cal-month-cell.other-month .cal-month-daynum {
+  color: #b6bcc6;
+}
+
+.cal-month-daynum {
+  align-self: flex-start;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  padding: 0;
+  background: transparent;
+  color: #3c424c;
+  font-size: calc(var(--font-control) - 5px);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.cal-month-cell.today .cal-month-daynum {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+}
+
+.cal-month-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 2px 7px;
+  border: 0;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 4.5%);
+  color: #23272f;
+  font-size: calc(var(--font-control) - 6px);
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.cal-month-chip::before {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  content: "";
+}
+
+.cal-month-chip.allday {
+  background: var(--accent);
+  color: #fff;
+}
+
+.cal-month-chip.allday::before {
+  background: rgb(255 255 255 / 85%);
+}
+
+.cal-month-chip.past {
+  color: #8b929e;
+}
+
+.cal-month-chip.past::before {
+  background: #b6bcc6;
+}
+
+.cal-month-chip:hover {
+  filter: brightness(0.96);
+}
+
+.cal-month-chip-time {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-month-chip.allday .cal-month-chip-time {
+  color: #fff;
+}
+
+.cal-month-chip-title {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cal-month-more {
+  align-self: flex-start;
+  border: 0;
+  border-radius: 5px;
+  padding: 1px 6px;
+  background: transparent;
+  color: #8b929e;
+  font-size: calc(var(--font-control) - 7px);
+  cursor: pointer;
+}
+
+.cal-month-more:hover {
+  background: rgb(0 0 0 / 6%);
+  color: var(--accent);
+}
+
+/* ---------- FAB（与记账同一套） ---------- */
+
+.calendar-fab-row {
+  position: absolute;
+  right: 30px;
+  bottom: 104px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+}
+
+.calendar-fab {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  padding: 0;
+  background: var(--accent);
+  color: #ffffff;
+  cursor: pointer;
+  box-shadow: 0 10px 26px rgb(31 41 55 / 26%);
+  transition: filter 0.12s ease, transform 0.12s ease;
+}
+
+.calendar-fab:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+/* ---------- 编辑器补充（主体样式在 editor.css 的 editor-dialog 那一套） ---------- */
+
+.calendar-title-input {
+  font-size: calc(var(--font-control) + 4px);
+  font-weight: 700;
+}
+
+.calendar-meta {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+
+.calendar-allday {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid rgb(0 0 0 / 10%);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 70%);
+  color: #3c424c;
+  font-size: calc(var(--font-control) - 4px);
+  cursor: pointer;
+  user-select: none;
+}
+
+.calendar-allday input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.calendar-meta-time {
+  margin-left: 6px;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.calendar-duration {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 5%);
+  color: #6b7280;
+  font-size: calc(var(--font-control) - 5px);
+  white-space: nowrap;
+}
+
+.calendar-reminders {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.calendar-reminder-chip,
+.calendar-linked-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.calendar-reminder-pop {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 236px;
+  padding: 10px;
+}
+
+.calendar-reminder-preset {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.calendar-reminder-custom {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding-top: 8px;
+  border-top: 1px solid rgb(0 0 0 / 8%);
+  color: #6b7280;
+  font-size: calc(var(--font-control) - 5px);
+}
+
+.calendar-reminder-custom input {
+  min-width: 0;
+  flex: 1;
+  padding: 4px 7px;
+  border: 1px solid rgb(0 0 0 / 12%);
+  border-radius: 7px;
+  background: rgb(255 255 255 / 90%);
+  color: #23272f;
+  font-size: calc(var(--font-control) - 5px);
+}
+
+.calendar-editor .editor-icon-button.danger {
+  color: #c0392b;
+}
+
+.calendar-editor .editor-icon-button.danger:hover {
+  background: rgb(192 57 43 / 12%);
+}

@@ -282,11 +282,19 @@ async fn lan_round_trip_carries_text_html_image_and_files() {
     send_lan(&sender, addr, &content).await.unwrap();
     let received = wait_for_write(&backend);
     assert_eq!(received.text, content.text);
-    assert_eq!(received.html, content.html);
+    // HTML 当文件处理（v0.9.0 bugfix 4.1）：html 段不再独立投递，落盘成一个 .html 文件
+    assert_eq!(received.html, "");
     assert_eq!(received.image, content.image);
-    assert_eq!(received.files.len(), 1);
-    assert_eq!(received.files[0].name, "note.txt");
-    let path = received.files[0].path.clone().unwrap();
+    assert_eq!(received.files.len(), 2);
+    let html_entry = received
+        .files
+        .iter()
+        .find(|file| file.name.ends_with(".html"))
+        .expect("html 应当折成 .html 文件");
+    let html_path = html_entry.path.clone().unwrap();
+    assert_eq!(tokio::fs::read(html_path).await.unwrap(), content.html.as_bytes());
+    let note = received.files.iter().find(|file| file.name == "note.txt").expect("note.txt");
+    let path = note.path.clone().unwrap();
     assert_eq!(tokio::fs::read(path).await.unwrap(), b"file body");
     receiver.cancel.store(true, Ordering::SeqCst);
     receiver.notify.notify_waiters();
@@ -294,6 +302,41 @@ async fn lan_round_trip_carries_text_html_image_and_files() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn disabled_types_are_ignored_at_the_receiver() {
+    let root = tempfile::tempdir().unwrap();
+    let backend = Arc::new(TestBackend::default());
+    let mut receiver = test_inner(root.path(), "receiver", Some(backend.clone()));
+    {
+        let inner = Arc::get_mut(&mut receiver).unwrap();
+        inner.settings.types.text = false;
+        inner.settings.types.image = false;
+        // 文件开着：html 归文件档，应当照收
+    }
+    let sender = test_inner(root.path(), "sender", None);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let task = receiver.clone();
+    tokio::spawn(async move {
+        lan_accept_loop_with_listener(task, listener).await;
+    });
+    let content = ClipboardContent {
+        text: "secret".into(),
+        html: "<i>rich</i>".into(),
+        image: Some(vec![1, 2, 3]),
+        files: vec![],
+    };
+    send_lan(&sender, addr, &content).await.unwrap();
+    let received = wait_for_write(&backend);
+    assert_eq!(received.text, "");
+    assert!(received.image.is_none());
+    assert_eq!(received.files.len(), 1, "html 折成文件走文件档");
+    let html_path = received.files[0].path.clone().unwrap();
+    assert_eq!(tokio::fs::read(html_path).await.unwrap(), b"<i>rich</i>");
+    receiver.cancel.store(true, Ordering::SeqCst);
+    receiver.notify.notify_waiters();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn all_types_off_drops_everything_including_html_as_file() {
     let root = tempfile::tempdir().unwrap();
     let backend = Arc::new(TestBackend::default());
     let mut receiver = test_inner(root.path(), "receiver", Some(backend.clone()));
@@ -317,10 +360,16 @@ async fn disabled_types_are_ignored_at_the_receiver() {
         files: vec![],
     };
     send_lan(&sender, addr, &content).await.unwrap();
-    let received = wait_for_write(&backend);
-    assert_eq!(received.text, "");
-    assert_eq!(received.html, "<i>rich</i>");
-    assert!(received.image.is_none());
+    // 全关：什么都不写，事件记一条 ignored
+    let deadline = Instant::now() + Duration::from_millis(600);
+    loop {
+        let event = receiver.last_event.lock().unwrap().clone();
+        if event.as_ref().and_then(|value| value.get("kind").and_then(|k| k.as_str())) == Some("ignored") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "没等到 ignored 事件：{:?}", event);
+        std::thread::sleep(Duration::from_millis(20));
+    }
     receiver.cancel.store(true, Ordering::SeqCst);
     receiver.notify.notify_waiters();
 }

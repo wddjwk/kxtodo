@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, tick } from "svelte";
-  import { Check, ChevronUp, PenLine, Pin, Plus, X } from "@lucide/svelte";
+  import { CalendarClock, Check, ChevronUp, PenLine, Pin, PinOff, Plus, Trash2, X } from "@lucide/svelte";
   import { collapsedMarkdownLine, hasMultipleMarkdownLines, renderInlineMarkdown, setRenderedTaskBox } from "./markdown";
   import { markdownTaskChecked, taskToggleIndex, toggleMarkdownTask } from "./markdownTasks";
   import { tagChipStyle } from "./tagColors";
@@ -10,15 +10,17 @@
   import { fullDayLabel } from "./diary";
   import { createDeferredMarkdown } from "./deferredMarkdown";
   import { preloadMarkdownImages } from "./images";
-  import { appSettings, selectedNode } from "./stores";
+  import { appSettings, calendarTaskIds, selectedNode } from "./stores";
   import { saveTaskMarkdown } from "./actions";
   import { isMobile as isMobileStore, touchOnly } from "./platform";
   import { uiScaleValue } from "./styles";
   import { placePopover, popoverFrame } from "./popover";
   import {
-    closeDatePopover, datePopoverTaskId, hideReveals, revealEmoji, revealTag, revealedEmoji, revealedTag, toggleDatePopover
+    closeDatePopover, datePopoverTaskId, hideReveals, revealEmoji, revealTag, revealedEmoji,
+    revealedSwipeRow, revealedTag, setSwipeRowOpen, toggleDatePopover
   } from "./cardOverlays";
   import { longpress, isLongPressSuppressed } from "./longpress";
+  import { swipeRow, isSwipeSuppressed, SWIPE_REVEAL_THRESHOLD_PX, type SwipeActionKind } from "./swipeRow";
   import { markdownWire } from "./markdownControls";
   import { observeResize } from "./measureBus";
   import TaskDateReminderPanel from "./TaskDateReminderPanel.svelte";
@@ -45,6 +47,10 @@
     editTag: { id: string; tagId: string; text: string };
     removeEmoji: { id: string; index: number };
     pickEmoji: { id: string; index: number };
+    /** 移动端右滑到位即删（v0.9.0） */
+    swipeDelete: string;
+    /** 移动端左滑露出的「置顶 / 取消置顶」（v0.9.0） */
+    swipePin: { id: string; pinned: boolean };
   }>();
 
   /** 两击判定窗口：移动端单击的动作要等到这个窗口过去才执行。
@@ -81,6 +87,10 @@
   // 宽度一变标题溢出判定就翻转），拿它门控渲染会出现「动了别的任务这张卡自己展开」。
   // canExpand 只留给手势/按钮当「有没有内容可展开」的判据。
   $: isExpanded = task.expanded === true;
+  /** 「已加入日程」标记（v0.9.0）：日程域里有关联到这个任务的活事件就显示图标 */
+  $: inCalendar = $calendarTaskIds.has(task.id);
+  /** 左滑露出「置顶 / 编辑」的那一行全局唯一（v0.9.0）：宿主 id 住在模块级 store */
+  $: swipeOpen = $revealedSwipeRow === task.id;
 
   // 插图预热：渲染吃**原始 markdown**（图片是占位符，由 markdownWire 从缓存异步填 src），
   // 这里只负责在卡片挂载时把字节提前要过来——展开时图已经在缓存里，占位一挂上就填掉。
@@ -364,8 +374,36 @@
     dispatch("context", { id: task.id, x: pos.x, y: pos.y });
   }
 
+  /**
+   * 移动端左右滑（v0.9.0）：右滑到位即删；左滑露出「置顶 / 编辑」，点哪块干哪件事。
+   * 三个动作都复用既有路径（删除与置顶跟右键菜单同一条 action，编辑就是 openEditor），
+   * 手势只是第三个入口，不另开一套语义。
+   */
+  function handleSwipeAction(action: SwipeActionKind): void {
+    if (action === "delete") {
+      dispatch("swipeDelete", task.id);
+      return;
+    }
+    if (action === "pin") {
+      dispatch("swipePin", { id: task.id, pinned: !task.pinned });
+      return;
+    }
+    openEditor();
+  }
+
+  function handleSwipeReveal(open: boolean): void {
+    setSwipeRowOpen(open ? task.id : null);
+  }
+
   /** 长按抬手补发的 click 会冒泡到 app-shell 关掉刚开的菜单，抑制窗内吞掉。 */
   function handleCardClick(event: MouseEvent): void {
+    // 左右滑之后补发的那一记 click 同样不算点击（swipeRow 自己已经在捕获阶段吞过，
+    // 这里是第二道保险：捕获处理器只挂在 wrapper 上，卡片内的 stopPropagation 会绕过它）
+    if (isSwipeSuppressed()) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     if (isLongPressSuppressed()) {
       event.preventDefault();
       event.stopPropagation();
@@ -378,7 +416,7 @@
     // 内容区的点击不冒泡到卡片（否则移动端一次点击会被两套逻辑各处理一遍），
     // 但手势语义要在这里补上：展开态点内容区 = 折叠，双击内容区 = 进编辑器。
     event.stopPropagation();
-    if (isLongPressSuppressed()) {
+    if (isSwipeSuppressed() || isLongPressSuppressed()) {
       event.preventDefault();
       return;
     }
@@ -455,9 +493,41 @@
 
 <!-- 卡片级浮层与「点别处收回」都归 cardOverlays 的一份 document 监听（v0.8.6 需求 4）：
      几千张卡不再各自挂 window 监听 -->
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<article
+<!-- 滑动行的外壳（v0.9.0 新特性 3，只在移动端接管手势）：`display: flow-root` 与
+     `.virtual-item` 同一条理由——卡片的 margin-bottom 不许逃逸出外壳，否则
+     VirtualStack 量出来的行高比实际占位小几像素，越往后累积误差越大。 -->
+<div class="task-swipe" class:swipe-open={swipeOpen} use:swipeRow={{
+  enabled: () => mobile && !isExpanded,
+  open: swipeOpen,
+  revealWidth: SWIPE_REVEAL_THRESHOLD_PX,
+  scale: () => uiScaleValue($appSettings.appearance.uiScale),
+  onAction: handleSwipeAction,
+  onRevealChange: handleSwipeReveal
+}}>
+  {#if mobile}
+    <!-- 露出层在卡片**下面**（卡片自己平移让位），两块动作随 --swipe-reveal 一起缩放 -->
+    <div class="task-swipe-actions" aria-hidden="true">
+      <div class="swipe-side swipe-side-left">
+        <span class="swipe-action swipe-delete" data-swipe-action="delete">
+          <Trash2 size={16} strokeWidth={2.4} />
+          <span class="swipe-action-label">删除</span>
+        </span>
+      </div>
+      <div class="swipe-side swipe-side-right">
+        <span class="swipe-action swipe-pin" data-swipe-action="pin">
+          {#if task.pinned}<PinOff size={15} strokeWidth={2.4} />{:else}<Pin size={15} strokeWidth={2.4} />{/if}
+          <span class="swipe-action-label">{task.pinned ? "取消置顶" : "置顶"}</span>
+        </span>
+        <span class="swipe-action swipe-edit" data-swipe-action="edit">
+          <PenLine size={15} strokeWidth={2.4} />
+          <span class="swipe-action-label">编辑</span>
+        </span>
+      </div>
+    </div>
+  {/if}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <article
   class:completed={task.completed}
   class:compact={!isExpanded}
   class:expanded={isExpanded}
@@ -465,6 +535,7 @@
   class:plain
   class:selected
   class:task-pinned-icon={task.pinned && $appSettings.features.pinnedIcon && !isExpanded}
+  class:task-calendar-icon={inCalendar && !isExpanded}
   class:due-soon={dueHighlight !== null}
   class:due-strong={dueHighlight?.strong === true}
   class="task-card"
@@ -487,6 +558,9 @@
     {/if}
     {#if task.pinned && $appSettings.features.pinnedIcon && !isExpanded}
       <span class="task-pin" title="已置顶" aria-label="已置顶"><Pin size={16} /></span>
+    {/if}
+    {#if inCalendar && !isExpanded}
+      <span class="task-calendar-badge" title="已加入日程" aria-label="已加入日程"><CalendarClock size={16} /></span>
     {/if}
 
     <section class="task-body">
@@ -585,3 +659,4 @@
     {/if}
   </div>
 </article>
+</div>

@@ -4,7 +4,8 @@ use serde_json::{json, Map, Value};
 
 use crate::error::{CoreError, CoreResult};
 use crate::model::{
-    DiaryView, LedgerView, LinkOpenMode, NotificationPosition, SettingsFile, SyncMode, ThemePreset,
+    CalendarView, DiaryView, LedgerView, LinkOpenMode, NotificationPosition, SettingsFile,
+    SyncMode, ThemePreset, default_keep_alive_notice,
 };
 use crate::time::now_iso;
 
@@ -48,6 +49,11 @@ pub fn is_shared_settings_path(path: &str) -> bool {
             | "ledger.backgroundColor"
             | "ledger.backgroundImage"
             | "ledger.backgroundOpacity"
+            // 日程同日记/记账（v0.9.0）：外观共享，view 本机偏好
+            | "calendar.accent"
+            | "calendar.backgroundColor"
+            | "calendar.backgroundImage"
+            | "calendar.backgroundOpacity"
             // 工具箱外观同日记/记账（v0.8.4）：工具页换台设备该是同一副样子；
             // 每个工具子页自己的颜色（v0.8.7）同理
             | "toolbox.accent"
@@ -491,6 +497,18 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         is_map: false,
     },
     FieldMeta {
+        path: "features.androidKeepAlive",
+        kind: "boolean",
+        description: "安卓后台常驻（默认关，本机设置不同步）：前台服务保活，同步与提醒在后台继续跑",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "features.keepAliveNotice",
+        kind: "string",
+        description: "常驻通知的标语文本（默认「今天有什么要做的吗~」，本机设置不同步）",
+        is_map: false,
+    },
+    FieldMeta {
         path: "diary.view",
         kind: "enum(list|calendar|group)",
         description: "日记视图（本机偏好，不跨设备同步）",
@@ -548,6 +566,36 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         path: "ledger.backgroundOpacity",
         kind: "number",
         description: "记账界面背景图透明度（0-1）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "calendar.view",
+        kind: "enum(month|week|threeday|day)",
+        description: "日程视图（本机偏好，不跨设备同步；默认 week）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "calendar.accent",
+        kind: "color",
+        description: "日程界面主题色（空串 = 默认日程色）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "calendar.backgroundColor",
+        kind: "color",
+        description: "日程界面背景色",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "calendar.backgroundImage",
+        kind: "string",
+        description: "日程界面背景图（img:<文件名> 或 http(s)/data URL；空串 = 无图）",
+        is_map: false,
+    },
+    FieldMeta {
+        path: "calendar.backgroundOpacity",
+        kind: "number",
+        description: "日程界面背景图透明度（0-1）",
         is_map: false,
     },
     FieldMeta {
@@ -632,12 +680,6 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         is_map: false,
     },
     FieldMeta {
-        path: "clipboard.acceptHtml",
-        kind: "bool",
-        description: "剪切板同步：接收 HTML（带纯文本回退）",
-        is_map: false,
-    },
-    FieldMeta {
         path: "clipboard.acceptImage",
         kind: "bool",
         description: "剪切板同步：接收图片",
@@ -653,12 +695,6 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         path: "clipboard.textLimitMb",
         kind: "integer(1-64)",
         description: "剪切板同步：纯文本大小上限（MB）",
-        is_map: false,
-    },
-    FieldMeta {
-        path: "clipboard.htmlLimitMb",
-        kind: "integer(1-64)",
-        description: "剪切板同步：HTML 大小上限（MB）",
         is_map: false,
     },
     FieldMeta {
@@ -783,11 +819,9 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "clipboard.account" => json!(settings.clipboard.account),
         "clipboard.password" => json!(settings.clipboard.password),
         "clipboard.acceptText" => json!(settings.clipboard.types.text),
-        "clipboard.acceptHtml" => json!(settings.clipboard.types.html),
         "clipboard.acceptImage" => json!(settings.clipboard.types.image),
         "clipboard.acceptFiles" => json!(settings.clipboard.types.files),
         "clipboard.textLimitMb" => json!(settings.clipboard.limits.text_mb),
-        "clipboard.htmlLimitMb" => json!(settings.clipboard.limits.html_mb),
         "clipboard.imageLimitMb" => json!(settings.clipboard.limits.image_mb),
         "clipboard.filesLimitMb" => json!(settings.clipboard.limits.files_mb),
         "clipboard.saveDir" => json!(settings.clipboard.save_dir),
@@ -811,6 +845,8 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "features.linkRender" => json!(settings.features.link_render),
         "features.weekStart" => json!(settings.features.week_start),
         "features.dueHighlight" => json!(settings.features.due_highlight),
+        "features.androidKeepAlive" => json!(settings.features.android_keep_alive),
+        "features.keepAliveNotice" => json!(settings.features.keep_alive_notice),
         "diary.view" => json!(settings.diary.view.as_str()),
         "diary.accent" => json!(settings.diary.accent),
         "diary.backgroundColor" => json!(settings.diary.background_color),
@@ -821,6 +857,11 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "ledger.backgroundColor" => json!(settings.ledger.background_color),
         "ledger.backgroundImage" => json!(settings.ledger.background_image),
         "ledger.backgroundOpacity" => json!(settings.ledger.background_opacity),
+        "calendar.view" => json!(settings.calendar.view.as_str()),
+        "calendar.accent" => json!(settings.calendar.accent),
+        "calendar.backgroundColor" => json!(settings.calendar.background_color),
+        "calendar.backgroundImage" => json!(settings.calendar.background_image),
+        "calendar.backgroundOpacity" => json!(settings.calendar.background_opacity),
         "toolbox.accent" => json!(settings.toolbox.accent),
         "toolbox.backgroundColor" => json!(settings.toolbox.background_color),
         "toolbox.toolAccents" => json!(settings.toolbox.tool_accents),
@@ -1437,14 +1478,10 @@ pub fn set_value(
             settings.clipboard.password = expect_string(path, &value)?.to_string();
         }
         "clipboard.acceptText" => settings.clipboard.types.text = expect_bool(path, &value)?,
-        "clipboard.acceptHtml" => settings.clipboard.types.html = expect_bool(path, &value)?,
         "clipboard.acceptImage" => settings.clipboard.types.image = expect_bool(path, &value)?,
         "clipboard.acceptFiles" => settings.clipboard.types.files = expect_bool(path, &value)?,
         "clipboard.textLimitMb" => {
             settings.clipboard.limits.text_mb = expect_clipboard_limit(path, &value, 64)?;
-        }
-        "clipboard.htmlLimitMb" => {
-            settings.clipboard.limits.html_mb = expect_clipboard_limit(path, &value, 64)?;
         }
         "clipboard.imageLimitMb" => {
             settings.clipboard.limits.image_mb = expect_clipboard_limit(path, &value, 256)?;
@@ -1541,6 +1578,18 @@ pub fn set_value(
             }
             settings.features.due_highlight = raw;
         }
+        "features.androidKeepAlive" => {
+            settings.features.android_keep_alive = expect_bool(path, &value)?;
+        }
+        "features.keepAliveNotice" => {
+            // 空串 = 回落默认标语（常驻通知不能没有文字）；长度截到 60 字符
+            let raw = expect_string(path, &value)?.trim().chars().take(60).collect::<String>();
+            settings.features.keep_alive_notice = if raw.is_empty() {
+                default_keep_alive_notice()
+            } else {
+                raw
+            };
+        }
         "diary.view" => {
             let raw = expect_string(path, &value)?;
             settings.diary.view = DiaryView::parse(&raw)
@@ -1589,6 +1638,30 @@ pub fn set_value(
                 .as_f64()
                 .ok_or_else(|| invalid_value(path, "应为 0-1 的数字"))?;
             settings.ledger.background_opacity = raw.clamp(0.0, 1.0);
+        }
+        "calendar.view" => {
+            let raw = expect_string(path, &value)?;
+            settings.calendar.view = CalendarView::parse(&raw)
+                .ok_or_else(|| invalid_value(path, "应为 month/week/threeday/day"))?;
+        }
+        "calendar.accent" => {
+            let raw = expect_string(path, &value)?.trim().to_string();
+            if !raw.is_empty() && !is_hex_color(&raw) {
+                return Err(invalid_value(path, "应为 #rrggbb 颜色或空串"));
+            }
+            settings.calendar.accent = raw;
+        }
+        "calendar.backgroundColor" => {
+            settings.calendar.background_color = expect_color(path, &value)?;
+        }
+        "calendar.backgroundImage" => {
+            settings.calendar.background_image = expect_string(path, &value)?.trim().to_string();
+        }
+        "calendar.backgroundOpacity" => {
+            let raw = value
+                .as_f64()
+                .ok_or_else(|| invalid_value(path, "应为 0-1 的数字"))?;
+            settings.calendar.background_opacity = raw.clamp(0.0, 1.0);
         }
         "toolbox.accent" => {
             let raw = expect_string(path, &value)?.trim().to_string();
@@ -1814,14 +1887,10 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "clipboard.account" => target.clipboard.account = defaults.clipboard.account.clone(),
         "clipboard.password" => target.clipboard.password = defaults.clipboard.password.clone(),
         "clipboard.acceptText" => target.clipboard.types.text = defaults.clipboard.types.text,
-        "clipboard.acceptHtml" => target.clipboard.types.html = defaults.clipboard.types.html,
         "clipboard.acceptImage" => target.clipboard.types.image = defaults.clipboard.types.image,
         "clipboard.acceptFiles" => target.clipboard.types.files = defaults.clipboard.types.files,
         "clipboard.textLimitMb" => {
             target.clipboard.limits.text_mb = defaults.clipboard.limits.text_mb
-        }
-        "clipboard.htmlLimitMb" => {
-            target.clipboard.limits.html_mb = defaults.clipboard.limits.html_mb
         }
         "clipboard.imageLimitMb" => {
             target.clipboard.limits.image_mb = defaults.clipboard.limits.image_mb
@@ -1858,6 +1927,12 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "features.dueHighlight" => {
             target.features.due_highlight = defaults.features.due_highlight.clone()
         }
+        "features.androidKeepAlive" => {
+            target.features.android_keep_alive = defaults.features.android_keep_alive
+        }
+        "features.keepAliveNotice" => {
+            target.features.keep_alive_notice = defaults.features.keep_alive_notice.clone()
+        }
         "diary.view" => target.diary.view = defaults.diary.view,
         "diary.accent" => target.diary.accent = defaults.diary.accent.clone(),
         "diary.backgroundColor" => {
@@ -1879,6 +1954,17 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         }
         "ledger.backgroundOpacity" => {
             target.ledger.background_opacity = defaults.ledger.background_opacity
+        }
+        "calendar.view" => target.calendar.view = defaults.calendar.view,
+        "calendar.accent" => target.calendar.accent = defaults.calendar.accent.clone(),
+        "calendar.backgroundColor" => {
+            target.calendar.background_color = defaults.calendar.background_color.clone()
+        }
+        "calendar.backgroundImage" => {
+            target.calendar.background_image = defaults.calendar.background_image.clone()
+        }
+        "calendar.backgroundOpacity" => {
+            target.calendar.background_opacity = defaults.calendar.background_opacity
         }
         "toolbox.accent" => target.toolbox.accent = defaults.toolbox.accent.clone(),
         "toolbox.backgroundColor" => {

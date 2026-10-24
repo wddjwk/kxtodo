@@ -17,7 +17,6 @@ export function androidBridge() {
 
 export type NativeClipboard = {
   text: string;
-  html: string;
   imagePath: string | null;
   files: Array<{ name: string; path: string }>;
 };
@@ -33,14 +32,12 @@ export function readNativeClipboard(): NativeClipboard | null {
     const parsed = JSON.parse(raw) as {
       error?: string;
       text?: string;
-      html?: string;
       imagePath?: string | null;
       files?: Array<{ name?: string; path?: string }>;
     };
     if (parsed.error) return null;
     return {
       text: typeof parsed.text === "string" ? parsed.text : "",
-      html: typeof parsed.html === "string" ? parsed.html : "",
       imagePath: typeof parsed.imagePath === "string" && parsed.imagePath ? parsed.imagePath : null,
       files: (parsed.files ?? [])
         .filter((file): file is { name: string; path: string } =>
@@ -62,11 +59,101 @@ export function writeNativeClipboard(content: ClipboardRemoteContent): string {
       token,
       JSON.stringify({
         text: content.text,
-        html: content.html,
         imagePath: content.imagePath ?? "",
         files: content.files.filter((file) => Boolean(file.path))
       })
     );
+  } catch (error) {
+    return String(error);
+  }
+}
+
+export type KeepAliveState = {
+  enabled: boolean;
+  running: boolean;
+  notice: string;
+  notificationsAllowed: boolean;
+};
+
+/**
+ * 后台常驻（v0.9.0）：把前台服务对齐到设置。
+ *
+ * 非安卓（桥不存在 / 桌面 / 浏览器 dev）时是**空操作并返回 ""**——调用方不必自己判平台，
+ * 这样「设置变了就 reconcile」可以写成一条无条件的响应式语句。
+ */
+export function setNativeKeepAlive(enabled: boolean, notice: string): string {
+  const bridge = androidBridge();
+  const token = androidToken();
+  if (!bridge?.setKeepAlive || !token) return "";
+  try {
+    return bridge.setKeepAlive(token, enabled, notice) ?? "";
+  } catch (error) {
+    return String(error);
+  }
+}
+
+/** 常驻状态；桥不可用时返回 null（设置页据此决定要不要显示「未生效」提示）。 */
+export function readNativeKeepAlive(): KeepAliveState | null {
+  const bridge = androidBridge();
+  const token = androidToken();
+  if (!bridge?.keepAliveState || !token) return null;
+  try {
+    const parsed = JSON.parse(bridge.keepAliveState(token) ?? "null") as Partial<KeepAliveState> & {
+      error?: string;
+    };
+    if (parsed?.error) return null;
+    return {
+      enabled: parsed?.enabled === true,
+      running: parsed?.running === true,
+      notice: typeof parsed?.notice === "string" ? parsed.notice : "",
+      notificationsAllowed: parsed?.notificationsAllowed !== false
+    };
+  } catch {
+    return null;
+  }
+}
+
+export type NativeSaveDir = { label: string; path: string };
+
+/** 安卓上可写的保存目录候选（作用域存储只允许应用自己的外部目录用路径写）。 */
+export function listNativeSaveDirs(): NativeSaveDir[] {
+  const bridge = androidBridge();
+  const token = androidToken();
+  if (!bridge?.listSaveDirs || !token) return [];
+  try {
+    const parsed = JSON.parse(bridge.listSaveDirs(token) ?? "null") as
+      | Array<Partial<NativeSaveDir>>
+      | { error?: string }
+      | null;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (entry): entry is NativeSaveDir =>
+        typeof entry?.label === "string" && typeof entry?.path === "string" && entry.path !== ""
+    );
+  } catch {
+    return [];
+  }
+}
+
+/** 打开保存目录；返回 "" 表示成功，非空为错误文案（没有文件管理器之类）。 */
+export function openNativeFolder(path: string): string {
+  const bridge = androidBridge();
+  const token = androidToken();
+  if (!bridge?.openFolder || !token) return "剪切板桥未就绪";
+  try {
+    return bridge.openFolder(token, path) ?? "";
+  } catch (error) {
+    return String(error);
+  }
+}
+
+/** 收到的图片另存一份进相册（Pictures/kxtodo）；返回 "" 表示成功。 */
+export function exportNativeImageToGallery(path: string): string {
+  const bridge = androidBridge();
+  const token = androidToken();
+  if (!bridge?.exportImageToGallery || !token) return "";
+  try {
+    return bridge.exportImageToGallery(token, path) ?? "";
   } catch (error) {
     return String(error);
   }

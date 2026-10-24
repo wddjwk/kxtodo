@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use crate::model::{DataFile, DiaryFile, LedgerFile, ScheduleFile, SettingsFile};
+use crate::model::{CalendarFile, DataFile, DiaryFile, LedgerFile, ScheduleFile, SettingsFile};
 
 pub const SETTINGS_ENTITY_ID: &str = "settings";
 
@@ -17,6 +17,7 @@ pub struct Scopes {
     pub schedules: bool,
     pub diary: bool,
     pub ledger: bool,
+    pub calendar: bool,
 }
 
 impl Scopes {
@@ -27,6 +28,7 @@ impl Scopes {
             schedules: settings.sync.sync_schedules,
             diary: settings.sync.sync_diary,
             ledger: settings.sync.sync_ledger,
+            calendar: settings.sync.sync_calendar,
         }
     }
 }
@@ -34,7 +36,7 @@ impl Scopes {
 /// 解密后的同步实体（内存表示）。
 #[derive(Debug, Clone)]
 pub struct EntityRecord {
-    /// "node" | "task" | "diary" | "schedule" | "settings"
+    /// "node" | "task" | "diary" | "schedule" | "calendar" | "settings"
     pub kind: String,
     pub id: String,
     pub updated_at: String,
@@ -158,6 +160,24 @@ pub fn diary_entity_stamp(diary: &DiaryFile, id: &str) -> Option<String> {
         .map(|tomb| tomb.updated_at.clone())
 }
 
+/// 本地实体的版本戳（calendar 域：活实体或墓碑）。
+pub fn calendar_entity_stamp(calendar: &CalendarFile, id: &str) -> Option<String> {
+    if let Some(event) = calendar.events.iter().find(|event| event.id == id) {
+        return Some(
+            event
+                .updated_at
+                .clone()
+                .unwrap_or_else(|| event.created_at.clone()),
+        );
+    }
+    calendar
+        .meta
+        .tombstones
+        .iter()
+        .find(|tomb| tomb.id == id)
+        .map(|tomb| tomb.updated_at.clone())
+}
+
 /// 记账域的四种实体_kind_（流水 / 账户 / 分类 / 账户类型）走同一套同步机制。
 pub fn is_ledger_kind(kind: &str) -> bool {
     matches!(kind, "ledger" | "ledgerAccount" | "ledgerCategory" | "ledgerAccountType")
@@ -260,6 +280,11 @@ fn diary_payload(entry: &crate::model::DiaryEntry) -> Value {
     payload
 }
 
+/// 日程事件没有本机 UI 状态字段，整个实体都是内容。
+fn calendar_payload(event: &crate::model::CalendarEvent) -> Value {
+    serde_json::to_value(event).unwrap_or(Value::Null)
+}
+
 fn ledger_entry_payload(entry: &crate::model::LedgerEntry) -> Value {
     serde_json::to_value(entry).unwrap_or(Value::Null)
 }
@@ -332,6 +357,13 @@ pub fn settings_payload(settings: &SettingsFile) -> Value {
             "backgroundImage": settings.ledger.background_image,
             "backgroundOpacity": settings.ledger.background_opacity,
         },
+        // 日程同日记/记账：外观跟着走，view 是本机偏好
+        "calendar": {
+            "accent": settings.calendar.accent,
+            "backgroundColor": settings.calendar.background_color,
+            "backgroundImage": settings.calendar.background_image,
+            "backgroundOpacity": settings.calendar.background_opacity,
+        },
         // 工具箱同日记/记账（v0.8.4）：外观跟着走；v0.8.7 起每个工具子页自己那两份也在
         "toolbox": {
             "accent": settings.toolbox.accent,
@@ -343,10 +375,12 @@ pub fn settings_payload(settings: &SettingsFile) -> Value {
 }
 
 /// 提取本设备的全部同步实体（含墓碑），按 scope 裁剪。
+#[allow(clippy::too_many_arguments)]
 pub fn extract_entities(
     data: &DataFile,
     diary: &DiaryFile,
     ledger: &LedgerFile,
+    calendar: &CalendarFile,
     settings: &SettingsFile,
     schedule: &ScheduleFile,
     scopes: &Scopes,
@@ -382,7 +416,7 @@ pub fn extract_entities(
                 seq: 0,
             });
         }
-        // 草稿纸（v0.8.4）：单例实体，写过才有（updatedAt 空 = 没有内容可推）
+        // 草稿纸（v0.8.4，v0.9.0 标签页化）：单例实体，写过才有（updatedAt 空 = 没有内容可推）
         if let Some(stamp) = scratchpad_entity_stamp(data) {
             out.push(EntityRecord {
                 kind: "scratchpad".to_string(),
@@ -390,7 +424,10 @@ pub fn extract_entities(
                 updated_at: stamp,
                 updated_by: device_id.to_string(),
                 deleted: false,
-                data: json!({ "text": data.scratchpad.text }),
+                data: json!({
+                    "tabs": data.scratchpad.tabs,
+                    "activeTabId": data.scratchpad.active_tab_id,
+                }),
                 seq: 0,
             });
         }
@@ -428,6 +465,36 @@ pub fn extract_entities(
             if tomb.kind == "diary" {
                 out.push(EntityRecord {
                     kind: "diary".to_string(),
+                    id: tomb.id.clone(),
+                    updated_at: tomb.updated_at.clone(),
+                    updated_by: device_id.to_string(),
+                    deleted: true,
+                    data: Value::Null,
+                    seq: 0,
+                });
+            }
+        }
+    }
+    // 日程（v0.9.0）：独立领域文件 + 独立范围勾选，机制与日记完全一致
+    if scopes.calendar {
+        for event in &calendar.events {
+            out.push(EntityRecord {
+                kind: "calendar".to_string(),
+                id: event.id.clone(),
+                updated_at: event
+                    .updated_at
+                    .clone()
+                    .unwrap_or_else(|| event.created_at.clone()),
+                updated_by: device_id.to_string(),
+                deleted: false,
+                data: calendar_payload(event),
+                seq: 0,
+            });
+        }
+        for tomb in &calendar.meta.tombstones {
+            if tomb.kind == "calendar" {
+                out.push(EntityRecord {
+                    kind: "calendar".to_string(),
                     id: tomb.id.clone(),
                     updated_at: tomb.updated_at.clone(),
                     updated_by: device_id.to_string(),
@@ -607,6 +674,21 @@ pub fn apply_diary_record(record: &EntityRecord, diary: &mut DiaryFile) -> Resul
     Ok(())
 }
 
+pub fn apply_calendar_record(record: &EntityRecord, calendar: &mut CalendarFile) -> Result<(), String> {
+    if record.deleted {
+        calendar.events.retain(|event| event.id != record.id);
+        calendar
+            .meta
+            .record_tombstone(&record.id, "calendar", &record.updated_at);
+        return Ok(());
+    }
+    let event: crate::model::CalendarEvent =
+        serde_json::from_value(record.data.clone()).map_err(|e| e.to_string())?;
+    calendar.events.retain(|item| item.id != event.id);
+    calendar.events.push(event);
+    Ok(())
+}
+
 pub fn apply_ledger_record(record: &EntityRecord, ledger: &mut LedgerFile) -> Result<(), String> {
     if record.deleted {
         match record.kind.as_str() {
@@ -714,6 +796,8 @@ fn apply_settings_record(record: &EntityRecord, settings: &mut SettingsFile) -> 
         diary: Option<Value>,
         #[serde(default)]
         ledger: Option<Value>,
+        #[serde(default)]
+        calendar: Option<Value>,
         #[serde(default)]
         toolbox: Option<Value>,
     }
@@ -876,6 +960,23 @@ fn apply_settings_record(record: &EntityRecord, settings: &mut SettingsFile) -> 
             }
         }
     }
+    if let Some(calendar) = payload.calendar {
+        if let Some(map) = calendar.as_object() {
+            // 逐字段合并：老设备的载荷没有 calendar 键时，本机外观一动不动
+            if let Some(value) = map.get("accent").and_then(Value::as_str) {
+                settings.calendar.accent = value.to_string();
+            }
+            if let Some(value) = map.get("backgroundColor").and_then(Value::as_str) {
+                settings.calendar.background_color = value.to_string();
+            }
+            if let Some(value) = map.get("backgroundImage").and_then(Value::as_str) {
+                settings.calendar.background_image = value.to_string();
+            }
+            if let Some(value) = map.get("backgroundOpacity").and_then(Value::as_f64) {
+                settings.calendar.background_opacity = value.clamp(0.0, 1.0);
+            }
+        }
+    }
     if let Some(toolbox) = payload.toolbox {
         if let Some(map) = toolbox.as_object() {
             // 逐字段覆盖（老设备的载荷没有 toolbox 键 = 这条记录没提它）
@@ -924,18 +1025,39 @@ pub fn apply_data_record(
     match record.kind.as_str() {
         "node" => apply_node_record(record, data),
         "task" => apply_task_record(record, data),
-        // 草稿纸：LWW 整段覆盖（载荷里就是整篇文本）
+        // 草稿纸：LWW 整份覆盖（载荷里就是全部标签页）
         "scratchpad" => {
-            let text = record
-                .data
-                .get("text")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-            data.scratchpad = crate::model::Scratchpad {
-                text,
+            let tabs: Vec<crate::model::ScratchpadTab> =
+                serde_json::from_value(record.data.get("tabs").cloned().unwrap_or(Value::Null))
+                    .unwrap_or_default();
+            let mut next = crate::model::Scratchpad {
+                tabs,
+                active_tab_id: record
+                    .data
+                    .get("activeTabId")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
                 updated_at: record.updated_at.clone(),
+                extra: Map::new(),
             };
+            // 对端可能还是 v0.9.0 之前的版本（载荷是整段 text）：折进第一个标签页，
+            // 与 repo.rs::load_data 的加载归一同一条口径
+            if next.tabs.is_empty() {
+                if let Some(text) = record.data.get("text").and_then(Value::as_str) {
+                    if !text.trim().is_empty() {
+                        next.tabs.push(crate::model::ScratchpadTab {
+                            id: "tab-1".to_string(),
+                            name: "1".to_string(),
+                            text: text.to_string(),
+                            updated_at: record.updated_at.clone(),
+                            extra: Map::new(),
+                        });
+                        next.active_tab_id = "tab-1".to_string();
+                    }
+                }
+            }
+            data.scratchpad = next;
             Ok(())
         }
         other => Err(format!("未知数据域实体类型 `{other}`")),
@@ -985,6 +1107,11 @@ pub fn normalize_diary_orders(diary: &mut DiaryFile) {
             .then_with(|| a.created_at.cmp(&b.created_at))
             .then_with(|| a.id.cmp(&b.id))
     });
+}
+
+/// 日程的规范数组序：与 `calendar list` 的输出同序（开始早的在前，同刻全天在前）。
+pub fn normalize_calendar_orders(calendar: &mut CalendarFile) {
+    crate::ops_calendar::sort_events(&mut calendar.events);
 }
 
 /// 记账的规范数组序：流水与列表视图同序（日期新→旧），账户/分类按 order。
@@ -1180,16 +1307,25 @@ mod tests {
 
     #[test]
     fn scratchpad_syncs_as_a_singleton_entity() {
-        // 写过草稿纸 → 提取出一个 kind=scratchpad 的单例实体
+        // 写过草稿纸 → 提取出一个 kind=scratchpad 的单例实体（v0.9.0 起载荷是标签页数组）
         let mut data = empty_data();
         data.scratchpad = crate::model::Scratchpad {
-            text: "甲".to_string(),
+            tabs: vec![crate::model::ScratchpadTab {
+                id: "tab-1".to_string(),
+                name: "1".to_string(),
+                text: "甲".to_string(),
+                updated_at: "2026-09-19T00:00:00Z".to_string(),
+                extra: Map::new(),
+            }],
+            active_tab_id: "tab-1".to_string(),
             updated_at: "2026-09-19T00:00:00Z".to_string(),
+            extra: Map::new(),
         };
         let entities = extract_entities(
             &data,
             &crate::model::DiaryFile::default(),
             &crate::model::LedgerFile::default(),
+            &crate::model::CalendarFile::default(),
             &crate::model::SettingsFile::default(),
             &crate::model::ScheduleFile::default(),
             &Scopes { data: true, ..Default::default() },
@@ -1200,7 +1336,8 @@ mod tests {
             .find(|item| item.kind == "scratchpad")
             .expect("草稿纸实体应被提取");
         assert_eq!(entity.id, SCRATCHPAD_ENTITY_ID);
-        assert_eq!(entity.data["text"], json!("甲"));
+        assert_eq!(entity.data["tabs"][0]["text"], json!("甲"));
+        assert_eq!(entity.data["activeTabId"], json!("tab-1"));
 
         // 没写过（updatedAt 空）→ 不产生实体，免得把空草稿推给别的设备
         let fresh = empty_data();
@@ -1208,6 +1345,7 @@ mod tests {
             &fresh,
             &crate::model::DiaryFile::default(),
             &crate::model::LedgerFile::default(),
+            &crate::model::CalendarFile::default(),
             &crate::model::SettingsFile::default(),
             &crate::model::ScheduleFile::default(),
             &Scopes { data: true, ..Default::default() },
@@ -1215,22 +1353,38 @@ mod tests {
         );
         assert!(none.iter().all(|item| item.kind != "scratchpad"));
 
-        // 远端记录应用回来：整段覆盖 + 记 stamp
+        // 远端记录应用回来：整份覆盖 + 记 stamp
         let mut target = empty_data();
         let round = record(
             "scratchpad",
             SCRATCHPAD_ENTITY_ID,
             "2026-09-19T01:00:00Z",
             "dev-b",
-            json!({ "text": "乙" }),
+            json!({
+                "tabs": [{ "id": "tab-1", "name": "1", "text": "乙", "updatedAt": "2026-09-19T01:00:00Z" }],
+                "activeTabId": "tab-1"
+            }),
         );
         apply_data_record(&round, &mut target).expect("应用草稿纸记录");
-        assert_eq!(target.scratchpad.text, "乙");
+        assert_eq!(target.scratchpad.tabs[0].text, "乙");
         assert_eq!(target.scratchpad.updated_at, "2026-09-19T01:00:00Z");
         assert_eq!(
             data_entity_stamp(&target, SCRATCHPAD_ENTITY_ID).as_deref(),
             Some("2026-09-19T01:00:00Z")
         );
+
+        // 老版本对端（载荷是整段 text）→ 折进第一个标签页，不丢内容
+        let mut legacy_target = empty_data();
+        let legacy = record(
+            "scratchpad",
+            SCRATCHPAD_ENTITY_ID,
+            "2026-09-19T02:00:00Z",
+            "dev-c",
+            json!({ "text": "旧版整段" }),
+        );
+        apply_data_record(&legacy, &mut legacy_target).expect("应用旧版草稿纸记录");
+        assert_eq!(legacy_target.scratchpad.tabs.len(), 1);
+        assert_eq!(legacy_target.scratchpad.tabs[0].text, "旧版整段");
     }
 
     #[test]
@@ -1251,6 +1405,7 @@ mod tests {
             &data,
             &DiaryFile::default(),
             &LedgerFile::default(),
+            &CalendarFile::default(),
             &settings,
             &schedule,
             &Scopes {
@@ -1259,6 +1414,7 @@ mod tests {
                 schedules: false,
                 diary: false,
                 ledger: false,
+                calendar: false,
             },
             "dev-a",
         );
@@ -1535,6 +1691,7 @@ mod tests {
             &data,
             &local,
             &LedgerFile::default(),
+            &CalendarFile::default(),
             &settings,
             &schedule,
             &Scopes {
@@ -1543,6 +1700,7 @@ mod tests {
                 schedules: false,
                 diary: true,
                 ledger: false,
+                calendar: false,
             },
             "dev-a",
         );
@@ -1562,6 +1720,7 @@ mod tests {
             &data,
             &local,
             &LedgerFile::default(),
+            &CalendarFile::default(),
             &settings,
             &schedule,
             &Scopes {
@@ -1570,6 +1729,7 @@ mod tests {
                 schedules: false,
                 diary: false,
                 ledger: false,
+                calendar: false,
             },
             "dev-a",
         );
@@ -1648,6 +1808,181 @@ mod tests {
         assert_eq!(ids, vec!["d-early", "d-late", "d-old"]);
     }
 
+    // -----------------------------------------------------------------------
+    // calendar 域（v0.9.0）：与日记同一套机制——独立范围、LWW、墓碑、规范序
+    // -----------------------------------------------------------------------
+
+    fn calendar_event(id: &str, start_date: &str, start_time: &str, ts: &str) -> crate::model::CalendarEvent {
+        crate::model::CalendarEvent {
+            id: id.to_string(),
+            title: format!("日程 {id}"),
+            details: String::new(),
+            start_date: start_date.to_string(),
+            start_time: start_time.to_string(),
+            end_date: start_date.to_string(),
+            end_time: start_time.to_string(),
+            all_day: start_time.is_empty(),
+            reminders: Vec::new(),
+            task_id: String::new(),
+            created_at: ts.to_string(),
+            updated_at: Some(ts.to_string()),
+            extra: Map::new(),
+        }
+    }
+
+    #[test]
+    fn calendar_has_its_own_scope_and_tombstones_stay_in_its_own_meta() {
+        let mut local = CalendarFile {
+            events: vec![calendar_event("c1", "2026-10-25", "09:00", "2026-10-01T00:00:00.000Z")],
+            ..Default::default()
+        };
+        let data = empty_data();
+        let settings = SettingsFile::default();
+        let schedule = ScheduleFile::default();
+
+        let on = extract_entities(
+            &data,
+            &DiaryFile::default(),
+            &LedgerFile::default(),
+            &local,
+            &settings,
+            &schedule,
+            &Scopes {
+                data: false,
+                settings: false,
+                schedules: false,
+                diary: false,
+                ledger: false,
+                calendar: true,
+            },
+            "dev-a",
+        );
+        let entity = on
+            .iter()
+            .find(|e| e.kind == "calendar")
+            .expect("日程在「日程」范围内");
+        assert_eq!(entity.id, "c1");
+        assert_eq!(entity.data["startDate"], json!("2026-10-25"));
+
+        let off = extract_entities(
+            &data,
+            &DiaryFile::default(),
+            &LedgerFile::default(),
+            &local,
+            &settings,
+            &schedule,
+            &Scopes {
+                data: true,
+                settings: false,
+                schedules: false,
+                diary: false,
+                ledger: false,
+                calendar: false,
+            },
+            "dev-a",
+        );
+        assert!(
+            off.iter().all(|e| e.kind != "calendar"),
+            "关掉日程范围就不推日程"
+        );
+
+        // 远端更新胜出：内容替换
+        let remote = record(
+            "calendar",
+            "c1",
+            "2026-10-02T00:00:00.000Z",
+            "dev-b",
+            serde_json::to_value(calendar_event(
+                "c1",
+                "2026-10-26",
+                "09:00",
+                "2026-10-02T00:00:00.000Z",
+            ))
+            .unwrap(),
+        );
+        assert!(remote_wins(
+            &remote,
+            calendar_entity_stamp(&local, "c1").as_deref().map(|ts| (ts, "dev-a"))
+        ));
+        apply_calendar_record(&remote, &mut local).unwrap();
+        assert_eq!(local.events.len(), 1);
+        assert_eq!(local.events[0].start_date, "2026-10-26");
+        assert_eq!(
+            calendar_entity_stamp(&local, "c1").as_deref(),
+            Some("2026-10-02T00:00:00.000Z")
+        );
+
+        // 远端墓碑 → 删除 + 在 calendar 域自己的 _meta 里记墓碑
+        let tomb = EntityRecord {
+            kind: "calendar".to_string(),
+            id: "c1".to_string(),
+            updated_at: "2026-10-03T00:00:00.000Z".to_string(),
+            updated_by: "dev-b".to_string(),
+            deleted: true,
+            data: Value::Null,
+            seq: 3,
+        };
+        apply_calendar_record(&tomb, &mut local).unwrap();
+        assert!(local.events.is_empty());
+        assert_eq!(local.meta.tombstones[0].kind, "calendar");
+        assert_eq!(
+            calendar_entity_stamp(&local, "c1").as_deref(),
+            Some("2026-10-03T00:00:00.000Z"),
+            "墓碑也是版本戳：对端不能把删掉的日程推回来"
+        );
+    }
+
+    #[test]
+    fn calendar_array_order_is_canonical_after_merge() {
+        let mut local = CalendarFile {
+            events: vec![
+                calendar_event("c-late", "2026-10-25", "14:00", "2026-10-01T00:00:00.000Z"),
+                calendar_event("c-allday", "2026-10-25", "", "2026-10-01T00:00:00.000Z"),
+                calendar_event("c-early", "2026-10-24", "18:00", "2026-10-01T00:00:00.000Z"),
+            ],
+            ..Default::default()
+        };
+        normalize_calendar_orders(&mut local);
+        let ids: Vec<&str> = local.events.iter().map(|e| e.id.as_str()).collect();
+        // 开始早的在前；同一天全天排在定时前
+        assert_eq!(ids, vec!["c-early", "c-allday", "c-late"]);
+    }
+
+    #[test]
+    fn calendar_appearance_syncs_but_the_view_choice_does_not() {
+        let mut source = SettingsFile::default();
+        source.calendar.accent = "#123456".to_string();
+        source.calendar.background_color = "#0f0f0f".to_string();
+        source.calendar.view = crate::model::CalendarView::Month;
+        let payload = settings_payload(&source);
+        assert_eq!(payload["calendar"]["accent"], json!("#123456"));
+        assert_eq!(payload["calendar"]["backgroundColor"], json!("#0f0f0f"));
+        assert!(
+            payload["calendar"].get("view").is_none(),
+            "视图选择是本机 UI 状态，不进共享子集"
+        );
+
+        let mut target = SettingsFile::default();
+        target.calendar.view = crate::model::CalendarView::Day;
+        let record = EntityRecord {
+            kind: "settings".to_string(),
+            id: SETTINGS_ENTITY_ID.to_string(),
+            updated_at: "2026-10-02T00:00:00.000Z".to_string(),
+            updated_by: "dev-b".to_string(),
+            deleted: false,
+            data: payload,
+            seq: 1,
+        };
+        apply_record_settings(&record, &mut target).unwrap();
+        assert_eq!(target.calendar.accent, "#123456");
+        assert_eq!(target.calendar.background_color, "#0f0f0f");
+        assert_eq!(
+            target.calendar.view,
+            crate::model::CalendarView::Day,
+            "本机选的视图不被同步盖掉"
+        );
+    }
+
     #[test]
     fn diary_appearance_syncs_but_the_view_choice_does_not() {
         let mut source = SettingsFile::default();
@@ -1707,6 +2042,7 @@ mod tests {
             &empty_data(),
             &DiaryFile::default(),
             &local,
+            &CalendarFile::default(),
             &SettingsFile::default(),
             &ScheduleFile::default(),
             &Scopes {
@@ -1715,6 +2051,7 @@ mod tests {
                 schedules: false,
                 diary: false,
                 ledger: true,
+                calendar: false,
             },
             "dev-a",
         );

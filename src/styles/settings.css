@@ -245,9 +245,10 @@
   list-style: none;
 }
 
+/* 主视图精简后只有「名字 + 字节数」两列（v0.9.0 bugfix 5） */
 .storage-parts li {
   display: grid;
-  grid-template-columns: 5.2em minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   align-items: baseline;
 }
@@ -258,23 +259,57 @@
   font-weight: 600;
 }
 
-.storage-parts em {
-  color: #9aa1ac;
-  font-size: calc(var(--ui-font-size) - 5px);
-  font-style: normal;
-  line-height: 1.5;
-}
-
 .storage-parts b {
   color: #5c6470;
   font-size: calc(var(--ui-font-size) - 4px);
   font-variant-numeric: tabular-nums;
 }
 
-.storage-detail {
-  margin: -4px 0 9px;
+/* 「数据占用」行：数字右边的 ⓘ 靠最右 */
+.storage-head-row .icon-button {
+  margin-left: auto;
+}
+
+/* ⓘ 展开的详细说明：灰底卡片，条目两列（名字 + 解释） */
+.storage-info-pop {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f7f7f7;
+  color: #6b7280;
   font-size: calc(var(--ui-font-size) - 5px);
   line-height: 1.6;
+}
+
+.storage-info-pop ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.storage-info-pop li {
+  display: grid;
+  grid-template-columns: 5.2em minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.storage-info-pop strong {
+  color: #4b5563;
+  font-weight: 600;
+}
+
+.storage-info-pop em {
+  color: #9aa1ac;
+  font-style: normal;
+}
+
+.storage-info-pop p {
+  margin: 0;
 }
 
 .new-node-color {
@@ -386,6 +421,12 @@
 .sync-card {
   color: #666;
   line-height: 1.6;
+}
+
+/* 安卓后台常驻的说明行（v0.9.0）：一句实话，字号比正文小一档 */
+.keep-alive-hint {
+  margin: -6px 0 12px;
+  font-size: calc(var(--font-control) - 2px);
 }
 
 .sync-card {

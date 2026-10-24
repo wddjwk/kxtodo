@@ -471,10 +471,13 @@ const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 
   await page.locator(".scratchpad-area").fill("第一行\n# 这不是标题，只是文本");
   // v0.8.4：防抖拉到 5 秒（每次落盘 = 一条审计 + 一次 revision），状态提示行撤掉了
   await page.waitForTimeout(5400);
-  const stored = await page.evaluate(() => localStorage.getItem("kxtodo-scratchpad-v1"));
-  check("草稿自动保存进 localStorage", stored === "第一行\n# 这不是标题，只是文本", J(stored));
+  // v0.9.0：草稿纸标签页化——缓存键升到 v2、存的是 {tabs, activeTabId} 结构
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("kxtodo-scratchpad-v2") ?? "null"));
+  const storedActive = stored?.tabs?.find((tab) => tab.id === stored?.activeTabId);
+  check("草稿自动保存进 localStorage", storedActive?.text === "第一行\n# 这不是标题，只是文本", J(stored));
   const scratch = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "{}").scratchpad ?? null, STATE_KEY);
-  check("草稿正文进数据域（可同步）", scratch?.text === "第一行\n# 这不是标题，只是文本", J(scratch));
+  const domainActive = scratch?.tabs?.find((tab) => tab.id === scratch?.activeTabId);
+  check("草稿正文进数据域（可同步）", domainActive?.text === "第一行\n# 这不是标题，只是文本", J(scratch));
   await page.reload({ waitUntil: "load" });
   await page.waitForTimeout(800);
   await page.click(".system-nav .nav-row:has-text('工具箱')");

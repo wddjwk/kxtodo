@@ -67,6 +67,26 @@ export function ledgerBackground(ledger: Settings["ledger"]): ListBackground {
 }
 
 /**
+ * 日程的主题色（v0.9.0）：黛紫。与「计划内」的蓝、日记的墨蓝、记账的绿、
+ * 定时任务的墨绿都错开——侧栏里日程行一眼能认出来，图标（CalendarClock）也配套。
+ */
+export const CALENDAR_ACCENT = "#7c5cbf";
+
+/** 日程的主题色：设置里空着就用默认日程色。 */
+export function calendarAccent(calendar: Settings["calendar"]): string {
+  return isHexColor(calendar.accent) ? calendar.accent : CALENDAR_ACCENT;
+}
+
+/** 日程的背景：与条目背景同一个 ListBackground 形状。 */
+export function calendarBackground(calendar: Settings["calendar"]): ListBackground {
+  return {
+    color: isHexColor(calendar.backgroundColor) ? calendar.backgroundColor : defaultBackground.color,
+    image: calendar.backgroundImage || undefined,
+    imageOpacity: calendar.backgroundOpacity
+  };
+}
+
+/**
  * 工具箱的主题色（v0.8.4；v0.8.7 加每工具一层）：传工具 id 就取那个工具自己的，
  * 没配过（或没传）回落到工具箱主界面。两层的「空」都回应用默认主题色。
  */

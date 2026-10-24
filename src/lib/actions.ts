@@ -5,14 +5,15 @@
 // ---------------------------------------------------------------------------
 
 import { get, type Writable } from "svelte/store";
-import type { AppNode, AppState, CardStyle, DiaryEntry, LedgerAccount, LedgerAccountKind, LedgerAccountType, LedgerBook, LedgerCategory, LedgerEntry, LedgerKind, LedgerSide, ListBackground, ReminderRule, ScheduledTask, SchedulerState, Settings, SyncMode, Tag, TagColor, Task } from "./types";
+import type { AppNode, AppState, CalendarEvent, CardStyle, DiaryEntry, LedgerAccount, LedgerAccountKind, LedgerAccountType, LedgerBook, LedgerCategory, LedgerEntry, LedgerKind, LedgerSide, ListBackground, ReminderRule, ScheduledTask, SchedulerState, ScratchpadTab, Settings, SyncMode, Tag, TagColor, Task } from "./types";
 import { navToolId, type NavItemId } from "./nav";
 import type { ToolId } from "./tools/catalog";
 import { accountBalance } from "./ledger";
+import { normalizeCalendarTimes } from "./calendar";
 import { remindersParam } from "./reminders";
 import {
-  appState, appSettings, commit, commitDiary, commitLedger, commitScheduler, commitSettings,
-  coreMode, createDiaryId, createTaskId, diaryEntries, editBaseUpdatedAt, ledgerData, markEditStart, clearEditBase, rebaseEditBase,
+  appState, appSettings, commit, commitCalendar, commitDiary, commitLedger, commitScheduler, commitSettings,
+  coreMode, createDiaryId, createTaskId, calendarEvents, diaryEntries, editBaseUpdatedAt, ledgerData, markEditStart, clearEditBase, rebaseEditBase,
   manualSyncAt, noteEnvelopeRevision, refreshFromCore, scheduleEntries, syncConnection, showToast, todayIso
 } from "./stores";
 import {
@@ -22,7 +23,8 @@ import {
   type DiaryArchiveResult, type DiaryExportRange
 } from "./backend";
 import {
-  createCategoryNode, createEntryNode, defaultBackground, createScheduledTask, DEFAULT_ENTRY_ICON
+  createCategoryNode, createEntryNode, defaultBackground, createScheduledTask, DEFAULT_ENTRY_ICON,
+  normalizeCalendarEvents
 } from "./defaults";
 import { nodeAndDescendantIds } from "./nodes";
 import { clockOf, composeTimestamp } from "./clock";
@@ -503,6 +505,10 @@ export async function updateTask(id: string, changes: TaskChanges): Promise<void
       return;
     }
     legacyLocalTaskPatch(id, changes);
+    // 关联日程的详情双向编辑（v0.9.0）：任务内容变了，挂着的日程详情跟着变
+    if (changes.markdown !== undefined) {
+      void syncTaskMarkdownToLinkedEvents(id, changes.markdown);
+    }
     return;
   }
   legacyUpdateTask(id, (task) => {
@@ -522,6 +528,9 @@ export async function updateTask(id: string, changes: TaskChanges): Promise<void
     if (changes.reminders !== undefined) next.reminders = changes.reminders;
     return next;
   });
+  if (changes.markdown !== undefined) {
+    void syncTaskMarkdownToLinkedEvents(id, changes.markdown);
+  }
 }
 
 /** core 路径下的本地即时补丁（不等事件回刷，保持交互跟手）。 */
@@ -718,6 +727,8 @@ export async function saveTaskMarkdown(id: string, markdown: string, expanded: b
         // 忽略
       }
     }
+    // 关联日程的详情双向编辑（v0.9.0）：编辑器保存是 markdown 的主写路径之一
+    void syncTaskMarkdownToLinkedEvents(id, markdown);
     return true;
   }
   legacyUpdateTask(id, (task) => ({
@@ -726,6 +737,7 @@ export async function saveTaskMarkdown(id: string, markdown: string, expanded: b
     expanded,
     updatedAt: new Date().toISOString()
   }));
+  void syncTaskMarkdownToLinkedEvents(id, markdown);
   return true;
 }
 
@@ -761,20 +773,24 @@ export async function setBackground(
 }
 
 /**
- * 草稿纸（v0.8.4 需求 2）：整篇覆盖写。
+ * 草稿纸（v0.8.4 需求 2；v0.9.0 标签页化）：整份覆盖写（全部标签页 + 激活页）。
  *
- * 它是**内容**（跟数据域一起同步，LWW 整段覆盖），所以写路径走 core 命令
+ * 它是**内容**（跟数据域一起同步，LWW 整份覆盖），所以写路径走 core 命令
  * （`gui.set-scratchpad`）而不是停留在 localStorage；localStorage 只留作首帧缓存。
- * 调用方（ScratchpadTool）把防抖拉到秒级：每一次落盘 = 一条审计 + 一次 revision，
- * 逐键写会把台账灌爆。
+ * 调用方（ScratchpadTool）把文本输入的防抖拉到秒级：每一次落盘 = 一条审计 +
+ * 一次 revision，逐键写会把台账灌爆；标签页结构变更（新建/改名/关闭）则立即写。
  */
-export async function setScratchpad(text: string): Promise<boolean> {
+export async function setScratchpadTabs(tabs: ScratchpadTab[], activeTabId: string): Promise<boolean> {
+  const payload = {
+    tabs: tabs.map((tab) => ({ id: tab.id, name: tab.name, text: tab.text, updatedAt: tab.updatedAt ?? "" })),
+    activeTabId
+  };
   const mutate = (): void => {
-    appState.update((s) => ({ ...s, scratchpad: { text, updatedAt: new Date().toISOString() } }));
+    appState.update((s) => ({ ...s, scratchpad: { tabs, activeTabId, updatedAt: new Date().toISOString() } }));
   };
   if (coreMode) {
     return withRollback(appState, "草稿纸保存失败", mutate, () =>
-      coreDispatch("gui.set-scratchpad", { text })
+      coreDispatch("gui.set-scratchpad", payload)
     );
   }
   mutate();
@@ -1146,6 +1162,192 @@ export async function importDiaryArchiveFile(file: File): Promise<boolean> {
     await report(error, "日记导入失败");
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// 日程（calendar.json，独立的第六个领域，v0.9.0）
+// ---------------------------------------------------------------------------
+
+function calendars(): CalendarEvent[] {
+  return get(calendarEvents);
+}
+
+export function findCalendarEvent(id: string): CalendarEvent | undefined {
+  return calendars().find((event) => event.id === id);
+}
+
+/** 某个 todo 条目关联的全部日程（「添加到日程」的图标与双向详情都查它）。 */
+export function eventsLinkedToTask(taskId: string): CalendarEvent[] {
+  if (!taskId) return [];
+  return calendars().filter((event) => event.taskId === taskId);
+}
+
+function createCalendarId(): string {
+  if (crypto.randomUUID) return `cal-${crypto.randomUUID().replace(/-/g, "")}`;
+  return `cal-${Math.random().toString(16).slice(2, 10)}${Math.random()
+    .toString(16)
+    .slice(2, 10)}${Math.random()
+    .toString(16)
+    .slice(2, 10)}${Math.random().toString(16).slice(2, 10)}`;
+}
+
+export type CalendarDraft = {
+  title?: string;
+  details?: string;
+  startDate: string;
+  startTime?: string;
+  endDate?: string;
+  endTime?: string;
+  allDay?: boolean;
+  reminders?: ReminderRule[];
+  /** 关联的 todo 条目（右键「添加到日程」）；空 = 独立日程 */
+  taskId?: string;
+};
+
+export type CalendarChanges = {
+  title?: string;
+  details?: string;
+  startDate?: string;
+  startTime?: string;
+  endDate?: string;
+  endTime?: string;
+  allDay?: boolean;
+  /** `undefined` = 这次不动提醒（与 core 的 Option 分界一致）；空数组 = 清空 */
+  reminders?: ReminderRule[];
+  taskId?: string;
+};
+
+export async function addCalendarEvent(draft: CalendarDraft): Promise<CalendarEvent | null> {
+  const createdAt = new Date().toISOString();
+  if (coreMode) {
+    let created;
+    try {
+      created = await coreDispatch<Record<string, unknown>>("calendar.add", {
+        title: draft.title ?? "",
+        details: draft.details ?? "",
+        startDate: draft.startDate,
+        startTime: draft.startTime ?? "",
+        endDate: draft.endDate ?? "",
+        endTime: draft.endTime ?? "",
+        allDay: draft.allDay === true,
+        reminders: remindersParam(draft.reminders ?? []),
+        taskId: draft.taskId ?? ""
+      });
+    } catch (error) {
+      return await report(error, "日程创建失败");
+    }
+    // 用 core 归一后的权威值（缺省结束时刻 +1 小时、全天折算都在那边做完）
+    const [event] = normalizeCalendarEvents([created.data]);
+    if (!event) return null;
+    calendarEvents.update((list) => [...list, event]);
+    return event;
+  }
+  const times = normalizeCalendarTimes(draft);
+  const event: CalendarEvent = {
+    id: createCalendarId(),
+    title: draft.title ?? "",
+    details: draft.details ?? "",
+    ...times,
+    reminders: draft.reminders ?? [],
+    taskId: draft.taskId ?? "",
+    createdAt,
+    updatedAt: createdAt
+  };
+  commitCalendar([...calendars(), event]);
+  return event;
+}
+
+function applyCalendarChanges(event: CalendarEvent, changes: CalendarChanges): CalendarEvent {
+  const next: CalendarEvent = { ...event, updatedAt: new Date().toISOString() };
+  if (changes.title !== undefined) next.title = changes.title;
+  if (changes.details !== undefined) next.details = changes.details;
+  if (changes.startDate !== undefined) next.startDate = changes.startDate;
+  if (changes.startTime !== undefined) next.startTime = changes.startTime;
+  if (changes.endDate !== undefined) next.endDate = changes.endDate;
+  if (changes.endTime !== undefined) next.endTime = changes.endTime;
+  if (changes.allDay !== undefined) next.allDay = changes.allDay;
+  if (changes.reminders !== undefined) next.reminders = changes.reminders;
+  if (changes.taskId !== undefined) next.taskId = changes.taskId;
+  return next;
+}
+
+export async function updateCalendarEvent(id: string, changes: CalendarChanges): Promise<boolean> {
+  const previous = findCalendarEvent(id);
+  if (!previous) return false;
+  if (coreMode) {
+    const params: Record<string, unknown> = { id };
+    if (changes.title !== undefined) params.title = changes.title;
+    if (changes.details !== undefined) params.details = changes.details;
+    if (changes.startDate !== undefined) params.startDate = changes.startDate;
+    if (changes.startTime !== undefined) params.startTime = changes.startTime;
+    if (changes.endDate !== undefined) params.endDate = changes.endDate;
+    if (changes.endTime !== undefined) params.endTime = changes.endTime;
+    if (changes.allDay !== undefined) params.allDay = changes.allDay;
+    if (changes.reminders !== undefined) params.reminders = remindersParam(changes.reminders);
+    if (changes.taskId !== undefined) params.taskId = changes.taskId;
+    try {
+      const envelope = await coreDispatch<Record<string, unknown>>("calendar.modify", params);
+      const [normalized] = normalizeCalendarEvents([envelope.data]);
+      calendarEvents.update((list) =>
+        list.map((event) => (event.id === id ? (normalized ?? applyCalendarChanges(event, changes)) : event))
+      );
+    } catch (error) {
+      await report(error, "日程保存失败");
+      return false;
+    }
+  } else {
+    commitCalendar(calendars().map((event) => (event.id === id ? applyCalendarChanges(event, changes) : event)));
+  }
+  // 关联条目的详情是**双向**的：日程这边改了详情，todo 条目的内容跟着改
+  // （反方向在 updateTask 里挂钩；两边都只在值真的不同时才写，不会打乒乓）。
+  const linkedTask = (changes.taskId !== undefined ? changes.taskId : previous.taskId) || "";
+  if (changes.details !== undefined && linkedTask) {
+    const task = state().tasks.find((item) => item.id === linkedTask);
+    if (task && task.markdown !== changes.details) {
+      await updateTask(linkedTask, { markdown: changes.details });
+    }
+  }
+  return true;
+}
+
+export async function deleteCalendarEvent(id: string): Promise<void> {
+  const keep = (list: CalendarEvent[]): CalendarEvent[] => list.filter((event) => event.id !== id);
+  if (coreMode) {
+    try {
+      await coreDispatch("calendar.remove", { id });
+    } catch (error) {
+      await report(error, "日程删除失败");
+      return;
+    }
+    calendarEvents.update(keep);
+    return;
+  }
+  commitCalendar(keep(calendars()));
+}
+
+/**
+ * 任务内容 → 关联日程的单向回写（`updateTask` 改了 markdown 时调）。
+ * 只在值真的不同时写：日程编辑器保存详情会先改日程再调 updateTask，
+ * 那时这里已经相等，不会再写回日程——双向编辑靠这个等值判断收敛。
+ */
+async function syncTaskMarkdownToLinkedEvents(taskId: string, markdown: string): Promise<void> {
+  const linked = calendars().filter((event) => event.taskId === taskId && event.details !== markdown);
+  if (linked.length === 0) return;
+  for (const event of linked) {
+    if (coreMode) {
+      try {
+        await coreDispatch("calendar.modify", { id: event.id, details: markdown });
+      } catch {
+        // 域事件/下一轮快照会兜底；这里不打断任务保存本身
+      }
+    }
+    calendarEvents.update((list) =>
+      list.map((item) =>
+        item.id === event.id ? { ...item, details: markdown, updatedAt: new Date().toISOString() } : item
+      )
+    );
+  }
+  if (!coreMode) commitCalendar(calendars());
 }
 
 /** 一般卡片条目导出为 Markdown 压缩包；返回导出的卡片数（0 = 取消或空）。 */
@@ -1994,6 +2196,7 @@ export type SyncPairInput = {
   syncSchedules?: boolean;
   syncDiary?: boolean;
   syncLedger?: boolean;
+  syncCalendar?: boolean;
 };
 
 /**
@@ -2336,6 +2539,7 @@ export async function setSyncScopes(scopes: {
   syncSchedules?: boolean;
   syncDiary?: boolean;
   syncLedger?: boolean;
+  syncCalendar?: boolean;
   enabled?: boolean;
   intervalSeconds?: number;
   reconnectSeconds?: number;
