@@ -263,7 +263,7 @@ pub fn risk_condition(command: &str) -> Value {
 pub fn risk_for(command: &str) -> &'static str {
     match command {
         "task.remove" | "schedule.remove" | "schedule.enable" | "schedule.run" | "config.reset"
-        | "diary.remove" | "calendar.remove" => "high-risk-write",
+        | "diary.remove" | "calendar.remove" | "calendar.categoryRemove" => "high-risk-write",
         // 存储清理不可恢复（孤儿图片/临时文件/过期日志直接删），与删除同级；
         // storage.usage 是纯读，落在默认分支
         "storage.clean" => "high-risk-write",
@@ -290,6 +290,8 @@ pub fn risk_for(command: &str) -> &'static str {
         | "diary.import"
         | "calendar.add"
         | "calendar.modify"
+        | "calendar.categoryAdd"
+        | "calendar.categoryModify"
         | "schedule.add"
         | "schedule.modify"
         | "schedule.disable"

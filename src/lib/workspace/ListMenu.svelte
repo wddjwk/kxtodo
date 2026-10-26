@@ -3,7 +3,7 @@
   import ContextMenu from "../menu/ContextMenu.svelte";
   import MenuItem from "../menu/MenuItem.svelte";
   import MenuSeparator from "../menu/MenuSeparator.svelte";
-  import { ArrowUpDown, CalendarRange, Download, Eraser, Eye, EyeOff, FileArchive, FolderInput, Image, LayoutGrid, ListTodo, PenLine, RefreshCw, RotateCcw, Trash2, Upload } from "@lucide/svelte";
+  import { ArrowUpDown, CalendarRange, Download, Eraser, Eye, EyeOff, FileArchive, FolderInput, Image, LayoutGrid, ListTodo, PenLine, RefreshCw, RotateCcw, Tags, Trash2, Upload } from "@lucide/svelte";
   import { appSettings, appState, selectedBackground, accent, showToast, now, safeFileName, appVersion } from "../stores";
   import {
     deleteNodeCascade as deleteNodeCascadeAction,
@@ -66,6 +66,8 @@
   export let ledgerMode = false;
   /** 日程模式（v0.9.0）：外观在 settings.calendar；没有导出导入，菜单直奔外观。 */
   export let calendarMode = false;
+  /** 日程模式下的「管理分类」入口（v0.9.1）；null = 不显示这一行 */
+  export let onManageCategories: (() => void) | null = null;
   export let background: ListBackground | null = null;
   export let accentColor: string | null = null;
 
@@ -902,6 +904,19 @@
   {/if}
   {#if !isSystemNode}
     <MenuItem icon={Trash2} danger label="删除当前条目" onSelect={deleteCurrentNode} />
+  {/if}
+
+  {#if calendarMode && onManageCategories}
+    <MenuSeparator />
+    <MenuItem
+      icon={Tags}
+      label="管理分类"
+      onSelect={() => {
+        const open = onManageCategories;
+        onClose();
+        open?.();
+      }}
+    />
   {/if}
 
   {#if !calendarMode}

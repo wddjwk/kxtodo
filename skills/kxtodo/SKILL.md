@@ -196,13 +196,24 @@ ledger stats --from 2026-09-14 --to 2026-09-21 --jq '.data.series'
   `--end` 同两种写法，且**可以只给 `HH:MM`**（沿用开始日期）；定时事件不给 `--end` 默认一小时（跨午夜自动进位）。
   开始晚于结束报 `CALENDAR_RANGE_INVALID`。长详情用 `--details` / `--details-file`。
 - **提醒** `--reminder` 可重复：`due-<分钟>` = 开始前 N 分钟（全天事件按当天 09:00 折算），或绝对时刻（RFC3339 / `+30m` / `+1h` / `+2d`）。**过去的时刻会被拒**（`REMINDER_IN_PAST`）。
+- **地点与分类**：`--location "3 号会议室"`；`--category <名字或ID>`（先 `calendar categories` 查、`calendar category-add --name 工作 --color "#4f7cff"` 建）。分类的 `--color` 就是各视图里的展示色（事件块左轨主色 + 块内淡色）。
+- **重复**：`--repeat none|daily|weekdays|weekly|biweekly|monthly|yearly`（也认 `day|week|month|year`），再用
+  `--repeat-every N`（每 N 个单位）、`--repeat-days 1,3,5`（周几，0=周日）、`--repeat-month-days 1,15`（几号）、
+  `--repeat-times N`（共几次，含首次）、`--repeat-until YYYY-MM-DD`（到哪天为止，含当天）收尾。
+  细化键必须和 `--repeat` 一起给。周次锚在**开始日期所在周的周一**；月/年遇到不存在的日号（2 月 30 日）**跳过该次**。
 - **关联 todo**：`--task <条目ID>`；条目上会显示日程图标，日程详情与条目内容**双向同步编辑**。解除关联 `calendar modify --task ""`。
-- **读**：`calendar list [--date 某天 | --from 起 --to 止 | --task 条目ID]`，按开始时间由早到晚（同刻全天在前）；区间按**交叠**判定（跨天事件命中区间内每一天）。分页口径与 diary 相同（不传 `--limit` 返回全部）。`calendar get --id ...` 读单条。
-- **改**：`calendar modify --id ... --title/--details/--start/--end/--all-day/--reminder/--task`。
+- **读**：`calendar list [--date 某天 | --from 起 --to 止 | --task 条目ID | --category 名字或ID]`，按开始时间由早到晚（同刻全天在前）；区间按**交叠**判定（跨天事件命中区间内每一天）。分页口径与 diary 相同（不传 `--limit` 返回全部）。`calendar get --id ...` 读单条。
+  **重复日程会按闭区间逐次展开**：每条结果多带 `occurrence`（这一次的开始日期）与 `recurring`，`total` 数的是出现次数。
+  只给 `--from` 不给 `--to`（开区间）或加 `--no-expand` 时只看系列本身。
+- **改**：`calendar modify --id ... --title/--details/--start/--end/--all-day/--reminder/--location/--category/--repeat/--task`。
   **挪动语义**：只改开始而没给 `--end` 时结束跟着平移、保持原时长（与日历应用拖动事件一致）；要改时长就把 `--end` 一起给。
-  `--reminder` 给一组就**整体替换**（一个都不给 = 不动）；`--title/--details` 传空串 = 清除。
-- **删**：`calendar remove --id ... --yes`（high-risk-write，写同步墓碑；关联的 todo 条目不会被删）。
-- 视图偏好 `calendar.view`（month/week/threeday/day）是**本机状态不同步**；日程外观（主题色/背景）跟设置同步。
+  `--reminder` 给一组就**整体替换**（一个都不给 = 不动）；`--title/--details/--location` 传空串 = 清除；`--category ""` = 取消分类；`--repeat none` = 取消重复（连带清掉例外日期）。
+  改的是**整个系列**（重复日程没有「只改这一次的时间」）。
+- **删**：`calendar remove --id ... --yes`（high-risk-write，写同步墓碑；关联的 todo 条目不会被删）。重复日程三档：
+  不给参数 = 删整个系列；`--occurrence 2026-10-12` = 只删这一次（写进例外日期）；`--from-occurrence 2026-11-01` = 删这次及以后（把重复截止日期收到它前一天，收到开始日之前就等于删整条）。
+- **分类管理**：`calendar categories`（带 `used` = 几条日程在用）/ `category-add --name --color --is-default` / `category-modify --id --name --color --is-default` / `category-remove --id --yes`。
+  「默认分类」全局互斥（新建日程时预选它）；**删分类不删日程**，用它的日程退回无分类。
+- 视图偏好 `calendar.view`（month/week/threeday/day）与网格缩放 `calendar.hourZoom`（0.5–3，1 = 一屏 12 小时）是**本机状态不同步**；日程外观（主题色/背景）与分类跟设置/日程域同步。
 
 ---
 

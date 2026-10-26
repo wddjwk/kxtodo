@@ -31,6 +31,10 @@ function event(partial: Partial<CalendarEvent> & { id: string }): CalendarEvent 
     endTime: "",
     allDay: true,
     reminders: [],
+    location: "",
+    categoryId: "",
+    repeat: null,
+    exceptDates: [],
     taskId: "",
     createdAt: "2026-10-01T00:00:00.000Z",
     ...partial

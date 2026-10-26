@@ -135,22 +135,23 @@ pub fn read() -> Result<Option<ClipboardContent>, String> {
     // Windows 用序列号跳过了未变化的轮询；Linux 没有序列号，文本/HTML 已有时
     // 不再每 800ms 读一次图片（大图重编码 PNG 很贵），图片单独复制时文本为空，照读。
     let read_image = cfg!(windows) || (text.is_empty() && html.is_empty());
-    let image = if read_image {
-        let mut clipboard = arboard::Clipboard::new().map_err(|error| error.to_string())?;
-        clipboard.get_image().ok().filter(|image| image.bytes.len() <= 256 * 1024 * 1024)
-    } else {
-        None
-    };
+    let image = if read_image { read_clipboard_image() } else { None };
     let image_png = match image {
-        Some(image) => {
+        Some((width, height, mut rgba)) => {
+            // CF_DIBV5 带 alpha 掩码但 alpha 字节全 0 的坏数据（截图工具常见）
+            // 会编出一张全透明的 PNG——粘贴到哪里都看不见。先修复再编码。
+            kxtodo_core::clipboard_sync::repair_zero_alpha(&mut rgba);
             // 解码/编码失败不该把整条文本也丢掉：图片只是其中一种表示。
-            png_from_rgba(image.width as u32, image.height as u32, &image.bytes).ok()
+            png_from_rgba(width, height, &rgba).ok()
         }
         None => None,
     };
     // HTML 当文件处理（v0.9.0 bugfix 4.1）：富文本剪切板折成一个 .html 文件走文件
     // 通道（接收端落盘），设置里不再有 HTML 这一档。bytes 直传，发送端不落盘。
-    let files: Vec<ClipboardFile> = if html.is_empty() {
+    // **已经有位图时不折**（v0.9.1）：浏览器/聊天软件「复制图片」永远附带一段
+    // <img> 包装 html，折成文件后接收端按「文件优先」只写文件引用，图片整个被丢
+    // ——「复制图片对方收不到图」的主路径之一。
+    let files: Vec<ClipboardFile> = if html.is_empty() || image_png.is_some() {
         Vec::new()
     } else {
         vec![ClipboardFile {
@@ -168,6 +169,45 @@ pub fn read() -> Result<Option<ClipboardContent>, String> {
         }));
     }
     Ok(None)
+}
+
+/// 剪切板位图的上限：超过就不带图（文本/文件照发）。与 lib.rs 桥侧的 256MB 同值。
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const MAX_IMAGE_BYTES: usize = 256 * 1024 * 1024;
+
+/// CF_DIBV5 的注册格式号（clipboard-win 5 没有这个常量）。
+#[cfg(windows)]
+const CF_DIBV5_FORMAT: u32 = 17;
+
+/// 读位图（v0.9.1）：arboard（PNG 注册格式 → CF_DIBV5）优先；失败再手工解 CF_DIB。
+/// arboard 3.7 在 Windows 上**只认 PNG 与 CF_DIBV5**，只放 CF_DIB / CF_BITMAP 的
+/// 应用（老截图工具、看图软件、远程桌面）会拿不到图——整张静默跳过，
+/// 这是「总是有收不到图」的一大来源（CF_BITMAP 由系统自动合成 CF_DIB，一并覆盖）。
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn read_clipboard_image() -> Option<(u32, u32, Vec<u8>)> {
+    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+        if let Ok(image) = clipboard.get_image() {
+            if image.bytes.len() <= MAX_IMAGE_BYTES {
+                return Some((image.width as u32, image.height as u32, image.bytes.into_owned()));
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        use clipboard_win::formats;
+        for format in [formats::CF_DIB, CF_DIBV5_FORMAT] {
+            if let Ok(dib) = clipboard_win::get_clipboard::<Vec<u8>, _>(formats::RawData(format)) {
+                if let Some((width, height, rgba)) =
+                    kxtodo_core::clipboard_sync::rgba_from_cf_dib(&dib)
+                {
+                    if rgba.len() <= MAX_IMAGE_BYTES {
+                        return Some((width, height, rgba));
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// arboard 只能写 HTML、不能读（3.7 的 API 里没有 get_html）。Windows 的
@@ -189,35 +229,109 @@ fn read_html() -> String {
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn write(content: &ClipboardContent) -> Result<(), String> {
-    if !content.files.is_empty() {
-        let paths: Vec<PathBuf> = content
-            .files
-            .iter()
-            .filter_map(|file| file.path.clone())
-            .filter(|path| path.exists())
-            .collect();
+    let paths: Vec<PathBuf> = content
+        .files
+        .iter()
+        .filter_map(|file| file.path.clone())
+        .filter(|path| path.exists())
+        .collect();
+    #[cfg(windows)]
+    {
+        let result = write_windows(content, &paths);
+        // 压掉自己的写回（v0.9.1）：记下写完后的序列号，轮询线程就不会把
+        // 「我们刚写进剪切板的内容」当成一次新复制回声给对端。此前的签名闸
+        // 对复合内容必然失配（读回时 CF_HDROP 分支只剩文件、PNG 重编码字节
+        // 也会变），收到富文本/图文混合时对端之间会来回弹一到两轮。
+        // 部分失败也记：剪切板已经被我们动过了，回声照样要压（错误经 ack 报给发送端）。
+        if let Some(seq) = clipboard_win::seq_num() {
+            LAST_CLIPBOARD_SEQ.store(seq.get(), std::sync::atomic::Ordering::Relaxed);
+        }
+        return result;
+    }
+    #[cfg(not(windows))]
+    {
         if !paths.is_empty() {
             return write_file_list(&paths);
         }
+        let mut clipboard = arboard::Clipboard::new().map_err(|error| error.to_string())?;
+        if let Some(image) = &content.image {
+            let (width, height, mut rgba) = rgba_from_png(image)?;
+            kxtodo_core::clipboard_sync::repair_zero_alpha(&mut rgba);
+            clipboard
+                .set_image(arboard::ImageData {
+                    width: width as usize,
+                    height: height as usize,
+                    bytes: rgba.into(),
+                })
+                .map_err(|error| error.to_string())?;
+            return Ok(());
+        }
+        if !content.text.is_empty() {
+            clipboard
+                .set_text(&content.text)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
     }
-    let mut clipboard = arboard::Clipboard::new().map_err(|error| error.to_string())?;
-    if let Some(image) = &content.image {
-        let (width, height, rgba) = rgba_from_png(image)?;
-        clipboard
-            .set_image(arboard::ImageData {
-                width: width as usize,
-                height: height as usize,
-                bytes: rgba.into(),
-            })
-            .map_err(|error| error.to_string())?;
+}
+
+/// Windows 写回（v0.9.1）：一次会话把「文件列表 + 文本 + 图片」全部格式都写上。
+/// 旧实现按「文件 > 图片 > 文本」只写第一项就返回——复合内容（安卓多项剪切板、
+/// 老对端发来的 文本+图片）其余表示全部被静默丢弃，接收端表现为「收不到图/文」。
+/// 图片自己构造 CF_DIBV5（与 arboard 同布局），系统会自动合成 CF_DIB/CF_BITMAP。
+#[cfg(windows)]
+fn write_windows(content: &ClipboardContent, paths: &[PathBuf]) -> Result<(), String> {
+    use clipboard_win::{formats, Clipboard, Setter};
+    if content.image.is_none() && content.text.is_empty() && paths.is_empty() {
         return Ok(());
     }
-    if !content.text.is_empty() {
-        clipboard
-            .set_text(&content.text)
-            .map_err(|error| error.to_string())?;
+    let mut failures: Vec<String> = Vec::new();
+    // 图片解码失败不连累文本/文件：能写的照写，失败最后一起报出去。
+    let rgba = match &content.image {
+        Some(png) => match rgba_from_png(png) {
+            Ok((width, height, mut rgba)) => {
+                kxtodo_core::clipboard_sync::repair_zero_alpha(&mut rgba);
+                Some((width, height, rgba))
+            }
+            Err(error) => {
+                failures.push(error);
+                None
+            }
+        },
+        None => None,
+    };
+    let path_strings: Vec<String> = paths
+        .iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect();
+    let _clip = Clipboard::new_attempts(10)
+        .map_err(|error| format!("打开剪切板失败：{error}"))?;
+    clipboard_win::raw::empty().map_err(|error| format!("清空剪切板失败：{error}"))?;
+    if let Some((width, height, rgba)) = rgba {
+        match kxtodo_core::clipboard_sync::cf_dibv5_from_rgba(width, height, &rgba) {
+            Some(dib) => {
+                if let Err(error) = formats::RawData(CF_DIBV5_FORMAT).write_clipboard(&dib) {
+                    failures.push(format!("写入图片失败：{error}"));
+                }
+            }
+            None => failures.push("剪切板图片尺寸不合法".to_string()),
+        }
     }
-    Ok(())
+    if !content.text.is_empty() {
+        if let Err(error) = formats::Unicode.write_clipboard(&content.text) {
+            failures.push(format!("写入文本失败：{error}"));
+        }
+    }
+    if !path_strings.is_empty() {
+        if let Err(error) = formats::FileList.write_clipboard(&path_strings) {
+            failures.push(format!("写入文件列表失败：{error}"));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("；"))
+    }
 }
 
 /// 扩展名判图片（CF_HDROP 分支用）：只看名字，不读文件内容。
@@ -231,8 +345,22 @@ fn is_image_file_name(path: &std::path::Path) -> bool {
     )
 }
 
-/// 剪切板当前有没有位图表示（CF_BITMAP / DIB）。读失败一律当没有。
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+/// 剪切板当前有没有位图表示（PNG / CF_DIBV5 / CF_DIB / CF_BITMAP）。
+/// v0.9.1：只查格式可用性，不再让 arboard 完整解码一遍；且补上 CF_DIB/CF_BITMAP
+/// ——arboard 只认 PNG/DIBV5，只放 CF_DIB 的应用会被误判成「没有位图」，
+/// 复制单个图片文件时被当成普通文件同步。读失败一律当没有。
+#[cfg(windows)]
+fn clipboard_has_bitmap() -> bool {
+    use clipboard_win::formats;
+    let png = clipboard_win::register_format("PNG")
+        .map(|code| clipboard_win::raw::is_format_avail(code.get()))
+        .unwrap_or(false);
+    png || clipboard_win::raw::is_format_avail(CF_DIBV5_FORMAT)
+        || clipboard_win::raw::is_format_avail(formats::CF_DIB)
+        || clipboard_win::raw::is_format_avail(formats::CF_BITMAP)
+}
+
+#[cfg(not(any(windows, target_os = "android", target_os = "ios")))]
 fn clipboard_has_bitmap() -> bool {
     arboard::Clipboard::new()
         .and_then(|mut clipboard| clipboard.get_image())
@@ -252,18 +380,6 @@ fn read_file_list() -> Option<Vec<PathBuf>> {
     // 非 Windows：不复用 read() 里的 arboard 实例（那会二次打开），
     // 由 write/read 的文本分支识别 URI 列表更稳；这里返回 None。
     None
-}
-
-#[cfg(windows)]
-fn write_file_list(paths: &[PathBuf]) -> Result<(), String> {
-    use clipboard_win::formats;
-    use clipboard_win::Setter;
-    let paths: Vec<String> = paths.iter().map(|path| path.to_string_lossy().to_string()).collect();
-    let _clip = clipboard_win::Clipboard::new_attempts(10)
-        .map_err(|error| format!("打开剪切板失败：{error}"))?;
-    formats::FileList
-        .write_clipboard(paths.as_slice())
-        .map_err(|error| format!("写入文件剪切板失败：{error}"))
 }
 
 #[cfg(not(any(windows, target_os = "android", target_os = "ios")))]

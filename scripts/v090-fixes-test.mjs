@@ -163,7 +163,8 @@ async function section1ScheduleDesktop(context) {
   const cellBox = await page.locator(".cal-month-cell.today").boundingBox();
   await page.mouse.click(cellBox.x + cellBox.width / 2, cellBox.y + cellBox.height - 6);
   await page.waitForSelector(".calendar-editor", { timeout: 5000 });
-  const allDayChecked = await page.locator(".calendar-allday input").isChecked();
+  // v0.9.1：编辑器改成设置式表单，「全天」是一行开关（.cal-field + .cal-toggle）
+  const allDayChecked = await page.locator(".cal-field", { hasText: "全天" }).locator("input[type='checkbox']").isChecked();
   check("1.12 月视图点格子默认全天", allDayChecked);
   await page.locator(".calendar-title-input").fill("全天事项");
   await page.locator(".calendar-editor .editor-icon-button.primary").click();
@@ -238,7 +239,7 @@ async function section2GridInteractions(context) {
   check("2.1 拖选出现预览块（10:00 – 12:00）", preview.replace(/\s/g, "").includes("10:00–12:00"), `preview=${preview}`);
   await page.mouse.up();
   await page.waitForSelector(".calendar-editor", { timeout: 3000 });
-  const metaText = await page.locator(".calendar-meta").innerText();
+  const metaText = await page.locator(".calendar-form-body").innerText();
   check("2.2 拖选放开进编辑器且预置 10:00", metaText.includes("10:00"), `meta=${metaText}`);
   await page.locator(".calendar-title-input").fill("拖选日程");
   await page.locator(".calendar-editor .editor-icon-button.primary").click();
@@ -250,11 +251,17 @@ async function section2GridInteractions(context) {
   const heightHours = draggedBox.height / hourH;
   check("2.4 拖选日程时长两小时", Math.abs(heightHours - 2) < 0.2, `hours=${heightHours}`);
 
-  // 单击空白：默认一小时
-  await page.mouse.click(box.x + box.width / 2, box.y + hourH * 16.5);
+  // 单击空白：默认一小时。
+  // v0.9.1 起格高按「一屏 12 小时」算，列的 24 小时里下半截在可视区外——落点改成
+  // 「先把网格滚到顶，再按可视区高度换算」，与当前时刻/窗口高度都无关。
+  await page.evaluate(() => { document.querySelector(".cal-scroll").scrollTop = 0; });
+  await page.waitForTimeout(200);
+  const scrollBox = await page.locator(".cal-scroll").boundingBox();
+  // 可视区 = 12 小时；取 08:35 → 15 分钟吸附到 08:30（离吸附格边界足够远）
+  await page.mouse.click(scrollBox.x + scrollBox.width / 2, scrollBox.y + scrollBox.height * (515 / 720));
   await page.waitForSelector(".calendar-editor", { timeout: 3000 });
-  const clickMeta = await page.locator(".calendar-meta").innerText();
-  check("2.5 单击空白预置 16:30 起", clickMeta.includes("16:30"), `meta=${clickMeta}`);
+  const clickMeta = await page.locator(".cal-field", { hasText: "开始" }).innerText();
+  check("2.5 单击空白预置 08:30 起", clickMeta.includes("08:30"), `meta=${clickMeta}`);
   await page.locator(".calendar-editor .editor-icon-button[title='关闭']").click();
   await page.waitForSelector(".calendar-editor", { state: "detached", timeout: 5000 });
   const stored = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "{}"), CALENDAR_KEY);
@@ -291,7 +298,7 @@ async function section3TaskLink(context) {
   await page.waitForSelector(".calendar-editor", { timeout: 5000 });
   const title = await page.locator(".calendar-title-input").inputValue();
   check("3.2 编辑器预填任务名", title === "写周报", `title=${title}`);
-  const metaText = await page.locator(".calendar-meta").innerText();
+  const metaText = await page.locator(".calendar-form-body").innerText();
   check("3.3 预置任务的日期与时刻", metaText.includes("15:00"), `meta=${metaText}`);
   check("3.4 显示关联条目芯片", await page.locator(".calendar-linked-chip").count() === 1);
   const detailsText = await page.evaluate(() => {
@@ -502,6 +509,9 @@ async function section6ScratchpadTabs(desktopContext) {
   // 内容按页隔离
   await page.locator(".scratchpad-area").fill("第二页的内容");
   await page.waitForTimeout(150);
+  // v0.9.1 需求 18：机器命名的标签页默认名从内容派生（宽度预算 5 个半角单位 →
+  // 「第二页的内容」取前两个全角字）。v0.9.0 时这里保持纯数字 "2"。
+  check("6.5a 默认名从内容派生", (await tabNames(page)).join(",") === "1,第二", J(await tabNames(page)));
   await page.locator(".scratchpad-tab").nth(0).click();
   await page.waitForTimeout(250);
   check("6.6 切到第一页内容为空（隔离）", (await page.locator(".scratchpad-area").inputValue()) === "");
@@ -549,6 +559,9 @@ async function section6ScratchpadTabs(desktopContext) {
   await page.waitForTimeout(200);
   await page.locator(".scratchpad-area").fill("B");
   await page.waitForTimeout(200);
+  // v0.9.1 需求 18：第一页写 "A" → 机器名跟着变 "A"；「会议」是用户手动改过的名，
+  // 正文再变也不许被内容派生名覆盖；第三页没内容仍是数字名 "2"。
+  check("6.13a 手动改名不被内容覆盖", (await tabNames(page)).join(",") === "A,会议,2", J(await tabNames(page)));
 
   const widthBefore = geom.widths[0];
   await page.locator(".scratchpad-tab").nth(0).hover();
@@ -992,7 +1005,7 @@ async function section9Bugfixes(desktopContext) {
     await page.close();
   }
 
-  // 9.8 剪切板工具：无 HTML 档 / 居中 / 三个按钮 / 路径折行完整显示
+  // 9.8 剪切板工具：无 HTML 档 / 居中 / 两个按钮（v0.9.1 移除「选择路径」）/ 路径单行起可折行
   {
     const { page, errors } = await freshPage(desktopContext);
     await seedState(page, { nodes: [entryNode("entry-a", "记事")], tasks: [] });
@@ -1031,15 +1044,22 @@ async function section9Bugfixes(desktopContext) {
         buttons: row.querySelectorAll(".clipboard-dir-actions .menu-action-button").length,
         titles: [...row.querySelectorAll(".clipboard-dir-actions .menu-action-button")].map((b) => b.getAttribute("title")),
         inputTag: input?.tagName ?? "",
+        rows: input?.getAttribute("rows") ?? "",
         wrap: input ? getComputedStyle(input).whiteSpace : ""
       };
     });
+    // v0.9.1：「选择路径」整个移除（安卓打开错目录的那批功能一起收掉），只剩 打开/默认
     check(
-      "9.10 打开/选择/默认三个按钮齐",
-      dirUi !== null && dirUi.buttons === 3 && dirUi.titles.join("|") === "打开文件夹|选择路径|恢复默认保存位置",
+      "9.10 打开/默认两个按钮齐（选择路径已移除）",
+      dirUi !== null && dirUi.buttons === 2 && dirUi.titles.join("|") === "打开文件夹|恢复默认保存位置",
       J(dirUi)
     );
-    check("9.11 路径是可折行的多行输入", dirUi !== null && dirUi.inputTag === "TEXTAREA" && dirUi.wrap !== "nowrap", J(dirUi));
+    // v0.9.1：桌面默认单行（rows=1，放不下才由 JS 加高折行）；仍是可折行的 textarea
+    check(
+      "9.11 路径输入默认单行且可折行",
+      dirUi !== null && dirUi.inputTag === "TEXTAREA" && dirUi.rows === "1" && dirUi.wrap !== "nowrap",
+      J(dirUi)
+    );
     check("9.12 剪切板工具无页面错误", errors.length === 0, J(errors.slice(0, 3)));
     await page.close();
   }

@@ -276,10 +276,12 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
   await page.click(".settings-segmented button:has-text('单列')");
   await page.waitForTimeout(300);
 
-  // 存储空间：浏览器预览没有数据目录，但按钮与说明都得在
+  // 存储空间：浏览器预览没有数据目录，但按钮得在。
+  // v0.9.1 需求 17：主视图不再放「只清没人引用的图片…一概不动」那句长说明——
+  // 清理边界的解释收在 ⓘ 浮层里（浮层只在有真实占用数据时渲染，浏览器预览没有）。
   const storageText = await page.textContent(".settings-section:has(h3:text-is('存储空间'))");
   check("存储空间给出释放空间按钮", (await page.$$(".settings-section:has(h3:text-is('存储空间')) button:has-text('释放空间')")).length === 1);
-  check("存储空间说明清理边界", (storageText ?? "").includes("一概不动"));
+  check("存储空间说明精简（长句已删）", !(storageText ?? "").includes("一概不动"), storageText ?? "");
 
   // 同步账户不再用资料里的显示名预填（默认资料名是 Example User）
   const usernameInput = await page.$("input[placeholder^='账户名']");

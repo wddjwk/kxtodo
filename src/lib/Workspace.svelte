@@ -1373,14 +1373,14 @@
         </div>
       </MenuItem>
       <MenuItem
-        icon={Star}
-        label={taskMenuTask.important ? "取消收藏" : "收藏"}
-        onSelect={() => { void updateTaskAction(taskMenuTask.id, { important: !taskMenuTask.important }); taskMenu = null; }}
-      />
-      <MenuItem
         icon={CalendarClock}
         label={$calendarEvents.some((event) => event.taskId === taskMenuTask.id) ? "打开日程" : "添加到日程"}
         onSelect={() => openTaskCalendar(taskMenuTask)}
+      />
+      <MenuItem
+        icon={Star}
+        label={taskMenuTask.important ? "取消收藏" : "收藏"}
+        onSelect={() => { void updateTaskAction(taskMenuTask.id, { important: !taskMenuTask.important }); taskMenu = null; }}
       />
       <MenuItem
         icon={taskMenuTask.pinned ? PinOff : Pin}

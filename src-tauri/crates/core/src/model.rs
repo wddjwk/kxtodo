@@ -129,12 +129,18 @@ pub struct Scratchpad {
     pub extra: Map<String, Value>,
 }
 
-/// 草稿纸的一个标签页：名字默认 "1"/"2"/"3"…（用户可改），正文纯文本。
+/// 草稿纸的一个标签页：默认名从正文内容派生（v0.9.1；没有内容可取时是 "1"/"2"/"3"…），
+/// 正文纯文本。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ScratchpadTab {
     pub id: String,
     #[serde(default)]
     pub name: String,
+    /// 名字是否仍是机器给的默认名（v0.9.1）：true = 前端随正文内容重派生；
+    /// false = 用户手动改过名，永不覆盖。旧数据缺字段按 false 对待
+    /// （宁可让旧数字名不再跟随内容，也不能覆盖用户改过的名字）。
+    #[serde(rename = "nameAuto", default)]
+    pub name_auto: bool,
     #[serde(default)]
     pub text: String,
     #[serde(rename = "updatedAt", default)]
@@ -162,6 +168,8 @@ impl Scratchpad {
         self.tabs.push(ScratchpadTab {
             id: "tab-1".to_string(),
             name: "1".to_string(),
+            // 折进来的旧正文配的仍是默认名 "1" → 机器名，允许后续被内容派生名接管
+            name_auto: true,
             text,
             updated_at: self.updated_at.clone(),
             extra: Map::new(),
@@ -480,9 +488,165 @@ pub struct CalendarEvent {
     /// 全天事件按当天 09:00 开始折算（业界通行做法）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reminders: Vec<Reminder>,
+    /// 地点（v0.9.1）：自由文本，编辑器里是独立一栏
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub location: String,
+    /// 分类 id（v0.9.1）：指向 [`CalendarCategory`]；空 = 无分类，各视图用日程主题色
+    #[serde(rename = "categoryId", default, skip_serializing_if = "String::is_empty")]
+    pub category_id: String,
+    /// 重复规则（v0.9.1）；`None` = 不重复
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat: Option<CalendarRepeat>,
+    /// 重复系列的例外日期（YYYY-MM-DD）：「只删这一次」写在这里，系列本身留着
+    #[serde(rename = "exceptDates", default, skip_serializing_if = "Vec::is_empty")]
+    pub except_dates: Vec<String>,
     /// 关联的 todo 条目 id（右键「添加到日程」创建）；空 = 独立日程
     #[serde(rename = "taskId", default, skip_serializing_if = "String::is_empty")]
     pub task_id: String,
+    #[serde(rename = "createdAt", default)]
+    pub created_at: String,
+    #[serde(rename = "updatedAt", skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
+}
+
+/// 重复频率（v0.9.1）：按天 / 按周 / 按月 / 按年。
+///
+/// 「工作日」「每两周」这类业界预设都是 `freq + interval + by_weekday` 的组合，
+/// 不给它们各开一个变体——否则自定义间隔（每 3 周）就无处安放。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum RepeatFreq {
+    Day,
+    Week,
+    Month,
+    Year,
+}
+
+impl Default for RepeatFreq {
+    fn default() -> Self {
+        RepeatFreq::Week
+    }
+}
+
+impl RepeatFreq {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RepeatFreq::Day => "day",
+            RepeatFreq::Week => "week",
+            RepeatFreq::Month => "month",
+            RepeatFreq::Year => "year",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "day" | "daily" | "天" | "每天" => Some(RepeatFreq::Day),
+            "week" | "weekly" | "周" | "每周" => Some(RepeatFreq::Week),
+            "month" | "monthly" | "月" | "每月" => Some(RepeatFreq::Month),
+            "year" | "yearly" | "年" | "每年" => Some(RepeatFreq::Year),
+            _ => None,
+        }
+    }
+}
+
+/// 重复的结束条件：永不 / 按次数 / 按截止日期。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum RepeatEnd {
+    Never,
+    Count,
+    Until,
+}
+
+impl Default for RepeatEnd {
+    fn default() -> Self {
+        RepeatEnd::Never
+    }
+}
+
+impl RepeatEnd {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RepeatEnd::Never => "never",
+            RepeatEnd::Count => "count",
+            RepeatEnd::Until => "until",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "never" | "永不" => Some(RepeatEnd::Never),
+            "count" | "次数" => Some(RepeatEnd::Count),
+            "until" | "截止" => Some(RepeatEnd::Until),
+            _ => None,
+        }
+    }
+}
+
+/// 重复规则（v0.9.1）。语义对齐 RFC 5545 的 RRULE 子集，但**只用本地墙上日期**
+/// （与事件本身的口径一致，不做时区换算）：
+///
+/// - `freq` + `interval`：每 `interval` 个 `freq` 单位重复一次（interval ≥ 1）。
+/// - `by_weekday`（仅 week）：0 = 周日 … 6 = 周六。空 = 只按开始日期所在的星期。
+///   周次以**开始日期所在周的周一**为锚（ISO 周），与用户的「一周从周几开始」
+///   显示偏好无关——否则改个偏好重复日就漂了。
+/// - `by_month_day`（仅 month）：1..31。空 = 按开始日期的日号。目标月没有那一天
+///   （2 月 30 日）就**跳过该次**，不折算到月末（RFC 口径）。
+/// - `count` 数的是**规则生成的次数**（含首次），例外日期（`except_dates`）同样占名额；
+///   `until` 是闭区间日期。
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CalendarRepeat {
+    #[serde(default)]
+    pub freq: RepeatFreq,
+    #[serde(default = "default_repeat_interval")]
+    pub interval: u32,
+    #[serde(rename = "byWeekday", default, skip_serializing_if = "Vec::is_empty")]
+    pub by_weekday: Vec<u8>,
+    #[serde(rename = "byMonthDay", default, skip_serializing_if = "Vec::is_empty")]
+    pub by_month_day: Vec<u8>,
+    #[serde(default)]
+    pub end: RepeatEnd,
+    /// `end = count` 时的总次数（含首次）；0 视为无效 → 归一成 never
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub count: u32,
+    /// `end = until` 时最后一次出现的日期（YYYY-MM-DD，闭区间）
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub until: String,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
+}
+
+fn default_repeat_interval() -> u32 {
+    1
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+
+/// 重复次数的硬上限：既是「次数」输入的上限，也是展开循环的保险丝。
+pub const REPEAT_COUNT_MAX: u32 = 999;
+
+/// 日程分类（v0.9.1）：用户自定义的名字 + 颜色。颜色就是各视图里的展示色——
+/// 事件块左侧边框用主色、块内铺一层不影响阅读的淡色（前端 `tintColor` 算）。
+///
+/// 与记账分类不同：日程分类**只有一级**、不带图标、不带收支侧。
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CalendarCategory {
+    pub id: String,
+    pub name: String,
+    /// #rrggbb；空 = 前端取默认日程色
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub color: String,
+    /// 新建日程时默认选中它（全局最多一个为真，由 `ops_calendar` 保证）
+    #[serde(rename = "isDefault", default)]
+    pub is_default: bool,
+    #[serde(default)]
+    pub order: f64,
     #[serde(rename = "createdAt", default)]
     pub created_at: String,
     #[serde(rename = "updatedAt", skip_serializing_if = "Option::is_none")]
@@ -501,6 +665,10 @@ pub struct CalendarFile {
     pub meta: DomainMeta,
     #[serde(default)]
     pub events: Vec<CalendarEvent>,
+    /// 分类（v0.9.1）：与事件同住一个领域文件、同一个同步范围勾选，
+    /// 但同步上是**独立实体**（kind = `calendarCategory`，与记账分类同款做法）
+    #[serde(default)]
+    pub categories: Vec<CalendarCategory>,
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
@@ -1965,6 +2133,60 @@ impl Default for FeatureSettings {
     }
 }
 
+// ---------------------------------------------------------------------------
+// settings.json 里的「视图模式」：读盘宽容
+// ---------------------------------------------------------------------------
+
+/// 各页的视图模式（日记 / 记账 / 日程）是**本机 UI 状态**，不是用户数据：
+/// 它只记「上次停在哪一屏」。所以读盘一律宽容——认不出的值回落到该页默认视图，
+/// 而不是让整份 `settings.json` 反序列化失败。
+///
+/// 为什么值得专门写一条：一个开发中间版曾把 `"3days"` 写进 settings.json，
+/// 正式版严格反序列化直接读不出这份文件，于是**改任何设置**都报
+/// 「settings.json 结构无效」，用户必须手工编辑 JSON 才能恢复（v0.9.1）。
+/// 写路径依旧严格（`ops_config` 用 `parse` 校验，未知值直接拒），
+/// 数据字段（金额 / 日期 / ID）也依旧严格——宽容只给这一个字段族。
+fn lenient_view<T>(
+    raw: Value,
+    parse: fn(&str) -> Option<T>,
+    default: fn() -> T,
+) -> T {
+    raw.as_str().and_then(parse).unwrap_or_else(default)
+}
+
+fn lenient_diary_view<'de, D>(deserializer: D) -> Result<DiaryView, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(lenient_view(
+        Value::deserialize(deserializer)?,
+        DiaryView::parse,
+        DiaryView::default,
+    ))
+}
+
+fn lenient_ledger_view<'de, D>(deserializer: D) -> Result<LedgerView, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(lenient_view(
+        Value::deserialize(deserializer)?,
+        LedgerView::parse,
+        LedgerView::default,
+    ))
+}
+
+fn lenient_calendar_view<'de, D>(deserializer: D) -> Result<CalendarView, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(lenient_view(
+        Value::deserialize(deserializer)?,
+        CalendarView::parse,
+        CalendarView::default,
+    ))
+}
+
 /// 日记视图：列表（时间轴）/ 日历（月历 + 当日卡片）/ 分组（按年月折叠）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -2006,7 +2228,7 @@ impl DiaryView {
 /// 一个待遇，日记换台设备不该变脸。
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DiarySettings {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_diary_view")]
     pub view: DiaryView,
     /// 主题色（#rrggbb）；空 = 用默认日记色
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -2086,7 +2308,7 @@ impl LedgerView {
 /// 主题色与背景是**外观**跟着共享子集走。
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct LedgerSettings {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_ledger_view")]
     pub view: LedgerView,
     /// 主题色（#rrggbb）；空 = 用默认记账色
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -2156,7 +2378,7 @@ impl CalendarView {
         match raw.trim().to_ascii_lowercase().as_str() {
             "month" => Some(CalendarView::Month),
             "week" => Some(CalendarView::Week),
-            "threeday" | "3day" | "three-day" => Some(CalendarView::ThreeDay),
+            "threeday" | "3day" | "3days" | "three-day" => Some(CalendarView::ThreeDay),
             "day" => Some(CalendarView::Day),
             _ => None,
         }
@@ -2167,8 +2389,12 @@ impl CalendarView {
 /// 主题色与背景是**外观**跟着共享子集走。
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CalendarSettings {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_calendar_view")]
     pub view: CalendarView,
+    /// 时间网格的缩放倍率（v0.9.1）：1.0 = 一屏刚好 12 小时（前端按可视高度算基准格高）。
+    /// 桌面 Ctrl+滚轮、移动端双指捏合调它。**本机 UI 状态**，与 `view` 同待遇不进同步。
+    #[serde(rename = "hourZoom", default = "default_calendar_hour_zoom")]
+    pub hour_zoom: f64,
     /// 主题色（#rrggbb）；空 = 用默认日程色
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub accent: String,
@@ -2189,6 +2415,14 @@ fn default_calendar_background_color() -> String {
     "#eef1f5".to_string()
 }
 
+/// 缩放倍率的合法区间（前端与 core 同一口径，写路径按它钳制）。
+pub const CALENDAR_HOUR_ZOOM_MIN: f64 = 0.5;
+pub const CALENDAR_HOUR_ZOOM_MAX: f64 = 3.0;
+
+fn default_calendar_hour_zoom() -> f64 {
+    1.0
+}
+
 fn default_calendar_background_opacity() -> f64 {
     0.28
 }
@@ -2197,6 +2431,7 @@ impl Default for CalendarSettings {
     fn default() -> Self {
         Self {
             view: CalendarView::default(),
+            hour_zoom: default_calendar_hour_zoom(),
             accent: String::new(),
             background_color: default_calendar_background_color(),
             background_image: String::new(),

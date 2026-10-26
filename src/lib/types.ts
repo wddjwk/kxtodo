@@ -126,8 +126,52 @@ export type CalendarEvent = {
   allDay: boolean;
   /** 提醒规则（与任务共用一套）；beforeDue = 开始前 N 分钟（全天按 09:00 折算） */
   reminders: ReminderRule[];
+  /** 地点（v0.9.1，自由文本） */
+  location: string;
+  /** 分类 id（v0.9.1）；空 = 无分类，各视图用日程主题色 */
+  categoryId: string;
+  /** 重复规则（v0.9.1）；null = 不重复 */
+  repeat: CalendarRepeat | null;
+  /** 重复系列的例外日期（「只删这一次」写在这里） */
+  exceptDates: string[];
   /** 关联的 todo 条目 id；空 = 独立日程 */
   taskId: string;
+  createdAt: string;
+  updatedAt?: string;
+};
+
+/**
+ * 重复频率与结束条件（v0.9.1）。语义与 core `model::CalendarRepeat` 同源：
+ * 周频率以开始日期所在周的**周一**为锚；月/年频率遇到不存在的日号跳过该次；
+ * `count` 数的是规则生成的次数（含首次），例外日期同样占名额。
+ */
+export type RepeatFreq = "day" | "week" | "month" | "year";
+export type RepeatEnd = "never" | "count" | "until";
+
+export type CalendarRepeat = {
+  freq: RepeatFreq;
+  /** 每 N 个单位一次（≥1） */
+  interval: number;
+  /** freq = week：0 = 周日 … 6 = 周六；空 = 只按开始日期的星期 */
+  byWeekday: number[];
+  /** freq = month/year：1..31；空 = 按开始日期的日号 */
+  byMonthDay: number[];
+  end: RepeatEnd;
+  /** end = count 时的总次数（含首次） */
+  count: number;
+  /** end = until 时最后一次出现的日期（闭区间） */
+  until: string;
+};
+
+/** 日程分类（v0.9.1）：名字 + 颜色，颜色就是各视图的展示色。 */
+export type CalendarCategory = {
+  id: string;
+  name: string;
+  /** #rrggbb；空 = 用日程主题色 */
+  color: string;
+  /** 新建日程时默认选中它（全局最多一个） */
+  isDefault: boolean;
+  order: number;
   createdAt: string;
   updatedAt?: string;
 };
@@ -418,6 +462,8 @@ export type Settings = {
   /** 日程偏好（v0.9.0）。与日记/记账同一条口径：view 本机状态，外观跟着设置同步走。 */
   calendar: {
     view: CalendarViewMode;
+    /** 时间网格缩放倍率（v0.9.1）：1 = 一屏刚好 12 小时；本机偏好，不进同步 */
+    hourZoom: number;
     accent: string;
     backgroundColor: string;
     backgroundImage: string;
@@ -443,10 +489,15 @@ export type ListBackground = {
 
 export type SchedulerRuntimeKey = "python" | "node" | "pwsh" | "bash" | "make";
 
-/** 草稿纸的一个标签页（v0.9.0）：名字默认 "1"/"2"/"3"…，正文纯文本。 */
+/**
+ * 草稿纸的一个标签页（v0.9.0；v0.9.1 起默认名从内容派生）：
+ * nameAuto=true = 名字仍是机器给的默认名，随正文内容重派生；
+ * false = 用户手动改过名，内容再变也不覆盖。
+ */
 export type ScratchpadTab = {
   id: string;
   name: string;
+  nameAuto: boolean;
   text: string;
   updatedAt?: string;
 };

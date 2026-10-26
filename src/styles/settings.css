@@ -265,9 +265,11 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 「数据占用」行：数字右边的 ⓘ 靠最右 */
-.storage-head-row .icon-button {
-  margin-left: auto;
+/* 「数据占用」行：名字 / 字节数 / ⓘ 同一行，ⓘ 靠最右。
+   .settings-row 的两列 grid 会把第三个孩子（ⓘ）挤到下一行自成一行，
+   这里给它补出第三列（auto 列贴行尾）就行，不必换成 flex。 */
+.storage-head-row {
+  grid-template-columns: 7em minmax(0, 1fr) auto;
 }
 
 /* ⓘ 展开的详细说明：灰底卡片，条目两列（名字 + 解释） */

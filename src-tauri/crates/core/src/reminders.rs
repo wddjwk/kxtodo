@@ -242,33 +242,78 @@ pub fn plan(data: &DataFile) -> Vec<PlannedReminder> {
     plans
 }
 
+/// 重复日程的提醒规划视野（天）。
+///
+/// 「每天重复到永远」的事件不能把每一次出现都塞进收据台账，所以只往前看这么远；
+/// 实际视野还要再加上**最长的提前量**——提前 30 天的提醒必须在 30 天前就进台账，
+/// 否则到点时它从没「被见过在未来」，按不补发纪律会被判跳过。
+const CALENDAR_PLAN_HORIZON_DAYS: i64 = 45;
+
 /// 日程事件的提醒清单（v0.9.0）：与任务提醒同一套台账与「不补发」纪律。
 /// `BeforeDue` 依附的是「事件开始时刻」——全天事件按当天 09:00 折算
 /// （`ops_calendar::effective_start_time`）。
+///
+/// 重复事件（v0.9.1）按视野内的**每一次出现**各规划一条：收据键含 `at`，
+/// 于是同一条规则在不同日期是不同的键，各自只发一次。
 pub fn plan_calendar(calendar: &crate::model::CalendarFile) -> Vec<PlannedReminder> {
     let mut plans = Vec::new();
+    let today = crate::recurrence::parse_date(&crate::time::today_local());
     for event in &calendar.events {
+        let dates = planned_dates(event, today);
         let mut seen = HashSet::new();
-        for rule in &event.reminders {
-            let Ok(at) = resolve(
-                rule,
-                Some(event.start_date.as_str()),
-                crate::ops_calendar::effective_start_time(event),
-            ) else {
-                continue;
-            };
-            if !seen.insert(at.timestamp_millis()) {
-                continue;
+        for date in &dates {
+            for rule in &event.reminders {
+                let Ok(at) = resolve(
+                    rule,
+                    Some(date.as_str()),
+                    crate::ops_calendar::effective_start_time(event),
+                ) else {
+                    continue;
+                };
+                if !seen.insert(at.timestamp_millis()) {
+                    continue;
+                }
+                plans.push(PlannedReminder {
+                    key: receipt_key(&event.id, at),
+                    task_id: event.id.clone(),
+                    calendar: true,
+                    at,
+                });
             }
-            plans.push(PlannedReminder {
-                key: receipt_key(&event.id, at),
-                task_id: event.id.clone(),
-                calendar: true,
-                at,
-            });
         }
     }
     plans
+}
+
+/// 要规划提醒的日期集合：非重复事件就是它自己的开始日期（过去也照旧进台账，
+/// 交给「不补发」那一层判跳过）；重复事件是今天起视野内的每一次出现。
+fn planned_dates(event: &crate::model::CalendarEvent, today: Option<chrono::NaiveDate>) -> Vec<String> {
+    if event.repeat.is_none() {
+        return vec![event.start_date.clone()];
+    }
+    let Some(today) = today else {
+        return Vec::new();
+    };
+    let lead_days = event
+        .reminders
+        .iter()
+        .filter_map(|rule| match rule {
+            crate::model::Reminder::BeforeDue { minutes } => {
+                Some(i64::from(*minutes) / 1440 + 1)
+            }
+            crate::model::Reminder::Absolute { .. } => None,
+        })
+        .max()
+        .unwrap_or(0);
+    let Some(horizon) = today
+        .checked_add_signed(chrono::Duration::days(CALENDAR_PLAN_HORIZON_DAYS + lead_days))
+    else {
+        return Vec::new();
+    };
+    crate::recurrence::occurrences(event, today, horizon)
+        .iter()
+        .map(|date| date.format("%Y-%m-%d").to_string())
+        .collect()
 }
 
 /// 时钟是否发生了跳变（休眠唤醒、用户改系统时间、时区切换）。

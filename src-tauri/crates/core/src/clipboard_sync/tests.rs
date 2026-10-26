@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc::Receiver as StdReceiver;
 
 #[derive(Default)]
@@ -449,4 +450,246 @@ async fn p2p_stream_round_trip_without_pkarr() {
     assert_eq!(received.text, "p2p text");
     receiver.cancel.store(true, Ordering::SeqCst);
     let _ = receiver_endpoint.close().await;
+}
+
+// ---------------------------------------------------------------------------
+// v0.9.1：图片管线（DIB 编解码 / alpha 修复 / 超限可见性 / 轮询基线）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn zero_alpha_repair_only_when_fully_transparent() {
+    // alpha 全 0（CF_DIBV5 坏数据的经典形态）→ 整体置 255，RGB 一个字节不动
+    let mut rgba = vec![10u8, 20, 30, 0, 40, 50, 60, 0];
+    repair_zero_alpha(&mut rgba);
+    assert_eq!(rgba, vec![10, 20, 30, 255, 40, 50, 60, 255]);
+    // 有任何非 0 alpha = 真透明，完全不动
+    let mut partial = vec![10u8, 20, 30, 0, 40, 50, 60, 128];
+    let before = partial.clone();
+    repair_zero_alpha(&mut partial);
+    assert_eq!(partial, before);
+    // 空 / 长度非法 → 不 panic
+    let mut empty: Vec<u8> = Vec::new();
+    repair_zero_alpha(&mut empty);
+    let mut odd = vec![1u8, 2, 3];
+    repair_zero_alpha(&mut odd);
+    assert_eq!(odd, vec![1, 2, 3]);
+}
+
+#[test]
+fn dibv5_encoder_round_trips_through_dib_decoder() {
+    // 2x3 非对称图：验证「自下而上」的行序在编码/解码两次翻转后正好还原
+    let rgba: Vec<u8> = (0..24u8).collect();
+    let dib = cf_dibv5_from_rgba(2, 3, &rgba).unwrap();
+    let (width, height, out) = rgba_from_cf_dib(&dib).unwrap();
+    assert_eq!((width, height), (2, 3));
+    assert_eq!(out, rgba);
+    // 头里声明的掩码与 arboard 写入的完全一致（BGRA + alpha 在最高字节）
+    assert_eq!(&dib[40..44], &0x00ff0000u32.to_le_bytes());
+    assert_eq!(&dib[52..56], &0xff000000u32.to_le_bytes());
+    assert_eq!(cf_dibv5_from_rgba(2, 3, &[0u8; 10]), None, "长度不符必须拒绝");
+    assert_eq!(cf_dibv5_from_rgba(0, 3, &[]), None);
+}
+
+fn dib_header(width: i32, height: i32, bpp: u16, compression: u32) -> Vec<u8> {
+    let mut out = vec![0u8; 40];
+    out[0..4].copy_from_slice(&40u32.to_le_bytes());
+    out[4..8].copy_from_slice(&width.to_le_bytes());
+    out[8..12].copy_from_slice(&height.to_le_bytes());
+    out[12..14].copy_from_slice(&1u16.to_le_bytes());
+    out[14..16].copy_from_slice(&bpp.to_le_bytes());
+    out[16..20].copy_from_slice(&compression.to_le_bytes());
+    out
+}
+
+#[test]
+fn dib_decoder_handles_real_world_cf_dib_variants() {
+    // BGRA 像素：内存序 B,G,R,A
+    let px = |v: u8| [v, v + 1, v + 2, 255u8];
+
+    // ① 32bpp BI_RGB，自下而上（CF_DIB 最常见形态）：2x2
+    let mut dib = dib_header(2, 2, 32, 0);
+    dib.extend_from_slice(&px(20)); // 底行左
+    dib.extend_from_slice(&px(21)); // 底行右
+    dib.extend_from_slice(&px(10)); // 顶行左
+    dib.extend_from_slice(&px(11)); // 顶行右
+    let (width, height, rgba) = rgba_from_cf_dib(&dib).unwrap();
+    assert_eq!((width, height), (2, 2));
+    assert_eq!(&rgba[0..4], &[12, 11, 10, 255], "顶行左：BGR→RGB");
+    assert_eq!(&rgba[4..8], &[13, 12, 11, 255]);
+    assert_eq!(&rgba[8..12], &[22, 21, 20, 255], "底行左");
+    assert_eq!(&rgba[12..16], &[23, 22, 21, 255]);
+
+    // ② 24bpp BI_RGB：每行 3 字节像素 + 补齐到 4 的倍数
+    let mut dib24 = dib_header(1, 2, 24, 0);
+    dib24.extend_from_slice(&[0x30, 0x20, 0x10, 0x00]); // 底行 BGR + padding
+    dib24.extend_from_slice(&[0x31, 0x21, 0x11, 0x00]); // 顶行 BGR + padding
+    let (width, height, rgba) = rgba_from_cf_dib(&dib24).unwrap();
+    assert_eq!((width, height), (1, 2));
+    assert_eq!(&rgba[0..4], &[0x11, 0x21, 0x31, 255], "顶行");
+    assert_eq!(&rgba[4..8], &[0x10, 0x20, 0x30, 255], "底行");
+
+    // ③ 负高度 = 顶向下：存储的第一行就是顶行
+    let mut top_down = dib_header(2, -2, 32, 0);
+    top_down.extend_from_slice(&px(10));
+    top_down.extend_from_slice(&px(11));
+    top_down.extend_from_slice(&px(20));
+    top_down.extend_from_slice(&px(21));
+    let (_, _, rgba) = rgba_from_cf_dib(&top_down).unwrap();
+    assert_eq!(&rgba[0..4], &[12, 11, 10, 255]);
+    assert_eq!(&rgba[12..16], &[23, 22, 21, 255]);
+
+    // ④ 32bpp BI_BITFIELDS（40 字节头 + 12 字节掩码，无 alpha 掩码 → 不透明）
+    let mut bitfields = dib_header(1, 1, 32, 3);
+    bitfields.extend_from_slice(&0x00ff0000u32.to_le_bytes());
+    bitfields.extend_from_slice(&0x0000ff00u32.to_le_bytes());
+    bitfields.extend_from_slice(&0x000000ffu32.to_le_bytes());
+    bitfields.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]); // LE dword 0x04030201
+    let (_, _, rgba) = rgba_from_cf_dib(&bitfields).unwrap();
+    assert_eq!(rgba, vec![3, 2, 1, 255], "R=0x03 G=0x02 B=0x01，无 alpha 掩码按不透明");
+
+    // ⑤ 坏头 / 数据不足一律拒绝，不 panic
+    assert!(rgba_from_cf_dib(&[]).is_none());
+    assert!(rgba_from_cf_dib(&dib_header(2, 2, 32, 0)).is_none(), "像素数据不足");
+    assert!(rgba_from_cf_dib(&dib_header(0, 2, 32, 0)).is_none());
+    assert!(rgba_from_cf_dib(&dib_header(2, 2, 16, 0)).is_none(), "16bpp 不支持");
+    let mut rle = dib_header(2, 2, 32, 2); // BI_RLE8
+    rle.extend_from_slice(&[0u8; 16]);
+    assert!(rgba_from_cf_dib(&rle).is_none(), "RLE 不支持");
+}
+
+#[test]
+fn local_limit_note_flags_oversized_parts() {
+    let mut limits = ClipboardLimits::default();
+    limits.text_mb = 1;
+    limits.image_mb = 1;
+    limits.files_mb = 1;
+    let content = ClipboardContent {
+        text: "x".repeat(2 * 1024 * 1024),
+        image: Some(vec![0u8; 2 * 1024 * 1024]),
+        files: vec![ClipboardFile {
+            name: "a.bin".into(),
+            path: None,
+            bytes: Some(vec![0u8; 2 * 1024 * 1024]),
+        }],
+        ..Default::default()
+    };
+    let note = local_limit_note(&content, &limits);
+    assert!(note.contains("文本超上限"), "{note}");
+    assert!(note.contains("图片超上限"), "{note}");
+    assert!(note.contains("部分文件超上限"), "{note}");
+    let small = ClipboardContent { text: "hi".into(), ..Default::default() };
+    assert_eq!(local_limit_note(&small, &limits), "", "没超限就没有备注");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn receiver_event_notes_image_dropped_over_limit() {
+    let root = tempfile::tempdir().unwrap();
+    let backend = Arc::new(TestBackend::default());
+    let mut receiver = test_inner(root.path(), "receiver", Some(backend.clone()));
+    {
+        let inner = Arc::get_mut(&mut receiver).unwrap();
+        inner.settings.limits.image_mb = 1;
+    }
+    let sender = test_inner(root.path(), "sender", None);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let task = receiver.clone();
+    tokio::spawn(async move {
+        lan_accept_loop_with_listener(task, listener).await;
+    });
+    let content = ClipboardContent {
+        text: "文字照发".into(),
+        image: Some(vec![9u8; 2 * 1024 * 1024]), // 2MB > 接收端 1MB 图片上限
+        ..Default::default()
+    };
+    send_lan(&sender, addr, &content).await.unwrap();
+    let received = wait_for_write(&backend);
+    assert_eq!(received.text, "文字照发");
+    assert!(received.image.is_none(), "超限图片应当被舍弃");
+    // 被舍弃的图片必须在「收到」事件里点名——绝不静默（v0.9.1 之前只写「文本」）
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let event = receiver.last_event.lock().unwrap().clone();
+        let detail = event
+            .as_ref()
+            .and_then(|value| value.get("detail"))
+            .and_then(|detail| detail.as_str())
+            .unwrap_or("")
+            .to_string();
+        if detail.contains("图片超上限") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "收到事件没提到被舍弃的图片：{event:?}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    receiver.cancel.store(true, Ordering::SeqCst);
+    receiver.notify.notify_waiters();
+}
+
+/// 脚本化的剪切板后端：第一次读是空（服务启动时剪切板没东西），之后每次读都有内容。
+#[derive(Default)]
+struct ScriptedClipboardBackend {
+    calls: AtomicUsize,
+}
+
+impl HostBackend for ScriptedClipboardBackend {
+    fn show_notification(
+        &self,
+        _payload: &Value,
+        _wait_rx: Option<StdReceiver<()>>,
+    ) -> CoreResult<String> {
+        Ok(String::new())
+    }
+    fn emit(&self, _event: &str, _payload: Value) {}
+    fn apply_native_effect(&self, _name: &str, _settings: &SettingsFile) -> CoreResult<()> {
+        Ok(())
+    }
+    fn request_exit(&self) {}
+    fn has_gui(&self) -> bool {
+        false
+    }
+    fn show_main_window(&self) -> CoreResult<()> {
+        Ok(())
+    }
+    fn clipboard_available(&self) -> bool {
+        true
+    }
+    fn clipboard_read(&self) -> CoreResult<Option<ClipboardContent>> {
+        let call = self.calls.fetch_add(1, Ordering::Relaxed);
+        if call == 0 {
+            Ok(None)
+        } else {
+            Ok(Some(ClipboardContent {
+                text: "启用后的第一次复制".into(),
+                ..Default::default()
+            }))
+        }
+    }
+}
+
+#[test]
+fn poller_primes_on_empty_clipboard_so_first_copy_sends() {
+    // 服务启动时剪切板是空的：基线必须在这一次就建好（哪怕没内容可记），
+    // 否则用户开启同步后的第一次复制会被当成「首次读取建基线」整次吞掉。
+    let root = tempfile::tempdir().unwrap();
+    let backend = Arc::new(ScriptedClipboardBackend::default());
+    let inner = test_inner(root.path(), "local", Some(backend));
+    spawn_native_poller(inner.clone());
+    // 没有任何在线目标 → on_local → send_all 会记一条 "idle" 事件；
+    // 事件出现即证明第一次真实复制走进了发送路径，而不是被基线吞掉。
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let event = inner.last_event.lock().unwrap().clone();
+        if event.as_ref().and_then(|value| value.get("kind")).and_then(|kind| kind.as_str())
+            == Some("idle")
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "空剪切板启动后的第一次复制被基线吞掉了：{event:?}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    inner.cancel.store(true, Ordering::SeqCst);
 }

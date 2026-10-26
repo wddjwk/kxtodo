@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { LedgerAccount, LedgerBook, LedgerCategory } from "../types";
-import { defaultSettings, normalizeLedger, normalizeSettings, normalizeState, seedLedgerBook } from "../defaults";
+import { defaultSettings, normalizeLedger, normalizeScratchpad, normalizeSettings, normalizeState, seedLedgerBook } from "../defaults";
 
 // ---------------------------------------------------------------------------
 // normalizeLedger → normalizeLedgerEntry
@@ -496,5 +496,39 @@ describe("normalizeSettings 剪切板同步（v0.8.10）", () => {
     expect(normalized.clipboard.serverUrl).toBe("http://192.168.1.10:52177");
     expect(normalized.clipboard.limits).toEqual({ textMb: 1, imageMb: 3, filesMb: 1024 });
     expect(normalized.clipboard.types).toEqual({ text: false, image: false, files: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// normalizeScratchpad（nameAuto 白名单，v0.9.1 需求 18）
+// ---------------------------------------------------------------------------
+
+describe("normalizeScratchpad（nameAuto 白名单）", () => {
+  it("nameAuto 原样往返（漏了 = 每次快照刷新把手动改名打回机器名，下次编辑正文就覆盖用户的名字）", () => {
+    const normalized = normalizeScratchpad({
+      tabs: [
+        { id: "tab-1", name: "会议", nameAuto: false, text: "甲" },
+        { id: "tab-2", name: "购物", nameAuto: true, text: "乙" }
+      ],
+      activeTabId: "tab-2",
+      updatedAt: "2026-10-01T00:00:00Z"
+    });
+    expect(normalized.tabs[0].nameAuto).toBe(false);
+    expect(normalized.tabs[1].nameAuto).toBe(true);
+    expect(normalized.activeTabId).toBe("tab-2");
+    // 幂等：再喂一遍自己的输出不变
+    expect(normalizeScratchpad(normalized)).toEqual(normalized);
+  });
+
+  it("缺 nameAuto 的旧数据按 false 对待（宁可旧数字名不再跟随内容，也不覆盖用户改过的名字）", () => {
+    const normalized = normalizeScratchpad({ tabs: [{ id: "tab-1", name: "1", text: "甲" }] });
+    expect(normalized.tabs[0].nameAuto).toBe(false);
+  });
+
+  it("旧顶层 text 折进 tab-1 时保留机器名标记（与 core fold_legacy_text 同口径）", () => {
+    const normalized = normalizeScratchpad({ text: "旧版整段", updatedAt: "2026-10-01T00:00:00Z" });
+    expect(normalized.tabs).toEqual([
+      { id: "tab-1", name: "1", nameAuto: true, text: "旧版整段", updatedAt: "2026-10-01T00:00:00Z" }
+    ]);
   });
 });

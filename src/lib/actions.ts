@@ -5,14 +5,14 @@
 // ---------------------------------------------------------------------------
 
 import { get, type Writable } from "svelte/store";
-import type { AppNode, AppState, CalendarEvent, CardStyle, DiaryEntry, LedgerAccount, LedgerAccountKind, LedgerAccountType, LedgerBook, LedgerCategory, LedgerEntry, LedgerKind, LedgerSide, ListBackground, ReminderRule, ScheduledTask, SchedulerState, ScratchpadTab, Settings, SyncMode, Tag, TagColor, Task } from "./types";
+import type { AppNode, AppState, CalendarCategory, CalendarEvent, CalendarRepeat, CardStyle, DiaryEntry, LedgerAccount, LedgerAccountKind, LedgerAccountType, LedgerBook, LedgerCategory, LedgerEntry, LedgerKind, LedgerSide, ListBackground, ReminderRule, ScheduledTask, SchedulerState, ScratchpadTab, Settings, SyncMode, Tag, TagColor, Task } from "./types";
 import { navToolId, type NavItemId } from "./nav";
 import type { ToolId } from "./tools/catalog";
 import { accountBalance } from "./ledger";
-import { normalizeCalendarTimes } from "./calendar";
+import { addDays, normalizeCalendarTimes } from "./calendar";
 import { remindersParam } from "./reminders";
 import {
-  appState, appSettings, commit, commitCalendar, commitDiary, commitLedger, commitScheduler, commitSettings,
+  appState, appSettings, calendarCategories, commit, commitCalendar, commitCalendarCategories, commitDiary, commitLedger, commitScheduler, commitSettings,
   coreMode, createDiaryId, createTaskId, calendarEvents, diaryEntries, editBaseUpdatedAt, ledgerData, markEditStart, clearEditBase, rebaseEditBase,
   manualSyncAt, noteEnvelopeRevision, refreshFromCore, scheduleEntries, syncConnection, showToast, todayIso
 } from "./stores";
@@ -24,7 +24,7 @@ import {
 } from "./backend";
 import {
   createCategoryNode, createEntryNode, defaultBackground, createScheduledTask, DEFAULT_ENTRY_ICON,
-  normalizeCalendarEvents
+  normalizeCalendarCategories, normalizeCalendarEvents
 } from "./defaults";
 import { nodeAndDescendantIds } from "./nodes";
 import { clockOf, composeTimestamp } from "./clock";
@@ -782,7 +782,9 @@ export async function setBackground(
  */
 export async function setScratchpadTabs(tabs: ScratchpadTab[], activeTabId: string): Promise<boolean> {
   const payload = {
-    tabs: tabs.map((tab) => ({ id: tab.id, name: tab.name, text: tab.text, updatedAt: tab.updatedAt ?? "" })),
+    // nameAuto 必须带上（v0.9.1）：漏掉的话 core 按 serde 默认 false 落盘，
+    // 机器命名的标签页往返一次就再也跟不上内容了
+    tabs: tabs.map((tab) => ({ id: tab.id, name: tab.name, nameAuto: tab.nameAuto, text: tab.text, updatedAt: tab.updatedAt ?? "" })),
     activeTabId
   };
   const mutate = (): void => {
@@ -1200,6 +1202,10 @@ export type CalendarDraft = {
   endTime?: string;
   allDay?: boolean;
   reminders?: ReminderRule[];
+  location?: string;
+  categoryId?: string;
+  /** null / 缺省 = 不重复 */
+  repeat?: CalendarRepeat | null;
   /** 关联的 todo 条目（右键「添加到日程」）；空 = 独立日程 */
   taskId?: string;
 };
@@ -1214,6 +1220,11 @@ export type CalendarChanges = {
   allDay?: boolean;
   /** `undefined` = 这次不动提醒（与 core 的 Option 分界一致）；空数组 = 清空 */
   reminders?: ReminderRule[];
+  location?: string;
+  categoryId?: string;
+  /** `undefined` = 不动；`null` = 取消重复（core 见到 null 就清掉规则与例外日期） */
+  repeat?: CalendarRepeat | null;
+  exceptDates?: string[];
   taskId?: string;
 };
 
@@ -1231,6 +1242,9 @@ export async function addCalendarEvent(draft: CalendarDraft): Promise<CalendarEv
         endTime: draft.endTime ?? "",
         allDay: draft.allDay === true,
         reminders: remindersParam(draft.reminders ?? []),
+        location: draft.location ?? "",
+        categoryId: draft.categoryId ?? "",
+        repeat: draft.repeat ?? null,
         taskId: draft.taskId ?? ""
       });
     } catch (error) {
@@ -1249,6 +1263,10 @@ export async function addCalendarEvent(draft: CalendarDraft): Promise<CalendarEv
     details: draft.details ?? "",
     ...times,
     reminders: draft.reminders ?? [],
+    location: draft.location ?? "",
+    categoryId: draft.categoryId ?? "",
+    repeat: draft.repeat ?? null,
+    exceptDates: [],
     taskId: draft.taskId ?? "",
     createdAt,
     updatedAt: createdAt
@@ -1267,6 +1285,13 @@ function applyCalendarChanges(event: CalendarEvent, changes: CalendarChanges): C
   if (changes.endTime !== undefined) next.endTime = changes.endTime;
   if (changes.allDay !== undefined) next.allDay = changes.allDay;
   if (changes.reminders !== undefined) next.reminders = changes.reminders;
+  if (changes.location !== undefined) next.location = changes.location;
+  if (changes.categoryId !== undefined) next.categoryId = changes.categoryId;
+  if (changes.repeat !== undefined) {
+    next.repeat = changes.repeat;
+    if (changes.repeat === null) next.exceptDates = [];
+  }
+  if (changes.exceptDates !== undefined) next.exceptDates = changes.exceptDates;
   if (changes.taskId !== undefined) next.taskId = changes.taskId;
   return next;
 }
@@ -1284,6 +1309,10 @@ export async function updateCalendarEvent(id: string, changes: CalendarChanges):
     if (changes.endTime !== undefined) params.endTime = changes.endTime;
     if (changes.allDay !== undefined) params.allDay = changes.allDay;
     if (changes.reminders !== undefined) params.reminders = remindersParam(changes.reminders);
+    if (changes.location !== undefined) params.location = changes.location;
+    if (changes.categoryId !== undefined) params.categoryId = changes.categoryId;
+    if (changes.repeat !== undefined) params.repeat = changes.repeat;
+    if (changes.exceptDates !== undefined) params.exceptDates = changes.exceptDates;
     if (changes.taskId !== undefined) params.taskId = changes.taskId;
     try {
       const envelope = await coreDispatch<Record<string, unknown>>("calendar.modify", params);
@@ -1310,19 +1339,178 @@ export async function updateCalendarEvent(id: string, changes: CalendarChanges):
   return true;
 }
 
-export async function deleteCalendarEvent(id: string): Promise<void> {
+/**
+ * 删除日程。重复日程有三档（业界日历通行做法）：
+ * 都不给 = 删整个系列；`occurrence` = 只删这一次（写进例外日期）；
+ * `fromOccurrence` = 删这次及以后（core 把重复截止日期收到它前一天）。
+ */
+export async function deleteCalendarEvent(
+  id: string,
+  scope?: { occurrence?: string; fromOccurrence?: string }
+): Promise<void> {
   const keep = (list: CalendarEvent[]): CalendarEvent[] => list.filter((event) => event.id !== id);
   if (coreMode) {
     try {
-      await coreDispatch("calendar.remove", { id });
+      await coreDispatch("calendar.remove", {
+        id,
+        ...(scope?.occurrence ? { occurrence: scope.occurrence } : {}),
+        ...(scope?.fromOccurrence ? { fromOccurrence: scope.fromOccurrence } : {})
+      });
     } catch (error) {
       await report(error, "日程删除失败");
       return;
     }
-    calendarEvents.update(keep);
+    // 按次删/截断都不该把整条系列从本地抹掉：等域事件与快照回填权威值
+    if (!scope?.occurrence && !scope?.fromOccurrence) calendarEvents.update(keep);
+    return;
+  }
+  const event = findCalendarEvent(id);
+  if (scope?.occurrence && event) {
+    commitCalendar(
+      calendars().map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              exceptDates: [...new Set([...item.exceptDates, scope.occurrence as string])].sort(),
+              updatedAt: new Date().toISOString()
+            }
+          : item
+      )
+    );
+    return;
+  }
+  if (scope?.fromOccurrence && event?.repeat) {
+    const until = addDays(scope.fromOccurrence, -1);
+    if (until < event.startDate) {
+      commitCalendar(keep(calendars()));
+      return;
+    }
+    commitCalendar(
+      calendars().map((item) =>
+        item.id === id && item.repeat
+          ? {
+              ...item,
+              repeat: { ...item.repeat, end: "until", until, count: 0 },
+              updatedAt: new Date().toISOString()
+            }
+          : item
+      )
+    );
     return;
   }
   commitCalendar(keep(calendars()));
+}
+
+// ---------------------------------------------------------------------------
+// 日程分类（v0.9.1）
+// ---------------------------------------------------------------------------
+
+function categories(): CalendarCategory[] {
+  return get(calendarCategories);
+}
+
+export function findCalendarCategory(id: string): CalendarCategory | undefined {
+  return categories().find((item) => item.id === id);
+}
+
+/** 新建日程的默认分类（用户在分类管理里勾的那个）；没有就返回空串。 */
+export function defaultCalendarCategoryId(): string {
+  return categories().find((item) => item.isDefault)?.id ?? "";
+}
+
+function createCategoryId(): string {
+  if (crypto.randomUUID) return `ccat-${crypto.randomUUID().replace(/-/g, "")}`;
+  return `ccat-${Math.random().toString(16).slice(2, 10)}${Math.random().toString(16).slice(2, 10)}`;
+}
+
+export type CalendarCategoryDraft = { name: string; color?: string; isDefault?: boolean };
+export type CalendarCategoryChanges = { name?: string; color?: string; isDefault?: boolean };
+
+export async function addCalendarCategory(draft: CalendarCategoryDraft): Promise<CalendarCategory | null> {
+  const createdAt = new Date().toISOString();
+  if (coreMode) {
+    let created;
+    try {
+      created = await coreDispatch<Record<string, unknown>>("calendar.categoryAdd", {
+        name: draft.name,
+        color: draft.color ?? "",
+        isDefault: draft.isDefault === true
+      });
+    } catch (error) {
+      return await report(error, "分类创建失败");
+    }
+    const [category] = normalizeCalendarCategories({ categories: [created.data] });
+    if (!category) return null;
+    calendarCategories.update((list) => [
+      ...list.filter((item) => !(category.isDefault && item.isDefault)),
+      category
+    ]);
+    return category;
+  }
+  const category: CalendarCategory = {
+    id: createCategoryId(),
+    name: draft.name.trim().slice(0, 24),
+    color: draft.color ?? "",
+    isDefault: draft.isDefault === true,
+    order: categories().reduce((max, item) => Math.max(max, item.order), 0) + 1,
+    createdAt,
+    updatedAt: createdAt
+  };
+  commitCalendarCategories([
+    ...categories().filter((item) => !(category.isDefault && item.isDefault)),
+    category
+  ]);
+  return category;
+}
+
+export async function updateCalendarCategory(
+  id: string,
+  changes: CalendarCategoryChanges
+): Promise<boolean> {
+  const previous = findCalendarCategory(id);
+  if (!previous) return false;
+  const next: CalendarCategory = { ...previous, updatedAt: new Date().toISOString() };
+  if (changes.name !== undefined) next.name = changes.name.trim().slice(0, 24);
+  if (changes.color !== undefined) next.color = changes.color;
+  if (changes.isDefault !== undefined) next.isDefault = changes.isDefault;
+  if (coreMode) {
+    const params: Record<string, unknown> = { id };
+    if (changes.name !== undefined) params.name = changes.name;
+    if (changes.color !== undefined) params.color = changes.color;
+    if (changes.isDefault !== undefined) params.isDefault = changes.isDefault;
+    try {
+      await coreDispatch("calendar.categoryModify", params);
+    } catch (error) {
+      await report(error, "分类保存失败");
+      return false;
+    }
+  }
+  // 「设为默认」全局互斥：别的分类同时摘掉（core 那边也做，本地要立刻一致）
+  commitCalendarCategories(
+    categories().map((item) => {
+      if (item.id === id) return next;
+      return next.isDefault && item.isDefault ? { ...item, isDefault: false } : item;
+    })
+  );
+  return true;
+}
+
+/** 删分类不删日程：用它的日程退回「无分类」（各视图改用日程主题色）。 */
+export async function deleteCalendarCategory(id: string): Promise<void> {
+  if (coreMode) {
+    try {
+      await coreDispatch("calendar.categoryRemove", { id });
+    } catch (error) {
+      await report(error, "分类删除失败");
+      return;
+    }
+  }
+  commitCalendarCategories(categories().filter((item) => item.id !== id));
+  commitCalendar(
+    calendars().map((event) =>
+      event.categoryId === id ? { ...event, categoryId: "", updatedAt: new Date().toISOString() } : event
+    )
+  );
 }
 
 /**

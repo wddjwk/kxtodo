@@ -19,6 +19,8 @@ export type NativeClipboard = {
   text: string;
   imagePath: string | null;
   files: Array<{ name: string; path: string }>;
+  /** 读不出来的剪切板项数（流打不开等）；>0 时前端必须提示，绝不静默丢 */
+  dropped: number;
 };
 
 /** 读当前剪切板。桥没就绪/未授权/平台不支持时返回 null。 */
@@ -34,6 +36,7 @@ export function readNativeClipboard(): NativeClipboard | null {
       text?: string;
       imagePath?: string | null;
       files?: Array<{ name?: string; path?: string }>;
+      dropped?: number;
     };
     if (parsed.error) return null;
     return {
@@ -42,7 +45,10 @@ export function readNativeClipboard(): NativeClipboard | null {
       files: (parsed.files ?? [])
         .filter((file): file is { name: string; path: string } =>
           typeof file?.name === "string" && typeof file?.path === "string" && file.path.length > 0
-        )
+        ),
+      dropped: Number.isInteger(parsed.dropped) && (parsed.dropped as number) > 0
+        ? (parsed.dropped as number)
+        : 0
     };
   } catch {
     return null;
@@ -110,28 +116,6 @@ export function readNativeKeepAlive(): KeepAliveState | null {
     };
   } catch {
     return null;
-  }
-}
-
-export type NativeSaveDir = { label: string; path: string };
-
-/** 安卓上可写的保存目录候选（作用域存储只允许应用自己的外部目录用路径写）。 */
-export function listNativeSaveDirs(): NativeSaveDir[] {
-  const bridge = androidBridge();
-  const token = androidToken();
-  if (!bridge?.listSaveDirs || !token) return [];
-  try {
-    const parsed = JSON.parse(bridge.listSaveDirs(token) ?? "null") as
-      | Array<Partial<NativeSaveDir>>
-      | { error?: string }
-      | null;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (entry): entry is NativeSaveDir =>
-        typeof entry?.label === "string" && typeof entry?.path === "string" && entry.path !== ""
-    );
-  } catch {
-    return [];
   }
 }
 

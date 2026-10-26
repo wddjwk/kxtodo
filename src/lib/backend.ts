@@ -2,9 +2,9 @@ import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { caps } from "./capabilities";
 import { externalLinkUrl, normalizeLinkMeta, type LinkMeta } from "./linkMeta";
-import { defaultSettings, emptySchedulerState, emptyState, normalizeCalendarEvents, normalizeDiaryEntries, normalizeSchedulerState, normalizeSettings, normalizeState } from "./defaults";
+import { defaultSettings, emptySchedulerState, emptyState, normalizeCalendarCategories, normalizeCalendarEvents, normalizeDiaryEntries, normalizeSchedulerState, normalizeSettings, normalizeState } from "./defaults";
 import { androidToken } from "./androidBridge";
-import type { AppNotification, AppState, CalendarEvent, DiaryEntry, LedgerBook, SchedulerRuntimePaths, SchedulerState, Settings } from "./types";
+import type { AppNotification, AppState, CalendarCategory, CalendarEvent, DiaryEntry, LedgerBook, SchedulerRuntimePaths, SchedulerState, Settings } from "./types";
 
 const stateKey = "todo-note-state-v3";
 const settingsKey = "todo-note-settings-v3";
@@ -75,12 +75,13 @@ export async function saveLedger(book: LedgerBook): Promise<void> {
   localStorage.setItem(ledgerKey, JSON.stringify(book));
 }
 
-export async function loadCalendar(): Promise<CalendarEvent[]> {
-  return normalizeCalendarEvents(readLocal(calendarKey, { events: [] }));
+export async function loadCalendar(): Promise<{ events: CalendarEvent[]; categories: CalendarCategory[] }> {
+  const raw = readLocal(calendarKey, { events: [], categories: [] });
+  return { events: normalizeCalendarEvents(raw), categories: normalizeCalendarCategories(raw) };
 }
 
-export async function saveCalendar(events: CalendarEvent[]): Promise<void> {
-  localStorage.setItem(calendarKey, JSON.stringify({ events }));
+export async function saveCalendar(events: CalendarEvent[], categories: CalendarCategory[]): Promise<void> {
+  localStorage.setItem(calendarKey, JSON.stringify({ events, categories }));
 }
 
 export async function resolveExecutorPaths(): Promise<SchedulerRuntimePaths> {

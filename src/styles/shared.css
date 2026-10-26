@@ -154,3 +154,33 @@
 .ui-switch.sm input:checked + .ui-switch-track::after {
   transform: translateX(16px);
 }
+
+/* ---------------------------------------------------------------------------
+ * 全局悬浮提示（v0.9.1 需求 13）：`tooltip.ts` 接管原生 title 后画的这一层。
+ * 深色半透明胶囊 + 轻微上浮淡入，位置由 placePopover 算（元素下方居中，放不下翻上）。
+ * --------------------------------------------------------------------------- */
+
+.kx-tooltip {
+  position: fixed;
+  z-index: 9000;
+  max-width: 320px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgb(28 32 38 / 92%);
+  color: #f4f6f9;
+  font-size: calc(var(--font-control) - 5px);
+  line-height: 1.45;
+  text-align: left;
+  white-space: pre-line;
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 22%), 0 2px 6px rgb(0 0 0 / 14%);
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-3px);
+  transition: opacity 0.13s ease, transform 0.13s ease;
+}
+
+.kx-tooltip.show {
+  opacity: 1;
+  transform: none;
+}

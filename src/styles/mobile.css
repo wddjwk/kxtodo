@@ -375,6 +375,26 @@
   grid-template-columns: auto minmax(0, 1fr);
 }
 
+/* 「已加入日程」图标（v0.9.1 需求 3）：窄屏也要给图标留一列，否则图标挤进正文那一列、
+   正文被顶到下一行——看上去就成了「图标在右边、文字右对齐」。
+   grid-column 由桌面那几条 `.task-*-icon .task-body` 给（列号与这里的模板一致，
+   移动端只是砍掉了尾部 edit-button 那一列）。 */
+.app-shell.mobile .task-card.compact.task-calendar-icon .task-title-grid {
+  grid-template-columns: 34px auto minmax(0, 1fr);
+}
+
+.app-shell.mobile .task-card.plain.compact.task-calendar-icon .task-title-grid {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.app-shell.mobile .task-card.compact.task-pinned-icon.task-calendar-icon .task-title-grid {
+  grid-template-columns: 34px auto auto minmax(0, 1fr);
+}
+
+.app-shell.mobile .task-card.plain.compact.task-pinned-icon.task-calendar-icon .task-title-grid {
+  grid-template-columns: auto auto minmax(0, 1fr);
+}
+
 /* 折叠态标题：折行显示。夹行与省略号由 .clamped 控制——只有「两行放不下」才夹成两行
    并在第二行末尾加省略号；两行放得下就是普通两行文本，没有省略号、也不算折叠态。 */
 .app-shell.mobile .markdown-title-row {
@@ -1097,7 +1117,8 @@
 
 .app-shell.mobile .calendar-fab-row {
   right: 16px;
-  bottom: calc(24px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
+  /* 与日记/记账同一高度：贴着底部会被系统手势条压住，也不像「浮在上面」的 FAB */
+  bottom: calc(97px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1));
 }
 
 .app-shell.mobile .calendar-fab {
@@ -1132,8 +1153,8 @@
 }
 
 .app-shell.mobile .cal-day-head.today .cal-dom {
-  width: 20px;
-  height: 20px;
+  width: calc(var(--font-control) + 2px);
+  height: calc(var(--font-control) + 2px);
 }
 
 .app-shell.mobile .cal-hour-label {
@@ -1192,12 +1213,30 @@
 }
 
 /* 编辑器元数据行窄屏收拢：全天 + 起 + 止 + 时长换行排 */
-.app-shell.mobile .calendar-meta {
-  gap: 6px;
+.app-shell.mobile .calendar-form {
+  width: 100%;
+  max-height: none;
+  height: 100%;
+  border-radius: 0;
 }
 
-.app-shell.mobile .calendar-reminder-pop {
-  width: min(236px, calc(100vw - 48px));
+.app-shell.mobile .calendar-form-body {
+  padding: 12px 12px 16px;
+}
+
+.app-shell.mobile .cal-field {
+  grid-template-columns: 4.2em minmax(0, 1fr);
+  gap: 3px 9px;
+}
+
+.app-shell.mobile .calendar-details-body {
+  max-height: none;
+  min-height: 190px;
+}
+
+.app-shell.mobile .calendar-repeat-custom,
+.app-shell.mobile .calendar-reminder-custom {
+  width: 100%;
 }
 
 /* 草稿纸标签页（v0.9.0）：触屏没有 hover，关闭叉常显（管理类动作不能藏） */

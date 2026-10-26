@@ -575,6 +575,12 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         is_map: false,
     },
     FieldMeta {
+        path: "calendar.hourZoom",
+        kind: "number(0.5-3)",
+        description: "日程时间网格缩放倍率（1 = 一屏 12 小时；本机偏好，不跨设备同步）",
+        is_map: false,
+    },
+    FieldMeta {
         path: "calendar.accent",
         kind: "color",
         description: "日程界面主题色（空串 = 默认日程色）",
@@ -726,7 +732,8 @@ fn unknown_field(path: &str) -> CoreError {
         .with_hint("运行 kxtodo-cli config list 查看全部已知配置项")
 }
 
-fn is_hex_color(raw: &str) -> bool {
+/// `#rrggbb` 严格七位（日程分类的颜色也用它校验，v0.9.1）。
+pub(crate) fn is_hex_color(raw: &str) -> bool {
     let value = raw.trim();
     value.len() == 7
         && value.starts_with('#')
@@ -858,6 +865,7 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "ledger.backgroundImage" => json!(settings.ledger.background_image),
         "ledger.backgroundOpacity" => json!(settings.ledger.background_opacity),
         "calendar.view" => json!(settings.calendar.view.as_str()),
+        "calendar.hourZoom" => json!(settings.calendar.hour_zoom),
         "calendar.accent" => json!(settings.calendar.accent),
         "calendar.backgroundColor" => json!(settings.calendar.background_color),
         "calendar.backgroundImage" => json!(settings.calendar.background_image),
@@ -1644,6 +1652,17 @@ pub fn set_value(
             settings.calendar.view = CalendarView::parse(&raw)
                 .ok_or_else(|| invalid_value(path, "应为 month/week/threeday/day"))?;
         }
+        "calendar.hourZoom" => {
+            let raw = value
+                .as_f64()
+                .ok_or_else(|| invalid_value(path, "应为 0.5-3 的数字"))?;
+            if !(crate::model::CALENDAR_HOUR_ZOOM_MIN..=crate::model::CALENDAR_HOUR_ZOOM_MAX)
+                .contains(&raw)
+            {
+                return Err(invalid_value(path, "应为 0.5-3 的数字"));
+            }
+            settings.calendar.hour_zoom = raw;
+        }
         "calendar.accent" => {
             let raw = expect_string(path, &value)?.trim().to_string();
             if !raw.is_empty() && !is_hex_color(&raw) {
@@ -1956,6 +1975,7 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
             target.ledger.background_opacity = defaults.ledger.background_opacity
         }
         "calendar.view" => target.calendar.view = defaults.calendar.view,
+        "calendar.hourZoom" => target.calendar.hour_zoom = defaults.calendar.hour_zoom,
         "calendar.accent" => target.calendar.accent = defaults.calendar.accent.clone(),
         "calendar.backgroundColor" => {
             target.calendar.background_color = defaults.calendar.background_color.clone()
@@ -2031,4 +2051,63 @@ pub fn validate_settings(
         }
     }
     issues
+}
+
+// ---------------------------------------------------------------------------
+// tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 每个 `config list` 里出现的路径都必须能被 `config reset` 认下。
+    ///
+    /// 三处登记（KNOWN_FIELDS / get / set）漏掉 reset 那处的症状很隐蔽：平时读写都正常，
+    /// 只有「恢复默认设置」整轮失败在 `UNKNOWN_CONFIG_KEY` 上（v0.9.1 加
+    /// `calendar.hourZoom` 时踩到，是集成测试 reset_requires_yes… 报出来的）。
+    #[test]
+    fn every_known_field_is_resettable() {
+        let defaults = SettingsFile::default();
+        let mut missing = Vec::new();
+        for field in KNOWN_FIELDS.iter() {
+            let mut target = defaults.clone();
+            if set_default(&mut target, &defaults, field.path).is_err() {
+                missing.push(field.path);
+            }
+        }
+        assert!(missing.is_empty(), "这些配置项没有 reset 分支：{missing:?}");
+    }
+
+    /// 本机 UI 状态读盘宽容：开发中间版往 settings.json 写过 `"3days"`，
+    /// 严格反序列化会让**整份 settings.json 读不出来**，于是改任何设置都报
+    /// 「settings.json 结构无效」（v0.9.1 的 P0）。
+    #[test]
+    fn view_enums_fall_back_instead_of_poisoning_settings() {
+        let raw = r#"{
+            "calendar": { "view": "nonsense" },
+            "diary": { "view": "timeline" },
+            "ledger": { "view": 42 }
+        }"#;
+        let parsed: SettingsFile = serde_json::from_str(raw).expect("坏值不该让整份文件读不出来");
+        assert_eq!(parsed.calendar.view.as_str(), "week");
+        assert_eq!(parsed.diary.view.as_str(), "list");
+        assert_eq!(parsed.ledger.view.as_str(), "list");
+        // 那份真实的遗留文件写的是 "3days"：既然认得出来就按用户的本意还原成三日视图
+        let leftover: SettingsFile =
+            serde_json::from_str(r#"{ "calendar": { "view": "3days" } }"#).unwrap();
+        assert_eq!(leftover.calendar.view.as_str(), "threeday");
+    }
+
+    #[test]
+    fn calendar_hour_zoom_roundtrips_and_resets() {
+        let defaults = SettingsFile::default();
+        let mut target = defaults.clone();
+        set_value(&mut target, "calendar.hourZoom", json!(1.75), None).unwrap();
+        assert_eq!(get_typed(&target, "calendar.hourZoom").unwrap(), json!(1.75));
+        // 越界一律拒（前端与 core 同一个 0.5..3 区间）
+        assert!(set_value(&mut target, "calendar.hourZoom", json!(9.0), None).is_err());
+        set_default(&mut target, &defaults, "calendar.hourZoom").unwrap();
+        assert_eq!(get_typed(&target, "calendar.hourZoom").unwrap(), json!(1.0));
+    }
 }

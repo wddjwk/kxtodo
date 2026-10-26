@@ -31,8 +31,6 @@ interface Window {
     setKeepAlive(token: string, enabled: boolean, notice: string): string;
     /** 常驻状态 JSON：{enabled, running, notice, notificationsAllowed} */
     keepAliveState(token: string): string;
-    /** 剪切板保存位置候选目录 JSON：[{label, path}] */
-    listSaveDirs(token: string): string;
     /** 打开保存目录（尽力而为）：返回 "" 表示成功 */
     openFolder(token: string, path: string): string;
     /** 收到的图片另存一份进相册 Pictures/kxtodo：返回 "" 表示成功 */

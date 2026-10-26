@@ -18,6 +18,7 @@ use crate::sync::endpoint;
 use crate::sync::merge::{
     apply_calendar_record, apply_data_record, apply_diary_record, apply_ledger_record,
     apply_record_settings, apply_schedule_record, calendar_entity_stamp, data_entity_stamp,
+    is_calendar_kind,
     diary_entity_stamp, ledger_entity_stamp, normalize_calendar_orders, normalize_data_orders,
     normalize_diary_orders, normalize_ledger_orders, normalize_schedule_orders, remote_wins,
     schedule_entity_stamp, EntityRecord, Scopes, SETTINGS_ENTITY_ID, SyncEnvelope,
@@ -257,7 +258,11 @@ fn merge_calendar_records(
 ) -> usize {
     let mut applied = 0;
     for record in records {
-        let stamp = local_stamp(state, &record.id, calendar_entity_stamp(file, &record.id));
+        let stamp = local_stamp(
+            state,
+            &record.id,
+            calendar_entity_stamp(file, &record.kind, &record.id),
+        );
         debug_log(format!(
             "merge calendar {} remote=({},{}) local={:?} -> {}",
             record.id,
@@ -568,10 +573,11 @@ fn run_sync_inner(
         .filter(|record| record.kind == "diary" && scopes.diary)
         .cloned()
         .collect();
-    // 日程（v0.9.0）：与日记同构——独立文件、独立事务、独立范围勾选
+    // 日程（v0.9.0）：与日记同构——独立文件、独立事务、独立范围勾选；
+    // v0.9.1 起分类是同一域里的第二种实体，共用一个勾选框（与记账四种实体同款）
     let calendar_records: Vec<EntityRecord> = records
         .iter()
-        .filter(|record| record.kind == "calendar" && scopes.calendar)
+        .filter(|record| is_calendar_kind(&record.kind) && scopes.calendar)
         .cloned()
         .collect();
     // 记账：流水/账户/分类三种实体一个事务、一个范围勾选
@@ -761,7 +767,9 @@ fn run_sync_inner(
         let local_ts = match record.kind.as_str() {
             "node" | "task" | "scratchpad" => data_entity_stamp(&data_after, &record.id),
             "diary" => diary_entity_stamp(&diary_after, &record.id),
-            "calendar" => calendar_entity_stamp(&calendar_after, &record.id),
+            kind if is_calendar_kind(kind) => {
+                calendar_entity_stamp(&calendar_after, &record.kind, &record.id)
+            }
             kind if crate::sync::merge::is_ledger_kind(kind) => {
                 ledger_entity_stamp(&ledger_after, &record.kind, &record.id)
             }
@@ -825,7 +833,7 @@ fn run_sync_inner(
         if !ledger_existed && crate::sync::merge::is_ledger_kind(&entity.kind) {
             return false;
         }
-        if !calendar_existed && entity.kind == "calendar" {
+        if !calendar_existed && is_calendar_kind(&entity.kind) {
             return false;
         }
         true
@@ -969,7 +977,7 @@ fn resolve_conflict(
                 Ok(json!({}))
             });
         }
-        "calendar" => {
+        kind if is_calendar_kind(kind) => {
             let records = vec![remote.clone()];
             let _ = repo.write_calendar(None, None, "sync.conflict", |file| {
                 merge_calendar_records(file, &records, &state_snapshot, &mut warnings);

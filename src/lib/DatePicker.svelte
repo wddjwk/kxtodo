@@ -22,6 +22,14 @@
   /** HH:MM（或 HH:MM:SS，只取前两段）；空 = 没有时刻 */
   export let time = "";
   export let withTime = false;
+  /**
+   * 「确认」模式（v0.9.1）：底行给「确认」而不是「今天」。
+   * 日程编辑器用它——那里选的是**具体某天的某个时刻**，「今天」是个误导；
+   * 确认只是收起浮层（值早就一路 dispatch 出去了）。
+   */
+  export let confirmMode = false;
+  /** 底行要不要「清除」（日程的开始日期没有「清除」语义，关掉） */
+  export let allowClear = true;
 
   const dispatch = createEventDispatcher<{ select: string; selectTime: string; clear: void; close: void }>();
 
@@ -119,7 +127,14 @@
   {/if}
 
   <div class="date-picker-actions">
-    <button type="button" class="dp-clear" on:click={() => dispatch("clear")}>清除</button>
-    <button type="button" class="dp-today" on:click={goToday}>今天</button>
+    {#if allowClear && panel !== "time"}
+      <button type="button" class="dp-clear" on:click={() => dispatch("clear")}>清除</button>
+    {/if}
+    {#if confirmMode || panel === "time"}
+      <!-- 时刻面板一律给「确认」：拨完滚轮再点「今天」会把刚选的日子改掉 -->
+      <button type="button" class="dp-today" on:click={() => dispatch("close")}>确认</button>
+    {:else}
+      <button type="button" class="dp-today" on:click={goToday}>今天</button>
+    {/if}
   </div>
 </div>

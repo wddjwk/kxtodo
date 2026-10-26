@@ -12,6 +12,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.provider.MediaStore
 import android.webkit.JavascriptInterface
@@ -157,32 +158,60 @@ class ApkBridge(private val context: Context) {
       var imagePath: String? = null
       val files = JSONArray()
       var total = 0L
+      var dropped = 0
       val cap = 128L * 1024 * 1024
       for (index in 0 until clip.itemCount) {
         val item = clip.getItemAt(index)
         if (Build.VERSION.SDK_INT >= 24) {
           item.htmlText?.toString()?.let { if (it.isNotBlank()) html = it }
         }
-        val uri = item.uri
-        if (uri != null) {
-          val mime = mimeOf(clip, uri)
-          if (mime.startsWith("image/") && imagePath == null) {
-            val copied = copyImage(uri) ?: continue
-            imagePath = copied.path
-            total += copied.size
+        // 文本第一份为准；带 uri 的项也可能同时带文本（分享的说明文字），别丢。
+        if (text.isEmpty()) {
+          item.text?.toString()?.let { if (it.isNotEmpty()) text = it }
+        }
+        val uri = item.uri ?: continue
+        val mime = mimeOf(clip, uri)
+        if (mime.startsWith("image/")) {
+          if (imagePath != null) {
+            // 多图剪切板：第一张走图片档，其余按文件走（宁可作为文件也不丢）。
+            val copied = copyFile(uri)
+            if (copied == null) dropped++
+            else {
+              total += copied.size
+              if (total > cap) break
+              files.put(JSONObject().put("name", copied.name).put("path", copied.path))
+            }
           } else {
-            val copied = copyFile(uri) ?: continue
+            val copied = copyImage(uri, mime)
+            if (copied == null) {
+              // 解不出位图也别丢：按普通文件走文件档（v0.9.1 之前是 continue 静默吞掉）。
+              val asFile = copyFile(uri)
+              if (asFile == null) dropped++
+              else {
+                total += asFile.size
+                if (total > cap) break
+                files.put(JSONObject().put("name", asFile.name).put("path", asFile.path))
+              }
+            } else {
+              imagePath = copied.path
+              total += copied.size
+            }
+          }
+        } else {
+          val copied = copyFile(uri)
+          if (copied == null) dropped++
+          else {
             total += copied.size
             if (total > cap) break
             files.put(JSONObject().put("name", copied.name).put("path", copied.path))
           }
-        } else {
-          item.text?.toString()?.let { if (it.isNotEmpty()) text = it }
         }
       }
       // HTML 当文件处理（v0.9.0 bugfix 4.1）：折成一个固定路径的 .html 文件进 files
       // 通道（路径固定 = 同一段剪切板的签名稳定，不会每轮轮询都重发）。
-      if (html.isNotEmpty()) {
+      // 已经有图片时不折（v0.9.1）：图文混合的复制里 html 只是包装纸，折成文件会让
+      // 桌面接收端「文件优先」把图挤掉——和桌面 read() 的同一处修复对齐。
+      if (html.isNotEmpty() && imagePath == null) {
         spoolHtml(html)?.let { entry ->
           files.put(JSONObject().put("name", entry.first).put("path", entry.second))
         }
@@ -191,6 +220,7 @@ class ApkBridge(private val context: Context) {
       if (text.isNotEmpty()) result.put("text", text)
       if (imagePath != null) result.put("imagePath", imagePath)
       if (files.length() > 0) result.put("files", files)
+      if (dropped > 0) result.put("dropped", dropped)
       result.toString()
     } catch (error: Exception) {
       JSONObject().put("error", error.message ?: error.toString()).toString()
@@ -201,11 +231,17 @@ class ApkBridge(private val context: Context) {
    * URI 的 mime 判定（v0.9.0 bugfix 4.1）：`getType` 对部分提供者为 null（某些
    * FileProvider / 未登记的 media URI），早先 null 就落进文件分支——复制的图片被当成
    * 文件发出去。四级兜底：resolver → 复制方在描述里登记的 mime → 扩展名 → 魔数。
+   *
+   * ClipDescription 一级只在**单项剪切板**时用（v0.9.1）：多项剪切板的描述里混着
+   * 所有项的 mime，拿它给「getType 为 null 的那一项」定性会把非图片项误判成图片，
+   * 位图解码失败后整项被静默丢掉。
    */
   private fun mimeOf(clip: ClipData, uri: Uri): String {
     context.contentResolver.getType(uri)?.takeIf { it.isNotEmpty() }?.let { return it }
-    for (index in 0 until clip.description.mimeTypeCount) {
-      clip.description.getMimeType(index)?.takeIf { it.startsWith("image/") }?.let { return it }
+    if (clip.itemCount == 1) {
+      for (index in 0 until clip.description.mimeTypeCount) {
+        clip.description.getMimeType(index)?.takeIf { it.startsWith("image/") }?.let { return it }
+      }
     }
     val extension = File(displayName(uri)).extension.lowercase()
     MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)?.let { return it }
@@ -259,9 +295,12 @@ class ApkBridge(private val context: Context) {
       val text = json.optString("text", "")
       val imagePath = json.optString("imagePath", "")
       val items = mutableListOf<Pair<Uri, String>>()
+      var imageFailed = false
       if (imagePath.isNotEmpty()) {
-        fileUri(imagePath, "image/png")?.let { items.add(it) }
+        val imageItem = fileUri(imagePath, "image/png")
+        if (imageItem != null) items.add(imageItem) else imageFailed = true
       }
+      var filesFailed = 0
       val files = json.optJSONArray("files")
       if (files != null) {
         for (index in 0 until files.length()) {
@@ -270,7 +309,8 @@ class ApkBridge(private val context: Context) {
           val extension = File(path).extension.lowercase()
           val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
             ?: "application/octet-stream"
-          fileUri(path, mime)?.let { items.add(it) }
+          val item = fileUri(path, mime)
+          if (item != null) items.add(item) else filesFailed++
         }
       }
       val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
@@ -283,6 +323,17 @@ class ApkBridge(private val context: Context) {
           manager.setPrimaryClip(clip)
         }
         text.isNotEmpty() -> manager.setPrimaryClip(ClipData.newPlainText("KXToDo", text))
+      }
+      // 有内容没写进去就必须报错让前端弹 Toast，绝不静默（v0.9.1 之前：收到的图片
+      // 落在内部数据目录 runtime/clipboard-inbox，过不了 fileUri 的白名单，整个被
+      // 跳过还返回 ""——「安卓收不到图」的最大单点）。
+      val problems = mutableListOf<String>()
+      if (imageFailed) problems.add("图片")
+      if (filesFailed > 0) problems.add("$filesFailed 个文件")
+      if (problems.isNotEmpty()) {
+        val wrote = items.isNotEmpty() || text.isNotEmpty()
+        return problems.joinToString("、") + "没能写进剪切板" +
+          if (wrote) "（其余内容已写入）" else ""
       }
       ""
     } catch (error: Exception) {
@@ -324,62 +375,91 @@ class ApkBridge(private val context: Context) {
   }
 
   /**
-   * 剪切板保存位置的候选目录（v0.9.0 bugfix 4.2）。Android 的作用域存储只允许应用
-   * 用**路径**写自己的外部文件目录，所以「选择路径」给的就是这几个真实可写的目录
-   * （文件管理器里也看得见），不给选不到的公共目录。JSON 数组 [{label, path}]。
-   */
-  @JavascriptInterface
-  fun listSaveDirs(token: String): String {
-    if (!authorized(token)) return JSONObject().put("error", "未授权").toString()
-    val out = JSONArray()
-    val entries = listOf(
-      "下载" to android.os.Environment.DIRECTORY_DOWNLOADS,
-      "文档" to android.os.Environment.DIRECTORY_DOCUMENTS,
-      "图片" to android.os.Environment.DIRECTORY_PICTURES,
-      "影片" to android.os.Environment.DIRECTORY_MOVIES
-    )
-    for ((label, kind) in entries) {
-      val dir = context.getExternalFilesDir(kind)?.resolve("kxtodo-clipboard") ?: continue
-      out.put(JSONObject().put("label", label).put("path", dir.absolutePath))
-    }
-    return out.toString()
-  }
-
-  /**
-   * 打开保存目录（v0.9.0 bugfix 4.2，尽力而为）：
-   * ① 图片目录直接开相册集合（MediaStore 的 Images 集合永远有 Activity 接，最稳）；
-   * ② 其余目录把 FileProvider 的目录 URI 交给 DocumentsUI / 文件管理器；
-   * ③ 没人接就返回错误文案，前端弹 Toast——安卓上「打开文件夹」没有桌面那种保证。
+   * 打开保存目录（v0.9.1 重写，尽力而为）：
+   * ① 配置目录在应用外部文件目录或公共外部存储下 → 构造 DocumentsUI 的文档 URI，
+   *    打开的就是**这个目录本身**；
+   * ② DocumentsUI 不接（没有可用 Activity）→ 退 FileProvider 目录 URI，第三方文件
+   *    管理器可能接；
+   * ③ 都不行（内部数据目录等打不开的位置）→ 返回错误文案，前端弹 Toast 说明，
+   *    绝不再打开别的地方充数。
+   *
+   * v0.9.0 的实现有两处「打开的不是配置的目录」：路径含 Pictures 就特判成
+   * MediaStore 的**全局图片集合**（那是相册，不是配置的文件夹）；其余把 FileProvider
+   * 目录 URI 直接丢给 ACTION_VIEW，系统 DocumentsUI 不认这种 URI，落到哪个界面全看
+   * 设备上装了什么。
    */
   @JavascriptInterface
   fun openFolder(token: String, path: String): String {
     if (!authorized(token)) return "未授权"
     return try {
       val dir = File(path).canonicalFile
-      if (!dir.isDirectory) return "目录不存在"
-      if (dir.path.contains("${File.separator}Pictures${File.separator}")) {
-        val gallery = Intent(Intent.ACTION_VIEW, MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
-        context.startActivity(gallery.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        return ""
+      if (!dir.isDirectory) return "目录不存在：${dir.absolutePath}"
+      documentsUriFor(dir)?.let { uri ->
+        if (startOpenDirectory(uri)) return ""
       }
-      val uri = FileProvider.getUriForFile(
-        context,
-        context.packageName + ".fileprovider",
-        dir
-      )
+      val roots = listOfNotNull(context.getExternalFilesDir(null), context.cacheDir)
+        .map { it.canonicalFile }
+      if (roots.any { dir == it || dir.path.startsWith(it.path + File.separator) }) {
+        val uri = FileProvider.getUriForFile(
+          context,
+          context.packageName + ".fileprovider",
+          dir
+        )
+        if (startOpenDirectory(uri)) return ""
+      }
+      "安卓限制：打不开这个目录（${dir.absolutePath}）"
+    } catch (error: Exception) {
+      error.message ?: error.toString()
+    }
+  }
+
+  private fun startOpenDirectory(uri: Uri): Boolean {
+    return try {
       val intent = Intent(Intent.ACTION_VIEW).apply {
         setDataAndType(uri, "vnd.android.document/directory")
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
       }
-      try {
-        context.startActivity(intent)
-        ""
-      } catch (missing: ActivityNotFoundException) {
-        "没有能打开目录的应用：${dir.absolutePath}"
-      }
-    } catch (error: Exception) {
-      error.message ?: error.toString()
+      context.startActivity(intent)
+      true
+    } catch (_: ActivityNotFoundException) {
+      false
+    } catch (_: SecurityException) {
+      false
     }
+  }
+
+  /**
+   * 目录 → DocumentsUI 文档 URI。应用外部文件目录映射成
+   * `primary:Android/data/<包名>/files/…`，公共外部存储映射成 `primary:…`；
+   * 其余位置（内部数据目录等）SAF 根本表达不了，返回 null。
+   */
+  private fun documentsUriFor(dir: File): Uri? {
+    val authority = "com.android.externalstorage.documents"
+    val appFiles = context.getExternalFilesDir(null)?.canonicalFile
+    val publicRoot = try {
+      android.os.Environment.getExternalStorageDirectory().canonicalFile
+    } catch (_: Exception) {
+      null
+    }
+    val docId = when {
+      appFiles != null && (dir == appFiles || dir.path.startsWith(appFiles.path + File.separator)) ->
+        "primary:Android/data/${context.packageName}/files" + relativeSuffix(appFiles, dir)
+      publicRoot != null && dir.path.startsWith(publicRoot.path + File.separator) ->
+        "primary" + relativeSuffix(publicRoot, dir)
+      else -> return null
+    }
+    return try {
+      val tree = DocumentsContract.buildTreeDocumentUri(authority, docId)
+      DocumentsContract.buildDocumentUriUsingTree(tree, docId)
+    } catch (_: Exception) {
+      null
+    }
+  }
+
+  private fun relativeSuffix(root: File, dir: File): String {
+    if (dir == root) return ""
+    val relative = dir.relativeTo(root).invariantSeparatorsPath
+    return if (relative.isEmpty()) "" else "/$relative"
   }
 
   /**
@@ -463,17 +543,35 @@ class ApkBridge(private val context: Context) {
     return CopiedFile(sanitizeName(name), target.absolutePath, size)
   }
 
-  private fun copyImage(uri: Uri): CopiedFile? {
-    val bitmap = context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
-      ?: return null
-    val dir = File(context.cacheDir, "clipboard-out/${UUID.randomUUID()}").apply { mkdirs() }
-    val target = File(dir, "clipboard.png")
-    val size = target.outputStream().use { out ->
-      bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-      target.length()
+  /**
+   * 把剪切板图片落成缓存里的 PNG。
+   *
+   * 本来就是 PNG 的**直接拷字节，不解码重编**（v0.9.1）：重编让「同一段剪切板」每次
+   * 读出的字节都不一样，core 的内容签名跟着不稳——最直接的后果是收到桌面发来的图片
+   * 写回剪切板后，下一次前台读回的签名对不上 last_local，整张图又被回声发回去；
+   * 也让「同一张图连复制两次」的去重失效。JPEG 等其它格式仍解码转 PNG
+   * （线上约定 image 段就是 PNG，桌面接收端按 PNG 解码）。
+   * 解码失败返回 null，由调用方退回文件档（绝不静默丢项）。
+   */
+  private fun copyImage(uri: Uri, mime: String): CopiedFile? {
+    return try {
+      val dir = File(context.cacheDir, "clipboard-out/${UUID.randomUUID()}").apply { mkdirs() }
+      val target = File(dir, "clipboard.png")
+      if (mime.equals("image/png", ignoreCase = true)) {
+        val size = context.contentResolver.openInputStream(uri)?.use { input ->
+          target.outputStream().use { output -> input.copyTo(output) }
+        } ?: return null
+        return CopiedFile("clipboard.png", target.absolutePath, size)
+      }
+      val bitmap = context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+        ?: return null
+      target.outputStream().use { out -> bitmap.compress(Bitmap.CompressFormat.PNG, 100, out) }
+      val size = target.length()
+      bitmap.recycle()
+      CopiedFile("clipboard.png", target.absolutePath, size)
+    } catch (_: Exception) {
+      null
     }
-    bitmap.recycle()
-    return CopiedFile("clipboard.png", target.absolutePath, size)
   }
 
   private fun displayName(uri: Uri): String {
@@ -501,12 +599,27 @@ class ApkBridge(private val context: Context) {
 
   private fun fileUri(path: String, mime: String): Pair<Uri, String>? {
     val target = File(path).canonicalFile
+    if (!target.isFile) return null
     val allowed = allowedRoots().any { target.path.startsWith(it.path + File.separator) }
-    if (!allowed || !target.isFile) return null
+    val effective = if (allowed) {
+      target
+    } else {
+      // FileProvider 暴露不了的路径（core 把收到的图片落在内部数据目录的
+      // runtime/clipboard-inbox，不在 cache-path / external-files-path 里）：
+      // 先拷进缓存目录再发 URI。v0.9.1 之前这里直接返回 null——收到的图片
+      // 从来没写进过安卓剪切板，而且没有任何提示。
+      val dir = File(context.cacheDir, "clipboard-out/${UUID.randomUUID()}").apply { mkdirs() }
+      val copy = File(dir, sanitizeName(target.name))
+      try {
+        target.copyTo(copy, overwrite = true)
+      } catch (_: Exception) {
+        return null
+      }
+    }
     val uri = FileProvider.getUriForFile(
       context,
       context.packageName + ".fileprovider",
-      target
+      effective
     )
     return uri to mime
   }

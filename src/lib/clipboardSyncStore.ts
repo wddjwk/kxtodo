@@ -17,6 +17,7 @@ import {
   type ClipboardEvent, type ClipboardStatus
 } from "./backend";
 import { exportNativeImageToGallery, readNativeClipboard, writeNativeClipboard } from "./androidBridge";
+import { nativeClipboardSignature } from "./clipboardSignature";
 
 export const clipboardSyncStatus = writable<ClipboardStatus | null>(null);
 
@@ -57,12 +58,20 @@ function handleNativeClipboard(): void {
   }
   const content = readNativeClipboard();
   if (!content) return;
+  if (content.dropped > 0) {
+    // 有项读不出来（流打不开之类）必须让用户知道，绝不静默丢。
+    showToast(`剪切板有 ${content.dropped} 个项目没能读出，未同步`, 4500);
+  }
+  const signature = nativeClipboardSignature(content);
+  // 首次读取只建基线，不发出去：onResume 报上来的可能是后台时复制的旧内容。
+  // **空剪切板也要把基线建掉**（v0.9.1）：否则「启用同步时剪切板是空的」这个最常见
+  // 路径下，用户的第一次真实复制会被当成基线整次吞掉（桌面轮询线程同款修复）。
+  if (!primed) {
+    primed = true;
+    lastLocalSignature = signature;
+    return;
+  }
   if (!content.text && !content.imagePath && content.files.length === 0) return;
-  const signature = [
-    content.text,
-    content.imagePath ? "image" : "",
-    ...content.files.map((file) => `${file.name}:${file.path}`)
-  ].join("\u0000");
   if (signature === lastLocalSignature) return;
   lastLocalSignature = signature;
   void clipboardLocalChanged(content).catch((error) => {
@@ -78,17 +87,19 @@ async function handleEvent(event: ClipboardEvent): Promise<void> {
   if (event.kind !== "remote" || !get(isMobile)) return;
   suppressNativeUntil = Date.now() + 3000;
   const error = writeNativeClipboard(event.content);
+  // 收到的图片另存一份进相册（v0.9.0 bugfix 4.2）：Pictures/kxtodo，相册里直接可见。
+  // 剪切板写入部分失败也要照存（图和剪切板是两条独立的落点）；失败只提示不打断。
+  // 「需要存储权限」不再静默（v0.9.1）：Android 9 及以下没有权限就是存不进相册，
+  // 用户看到的必须是一句话，而不是「说好的相册里找不到图」。
+  if (event.content.imagePath) {
+    const galleryError = exportNativeImageToGallery(event.content.imagePath);
+    if (galleryError) {
+      showToast(`图片没能存进相册：${galleryError}`, 5000);
+    }
+  }
   if (error) {
     showToast(`写入本机剪切板失败：${error}`, 5000);
     return;
-  }
-  // 收到的图片另存一份进相册（v0.9.0 bugfix 4.2）：Pictures/kxtodo，相册里直接可见。
-  // 失败只提示不打断——剪切板里那一份已经写好了。
-  if (event.content.imagePath) {
-    const galleryError = exportNativeImageToGallery(event.content.imagePath);
-    if (galleryError && galleryError !== "需要存储权限") {
-      showToast(`图片没能存进相册：${galleryError}`, 5000);
-    }
   }
   await refreshClipboardStatus();
 }
@@ -105,7 +116,8 @@ export function ensureClipboardRuntime(): void {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") handleNativeClipboard();
   });
-  // 设置里刚打开同步：补读一次当前剪切板（否则要等用户下一次复制）。
+  // 设置里刚打开同步：补读一次当前剪切板把基线建掉（首次读取不发送——那可能是
+  // 开启之前就躺在剪切板里的旧内容；用户开启后的下一次复制才是要同步的）。
   let wasEnabled = clipboardEnabled();
   appSettings.subscribe(() => {
     const enabled = clipboardEnabled();

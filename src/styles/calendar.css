@@ -87,7 +87,7 @@
   opacity: 1;
 }
 
-/* ---------- 区间工具行：今天 / 翻页 / 标题 / 现在 ---------- */
+/* ---------- 区间工具行：翻页 / 标题 / 现在 ---------- */
 
 .calendar-range-bar {
   display: flex;
@@ -98,7 +98,6 @@
   margin: -10px 0 14px;
 }
 
-.calendar-today-btn,
 .calendar-now-btn {
   flex: 0 0 auto;
   padding: 5px 14px;
@@ -111,16 +110,9 @@
   transition: border-color 0.12s ease, color 0.12s ease;
 }
 
-.calendar-today-btn:hover,
 .calendar-now-btn:hover {
   border-color: var(--accent);
   color: var(--accent);
-}
-
-.calendar-today-btn.away {
-  border-color: var(--accent);
-  color: var(--accent);
-  font-weight: 600;
 }
 
 .calendar-range-step {
@@ -218,7 +210,7 @@
 
 .cal-day-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
   justify-content: center;
   min-width: 0;
@@ -247,14 +239,18 @@
   color: var(--accent);
 }
 
+/* 圆形底跟着字号走：写死 24px 时大字号会把数字挤出圆外（v0.9.1 需求 8）。
+   flex 收缩也要关掉——窄屏日期头是列布局，圆被压扁就变成椭圆切字。 */
 .cal-day-head.today .cal-dom {
   display: grid;
-  width: 24px;
-  height: 24px;
+  flex: 0 0 auto;
+  width: calc(var(--font-control) + 10px);
+  height: calc(var(--font-control) + 10px);
   place-items: center;
   border-radius: 50%;
   background: var(--accent);
   color: #fff;
+  line-height: 1;
 }
 
 /* 全天栏 */
@@ -285,12 +281,15 @@
 }
 
 .cal-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   min-width: 0;
   padding: 2px 8px;
   border: 0;
   border-radius: 6px;
-  background: var(--accent);
-  color: #fff;
+  background: var(--cal-main, var(--accent));
+  color: var(--cal-on-main, #fff);
   font-size: calc(var(--font-control) - 5px);
   text-align: left;
   cursor: pointer;
@@ -315,6 +314,13 @@
   flex: 1;
   overflow-y: auto;
   overscroll-behavior: contain;
+  /* 日程界面一律不露滚动条（v0.9.1 需求 14）：网格自己有时刻轴与「现在」红线
+     当位置参照，滚动条只是噪音。 */
+  scrollbar-width: none;
+}
+
+.cal-scroll::-webkit-scrollbar {
+  display: none;
 }
 
 .cal-grid-body {
@@ -352,7 +358,9 @@
   pointer-events: none;
 }
 
-/* 事件块：白底 + 主题色左轨（任何主题色/背景图下都可读，不做颜色数学） */
+/* 事件块（v0.9.1）：**左侧边框主色 + 块内一层淡色**（`--cal-soft` 由
+   `calendar.ts::eventColors` 按 mixWithWhite(main, 0.14) 算好写进内联变量）。
+   淡色底在任何分类色下都不压字，所以文字色恒为深色，不做对比度数学。 */
 
 .cal-event {
   position: absolute;
@@ -361,10 +369,10 @@
   gap: 1px;
   min-width: 0;
   padding: 3px 7px;
-  border: 1px solid rgb(0 0 0 / 8%);
-  border-left: 3px solid var(--accent);
+  border: 1px solid var(--cal-line, rgb(0 0 0 / 8%));
+  border-left: 3px solid var(--cal-main, var(--accent));
   border-radius: 7px;
-  background: rgb(255 255 255 / 94%);
+  background: var(--cal-soft, rgb(255 255 255 / 94%));
   color: #23272f;
   font-size: calc(var(--font-control) - 5px);
   text-align: left;
@@ -375,17 +383,18 @@
 }
 
 .cal-event:hover {
-  border-color: var(--accent);
+  border-color: var(--cal-main, var(--accent));
   box-shadow: 0 3px 10px rgb(31 41 55 / 16%);
 }
 
 .cal-event.past {
   border-left-color: #b6bcc6;
   color: #8b929e;
+  filter: saturate(0.45);
 }
 
 .cal-event.past .cal-event-time {
-  color: #a8aeb8;
+  color: #8b929e;
 }
 
 .cal-event.ghost {
@@ -403,18 +412,38 @@
 
 .cal-event-time {
   flex: 0 0 auto;
-  color: var(--accent);
+  color: var(--cal-main, var(--accent));
   font-size: calc(var(--font-control) - 7px);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
+/* 标题**自动换行**、尽力多展示（v0.9.1 需求 7）：底线是绝不超出块范围——
+   容器 overflow:hidden 把多出来的行裁掉，就是用户要的「被挡住」的观感。 */
 .cal-event-title {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
   min-width: 0;
   font-weight: 600;
-  white-space: nowrap;
+  line-height: 1.25;
   overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
+.cal-repeat {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  color: var(--cal-main, var(--accent));
+  opacity: 0.9;
+}
+
+.cal-event-time .cal-repeat,
+.cal-chip .cal-repeat {
+  color: currentcolor;
 }
 
 /* 上下边缘的改时长手柄（桌面） */
@@ -435,6 +464,65 @@
   bottom: 0;
 }
 
+/* 触屏「点一下就落一个占位块」（v0.9.1 需求 6）：拖上下边界改起止，点块进编辑器。
+   手柄 touch-action:none，否则一拖就变成滚动网格。 */
+
+.cal-draft {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 3px 7px;
+  border: 1px dashed var(--cal-main, var(--accent));
+  border-left: 3px solid var(--cal-main, var(--accent));
+  border-radius: 7px;
+  background: var(--cal-soft, rgb(255 255 255 / 82%));
+  color: #23272f;
+  font-size: calc(var(--font-control) - 5px);
+  cursor: pointer;
+  overflow: hidden;
+  box-shadow: 0 4px 14px rgb(31 41 55 / 18%);
+}
+
+.cal-draft-time {
+  color: var(--cal-main, var(--accent));
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.cal-draft-hint {
+  color: #6b7280;
+  font-size: calc(var(--font-control) - 7px);
+}
+
+.cal-draft .cal-resize {
+  height: 14px;
+  touch-action: none;
+}
+
+.cal-draft .cal-resize::after {
+  position: absolute;
+  left: 50%;
+  width: 26px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--cal-main, var(--accent));
+  content: "";
+  opacity: 0.55;
+  transform: translateX(-50%);
+}
+
+.cal-draft .cal-resize-top::after {
+  top: 3px;
+}
+
+.cal-draft .cal-resize-bottom::after {
+  bottom: 3px;
+}
+
 /* 空白拖动框选的预览块 */
 
 .cal-drag-preview {
@@ -443,10 +531,10 @@
   right: 2px;
   z-index: 5;
   padding: 2px 8px;
-  border: 1px dashed var(--accent);
+  border: 1px dashed var(--cal-main, var(--accent));
   border-radius: 7px;
   background: rgb(255 255 255 / 70%);
-  color: var(--accent);
+  color: var(--cal-main, var(--accent));
   font-size: calc(var(--font-control) - 6px);
   font-variant-numeric: tabular-nums;
   pointer-events: none;
@@ -567,7 +655,7 @@
   padding: 2px 7px;
   border: 0;
   border-radius: 6px;
-  background: rgb(0 0 0 / 4.5%);
+  background: var(--cal-soft, rgb(0 0 0 / 4.5%));
   color: #23272f;
   font-size: calc(var(--font-control) - 6px);
   text-align: left;
@@ -580,17 +668,18 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--cal-main, var(--accent));
   content: "";
 }
 
 .cal-month-chip.allday {
-  background: var(--accent);
-  color: #fff;
+  background: var(--cal-main, var(--accent));
+  color: var(--cal-on-main, #fff);
 }
 
 .cal-month-chip.allday::before {
-  background: rgb(255 255 255 / 85%);
+  background: currentcolor;
+  opacity: 0.85;
 }
 
 .cal-month-chip.past {
@@ -607,7 +696,7 @@
 
 .cal-month-chip-time {
   flex: 0 0 auto;
-  color: var(--accent);
+  color: var(--cal-main, var(--accent));
   font-variant-numeric: tabular-nums;
 }
 
@@ -671,59 +760,182 @@
   transform: translateY(-1px);
 }
 
-/* ---------- 编辑器补充（主体样式在 editor.css 的 editor-dialog 那一套） ---------- */
+/* ---------- 日程编辑器：设置式表单（v0.9.1 重做） ----------
+ * 骨架仍是 editor.css 的 editor-overlay / editor-dialog / editor-icon-button，
+ * 这里只补表单那一层：两栏对齐的行、行内触发器、详情区块、浮层里的自定义面板。
+ */
 
-.calendar-title-input {
-  font-size: calc(var(--font-control) + 4px);
+.calendar-form {
+  width: min(700px, 92%);
+  height: auto;
+  max-height: min(90vh, 900px);
+}
+
+.calendar-form-body {
+  min-height: 0;
+  flex: 1;
+  padding: 14px 18px 18px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.calendar-form-body::-webkit-scrollbar {
+  display: none;
+}
+
+.calendar-form .calendar-title-input {
+  width: 100%;
+  margin-bottom: 14px;
+  border: 0;
+  border-bottom: 1px solid #eceff3;
+  border-radius: 0;
+  padding: 4px 2px 10px;
+  background: transparent;
+  color: #1f2328;
+  font-size: calc(var(--font-control) + 6px);
   font-weight: 700;
 }
 
-.calendar-meta {
-  flex-wrap: wrap;
-  row-gap: 8px;
+.calendar-form .calendar-title-input:focus {
+  border-bottom-color: var(--accent);
+  outline: none;
 }
 
-.calendar-allday {
-  display: inline-flex;
+/* 一行 = 标签栏 + 控件栏；标签定宽，控件那一栏吃满剩下的（对仗工整的关键） */
+
+.cal-field {
+  display: grid;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border: 1px solid rgb(0 0 0 / 10%);
-  border-radius: 8px;
-  background: rgb(255 255 255 / 70%);
-  color: #3c424c;
-  font-size: calc(var(--font-control) - 4px);
-  cursor: pointer;
+  grid-template-columns: 5.5em minmax(0, 1fr);
+  gap: 4px 12px;
+  min-height: 38px;
+  padding: 3px 0;
+  border-bottom: 1px solid rgb(0 0 0 / 4%);
+}
+
+.cal-field:last-of-type {
+  border-bottom: 0;
+}
+
+.cal-field-label {
+  color: #7b8493;
+  font-size: calc(var(--font-control) - 2px);
+  font-weight: 600;
   user-select: none;
 }
 
-.calendar-allday input {
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-
-.calendar-meta-time {
-  margin-left: 6px;
-  color: var(--accent);
-  font-variant-numeric: tabular-nums;
-  font-weight: 700;
-}
-
-.calendar-duration {
-  padding: 3px 9px;
-  border-radius: 999px;
-  background: rgb(0 0 0 / 5%);
-  color: #6b7280;
-  font-size: calc(var(--font-control) - 5px);
-  white-space: nowrap;
-}
-
-.calendar-reminders {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.cal-field-control,
+.cal-field-static {
+  display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
+}
+
+.cal-field-note {
+  color: #a4acb8;
+  font-size: calc(var(--font-control) - 5px);
+}
+
+.cal-field-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: rgb(0 0 0 / 3%);
+  color: #23272f;
+  font-size: calc(var(--font-control) - 2px);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.cal-field-trigger:hover {
+  border-color: rgb(0 0 0 / 10%);
+  background: rgb(0 0 0 / 5.5%);
+}
+
+.cal-field-trigger.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.cal-field-trigger.compact {
+  width: auto;
+  padding: 4px 10px;
+  font-size: calc(var(--font-control) - 4px);
+}
+
+.cal-field-trigger.disabled {
+  color: #a4acb8;
+  cursor: default;
+}
+
+.cal-field-trigger > svg:first-child {
+  flex: 0 0 auto;
+  color: #8b93a1;
+}
+
+.cal-field-trigger.on > svg:first-child {
+  color: var(--accent);
+}
+
+.cal-field-value {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-field-chevron {
+  flex: 0 0 auto;
+  color: #b3bac5;
+}
+
+.cal-field-location {
+  gap: 7px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: rgb(0 0 0 / 3%);
+  color: #8b93a1;
+}
+
+.cal-field-location:focus-within {
+  border-color: var(--accent);
+  background: #fff;
+}
+
+.cal-field-location input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: #23272f;
+  font-size: calc(var(--font-control) - 2px);
+}
+
+.cal-field-location input:focus {
+  outline: none;
+}
+
+.cal-field-wrap {
+  align-items: start;
+}
+
+.cal-field-wrap .cal-field-label {
+  padding-top: 9px;
+}
+
+.calendar-reminder-list {
+  padding: 3px 0;
 }
 
 .calendar-reminder-chip,
@@ -733,39 +945,260 @@
   gap: 4px;
 }
 
-.calendar-reminder-pop {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: 236px;
-  padding: 10px;
-}
-
-.calendar-reminder-preset {
-  width: 100%;
-  justify-content: flex-start;
-}
-
-.calendar-reminder-custom {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-  padding-top: 8px;
-  border-top: 1px solid rgb(0 0 0 / 8%);
+.calendar-duration {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 5%);
   color: #6b7280;
+  font-size: calc(var(--font-control) - 4px);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 全天那一行复用设置页的 .toggle-row，只把它压扁到表单行的密度 */
+
+.cal-toggle {
+  width: 100%;
+  margin-bottom: 0;
+  padding: 6px 10px;
+  background: rgb(0 0 0 / 3%);
+  color: #7b8493;
+  font-size: calc(var(--font-control) - 4px);
+}
+
+.cal-toggle input {
+  accent-color: var(--accent);
+}
+
+.calendar-form-error {
+  margin: 10px 0 0;
+  color: #c0392b;
+  font-size: calc(var(--font-control) - 3px);
+}
+
+.calendar-dot {
+  display: block;
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  border: 1px solid var(--dot, var(--accent));
+  border-radius: 50%;
+  background: var(--dot-soft, var(--dot, var(--accent)));
+}
+
+/* ---------- 详情区块（编辑器只是表单里的一个区块） ---------- */
+
+.calendar-details {
+  margin-top: 16px;
+  border: 1px solid #eceff3;
+  border-radius: 11px;
+  background: #fcfcfd;
+  overflow: hidden;
+}
+
+.calendar-details.active {
+  border-color: rgb(0 0 0 / 12%);
+  background: #fff;
+}
+
+.calendar-details-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 8px 12px;
+  border-bottom: 1px solid #eceff3;
+}
+
+.calendar-details-title {
+  min-width: 0;
+  flex: 1;
+  color: #7b8493;
+  font-size: calc(var(--font-control) - 2px);
+  font-weight: 600;
+  user-select: none;
+}
+
+.calendar-details-head .editor-icon-button {
+  width: 28px;
+  height: 28px;
+}
+
+.calendar-details-body {
+  min-height: 150px;
+  max-height: 34vh;
+  padding: 8px 10px;
+  overflow-y: auto;
+}
+
+.calendar-details-body.hidden-body {
+  display: none;
+}
+
+.calendar-details-empty {
+  padding: 22px 14px;
+  color: #98a1ae;
+  font-size: calc(var(--font-control) - 3px);
+  text-align: center;
+  cursor: text;
+  user-select: none;
+}
+
+.calendar-details-empty:hover {
+  background: rgb(0 0 0 / 2.5%);
+  color: var(--accent);
+}
+
+/* 段控的紧凑变体（详情区块头部空间小） */
+
+.editor-mode-switch.compact {
+  flex: 0 0 auto;
+}
+
+.editor-mode-switch.compact button {
+  padding: 4px 9px;
   font-size: calc(var(--font-control) - 5px);
 }
 
-.calendar-reminder-custom input {
+/* ---------- 行浮层里的自定义面板（重复规则 / 具体时刻提醒） ---------- */
+
+.calendar-pop-host {
+  padding: 2px;
+}
+
+.calendar-repeat-custom,
+.calendar-reminder-custom {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  width: 248px;
+  padding: 4px 2px;
+}
+
+.calendar-custom-hint {
+  margin: 0;
+  color: #8b93a1;
+  font-size: calc(var(--font-control) - 5px);
+  line-height: 1.5;
+}
+
+.calendar-custom-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  color: #6b7280;
+  font-size: calc(var(--font-control) - 4px);
+}
+
+.calendar-custom-row > span:first-child {
+  flex: 0 0 auto;
+  color: #8b93a1;
+}
+
+.calendar-custom-column {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.calendar-custom-number {
+  width: 62px;
+  padding: 4px 7px;
+  border: 1px solid rgb(0 0 0 / 12%);
+  border-radius: 7px;
+  background: #fff;
+  color: #23272f;
+  font-size: calc(var(--font-control) - 4px);
+  font-variant-numeric: tabular-nums;
+}
+
+.calendar-custom-row input[type="date"],
+.calendar-custom-row input[type="time"] {
   min-width: 0;
   flex: 1;
   padding: 4px 7px;
   border: 1px solid rgb(0 0 0 / 12%);
   border-radius: 7px;
-  background: rgb(255 255 255 / 90%);
+  background: #fff;
   color: #23272f;
+  font-size: calc(var(--font-control) - 4px);
+}
+
+.calendar-weekday-row {
+  display: flex;
+  gap: 4px;
+}
+
+.calendar-weekday {
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgb(0 0 0 / 10%);
+  border-radius: 50%;
+  padding: 0;
+  background: #fff;
+  color: #6b7280;
   font-size: calc(var(--font-control) - 5px);
+  cursor: pointer;
+}
+
+.calendar-weekday.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.calendar-monthday-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.calendar-monthday {
+  height: 26px;
+  border: 1px solid rgb(0 0 0 / 10%);
+  border-radius: 6px;
+  padding: 0;
+  background: #fff;
+  color: #6b7280;
+  font-size: calc(var(--font-control) - 6px);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.calendar-monthday.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.calendar-end-row {
+  display: flex;
+  gap: 5px;
+}
+
+.calendar-end-row .menu-action-button.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.calendar-end-detail {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #6b7280;
+  font-size: calc(var(--font-control) - 5px);
+}
+
+.calendar-custom-apply {
+  width: 100%;
+  justify-content: center;
+}
+
+.menu-action-button.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
 }
 
 .calendar-editor .editor-icon-button.danger {
@@ -774,4 +1207,259 @@
 
 .calendar-editor .editor-icon-button.danger:hover {
   background: rgb(192 57 43 / 12%);
+}
+
+/* ---------- 分类管理面板（v0.9.1） ----------
+ * 骨架复用 editor-overlay / editor-dialog / editor-icon-button / settings-button，
+ * 只补日程自己那一层：表单行、色板、块内效果预览、分类行。
+ */
+
+.calendar-sheet {
+  width: min(560px, 92%);
+  height: auto;
+  max-height: min(86vh, 760px);
+}
+
+.calendar-sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #eceff3;
+  background: #fafbfc;
+}
+
+.calendar-sheet-title {
+  min-width: 0;
+  flex: 1;
+  color: #23272f;
+  font-size: calc(var(--font-control) + 1px);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.calendar-sheet-spacer {
+  flex: 1;
+}
+
+.calendar-sheet-body {
+  min-height: 0;
+  flex: 1;
+  padding: 14px 16px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.calendar-sheet-body::-webkit-scrollbar {
+  display: none;
+}
+
+.calendar-sheet-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid #eceff3;
+  background: #fafbfc;
+}
+
+.calendar-sheet-hint {
+  min-width: 0;
+  flex: 1;
+  color: #98a1ae;
+  font-size: calc(var(--font-control) - 4px);
+  line-height: 1.4;
+}
+
+.calendar-sheet .editor-icon-button.danger {
+  color: #c0392b;
+}
+
+.calendar-sheet .editor-icon-button.danger:hover {
+  background: rgb(192 57 43 / 12%);
+}
+
+/* 表单行：标签在上、控件在下，一律同一套间距（对仗工整的设置界面口径） */
+
+.calendar-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-bottom: 16px;
+}
+
+.calendar-field:last-child {
+  margin-bottom: 0;
+}
+
+.calendar-field-label {
+  color: #6b7280;
+  font-size: calc(var(--font-control) - 3px);
+  font-weight: 600;
+}
+
+.calendar-field-input {
+  width: 100%;
+  padding: 8px 11px;
+  border: 1px solid rgb(0 0 0 / 12%);
+  border-radius: 9px;
+  background: #fff;
+  color: #23272f;
+  font-size: var(--font-control);
+}
+
+.calendar-field-input:focus {
+  border-color: var(--accent, #7c5cbf);
+  outline: none;
+}
+
+.calendar-field-inline {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.calendar-field-inline input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent, #7c5cbf);
+  cursor: pointer;
+}
+
+.calendar-field-hint {
+  margin: 0;
+  color: #98a1ae;
+  font-size: calc(var(--font-control) - 4px);
+  line-height: 1.5;
+}
+
+.calendar-field-error {
+  margin: 0;
+  color: #c0392b;
+  font-size: calc(var(--font-control) - 3px);
+}
+
+/* 色板：预设圆点 + 自定义（自定义走全应用唯一的取色盘单例） */
+
+.calendar-cat-colors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.calendar-cat-dot {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  padding: 0;
+  color: #fff;
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.12s ease;
+}
+
+.calendar-cat-dot:hover {
+  transform: scale(1.08);
+}
+
+.calendar-cat-dot.active {
+  border-color: #23272f;
+}
+
+.calendar-cat-dot.custom {
+  border: 1px dashed rgb(0 0 0 / 22%);
+  background: var(--dot, #7c5cbf);
+}
+
+/* 块内效果预览：与真实事件块同一套变量与观感 */
+
+.calendar-cat-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 9px;
+  border: 1px solid var(--cal-line, rgb(0 0 0 / 8%));
+  border-left: 3px solid var(--cal-main, #7c5cbf);
+  border-radius: 7px;
+  background: var(--cal-soft, #f3effa);
+  color: #23272f;
+  font-size: calc(var(--font-control) - 4px);
+}
+
+.calendar-cat-preview-time {
+  color: var(--cal-main, #7c5cbf);
+  font-size: calc(var(--font-control) - 6px);
+  font-variant-numeric: tabular-nums;
+}
+
+.calendar-cat-preview-title {
+  font-weight: 600;
+}
+
+/* 分类行 */
+
+.calendar-cat-empty {
+  margin: 0 0 12px;
+  color: #98a1ae;
+  font-size: calc(var(--font-control) - 3px);
+  line-height: 1.6;
+}
+
+.calendar-cat-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+  border-radius: 9px;
+  transition: background 0.12s ease;
+}
+
+.calendar-cat-row:hover {
+  background: rgb(0 0 0 / 3.5%);
+}
+
+.calendar-cat-swatch {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--cal-line, rgb(0 0 0 / 10%));
+  border-left: 3px solid var(--cal-main, #7c5cbf);
+  border-radius: 6px;
+  background: var(--cal-soft, #f3effa);
+}
+
+.calendar-cat-name {
+  min-width: 0;
+  flex: 1;
+  color: #23272f;
+  font-size: var(--font-control);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.calendar-cat-default {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border: 1px solid rgb(0 0 0 / 10%);
+  border-radius: 999px;
+  background: transparent;
+  color: #98a1ae;
+  font-size: calc(var(--font-control) - 5px);
+  cursor: pointer;
+}
+
+.calendar-cat-default.on {
+  border-color: var(--accent, #7c5cbf);
+  background: var(--accent, #7c5cbf);
+  color: #fff;
 }

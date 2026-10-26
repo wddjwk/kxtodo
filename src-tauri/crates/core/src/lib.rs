@@ -30,6 +30,7 @@ pub mod ops_storage;
 pub mod ops_sync;
 pub mod ops_task;
 pub mod plan;
+pub mod recurrence;
 pub mod reminders;
 pub mod render;
 pub mod repo;

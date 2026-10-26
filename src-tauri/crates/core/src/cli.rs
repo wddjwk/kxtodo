@@ -158,7 +158,7 @@ pub enum Commands {
     },
     /// 读写日程（日历上的时间安排，支持提醒与关联任务）
     #[command(
-        long_about = "日程与「定时任务」（schedule）是两回事：schedule 是「到点跑一段脚本」，\ncalendar 是「日历上的安排」（界面上叫「日程」）。日程住在自己的 calendar.json 里\n（独立领域文件，独立 revision 与域事件，参与同步）。\n\n时间是本地墙上时间：--start/--end 接受 `YYYY-MM-DD`（= 全天）或 `YYYY-MM-DD[ T]HH:MM`；\n--end 只给 `HH:MM` 时沿用 --start 的日期；定时事件不给 --end 默认一小时。\n\n动作：\n  add      新建日程（--title 标题、--details 详情 Markdown、--reminder 提醒，可重复）\n  get      按稳定 ID 读取\n  list     列出（--date 某天 / --from --to 区间（交叠即命中）/ --task 只看某任务的日程；\n           另有 --limit/--cursor/--all，不传 --limit 返回全部）\n  modify   修改（时间、标题、详情、提醒、关联任务）\n  remove   删除（high-risk-write）\n\n示例：\n  kxtodo-cli calendar add --title \"周会\" --start \"2026-10-25 09:00\" --end 10:30 --reminder due-15\n  kxtodo-cli calendar add --title \"出差\" --start 2026-11-01 --end 2026-11-03 --reminder \"2026-10-31T20:00:00+08:00\"\n  kxtodo-cli calendar list --from 2026-10-01 --to 2026-10-31\n  kxtodo-cli calendar modify --id cal-xxxx --start \"2026-10-25 14:00\"\n  kxtodo-cli calendar remove --id cal-xxxx --yes"
+        long_about = "日程与「定时任务」（schedule）是两回事：schedule 是「到点跑一段脚本」，\ncalendar 是「日历上的安排」（界面上叫「日程」）。日程住在自己的 calendar.json 里\n（独立领域文件，独立 revision 与域事件，参与同步）。\n\n时间是本地墙上时间：--start/--end 接受 `YYYY-MM-DD`（= 全天）或 `YYYY-MM-DD[ T]HH:MM`；\n--end 只给 `HH:MM` 时沿用 --start 的日期；定时事件不给 --end 默认一小时。\n\n动作：\n  add      新建日程（--title 标题、--details 详情 Markdown、--reminder 提醒（可重复）、\n           --location 地点、--category 分类、--repeat 重复）\n  get      按稳定 ID 读取\n  list     列出（--date 某天 / --from --to 区间（交叠即命中）/ --task 只看某任务的日程 /\n           --category 只看某分类；重复日程按闭区间逐次展开，每条带 occurrence，\n           --no-expand 只看系列本身；另有 --limit/--cursor/--all，不传 --limit 返回全部）\n  modify   修改（时间、标题、详情、提醒、地点、分类、重复、关联任务）\n  remove   删除（high-risk-write；重复日程可 --occurrence 只删一次、\n           --from-occurrence 删这次及以后）\n  categories / category-add / category-modify / category-remove   分类管理\n           （颜色 #rrggbb 就是各视图的展示色；删分类不删日程，日程退回无分类）\n\n重复（--repeat）：none|daily|weekdays|weekly|biweekly|monthly|yearly，\n再用 --repeat-every N（每 N 个单位）、--repeat-days 1,3,5（周几，0=周日）、\n--repeat-month-days 1,15（几号）、--repeat-times N（共几次）、--repeat-until 日期 收尾。\n\n示例：\n  kxtodo-cli calendar add --title \"周会\" --start \"2026-10-25 09:00\" --end 10:30 --reminder due-15 --repeat weekly\n  kxtodo-cli calendar add --title \"站会\" --start \"2026-10-25 09:30\" --repeat weekdays --category 工作\n  kxtodo-cli calendar add --title \"出差\" --start 2026-11-01 --end 2026-11-03 --reminder \"2026-10-31T20:00:00+08:00\"\n  kxtodo-cli calendar add --title \"复盘\" --start 2026-10-27 --repeat week --repeat-every 2 --repeat-days 1,4 --repeat-times 10\n  kxtodo-cli calendar list --from 2026-10-01 --to 2026-10-31\n  kxtodo-cli calendar modify --id cal-xxxx --start \"2026-10-25 14:00\"\n  kxtodo-cli calendar remove --id cal-xxxx --occurrence 2026-10-12 --yes\n  kxtodo-cli calendar category-add --name 工作 --color #4f7cff --is-default"
     )]
     Calendar {
         #[command(subcommand)]
@@ -805,9 +805,32 @@ pub enum CalendarAction {
     /// 删除一条日程（Risk: high-risk-write）
     #[command(
         visible_alias = "delete",
-        long_about = "Risk: high-risk-write\n\n删除一条日程并写同步墓碑（删除会传播到其它设备）。关联的 todo 条目**不会**被删。\n未带 --yes 返回退出码 10。\n\n示例：kxtodo-cli calendar remove --id cal-xxxx --yes"
+        long_about = "Risk: high-risk-write\n\n删除一条日程并写同步墓碑（删除会传播到其它设备）。关联的 todo 条目**不会**被删。\n未带 --yes 返回退出码 10。\n\n重复日程有三档（业界日历通行做法）：\n  都不给            = 删整个系列\n  --occurrence      = 只删这一次（写进例外日期，系列还在）\n  --from-occurrence = 删这次及以后（把重复截止日期收到它前一天；\n                      收到开始日之前就等于删整个系列）\n\n示例：\n  kxtodo-cli calendar remove --id cal-xxxx --yes\n  kxtodo-cli calendar remove --id cal-xxxx --occurrence 2026-10-12 --yes\n  kxtodo-cli calendar remove --id cal-xxxx --from-occurrence 2026-11-01 --yes"
     )]
-    Remove(CalendarIdArgs),
+    Remove(CalendarRemoveArgs),
+    /// 列出日程分类（Risk: read）
+    #[command(
+        long_about = "Risk: read\n\n列出全部日程分类（名字、颜色 #rrggbb、是否新建默认、被几条日程使用 used）。\n颜色就是各视图里的展示色：事件块左侧边框用主色、块内铺一层淡色。\n\n示例：kxtodo-cli calendar categories"
+    )]
+    Categories,
+    /// 新增日程分类（Risk: write）
+    #[command(
+        name = "category-add",
+        long_about = "Risk: write\n\n新建一个日程分类。--color 是 #rrggbb（不给 = 用日程主题色）；\n--is-default 把它设为新建日程的默认分类（全局互斥，别的分类会自动摘掉）。\n\n示例：\n  kxtodo-cli calendar category-add --name 工作 --color #4f7cff\n  kxtodo-cli calendar category-add --name 个人 --color #3fa66a --is-default"
+    )]
+    CategoryAdd(CalendarCategoryAddArgs),
+    /// 修改日程分类（Risk: write）
+    #[command(
+        name = "category-modify",
+        long_about = "Risk: write\n\n改名 / 改颜色 / 改默认标记；只动给了的字段。--color 传空串 = 回到日程主题色。\n\n示例：\n  kxtodo-cli calendar category-modify --id ccat-xxxx --color #d97706\n  kxtodo-cli calendar category-modify --id ccat-xxxx --is-default"
+    )]
+    CategoryModify(CalendarCategoryModifyArgs),
+    /// 删除日程分类（Risk: high-risk-write）
+    #[command(
+        name = "category-remove",
+        long_about = "Risk: high-risk-write\n\n删除分类并写同步墓碑。**用它的日程不会被删**，只是退回「无分类」\n（各视图改用日程主题色）。未带 --yes 返回退出码 10。\n\n示例：kxtodo-cli calendar category-remove --id ccat-xxxx --yes"
+    )]
+    CategoryRemove(CalendarCategoryRemoveArgs),
 }
 
 #[derive(Debug, Args, Serialize)]
@@ -845,6 +868,83 @@ pub struct CalendarAddArgs {
     /// 关联的 todo 条目 ID
     #[arg(long, value_name = "id")]
     pub task: Option<String>,
+    /// 地点（自由文本）
+    #[arg(long, value_name = "text", allow_hyphen_values = true)]
+    pub location: Option<String>,
+    /// 分类：名字或 ID（calendar categories 查看）
+    #[arg(long, value_name = "name|id")]
+    pub category: Option<String>,
+    /// 重复：none|daily|weekdays|weekly|biweekly|monthly|yearly（或 day|week|month|year）
+    #[arg(long, value_name = "preset")]
+    pub repeat: Option<String>,
+    /// 每 N 个单位重复一次（配合 --repeat；缺省 1）
+    #[arg(long, value_name = "n")]
+    pub repeat_every: Option<u32>,
+    /// 周频率的星期集合：0=周日 … 6=周六，逗号分隔（如 1,3,5 = 周一三五）
+    #[arg(long, value_name = "0-6", value_delimiter = ',')]
+    pub repeat_days: Vec<u8>,
+    /// 月频率的日号集合：1..31，逗号分隔（如 1,15）
+    #[arg(long, value_name = "1-31", value_delimiter = ',')]
+    pub repeat_month_days: Vec<u8>,
+    /// 重复总次数（含首次；1..=999）
+    #[arg(long, value_name = "n")]
+    pub repeat_times: Option<u32>,
+    /// 重复截止日期 YYYY-MM-DD（含当天）
+    #[arg(long, value_name = "date")]
+    pub repeat_until: Option<String>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarRemoveArgs {
+    /// 稳定 ID
+    #[arg(long, value_name = "id")]
+    pub id: String,
+    /// 只删重复日程的这一次（YYYY-MM-DD）
+    #[arg(long, value_name = "date", conflicts_with = "from_occurrence")]
+    pub occurrence: Option<String>,
+    /// 删重复日程的这次及以后（YYYY-MM-DD）
+    #[arg(long, value_name = "date")]
+    pub from_occurrence: Option<String>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarCategoryAddArgs {
+    /// 分类名（≤24 字，重名拒绝）
+    #[arg(long, value_name = "text", allow_hyphen_values = true)]
+    pub name: String,
+    /// #rrggbb；不给 = 用日程主题色
+    #[arg(long, value_name = "#rrggbb")]
+    pub color: Option<String>,
+    /// 设为新建日程的默认分类（全局互斥）
+    #[arg(long)]
+    pub is_default: bool,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarCategoryModifyArgs {
+    /// 稳定 ID
+    #[arg(long, value_name = "id")]
+    pub id: String,
+    /// 新名字
+    #[arg(long, value_name = "text", allow_hyphen_values = true)]
+    pub name: Option<String>,
+    /// 新颜色 #rrggbb（空串 = 回到日程主题色）
+    #[arg(long, value_name = "#rrggbb")]
+    pub color: Option<String>,
+    /// 设为 / 取消默认分类
+    #[arg(long, value_name = "true|false", num_args = 0..=1, default_missing_value = "true")]
+    pub is_default: Option<bool>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarCategoryRemoveArgs {
+    /// 稳定 ID
+    #[arg(long, value_name = "id")]
+    pub id: String,
 }
 
 #[derive(Debug, Args, Serialize)]
@@ -862,6 +962,12 @@ pub struct CalendarListArgs {
     /// 只列某个 todo 条目关联的日程
     #[arg(long, value_name = "id")]
     pub task: Option<String>,
+    /// 只看某个分类（名字或 ID）
+    #[arg(long, value_name = "name|id")]
+    pub category: Option<String>,
+    /// 不展开重复日程（缺省会按 --date/--from+--to 的闭区间逐次展开）
+    #[arg(long)]
+    pub no_expand: bool,
     /// 最多返回条数（不传则返回全部）
     #[arg(long, value_name = "n")]
     pub limit: Option<u64>,
@@ -903,6 +1009,33 @@ pub struct CalendarModifyArgs {
     /// 关联/解除关联 todo 条目（空串解除）
     #[arg(long, value_name = "id")]
     pub task: Option<String>,
+    /// 地点（空串清除）
+    #[arg(long, value_name = "text", allow_hyphen_values = true)]
+    pub location: Option<String>,
+    /// 分类：名字或 ID（空串 = 无分类）
+    #[arg(long, value_name = "name|id")]
+    pub category: Option<String>,
+    /// 重复：none|daily|weekdays|weekly|biweekly|monthly|yearly（none = 取消重复）
+    #[arg(long, value_name = "preset")]
+    pub repeat: Option<String>,
+    /// 每 N 个单位重复一次
+    #[arg(long, value_name = "n")]
+    pub repeat_every: Option<u32>,
+    /// 周频率的星期集合：0=周日 … 6=周六，逗号分隔
+    #[arg(long, value_name = "0-6", value_delimiter = ',')]
+    pub repeat_days: Vec<u8>,
+    /// 月频率的日号集合：1..31，逗号分隔
+    #[arg(long, value_name = "1-31", value_delimiter = ',')]
+    pub repeat_month_days: Vec<u8>,
+    /// 重复总次数（含首次）
+    #[arg(long, value_name = "n")]
+    pub repeat_times: Option<u32>,
+    /// 重复截止日期 YYYY-MM-DD（含当天）
+    #[arg(long, value_name = "date")]
+    pub repeat_until: Option<String>,
+    /// 整体替换例外日期（「只删某几次」的集合，逗号分隔 YYYY-MM-DD）
+    #[arg(long, value_name = "date", value_delimiter = ',')]
+    pub except_dates: Vec<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -2035,6 +2168,9 @@ fn supports_idempotency(command: &str) -> bool {
             | "calendar.add"
             | "calendar.modify"
             | "calendar.remove"
+            | "calendar.categoryAdd"
+            | "calendar.categoryModify"
+            | "calendar.categoryRemove"
             | "ledger.add"
             | "ledger.transfer"
             | "ledger.modify"
@@ -2580,8 +2716,42 @@ fn build_calendar_invocation(action: &CalendarAction) -> CoreResult<Invocation> 
             if let Some(task) = map.remove("task") {
                 map.insert("taskId".to_string(), task);
             }
+            // --category → categoryId（core 认名字或 ID；空串 = 无分类）
+            if let Some(category) = map.remove("category") {
+                map.insert("categoryId".to_string(), category);
+            }
         }
         params
+    }
+    /// 重复规则的几个键：`--repeat` 没给时细化键一律无意义（core 只在有 `repeat`
+    /// 时才读它们），与其静默忽略不如当场报错。空的星期/日号数组也要摘掉——
+    /// 否则会把预设（weekdays 的周一到周五）覆盖成空。
+    fn tidy_repeat(map: &mut serde_json::Map<String, serde_json::Value>) -> CoreResult<()> {
+        let has_preset = map
+            .get("repeat")
+            .and_then(Value::as_str)
+            .is_some_and(|raw| !raw.trim().is_empty());
+        for key in ["repeatEvery", "repeatDays", "repeatMonthDays", "repeatTimes", "repeatUntil"] {
+            let given = match map.get(key) {
+                None | Some(Value::Null) => false,
+                Some(Value::Array(list)) => !list.is_empty(),
+                Some(_) => true,
+            };
+            if given && !has_preset {
+                return Err(CoreError::validation(
+                    "CLI_ARGUMENT_ERROR",
+                    format!("--{key} 要和 --repeat 一起给（--repeat 决定重复单位，细化键才有落点）"),
+                )
+                .with_hint("例：--repeat weekly --repeat-days 1,3,5"));
+            }
+            if !given {
+                map.remove(key);
+            }
+        }
+        if !has_preset {
+            map.remove("repeat");
+        }
+        Ok(())
     }
     let (name, params) = match action {
         CalendarAction::Add(args) => {
@@ -2591,6 +2761,7 @@ fn build_calendar_invocation(action: &CalendarAction) -> CoreResult<Invocation> 
             map.remove("end");
             map.remove("allDay");
             apply_calendar_range(map, &args.start, &args.end, Some(args.all_day), true)?;
+            tidy_repeat(map)?;
             ("calendar.add", finish(params))
         }
         CalendarAction::Get(args) => ("calendar.get", serialize_args(args)),
@@ -2600,6 +2771,17 @@ fn build_calendar_invocation(action: &CalendarAction) -> CoreResult<Invocation> 
                 // --task → taskId（list 的过滤器）
                 if let Some(task) = map.remove("task") {
                     map.insert("taskId".to_string(), task);
+                }
+                if let Some(category) = map.remove("category") {
+                    map.insert("categoryId".to_string(), category);
+                }
+                // --no-expand → expand: false（core 缺省展开）
+                let no_expand = map
+                    .remove("noExpand")
+                    .map(|value| value.as_bool() == Some(true))
+                    .unwrap_or(false);
+                if no_expand {
+                    map.insert("expand".to_string(), Value::Bool(false));
                 }
             }
             ("calendar.list", params)
@@ -2622,9 +2804,20 @@ fn build_calendar_invocation(action: &CalendarAction) -> CoreResult<Invocation> 
                     map.remove("reminders");
                 }
             }
+            if args.except_dates.is_empty() {
+                map.remove("exceptDates");
+            }
+            tidy_repeat(map)?;
             ("calendar.modify", finish(params))
         }
         CalendarAction::Remove(args) => ("calendar.remove", serialize_args(args)),
+        CalendarAction::Categories => (
+            "calendar.categories",
+            Value::Object(serde_json::Map::new()),
+        ),
+        CalendarAction::CategoryAdd(args) => ("calendar.categoryAdd", serialize_args(args)),
+        CalendarAction::CategoryModify(args) => ("calendar.categoryModify", serialize_args(args)),
+        CalendarAction::CategoryRemove(args) => ("calendar.categoryRemove", serialize_args(args)),
     };
     Ok(Invocation::new(name, params))
 }

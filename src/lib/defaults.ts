@@ -1,8 +1,12 @@
 import { platform as tauriPlatform } from "@tauri-apps/plugin-os";
+import { REPEAT_COUNT_MAX } from "./calendar";
+import { isHex } from "./colors";
 import type {
   AppNode,
   AppState,
+  CalendarCategory,
   CalendarEvent,
+  CalendarRepeat,
   CalendarViewMode,
   DiaryEntry,
   DiaryViewMode,
@@ -217,6 +221,7 @@ export const defaultSettings: Settings = {
   },
   calendar: {
     view: "week",
+    hourZoom: 1,
     accent: "",
     // 与 core 的 default_calendar_background_color 同值
     backgroundColor: "#eef1f5",
@@ -815,13 +820,16 @@ export function normalizeScratchpad(raw: unknown): { tabs: ScratchpadTab[]; acti
       tabs.push({
         id: tab.id,
         name: typeof tab.name === "string" ? tab.name.slice(0, 40) : "",
+        // 白名单必须带上 nameAuto（v0.9.1）：漏掉 = 每次快照刷新把「用户改过名」
+        // 抹成机器名，下次编辑正文就会覆盖用户的手动改名
+        nameAuto: tab.nameAuto === true,
         text: typeof tab.text === "string" ? tab.text : "",
         updatedAt: typeof tab.updatedAt === "string" ? tab.updatedAt : undefined
       });
     }
   }
   if (tabs.length === 0 && typeof source?.text === "string" && source.text.trim() !== "") {
-    tabs = [{ id: "tab-1", name: "1", text: source.text, updatedAt: updatedAt || undefined }];
+    tabs = [{ id: "tab-1", name: "1", nameAuto: true, text: source.text, updatedAt: updatedAt || undefined }];
   }
   const activeTabId =
     typeof source?.activeTabId === "string" && tabs.some((tab) => tab.id === source.activeTabId)
@@ -846,7 +854,16 @@ export function normalizeDiaryEntries(raw: unknown): DiaryEntry[] {
 
 const CALENDAR_TIME_RE = /^\d{2}:\d{2}$/;
 
+/** 时间网格缩放倍率：与 core `CALENDAR_HOUR_ZOOM_MIN/MAX` 同口径，坏值回落 1。 */
+function normalizeHourZoom(raw: unknown): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return 1;
+  return Math.min(3, Math.max(0.5, raw));
+}
+
 function normalizeCalendarView(raw: unknown): CalendarViewMode {
+  // "3days"/"3day"/"three-day" 是历史写法（core 的 CalendarView::parse 同口径）：
+  // 认得出来就按用户本意还原，认不出来才回落周视图
+  if (raw === "3days" || raw === "3day" || raw === "three-day") return "threeday";
   if (raw === "month" || raw === "week" || raw === "threeday" || raw === "day") {
     return raw;
   }
@@ -877,6 +894,12 @@ function normalizeCalendarEvent(raw: unknown): CalendarEvent | null {
     endTime: !allDay && CALENDAR_TIME_RE.test(source.endTime ?? "") ? (source.endTime as string) : "",
     allDay,
     reminders: normalizeReminders(source.reminders),
+    location: typeof source.location === "string" ? source.location : "",
+    categoryId: typeof source.categoryId === "string" ? source.categoryId : "",
+    repeat: normalizeCalendarRepeat(source.repeat),
+    exceptDates: Array.isArray(source.exceptDates)
+      ? source.exceptDates.filter((date): date is string => DIARY_DATE_RE.test(String(date ?? "")))
+      : [],
     taskId: typeof source.taskId === "string" ? source.taskId : "",
     createdAt,
     updatedAt: typeof source.updatedAt === "string" ? source.updatedAt : undefined
@@ -887,6 +910,73 @@ export function normalizeCalendarEvents(raw: unknown): CalendarEvent[] {
   const source = raw as { events?: unknown } | undefined;
   const list = Array.isArray(source?.events) ? source?.events : Array.isArray(raw) ? raw : [];
   return list.map(normalizeCalendarEvent).filter((event): event is CalendarEvent => event !== null);
+}
+
+/** 与 core `recurrence::normalize_repeat` 同口径：认不出的形状一律回落「不重复」。 */
+function normalizeCalendarRepeat(raw: unknown): CalendarRepeat | null {
+  const source = raw as Partial<CalendarRepeat> | null | undefined;
+  if (!source || typeof source !== "object") return null;
+  const freq = source.freq;
+  if (freq !== "day" && freq !== "week" && freq !== "month" && freq !== "year") return null;
+  const interval =
+    typeof source.interval === "number" && Number.isFinite(source.interval)
+      ? Math.min(999, Math.max(1, Math.round(source.interval)))
+      : 1;
+  const end = source.end === "count" || source.end === "until" ? source.end : "never";
+  const count =
+    typeof source.count === "number" && Number.isFinite(source.count)
+      ? Math.min(REPEAT_COUNT_MAX, Math.max(0, Math.round(source.count)))
+      : 0;
+  const until = DIARY_DATE_RE.test(source.until ?? "") ? String(source.until) : "";
+  if (end === "count" && count < 1) return null;
+  if (end === "until" && until === "") return null;
+  return {
+    freq,
+    interval,
+    byWeekday: freq === "week" ? normalizeNumberSet(source.byWeekday, 0, 6) : [],
+    byMonthDay: freq === "month" || freq === "year" ? normalizeNumberSet(source.byMonthDay, 1, 31) : [],
+    end,
+    count: end === "count" ? count : 0,
+    until: end === "until" ? until : ""
+  };
+}
+
+function normalizeNumberSet(raw: unknown, min: number, max: number): number[] {
+  if (!Array.isArray(raw)) return [];
+  const out: number[] = [];
+  for (const item of raw) {
+    if (typeof item !== "number" || !Number.isFinite(item)) continue;
+    const value = Math.round(item);
+    if (value < min || value > max || out.includes(value)) continue;
+    out.push(value);
+  }
+  return out.sort((a, b) => a - b);
+}
+
+export function normalizeCalendarCategories(raw: unknown): CalendarCategory[] {
+  const source = raw as { categories?: unknown } | undefined;
+  const list = Array.isArray(source?.categories) ? source?.categories : Array.isArray(raw) ? raw : [];
+  const out: CalendarCategory[] = [];
+  let seenDefault = false;
+  for (const item of list) {
+    const category = item as Partial<CalendarCategory> | undefined;
+    if (!category || typeof category !== "object") continue;
+    if (typeof category.id !== "string" || category.id === "") continue;
+    const name = typeof category.name === "string" ? category.name.trim().slice(0, 24) : "";
+    if (name === "") continue;
+    const isDefault = category.isDefault === true && !seenDefault;
+    if (isDefault) seenDefault = true;
+    out.push({
+      id: category.id,
+      name,
+      color: isHex(category.color) ? String(category.color).trim().toLowerCase() : "",
+      isDefault,
+      order: typeof category.order === "number" && Number.isFinite(category.order) ? category.order : 0,
+      createdAt: typeof category.createdAt === "string" ? category.createdAt : now(),
+      updatedAt: typeof category.updatedAt === "string" ? category.updatedAt : undefined
+    });
+  }
+  return out.sort((a, b) => a.order - b.order || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
 }
 
 function normalizeLedgerView(raw: unknown): LedgerViewMode {
@@ -1452,6 +1542,7 @@ export function normalizeSettings(raw: unknown): Settings {
     },
     calendar: {
       view: normalizeCalendarView(source?.calendar?.view),
+      hourZoom: normalizeHourZoom(source?.calendar?.hourZoom),
       accent: normalizeHexColor(source?.calendar?.accent ?? "", ""),
       backgroundColor: normalizeHexColor(source?.calendar?.backgroundColor, defaultSettings.calendar.backgroundColor),
       backgroundImage: typeof source?.calendar?.backgroundImage === "string" ? source.calendar.backgroundImage : "",

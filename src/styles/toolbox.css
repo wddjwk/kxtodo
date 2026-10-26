@@ -1451,7 +1451,9 @@
   align-items: center;
 }
 
-/* 保存位置（v0.9.0 bugfix 4.2）：路径整段可见——textarea 两行折行，按钮另起一行右靠 */
+/* 保存位置（v0.9.1）：桌面默认单行不折行——rows="1" + 组件里按 scrollHeight 加高，
+   路径真的放不下才自动折行；移动端在文件末尾用 min-height 保持两行基线（长路径完整可见）。
+   overflow:hidden 是因为高度由 JS 顶着内容给，不该再出现内部滚动条 */
 .clipboard-dir-row .clipboard-dir-input {
   flex: 1 1 100%;
   height: auto;
@@ -1459,6 +1461,7 @@
   line-height: 1.45;
   word-break: break-all;
   white-space: pre-wrap;
+  overflow: hidden;
 }
 
 .clipboard-dir-actions {
@@ -1619,6 +1622,14 @@
 .app-shell.mobile .clipboard-field-inline {
   grid-template-columns: minmax(0, 1fr);
   gap: 5px;
+}
+
+/* 移动端保持「两行」基线（v0.9.0 的行为）：rows=1 + 桌面单行加高逻辑不动移动端，
+   长安卓路径靠 min-height 起步两行、超出继续加高，完整可见。
+   2 行 = 2 × line-height(1.45) × 字号(calc(var(--font-control) - 4px))，
+   再加上下 padding 8px×2 与边框 1px×2 */
+.app-shell.mobile .clipboard-dir-input {
+  min-height: calc((var(--font-control) - 4px) * 2.9 + 18px);
 }
 
 .app-shell.mobile .clipboard-form-grid {

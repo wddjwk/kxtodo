@@ -1,6 +1,6 @@
 import { writable, derived, get } from "svelte/store";
-import type { AppNotification, AppState, AppNode, CalendarEditorTarget, CalendarEvent, DiaryEditorTarget, DiaryEntry, EmojiPickerTarget, LedgerBook, LedgerEditorTarget, LedgerSide, NotificationTone, SchedulerState, SearchHit, Settings, Task } from "./types";
-import { cachedAppearance, cachedFeatures, cachedProfile, cachedState, defaultSchedulerRuntimes, defaultSettings, emptyState, normalizeCalendarEvents, normalizeDiaryEntries, normalizeLedger, normalizeState, normalizeSettings, schedulerRuntimeKeys, seedLedgerBook, writeAppearanceCache, writeFeaturesCache, writeProfileCache, writeStateCache } from "./defaults";
+import type { AppNotification, AppState, AppNode, CalendarCategory, CalendarEditorTarget, CalendarEvent, DiaryEditorTarget, DiaryEntry, EmojiPickerTarget, LedgerBook, LedgerEditorTarget, LedgerSide, NotificationTone, SchedulerState, SearchHit, Settings, Task } from "./types";
+import { cachedAppearance, cachedFeatures, cachedProfile, cachedState, defaultSchedulerRuntimes, defaultSettings, emptyState, normalizeCalendarCategories, normalizeCalendarEvents, normalizeDiaryEntries, normalizeLedger, normalizeState, normalizeSettings, schedulerRuntimeKeys, seedLedgerBook, writeAppearanceCache, writeFeaturesCache, writeProfileCache, writeStateCache } from "./defaults";
 import {
   loadState, saveState, loadSettings, saveSettings, loadScheduler, saveScheduler,
   loadDiary, saveDiary, loadLedger, saveLedger, loadCalendar, saveCalendar,
@@ -145,6 +145,11 @@ export const diaryEntries = writable<DiaryEntry[]>([]);
  * revision 与域事件，单独成 store——改一条日程不该惊动数据域。
  */
 export const calendarEvents = writable<CalendarEvent[]>([]);
+/**
+ * 日程分类（v0.9.1）：与事件同住 calendar.json、同一个域事件，但单独成 store——
+ * 改一个分类的颜色不该让整棵日程树重算。
+ */
+export const calendarCategories = writable<CalendarCategory[]>([]);
 export const isHydrated = writable(false);
 
 /**
@@ -513,7 +518,16 @@ export function commitCalendar(next: CalendarEvent[]): void {
   if (!get(isHydrated)) return;
   window.clearTimeout(calendarSaveTimer);
   calendarSaveTimer = window.setTimeout(() => {
-    saveCalendar(next).catch((error) => showToast(`保存日程失败：${String(error)}`));
+    saveCalendar(next, get(calendarCategories)).catch((error) => showToast(`保存日程失败：${String(error)}`));
+  }, 180);
+}
+
+export function commitCalendarCategories(next: CalendarCategory[]): void {
+  calendarCategories.set(next);
+  if (!get(isHydrated)) return;
+  window.clearTimeout(calendarSaveTimer);
+  calendarSaveTimer = window.setTimeout(() => {
+    saveCalendar(get(calendarEvents), next).catch((error) => showToast(`保存日程分类失败：${String(error)}`));
   }, 180);
 }
 
@@ -657,6 +671,7 @@ function applySnapshot(snapshot: Awaited<ReturnType<typeof coreSnapshot>>, domai
   }
   if ((wantAll || domains?.has("calendar")) && snapshot.calendar !== undefined && advanced("calendar")) {
     calendarEvents.set(normalizeCalendarEvents(snapshot.calendar));
+    calendarCategories.set(normalizeCalendarCategories(snapshot.calendar));
   }
   if ((wantAll || domains?.has("schedule")) && snapshot.schedule && advanced("schedule")) {
     const current = get(appState);
@@ -841,7 +856,8 @@ export async function hydrate(): Promise<void> {
       resolveExecutorPaths().catch(() => defaultSchedulerRuntimes)
     ]);
     diaryEntries.set(storedDiary);
-    calendarEvents.set(storedCalendar);
+    calendarEvents.set(storedCalendar.events);
+    calendarCategories.set(storedCalendar.categories);
     const storedLedgerBook = normalizeLedger(storedLedger);
     if (storedLedgerBook.accounts.length === 0 && storedLedgerBook.entries.length === 0) {
       // 浏览器预览的首跑也要有种子账户/分类，与 core 的 ensure_initialized 同口径

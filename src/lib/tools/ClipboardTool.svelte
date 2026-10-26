@@ -6,11 +6,10 @@
    * 设置一次写整份（`configureClipboard` → `gui.clipboard-configure`）；
    * 设备勾选是纯本机偏好，立刻生效、不重启后台服务（`gui.clipboard-peer`）。
    */
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
   import {
     ChevronDown,
     ClipboardCopy,
-    FolderOpen,
     FolderOutput,
     Info,
     RefreshCw,
@@ -19,12 +18,10 @@
   } from "@lucide/svelte";
   import { appSettings, showToast } from "../stores";
   import { configureClipboard, setClipboardPeer } from "../actions";
-  import { isMobile, createBackGuard, hostOs } from "../platform";
-  import { clipboardDefaultDir, clipboardRefresh, pickDirectory, transferOpenPath } from "../backend";
+  import { createBackGuard, hostOs } from "../platform";
+  import { clipboardDefaultDir, clipboardRefresh, transferOpenPath } from "../backend";
   import { clipboardSyncStatus, refreshClipboardStatus } from "../clipboardSyncStore";
-  import { listNativeSaveDirs, openNativeFolder, type NativeSaveDir } from "../androidBridge";
-  import ContextMenu from "../menu/ContextMenu.svelte";
-  import MenuItem from "../menu/MenuItem.svelte";
+  import { openNativeFolder } from "../androidBridge";
   import type { ClipboardPeer } from "../backend";
   import type { Settings } from "../types";
 
@@ -162,24 +159,15 @@
     await refreshClipboardStatus();
   }
 
-  async function chooseDir(): Promise<void> {
-    const dir = await pickDirectory();
-    if (dir) draft = { ...draft, saveDir: dir };
-  }
-
   function resetDir(): void {
     draft = { ...draft, saveDir: "" };
   }
 
-  // ---- 保存位置三件事（v0.9.0 bugfix 4.2）：打开文件夹 / 选择路径 / 设置默认 ----
+  // ---- 保存位置两件事（v0.9.1：「选择路径」整个移除，只留 打开文件夹 / 默认）----
 
   const isAndroid = hostOs === "android";
-  let dirMenu: { x: number; y: number; anchor: HTMLElement } | null = null;
-  let nativeDirs: NativeSaveDir[] = [];
-  const backGuardDirMenu = createBackGuard();
-  $: backGuardDirMenu(dirMenu !== null, () => (dirMenu = null));
 
-  /** 打开文件夹：桌面走系统资源管理器；安卓尽力而为（相册集合 / DocumentsUI）。 */
+  /** 打开文件夹：桌面走系统资源管理器；安卓尽力而为（DocumentsUI 打开配置的目录本身）。 */
   async function openSaveDir(): Promise<void> {
     const target = draft.saveDir.trim() || defaultDir;
     if (!target) {
@@ -198,21 +186,18 @@
     }
   }
 
-  /** 选择路径：桌面是系统目录对话框；安卓给一份真实可写的候选目录菜单。 */
-  function openDirPicker(event: MouseEvent): void {
-    const button = event.currentTarget as HTMLElement;
-    if (!isAndroid) {
-      void chooseDir();
-      return;
-    }
-    nativeDirs = listNativeSaveDirs();
-    if (nativeDirs.length === 0) {
-      showToast("拿不到可选目录", 4000);
-      return;
-    }
-    const rect = button.getBoundingClientRect();
-    dirMenu = { x: rect.right, y: rect.bottom + 6, anchor: button };
+  /**
+   * 保存位置输入框（v0.9.1）：桌面默认**单行不折行**，内容真的放不下时按内容加高
+   * 自动折行；移动端由 CSS min-height 保持两行基线（长路径要完整可见）。
+   * rows="1" + JS 量 scrollHeight 加高，三端 WebView 行为一致（不依赖 field-sizing）。
+   */
+  let dirInput: HTMLTextAreaElement | undefined;
+  function autoGrowDirInput(): void {
+    if (!dirInput) return;
+    dirInput.style.height = "auto";
+    dirInput.style.height = `${dirInput.scrollHeight}px`;
   }
+  $: draft.saveDir, void tick().then(autoGrowDirInput);
 </script>
 
 <svelte:window
@@ -266,7 +251,7 @@
         <p>局域网：同一网络下开启本工具的 KXToDo 会自动出现；双方都勾选后开始同步。</p>
         <p>广域网：填写账户名和密码。统一服务器还需要服务器地址；P2P 不需要。相同账户的设备会自动出现，同样双方勾选后同步。</p>
         <h4>内容与安全</h4>
-        <p>只转发文字、HTML、图片和文件，不保存剪切板历史。设备之间加密传输；统一服务器只做设备发现，不保存内容。</p>
+        <p>只转发文字、图片和文件，不保存剪切板历史。设备之间加密传输；统一服务器只做设备发现，不保存内容。</p>
         <p>收到文件会存到「文件保存位置」；其它内容只写入系统剪切板。</p>
         <h4>Android</h4>
         <p>系统限制：只有 KXToDo 在前台时才能读写剪切板。</p>
@@ -320,11 +305,13 @@
     <div class="clipboard-field-inline clipboard-dir-field">
       <span>文件保存位置</span>
       <div class="clipboard-dir-row">
-        <!-- 路径要完整看得见（v0.9.0 bugfix 4.2）：单行 input 只能省略号截断，
-             换成两行可折行的 textarea（仍可手改），安卓的长路径不再藏头露尾 -->
+        <!-- 桌面默认单行不折行（v0.9.1 用户要求），内容放不下时按 scrollHeight 加高
+             自动折行；移动端由 .app-shell.mobile 的 min-height 保持两行基线，
+             长安卓路径仍完整可见（仍可手改） -->
         <textarea
           class="clipboard-text-input clipboard-dir-input"
-          rows="2"
+          rows="1"
+          bind:this={dirInput}
           value={draft.saveDir}
           spellcheck="false"
           placeholder={defaultDir || "下载目录 / kxtodo-clipboard"}
@@ -335,36 +322,11 @@
           <button class="menu-action-button" type="button" title="打开文件夹" on:click={() => void openSaveDir()}>
             <FolderOutput size={13} />
           </button>
-          <button class="menu-action-button" type="button" title="选择路径" on:click={openDirPicker}>
-            <FolderOpen size={13} />
-          </button>
           <button class="menu-action-button" type="button" title="恢复默认保存位置" on:click={resetDir}>默认</button>
         </span>
       </div>
     </div>
   </section>
-
-  {#if dirMenu}
-    <ContextMenu
-      x={dirMenu.x}
-      y={dirMenu.y}
-      xAlign="right"
-      anchor={dirMenu.anchor}
-      minWidth={220}
-      onClose={() => (dirMenu = null)}
-    >
-      {#each nativeDirs as dir (dir.path)}
-        <MenuItem
-          label={dir.label}
-          active={draft.saveDir === dir.path}
-          onSelect={() => {
-            draft = { ...draft, saveDir: dir.path };
-            dirMenu = null;
-          }}
-        />
-      {/each}
-    </ContextMenu>
-  {/if}
 
   <section class="clipboard-card">
     <button class="clipboard-section-head" type="button" on:click={() => (methodsOpen = !methodsOpen)}>

@@ -149,3 +149,39 @@ fn due_color_palette_size_is_what_core_accepts() {
         2,
     );
 }
+
+/// 重复次数上限（v0.9.1）：core 校验 `1..=REPEAT_COUNT_MAX`，前端 `normalizeCalendarRepeat`
+/// 也按同一个数钳制。漂了的症状是「界面上能填的次数，core 拒收」或反过来。
+#[test]
+fn repeat_count_max_matches_frontend() {
+    let calendar_ts = include_str!("../../../../src/lib/calendar.ts");
+    let defaults_ts = DEFAULTS_TS;
+    let front = between(calendar_ts, "export const REPEAT_COUNT_MAX =", ";")
+        .trim()
+        .parse::<u32>()
+        .expect("前端 calendar.ts 里的 REPEAT_COUNT_MAX 应该是个数字");
+    assert_eq!(
+        front,
+        kxtodo_core::model::REPEAT_COUNT_MAX,
+        "REPEAT_COUNT_MAX 两侧不一致（前端归一会把合法次数钳掉，或 core 收下前端认不出的次数）"
+    );
+    // 前端归一确实引用了这个常量（而不是又写了一个字面量）
+    assert!(
+        defaults_ts.contains("REPEAT_COUNT_MAX"),
+        "defaults.ts 的 normalizeCalendarRepeat 必须引用 REPEAT_COUNT_MAX，别再写一个字面量"
+    );
+}
+
+/// 时间网格缩放倍率的合法区间（v0.9.1）：core 拒收区间外的值，前端归一钳到同一个区间。
+#[test]
+fn calendar_hour_zoom_bounds_match_frontend() {
+    let front = between(DEFAULTS_TS, "function normalizeHourZoom", "\n}");
+    assert!(
+        front.contains(&format!("Math.min({},", kxtodo_core::model::CALENDAR_HOUR_ZOOM_MAX)),
+        "前端的上限应与 core 的 CALENDAR_HOUR_ZOOM_MAX 一致：{front}"
+    );
+    assert!(
+        front.contains(&format!("Math.max({},", kxtodo_core::model::CALENDAR_HOUR_ZOOM_MIN)),
+        "前端的下限应与 core 的 CALENDAR_HOUR_ZOOM_MIN 一致：{front}"
+    );
+}

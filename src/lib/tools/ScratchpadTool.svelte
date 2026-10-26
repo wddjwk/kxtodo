@@ -8,6 +8,12 @@
    * 改名；悬浮右侧露出 X 关闭；右键菜单 = 关闭当前 / 关闭其他 / 关闭右侧。
    * 宽度按容器与页数自动伸缩（min/max 钳制、左对齐、放不下横向滚动）。
    *
+   * **默认名从内容派生（v0.9.1 需求 18）**：机器命名的标签页（`nameAuto: true`）
+   * 名字随正文重派生——取第一行有内容的文本、剥 markdown 噪音、按标签页最小宽度
+   * 的宽度预算截断（`scratchpadName.ts::autoTabName`，纯函数有单测）；没有内容可取
+   * 时回落纯数字名（最大值 + 1 且跳过已占用）。用户手动改过名（`nameAuto: false`）
+   * 就永不再动。
+   *
    * **存储与同步**：全部标签页住在数据域（`data.json` 的 `scratchpad.tabs`），
    * 跟着「同步数据」范围一起走（LWW 整份覆盖）。localStorage 只留作**首帧兜底**。
    *
@@ -22,6 +28,7 @@
   import { X } from "@lucide/svelte";
   import { appState, scratchpadNewTab } from "../stores";
   import { setScratchpadTabs } from "../actions";
+  import { autoTabName } from "../scratchpadName";
   import ContextMenu from "../menu/ContextMenu.svelte";
   import MenuItem from "../menu/MenuItem.svelte";
   import { createBackGuard } from "../platform";
@@ -30,7 +37,7 @@
   const STORAGE_KEY = "kxtodo-scratchpad-v2";
   const SAVE_DEBOUNCE_MS = 5000;
 
-  type LocalTab = { id: string; name: string; text: string };
+  type LocalTab = { id: string; name: string; nameAuto: boolean; text: string };
 
   let tabs: LocalTab[] = [];
   let activeId = "";
@@ -55,23 +62,27 @@
   }
 
   /**
-   * 新标签页的默认名：现有纯数字名的最大值 + 1（"1"、"2"、"3"…），并跳过已占用的名字
-   * ——用户把 "2" 改名成「会议」后再新建，纯按最大值算会撞回 "1"。
+   * 无内容可取时的数字回落名（v0.9.0 的默认名逻辑）：现有纯数字名的最大值 + 1
+   * （"1"、"2"、"3"…），并跳过已占用的名字——用户把 "2" 改名成「会议」后再新建，
+   * 纯按最大值算会撞回 "1"。`excludeId` = 给某个已有标签页重算回落名时把它自己
+   * 排除掉（否则它自己的数字名会把自己顶到下一个号）。
    */
-  function nextTabName(): string {
+  function nextTabName(excludeId = ""): string {
     let max = 0;
+    const used = new Set<string>();
     for (const tab of tabs) {
+      if (tab.id === excludeId) continue;
       const parsed = Number(tab.name);
       if (Number.isInteger(parsed) && parsed > max) max = parsed;
+      used.add(tab.name);
     }
-    const used = new Set(tabs.map((tab) => tab.name));
     let candidate = max + 1;
     while (used.has(String(candidate))) candidate += 1;
     return String(candidate);
   }
 
   function defaultTabs(): LocalTab[] {
-    return [{ id: "tab-1", name: "1", text: "" }];
+    return [{ id: "tab-1", name: "1", nameAuto: true, text: "" }];
   }
 
   function indexOf(id: string): number {
@@ -102,13 +113,14 @@
     const payload: ScratchpadTab[] = next.map((tab) => ({
       id: tab.id,
       name: tab.name,
+      nameAuto: tab.nameAuto,
       text: tab.text,
       updatedAt: new Date().toISOString()
     }));
     const signature = JSON.stringify({ tabs: next, activeTabId: activeId });
     const store = get(appState).scratchpad;
     const storeSignature = JSON.stringify({
-      tabs: store.tabs.map((tab) => ({ id: tab.id, name: tab.name, text: tab.text })),
+      tabs: store.tabs.map((tab) => ({ id: tab.id, name: tab.name, nameAuto: tab.nameAuto, text: tab.text })),
       activeTabId: store.activeTabId
     });
     dirty = false;
@@ -125,8 +137,14 @@
 
   function handleInput(): void {
     dirty = true;
-    // 活动页文本立即合进 tabs（切换/关闭标签不丢字），落盘照旧防抖
-    tabs = mergedTabs();
+    // 活动页文本立即合进 tabs（切换/关闭标签不丢字），落盘照旧防抖。
+    // 机器命名的活动页顺带随内容重派生默认名（v0.9.1 需求 18）；手动改过名的不动。
+    tabs = mergedTabs().map((tab) => {
+      if (tab.id !== activeId || !tab.nameAuto) return tab;
+      const derived = autoTabName(tab.text);
+      const name = derived !== "" ? derived : nextTabName(tab.id);
+      return name === tab.name ? tab : { ...tab, name };
+    });
     window.clearTimeout(timer);
     timer = window.setTimeout(() => flush(true), SAVE_DEBOUNCE_MS);
   }
@@ -174,7 +192,15 @@
           activeTabId?: string;
         } | null;
         if (cached && Array.isArray(cached.tabs) && cached.tabs.length > 0) {
-          tabs = cached.tabs.filter((tab) => tab && typeof tab.id === "string" && tab.id !== "");
+          tabs = cached.tabs
+            .filter((tab) => tab && typeof tab.id === "string" && tab.id !== "")
+            // 归一成 LocalTab 的键序与类型（老缓存可能缺 nameAuto；缺 = 手动名，宁可不覆盖）
+            .map((tab) => ({
+              id: tab.id,
+              name: typeof tab.name === "string" ? tab.name : "",
+              nameAuto: tab.nameAuto === true,
+              text: typeof tab.text === "string" ? tab.text : ""
+            }));
           activeId = tabs.some((tab) => tab.id === cached.activeTabId) ? (cached.activeTabId as string) : tabs[0].id;
           text = tabs.find((tab) => tab.id === activeId)?.text ?? "";
         }
@@ -201,7 +227,7 @@
     if (!dirty) {
       const store = $appState.scratchpad;
       if (store.tabs.length > 0) {
-        tabs = store.tabs.map((tab) => ({ id: tab.id, name: tab.name, text: tab.text }));
+        tabs = store.tabs.map((tab) => ({ id: tab.id, name: tab.name, nameAuto: tab.nameAuto === true, text: tab.text }));
         activeId = tabs.some((tab) => tab.id === store.activeTabId) ? store.activeTabId : tabs[0].id;
         text = tabs.find((tab) => tab.id === activeId)?.text ?? "";
         lastWritten = JSON.stringify({ tabs, activeTabId: activeId });
@@ -213,7 +239,8 @@
 
   function addTab(): void {
     if (dirty) flush(true);
-    const tab: LocalTab = { id: newTabId(), name: nextTabName(), text: "" };
+    // 新页没有内容 → 数字回落名；开始打字后由 handleInput 换成内容派生名
+    const tab: LocalTab = { id: newTabId(), name: nextTabName(), nameAuto: true, text: "" };
     tabs = [...mergedTabs(), tab];
     activeId = tab.id;
     text = "";
@@ -258,7 +285,9 @@
     const id = renamingId;
     const name = renameDraft.trim().slice(0, 40);
     renamingId = "";
-    tabs = tabs.map((tab) => (tab.id === id ? { ...tab, name: name || tab.name } : tab));
+    // 用户改了名 → nameAuto 落 false，之后正文怎么变都不再覆盖这个名字。
+    // 空名（清空后失焦）= 放弃这次改名，名字与标记都保持原样。
+    tabs = tabs.map((tab) => (tab.id === id ? { ...tab, name: name || tab.name, nameAuto: name ? false : tab.nameAuto } : tab));
     flush(true);
   }
 

@@ -2033,7 +2033,6 @@
         {storageBusy ? "清理中…" : "释放空间"}
       </button>
     </div>
-    <p class="muted">只清没人引用的图片、崩溃残留的临时文件与旧服务器日志；笔记、日记、账目、账户与同步记录一概不动。</p>
     {#if storageNote}
       <p class="update-status">{storageNote}</p>
     {/if}

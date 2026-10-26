@@ -155,6 +155,217 @@ fn file_size(file: &ClipboardFile) -> Option<u64> {
         .map(|meta| meta.len())
 }
 
+// ---------------------------------------------------------------------------
+// 位图编解码纯逻辑（v0.9.1，桌面壳 clipboard_os.rs 读写剪切板共用；有单测）
+// ---------------------------------------------------------------------------
+
+/// RGBA 的 alpha 全为 0 时整体置 255。
+///
+/// Windows 上大量程序（截图工具、部分浏览器）往 CF_DIBV5 里塞带 alpha 掩码
+/// 但 alpha 字节全 0 的位图；按「真透明」消费就是一张全透明的图——粘贴到哪里
+/// 都看不见，也就是「收不到图」的一种形态。全透明的剪切板图片不可能是本意，
+/// 恢复成不透明；只要有任何一个非 0 alpha 就完全不动（那是真透明）。
+pub fn repair_zero_alpha(rgba: &mut [u8]) {
+    if rgba.is_empty() || rgba.len() % 4 != 0 {
+        return;
+    }
+    let has_alpha = rgba.iter().skip(3).step_by(4).any(|alpha| *alpha != 0);
+    if !has_alpha {
+        for alpha in rgba.iter_mut().skip(3).step_by(4) {
+            *alpha = 255;
+        }
+    }
+}
+
+/// RGBA → CF_DIBV5（BITMAPV5HEADER + 自下而上的 BGRA），与 arboard 写入的
+/// 布局一致：BI_BITFIELDS + 四个掩码 + LCS_sRGB + 正高度（Word/WordPad 贴不了
+/// 负高度的图）。写系统剪切板用（多格式一次会话写入时需要自己构造 DIB）。
+pub fn cf_dibv5_from_rgba(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>> {
+    let w = width as usize;
+    let h = height as usize;
+    if w == 0 || h == 0 || rgba.len() != w.checked_mul(h)?.checked_mul(4)? {
+        return None;
+    }
+    const HEADER: usize = 124;
+    let mut out = vec![0u8; HEADER + w * h * 4];
+    let mut put = |offset: usize, bytes: &[u8]| {
+        out[offset..offset + bytes.len()].copy_from_slice(bytes);
+    };
+    put(0, &(HEADER as u32).to_le_bytes()); // bV5Size
+    put(4, &width.to_le_bytes()); // bV5Width
+    put(8, &height.to_le_bytes()); // bV5Height（正 = 自下而上）
+    put(12, &1u16.to_le_bytes()); // bV5Planes
+    put(14, &32u16.to_le_bytes()); // bV5BitCount
+    put(16, &3u32.to_le_bytes()); // bV5Compression = BI_BITFIELDS
+    put(20, &((w * h * 4) as u32).to_le_bytes()); // bV5SizeImage
+    put(40, &0x00ff_0000u32.to_le_bytes()); // bV5RedMask
+    put(44, &0x0000_ff00u32.to_le_bytes()); // bV5GreenMask
+    put(48, &0x0000_00ffu32.to_le_bytes()); // bV5BlueMask
+    put(52, &0xff00_0000u32.to_le_bytes()); // bV5AlphaMask
+    put(56, &0x7352_4742u32.to_le_bytes()); // bV5CSType = LCS_sRGB
+    put(108, &4u32.to_le_bytes()); // bV5Intent = LCS_GM_IMAGES
+    drop(put);
+    for y in 0..h {
+        // 自下而上：存储的第 0 行是图像的最底行。
+        let src_row = (h - 1 - y) * w * 4;
+        let dst_row = HEADER + y * w * 4;
+        for x in 0..w {
+            let s = src_row + x * 4;
+            let d = dst_row + x * 4;
+            out[d] = rgba[s + 2]; // B
+            out[d + 1] = rgba[s + 1]; // G
+            out[d + 2] = rgba[s]; // R
+            out[d + 3] = rgba[s + 3]; // A
+        }
+    }
+    Some(out)
+}
+
+/// 解码 CF_DIB / CF_DIBV5（BITMAPINFOHEADER 家族 + 像素）成 RGBA。
+///
+/// arboard 3.7 在 Windows 上只认「PNG 注册格式 → CF_DIBV5」，只给 CF_DIB /
+/// CF_BITMAP 的应用（老截图工具、看图软件、远程桌面类）会被整张静默跳过——
+/// 这是「收不到图」的另一大来源（CF_BITMAP 系统会自动合成 CF_DIB，读 CF_DIB
+/// 即覆盖）。支持真实世界会出现的全部品种：32bpp BI_RGB、32bpp BI_BITFIELDS
+/// （40 字节头后随掩码，或 DIBV5 头内掩码）、24bpp BI_RGB；负高度 = 顶向下。
+/// 调色板 / RLE / 16bpp 不支持（返回 None，调用方继续走别的格式）。
+pub fn rgba_from_cf_dib(dib: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    if dib.len() < 40 {
+        return None;
+    }
+    let u32_at = |offset: usize| -> Option<u32> {
+        Some(u32::from_le_bytes(dib.get(offset..offset + 4)?.try_into().ok()?))
+    };
+    let u16_at = |offset: usize| -> Option<u16> {
+        Some(u16::from_le_bytes(dib.get(offset..offset + 2)?.try_into().ok()?))
+    };
+    let header_size = u32_at(0)? as usize;
+    if header_size < 40 || dib.len() < header_size {
+        return None;
+    }
+    let width = u32_at(4)? as i32;
+    let height = u32_at(8)? as i32;
+    let bit_count = u16_at(14)?;
+    let compression = u32_at(16)?;
+    if width <= 0 || height == 0 {
+        return None;
+    }
+    let width = width as usize;
+    let top_down = height < 0;
+    let height = height.unsigned_abs() as usize;
+    const BI_RGB: u32 = 0;
+    const BI_BITFIELDS: u32 = 3;
+    if compression != BI_RGB && compression != BI_BITFIELDS {
+        return None;
+    }
+    // 掩码来源：DIBV5（头 ≥ 56 字节且掩码非 0）在头内；40 字节头的 BI_BITFIELDS
+    // 紧跟头后 12 字节；BI_RGB 用默认 BGRA 排布。
+    // 32bpp BI_RGB 的 alpha 字节按「有意义」处理（Chrome 系会塞真 alpha；
+    // 全 0 的坏数据交给 repair_zero_alpha 兜底）。
+    let (mask_r, mask_g, mask_b, mask_a, pixel_offset) = match (bit_count, compression) {
+        (32, BI_RGB) => (0x00ff_0000u32, 0x0000_ff00, 0x0000_00ff, 0xff00_0000, header_size),
+        (32, BI_BITFIELDS) if header_size >= 56 && u32_at(40)? != 0 => {
+            (u32_at(40)?, u32_at(44)?, u32_at(48)?, u32_at(52).unwrap_or(0), header_size)
+        }
+        (32, BI_BITFIELDS) if header_size == 40 && dib.len() >= header_size + 12 => (
+            u32_at(header_size)?,
+            u32_at(header_size + 4)?,
+            u32_at(header_size + 8)?,
+            0,
+            header_size + 12,
+        ),
+        (24, BI_RGB) => (0, 0, 0, 0, header_size),
+        _ => return None,
+    };
+    let bytes_per_pixel = if bit_count == 32 { 4 } else { 3 };
+    let stride = ((width * bytes_per_pixel + 3) / 4) * 4;
+    let pixels_len = stride.checked_mul(height)?;
+    if dib.len() < pixel_offset + pixels_len {
+        return None;
+    }
+    if width.checked_mul(height)? > 64 * 1024 * 1024 {
+        return None; // 64M 像素以上的「剪切板图片」是坏头，别分配几百 MB
+    }
+    let shift_of = |mask: u32| -> Option<usize> {
+        if mask == 0 {
+            return None;
+        }
+        let shift = mask.trailing_zeros() as usize;
+        (mask >> shift == 0xff).then_some(shift)
+    };
+    let mut rgba = vec![0u8; width * height * 4];
+    for row in 0..height {
+        let src_row = pixel_offset + if top_down { row } else { height - 1 - row } * stride;
+        let dst_row = row * width * 4;
+        for col in 0..width {
+            let dst = dst_row + col * 4;
+            if bit_count == 24 {
+                let s = src_row + col * 3;
+                rgba[dst] = dib[s + 2]; // R
+                rgba[dst + 1] = dib[s + 1]; // G
+                rgba[dst + 2] = dib[s]; // B
+                rgba[dst + 3] = 255;
+            } else {
+                let s = src_row + col * 4;
+                let value = u32::from_le_bytes([dib[s], dib[s + 1], dib[s + 2], dib[s + 3]]);
+                let channel = |mask: u32, shift: Option<usize>, fallback: u8| -> u8 {
+                    match shift {
+                        Some(shift) => ((value & mask) >> shift) as u8,
+                        None => fallback,
+                    }
+                };
+                rgba[dst] = channel(mask_r, shift_of(mask_r), 0);
+                rgba[dst + 1] = channel(mask_g, shift_of(mask_g), 0);
+                rgba[dst + 2] = channel(mask_b, shift_of(mask_b), 0);
+                rgba[dst + 3] = channel(mask_a, shift_of(mask_a), 255);
+            }
+        }
+    }
+    Some((width as u32, height as u32, rgba))
+}
+
+/// 发送端因**本机**类型上限要舍弃的部分（与 `send_clipboard` 的逐段闸同口径）。
+/// 返回值拼进「已发送」事件的 detail——超限的大图/大文件绝不无声消失
+/// （v0.9.1 之前：图片超 imageMb 时只发剩余部分，两端都没有任何提示）。
+fn local_limit_note(content: &ClipboardContent, limits: &ClipboardLimits) -> String {
+    let (text_limit, image_limit, files_limit) = limit_bytes(limits);
+    let mut dropped: Vec<&str> = Vec::new();
+    if !content.text.is_empty() && content.text.len() as u64 > text_limit {
+        dropped.push("文本超上限");
+    }
+    if content
+        .image
+        .as_ref()
+        .is_some_and(|image| image.len() as u64 > image_limit)
+    {
+        dropped.push("图片超上限");
+    }
+    let mut total = 0u64;
+    let mut files_dropped = false;
+    for file in &content.files {
+        let Some(size) = file_size(file) else { continue };
+        if total.saturating_add(size) > files_limit {
+            files_dropped = true;
+            break;
+        }
+        total += size;
+    }
+    if !files_dropped
+        && !content.html.is_empty()
+        && total.saturating_add(content.html.len() as u64) > files_limit
+    {
+        files_dropped = true;
+    }
+    if files_dropped {
+        dropped.push("部分文件超上限");
+    }
+    if dropped.is_empty() {
+        String::new()
+    } else {
+        format!("（{}未发送）", dropped.join("、"))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Hello {
@@ -1387,7 +1598,14 @@ fn spawn_native_poller(inner: Arc<Inner>) {
                                 inner.on_local(content);
                             }
                         }
-                        Ok(_) => {}
+                        Ok(_) => {
+                            // 空剪切板同样算「基线已建」（v0.9.1）：基线的目的是不发
+                            // 服务启动前就躺在剪切板里的旧内容；剪切板本来是空的时
+                            // 没有旧内容可防，若仍把下一次读取当基线，用户开启同步后
+                            // 的第一次复制（剪切板为空时启用是最常见路径）会被整次吞掉
+                            // ——「有时收不到图」的真实缺陷之一。
+                            primed = true;
+                        }
                         Err(error) => {
                             if inner.last_error.lock().map(|slot| slot.is_empty()).unwrap_or(false) {
                                 inner.set_error(format!("读取本机剪切板失败：{error}"));
@@ -1984,6 +2202,9 @@ impl Inner {
             self.set_event("idle", "没有已勾选的在线设备", "");
             return;
         }
+        // 因本机上限被舍弃的部分要拼进「已发送」事件：图片超限时只发剩余部分，
+        // 之前两端都没有任何提示，用户看到的就是「发过去了但对方没收到图」。
+        let limit_note = local_limit_note(&content, &self.settings.limits);
         let mut tasks = Vec::new();
         for target in targets {
             let inner = self.clone();
@@ -2008,7 +2229,7 @@ impl Inner {
         self.sent_count.fetch_add(sent as u64, Ordering::Relaxed);
         if sent > 0 {
             self.clear_send_error();
-            self.set_event("sent", format!("已发送到 {sent} 台设备"), "");
+            self.set_event("sent", format!("已发送到 {sent} 台设备{limit_note}"), "");
         }
         if !failures.is_empty() {
             self.set_error(failures.join("；"));
@@ -2131,6 +2352,21 @@ where
     let accept_image = types.image && header.image_size > 0 && header.image_size <= image_limit;
     let files_total: u64 = header.files.iter().map(|file| file.size).sum();
     let accept_files = types.files && !header.files.is_empty() && files_total <= files_limit;
+    // 被类型/上限挡掉的段落要拼进「收到」事件（v0.9.1）：之前图片超限被丢时，
+    // 只要文本还在就照常显示「收到：文本」，用户完全不知道图被舍弃了。
+    let mut dropped: Vec<&'static str> = Vec::new();
+    if header.text_size > 0 && !accept_text {
+        dropped.push(if types.text { "文本超上限" } else { "文本类型未开启" });
+    }
+    if header.image_size > 0 && !accept_image {
+        dropped.push(if types.image { "图片超上限" } else { "图片类型未开启" });
+    }
+    if !header.files.is_empty() && !accept_files {
+        dropped.push(if types.files { "文件超上限" } else { "文件类型未开启" });
+    }
+    if header.html_size > 0 && !accept_html_as_file {
+        dropped.push(if types.files { "HTML 超上限" } else { "文件类型未开启（HTML 计入文件）" });
+    }
 
     let mut content = ClipboardContent::default();
     let mut files: Vec<ClipboardFile> = Vec::new();
@@ -2213,7 +2449,7 @@ where
         inner.set_event("ignored", "收到内容，但类型被关闭或超过上限", session.peer_name.clone());
         return Ok(0);
     }
-    inner.apply_remote(content, &session.peer_name).await?;
+    inner.apply_remote(content, &session.peer_name, &dropped.join("、")).await?;
     Ok(1)
 }
 
@@ -2274,7 +2510,9 @@ fn sanitize_file_name(raw: &str) -> String {
 }
 
 impl Inner {
-    async fn apply_remote(&self, content: ClipboardContent, peer_name: &str) -> CoreResult<()> {
+    /// `dropped` 是被本机类型/上限挡掉的段落说明（可为空串），拼进「收到」事件，
+    /// 保证任何一段被舍弃都对用户可见。
+    async fn apply_remote(&self, content: ClipboardContent, peer_name: &str, dropped: &str) -> CoreResult<()> {
         if self.cancel.load(Ordering::SeqCst) {
             return Err(CoreError::execution("CLIPBOARD_DISABLED", "剪切板同步已关闭"));
         }
@@ -2285,11 +2523,17 @@ impl Inner {
         if let Ok(mut slot) = self.last_local.lock() {
             *slot = signature;
         }
+        let detail = describe_content(&content);
+        let detail = if dropped.is_empty() {
+            detail
+        } else {
+            format!("{detail}（舍弃：{dropped}）")
+        };
         if let Some(backend) = self.backend.as_ref() {
             if backend.clipboard_available() {
                 backend.clipboard_write(&content)?;
                 self.received_count.fetch_add(1, Ordering::Relaxed);
-                self.set_event("received", describe_content(&content), peer_name.to_string());
+                self.set_event("received", detail, peer_name.to_string());
                 return Ok(());
             }
         }
@@ -2326,7 +2570,7 @@ impl Inner {
             "peer": peer_name,
         }));
         self.received_count.fetch_add(1, Ordering::Relaxed);
-        self.set_event("received", describe_content(&content), peer_name.to_string());
+        self.set_event("received", detail, peer_name.to_string());
         Ok(())
     }
 }

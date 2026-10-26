@@ -19,6 +19,7 @@
   import { ensureClipboardRuntime } from "./lib/clipboardSyncStore";
   import { reconcileKeepAlive } from "./lib/keepAlive";
   import { ensureCardOverlayRuntime } from "./lib/cardOverlays";
+  import { installTooltips } from "./lib/tooltip";
   import { revealMainWindow } from "./lib/backend";
   import { oversizedAvatarShrink } from "./lib/images";
   import { checkForUpdate } from "./lib/updater";
@@ -89,6 +90,8 @@
     ensureClipboardRuntime();
     // 卡片级浮层（日期浮层单例 + 触屏露出态）的唯一一份 document 监听（v0.8.6 需求 4）
     ensureCardOverlayRuntime();
+    // 全局悬浮提示（v0.9.1 需求 13）：接管原生 title，一份 window 委托覆盖全应用
+    const stopTooltips = installTooltips();
     window.addEventListener("keydown", handleShortcut);
     // 启动后静默检查一次更新（全平台，可在设置关闭）
     const timer = window.setTimeout(() => {
@@ -104,6 +107,7 @@
       window.removeEventListener("keydown", handleShortcut);
       window.clearTimeout(timer);
       stopImeViewport();
+      stopTooltips();
     };
   });
 

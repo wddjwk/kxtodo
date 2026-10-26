@@ -160,21 +160,34 @@ pub fn diary_entity_stamp(diary: &DiaryFile, id: &str) -> Option<String> {
         .map(|tomb| tomb.updated_at.clone())
 }
 
-/// 本地实体的版本戳（calendar 域：活实体或墓碑）。
-pub fn calendar_entity_stamp(calendar: &CalendarFile, id: &str) -> Option<String> {
-    if let Some(event) = calendar.events.iter().find(|event| event.id == id) {
-        return Some(
-            event
-                .updated_at
-                .clone()
-                .unwrap_or_else(|| event.created_at.clone()),
-        );
+/// 日程域的两种实体_kind_（事件 / 分类）走同一套同步机制（与记账四种实体同款做法）。
+pub fn is_calendar_kind(kind: &str) -> bool {
+    matches!(kind, "calendar" | "calendarCategory")
+}
+
+/// 本地实体的版本戳（calendar 域：事件或分类的活实体，或墓碑）。
+pub fn calendar_entity_stamp(calendar: &CalendarFile, kind: &str, id: &str) -> Option<String> {
+    let stamp = match kind {
+        "calendar" => calendar
+            .events
+            .iter()
+            .find(|item| item.id == id)
+            .map(|item| item.updated_at.clone().unwrap_or_else(|| item.created_at.clone())),
+        "calendarCategory" => calendar
+            .categories
+            .iter()
+            .find(|item| item.id == id)
+            .map(|item| item.updated_at.clone().unwrap_or_else(|| item.created_at.clone())),
+        _ => None,
+    };
+    if stamp.is_some() {
+        return stamp;
     }
     calendar
         .meta
         .tombstones
         .iter()
-        .find(|tomb| tomb.id == id)
+        .find(|tomb| tomb.id == id && tomb.kind == kind)
         .map(|tomb| tomb.updated_at.clone())
 }
 
@@ -283,6 +296,10 @@ fn diary_payload(entry: &crate::model::DiaryEntry) -> Value {
 /// 日程事件没有本机 UI 状态字段，整个实体都是内容。
 fn calendar_payload(event: &crate::model::CalendarEvent) -> Value {
     serde_json::to_value(event).unwrap_or(Value::Null)
+}
+
+fn calendar_category_payload(category: &crate::model::CalendarCategory) -> Value {
+    serde_json::to_value(category).unwrap_or(Value::Null)
 }
 
 fn ledger_entry_payload(entry: &crate::model::LedgerEntry) -> Value {
@@ -491,10 +508,24 @@ pub fn extract_entities(
                 seq: 0,
             });
         }
+        for category in &calendar.categories {
+            out.push(EntityRecord {
+                kind: "calendarCategory".to_string(),
+                id: category.id.clone(),
+                updated_at: category
+                    .updated_at
+                    .clone()
+                    .unwrap_or_else(|| category.created_at.clone()),
+                updated_by: device_id.to_string(),
+                deleted: false,
+                data: calendar_category_payload(category),
+                seq: 0,
+            });
+        }
         for tomb in &calendar.meta.tombstones {
-            if tomb.kind == "calendar" {
+            if is_calendar_kind(&tomb.kind) {
                 out.push(EntityRecord {
-                    kind: "calendar".to_string(),
+                    kind: tomb.kind.clone(),
                     id: tomb.id.clone(),
                     updated_at: tomb.updated_at.clone(),
                     updated_by: device_id.to_string(),
@@ -676,16 +707,31 @@ pub fn apply_diary_record(record: &EntityRecord, diary: &mut DiaryFile) -> Resul
 
 pub fn apply_calendar_record(record: &EntityRecord, calendar: &mut CalendarFile) -> Result<(), String> {
     if record.deleted {
-        calendar.events.retain(|event| event.id != record.id);
+        match record.kind.as_str() {
+            "calendar" => calendar.events.retain(|item| item.id != record.id),
+            "calendarCategory" => calendar.categories.retain(|item| item.id != record.id),
+            _ => return Err(format!("未知 calendar 实体类型 {}", record.kind)),
+        }
         calendar
             .meta
-            .record_tombstone(&record.id, "calendar", &record.updated_at);
+            .record_tombstone(&record.id, &record.kind, &record.updated_at);
         return Ok(());
     }
-    let event: crate::model::CalendarEvent =
-        serde_json::from_value(record.data.clone()).map_err(|e| e.to_string())?;
-    calendar.events.retain(|item| item.id != event.id);
-    calendar.events.push(event);
+    match record.kind.as_str() {
+        "calendar" => {
+            let event: crate::model::CalendarEvent =
+                serde_json::from_value(record.data.clone()).map_err(|e| e.to_string())?;
+            calendar.events.retain(|item| item.id != event.id);
+            calendar.events.push(event);
+        }
+        "calendarCategory" => {
+            let category: crate::model::CalendarCategory =
+                serde_json::from_value(record.data.clone()).map_err(|e| e.to_string())?;
+            calendar.categories.retain(|item| item.id != category.id);
+            calendar.categories.push(category);
+        }
+        other => return Err(format!("未知 calendar 实体类型 {other}")),
+    }
     Ok(())
 }
 
@@ -1049,6 +1095,8 @@ pub fn apply_data_record(
                         next.tabs.push(crate::model::ScratchpadTab {
                             id: "tab-1".to_string(),
                             name: "1".to_string(),
+                            // 与 model.rs::fold_legacy_text 同口径：默认名 "1" = 机器名
+                            name_auto: true,
                             text: text.to_string(),
                             updated_at: record.updated_at.clone(),
                             extra: Map::new(),
@@ -1112,6 +1160,7 @@ pub fn normalize_diary_orders(diary: &mut DiaryFile) {
 /// 日程的规范数组序：与 `calendar list` 的输出同序（开始早的在前，同刻全天在前）。
 pub fn normalize_calendar_orders(calendar: &mut CalendarFile) {
     crate::ops_calendar::sort_events(&mut calendar.events);
+    crate::ops_calendar::sort_categories(&mut calendar.categories);
 }
 
 /// 记账的规范数组序：流水与列表视图同序（日期新→旧），账户/分类按 order。
@@ -1313,6 +1362,7 @@ mod tests {
             tabs: vec![crate::model::ScratchpadTab {
                 id: "tab-1".to_string(),
                 name: "1".to_string(),
+                name_auto: true,
                 text: "甲".to_string(),
                 updated_at: "2026-09-19T00:00:00Z".to_string(),
                 extra: Map::new(),
@@ -1823,6 +1873,10 @@ mod tests {
             end_time: start_time.to_string(),
             all_day: start_time.is_empty(),
             reminders: Vec::new(),
+            location: String::new(),
+            category_id: String::new(),
+            repeat: None,
+            except_dates: Vec::new(),
             task_id: String::new(),
             created_at: ts.to_string(),
             updated_at: Some(ts.to_string()),
@@ -1902,13 +1956,13 @@ mod tests {
         );
         assert!(remote_wins(
             &remote,
-            calendar_entity_stamp(&local, "c1").as_deref().map(|ts| (ts, "dev-a"))
+            calendar_entity_stamp(&local, "calendar", "c1").as_deref().map(|ts| (ts, "dev-a"))
         ));
         apply_calendar_record(&remote, &mut local).unwrap();
         assert_eq!(local.events.len(), 1);
         assert_eq!(local.events[0].start_date, "2026-10-26");
         assert_eq!(
-            calendar_entity_stamp(&local, "c1").as_deref(),
+            calendar_entity_stamp(&local, "calendar", "c1").as_deref(),
             Some("2026-10-02T00:00:00.000Z")
         );
 
@@ -1926,7 +1980,7 @@ mod tests {
         assert!(local.events.is_empty());
         assert_eq!(local.meta.tombstones[0].kind, "calendar");
         assert_eq!(
-            calendar_entity_stamp(&local, "c1").as_deref(),
+            calendar_entity_stamp(&local, "calendar", "c1").as_deref(),
             Some("2026-10-03T00:00:00.000Z"),
             "墓碑也是版本戳：对端不能把删掉的日程推回来"
         );
