@@ -256,16 +256,19 @@
     return null;
   }
 
-  /** 事件的绝对分钟（以 dates[0] 为零点；可见区间之前的多日事件会是负数，算术仍成立） */
+  /** 事件的绝对分钟（以 dates[0] 为零点；可见区间之前的多日事件会是负数，算术仍成立）。
+   *  结束时刻的口径与 segmentForDay 一致：「次日 + 00:00」= 24:00 结束（core 约定），
+   *  绝对结束分钟就是次日零点整，不能再折成 +1440（否则每拖一次系列长一天）。 */
   function absRange(ev: CalendarEvent): { start: number; end: number } {
-    const start = diffDays(gridEpoch, ev.startDate) * MINUTES_PER_DAY + minutesOf(ev.startTime || "00:00");
-    const endMinutes = minutesOf(ev.endTime || "00:00");
-    const end =
-      diffDays(gridEpoch, ev.endDate) * MINUTES_PER_DAY +
-      (ev.endDate === ev.startDate && endMinutes <= minutesOf(ev.startTime || "00:00")
-        ? MINUTES_PER_DAY
-        : endMinutes || MINUTES_PER_DAY);
-    return { start, end };
+    const startMin = minutesOf(ev.startTime || "00:00");
+    const start = diffDays(gridEpoch, ev.startDate) * MINUTES_PER_DAY + startMin;
+    let endMinutes = ev.endTime === "" ? startMin + 60 : minutesOf(ev.endTime);
+    if (ev.endDate === ev.startDate && endMinutes <= startMin) {
+      // 同天且结束不早于开始不成立（含「当天 + 00:00」的坏数据）：按画满当天算
+      endMinutes = MINUTES_PER_DAY;
+    }
+    const end = diffDays(gridEpoch, ev.endDate) * MINUTES_PER_DAY + endMinutes;
+    return { start, end: Math.max(end, start + SNAP_MIN) };
   }
 
   /** 重复日程的「这一次」是哪天：展开层写在 occurrence 上，没展开就是开始日期 */
@@ -397,7 +400,7 @@
     date: string,
     kind: "resize-start" | "resize-end" | "move"
   ): void {
-    if (event.button !== 0 || event.pointerType !== "mouse" || $isMobile) return;
+    if (event.button !== 0) return;
     event.stopPropagation();
     const ev = segment.event;
     const { start: startAbs, end: endAbs } = absRange(ev);
@@ -405,9 +408,18 @@
     const grabAbs = dates.indexOf(date) * MINUTES_PER_DAY + grabMin;
     let preview: { start: number; end: number } | null = null;
     blockDrag = { kind, eventId: ev.id, preview: null };
-    event.preventDefault();
+    // 触屏：越过 8px slop 才算拖动（否则是单击开编辑）；鼠标按下即拖。
+    // 触屏不在 pointerdown 里 preventDefault：要靠随后的 click 派发 open。
+    const isTouch = event.pointerType !== "mouse";
+    const origin = { x: event.clientX, y: event.clientY };
+    let armed = !isTouch;
+    if (!isTouch) event.preventDefault();
 
     const onMove = (move: PointerEvent): void => {
+      if (!armed) {
+        if (Math.hypot(move.clientX - origin.x, move.clientY - origin.y) < 8) return;
+        armed = true;
+      }
       const over = columnAt(move.clientX);
       if (!over) return;
       const index = dates.indexOf(over);
@@ -433,6 +445,7 @@
     const onUp = (): void => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
       const current = blockDrag;
       blockDrag = null;
       // 没拖出预览 = 单击：交给随后的 click 事件派发 open（鼠标与触屏同一条路）
@@ -442,8 +455,9 @@
       const startTime = formatMinutes(((range.start % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY);
       const endDay = Math.floor(range.end / MINUTES_PER_DAY);
       const endMinOfDay = ((range.end % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
-      // 结束恰好落在午夜：归到当天 00:00 会让区间倒挂，折成前一天结束
-      const endDate = endMinOfDay === 0 ? addDays(gridEpoch, endDay - 1) : addDays(gridEpoch, endDay);
+      // 结束恰好落在午夜 = core 约定的 24:00 结束：endDate 就是午夜当天 + endTime "00:00"
+      //（写成「前一天 + 00:00」会让 core 判区间倒挂，拖到网格底部保存必失败）
+      const endDate = addDays(gridEpoch, endDay);
       const endTime = endMinOfDay === 0 ? "00:00" : formatMinutes(endMinOfDay);
       suppressColumnClick = Date.now() + 350;
       if (startDate === ev.startDate && startTime === (ev.startTime || "") && endDate === ev.endDate && endTime === (ev.endTime || "")) {
@@ -460,6 +474,7 @@
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   }
 
   /**
@@ -510,6 +525,12 @@
   }
 
   function handleBlockContext(event: MouseEvent, block: RenderBlock): void {
+    // 日程界面没有长按逻辑（v0.9.2 需求 11）：触屏长按既不选字也不弹菜单，拖动就是拖动
+    if ($isMobile) {
+      event.stopPropagation();
+      event.preventDefault();
+      return;
+    }
     event.stopPropagation();
     event.preventDefault();
     dispatch("context", {
@@ -527,6 +548,11 @@
   }
 
   function handleChipContext(event: MouseEvent, item: CalendarEvent): void {
+    if ($isMobile) {
+      event.stopPropagation();
+      event.preventDefault();
+      return;
+    }
     event.stopPropagation();
     event.preventDefault();
     dispatch("context", {
@@ -566,9 +592,10 @@
     return minutesOf(event.endTime || "00:00") <= now;
   }
 
-  function nowLineStyle(): string {
-    return `top: ${(nowMinutes / MINUTES_PER_DAY) * totalHeight}px;`;
-  }
+  // 「现在」红线的 top 必须在 `$:` 里字面依赖 nowMinutes 与 totalHeight：
+  // 藏进函数体（style={nowLineStyle()}）编译产物是 untrack，只算一次永不移动；
+  // totalHeight 进依赖后界面缩放（hourZoom）红线也跟着缩放。
+  $: nowLineStyle = `top: ${(nowMinutes / MINUTES_PER_DAY) * totalHeight}px;`;
 
   function draftTimeText(current: { startMin: number; endMin: number }): string {
     return `${formatMinutes(current.startMin)} – ${formatMinutes(current.endMin)}`;
@@ -671,7 +698,10 @@
                 {#if block.event.repeat}<span class="cal-repeat" aria-hidden="true"><Repeat size={10} strokeWidth={2.6} /></span>{/if}
                 {block.event.title || "(无标题)"}
               </span>
-              {#if !block.continuesAfter && block.event.startDate === block.event.endDate && !$isMobile}
+              {#if block.event.location && !block.short}
+                <span class="cal-event-loc">{block.event.location}</span>
+              {/if}
+              {#if !block.continuesAfter && block.event.startDate === block.event.endDate}
                 <span
                   class="cal-resize cal-resize-top"
                   on:pointerdown={(event) => handleBlockPointerDown(event, block, column.date, "resize-start")}
@@ -706,7 +736,7 @@
           {/if}
 
           {#if column.date === today}
-            <div class="cal-now" style={nowLineStyle()}></div>
+            <div class="cal-now" style={nowLineStyle}></div>
           {/if}
         </div>
       {/each}

@@ -163,9 +163,9 @@ async function section1ScheduleDesktop(context) {
   const cellBox = await page.locator(".cal-month-cell.today").boundingBox();
   await page.mouse.click(cellBox.x + cellBox.width / 2, cellBox.y + cellBox.height - 6);
   await page.waitForSelector(".calendar-editor", { timeout: 5000 });
-  // v0.9.1：编辑器改成设置式表单，「全天」是一行开关（.cal-field + .cal-toggle）
-  const allDayChecked = await page.locator(".cal-field", { hasText: "全天" }).locator("input[type='checkbox']").isChecked();
-  check("1.12 月视图点格子默认全天", allDayChecked);
+  // v0.9.2：全天勾选行已删——全天态住在开始/结束右侧的时长括号里（点括号可换档）
+  const bracketText = await page.locator(".cal-duration-bracket").innerText();
+  check("1.12 月视图点格子默认全天", bracketText.includes("全天"), bracketText);
   await page.locator(".calendar-title-input").fill("全天事项");
   await page.locator(".calendar-editor .editor-icon-button.primary").click();
   await page.waitForSelector(".calendar-editor", { state: "detached", timeout: 5000 });

@@ -387,7 +387,8 @@ async function section5Categories(context) {
   await page.waitForSelector(".calendar-category-panel .calendar-field-input", { timeout: 3000 });
   await page.locator(".calendar-category-panel .calendar-field-input").fill("健康");
   await page.locator(".calendar-category-panel .calendar-cat-dot", { has: page.locator("[style*='2f9e6e']") }).first().click().catch(() => {});
-  await page.locator(".calendar-field-inline input[type='checkbox']").check();
+  // v0.9.2：默认分类改成星形开关按钮（裸 checkbox 已删）
+  await page.locator(".calendar-default-toggle").click();
   await page.locator(".calendar-category-panel .settings-button.primary", { hasText: "保存" }).click();
   await page.waitForTimeout(400);
   const stored = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "{}"), CALENDAR_KEY);
@@ -491,17 +492,28 @@ async function section6Repeat(context) {
   await page.waitForTimeout(300);
   const custom = await page.locator(".calendar-repeat-custom").innerText();
   check("6.7 自定义面板有频率与结束条件", custom.includes("频率") && custom.includes("结束") && custom.includes("永不"), custom);
-  await page.locator(".calendar-weekday", { hasText: "三" }).click();
+  // 点一个**当前未勾选**的星期（初始勾选 = 开始日期的星期；固定点「三」会在
+  // 「今天恰是周三」时把初始勾选取消成空集，被「至少选一个星期」拒掉——星期依赖的 flake）
+  const WEEK_LABELS = ["日", "一", "二", "三", "四", "五", "六"];
+  const weekdayState = await page.evaluate(() =>
+    [...document.querySelectorAll(".calendar-weekday")].map((b) => b.classList.contains("active"))
+  );
+  const pickIndex = weekdayState.findIndex((active) => !active);
+  await page.locator(".calendar-weekday").nth(pickIndex).click();
   await page.locator(".calendar-custom-apply").click();
   await page.waitForTimeout(300);
   const rowAfter = await page.locator(".cal-field", { hasText: "重复" }).first().innerText();
-  // 展示串把重复的「周」省掉了（"周二、三"），所以按数字断言
-  check("6.8 自定义重复写回行内（含刚点的周三）", /周三|、三/.test(rowAfter), rowAfter);
+  // 展示串把重复的「周」省掉了（"周二、三"），所以按星期名断言
+  check("6.8 自定义重复写回行内（含刚点的星期）", rowAfter.includes(WEEK_LABELS[pickIndex]), rowAfter);
   await page.locator(".calendar-editor .editor-icon-button.primary").click();
   await page.waitForTimeout(500);
   const persisted = await page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "{}"), CALENDAR_KEY);
   const weekly = (persisted.events ?? []).find((event) => event.id === "cal-weekly");
-  check("6.9 重复规则落盘", weekly?.repeat?.freq === "week" && (weekly?.repeat?.byWeekday ?? []).includes(3), J(weekly?.repeat));
+  check(
+    "6.9 重复规则落盘",
+    weekly?.repeat?.freq === "week" && (weekly?.repeat?.byWeekday ?? []).includes(pickIndex),
+    J(weekly?.repeat)
+  );
 
   // 右键重复日程 → 三档删除
   await page.locator(".cal-event", { hasText: "周会" }).first().click({ button: "right" });
@@ -583,9 +595,12 @@ async function section8EditorForm(context) {
   const labels = await page.locator(".calendar-editor .cal-field-label").allInnerTexts();
   check(
     "8.1 表单行齐全且有序",
-    ["全天", "开始", "结束", "时长", "重复", "提醒", "地点", "分类"].every((item) => labels.includes(item)),
+    ["开始", "结束", "重复", "提醒", "地点", "分类"].every((item) => labels.includes(item)),
     J(labels)
   );
+  // v0.9.2：全天与时长不再是独立行——时长住在开始/结束右侧的可点括号里（全天是括号菜单的一档）
+  const bracket = (await page.locator(".cal-duration-bracket").innerText()).trim();
+  check("8.1a 时长括号在开始/结束右侧且有值", bracket.length > 0, bracket);
   check("8.2 详情是独立区块（不是整个界面）", await page.locator(".calendar-editor .calendar-details").count() === 1);
 
   // 标签栏等宽对仗

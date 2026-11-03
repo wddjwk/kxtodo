@@ -5,6 +5,7 @@ import {
   allDayEventsFor,
   calendarToday,
   diffDays,
+  eventCoversDay,
   layoutDaySegments,
   minutesOf,
   formatMinutes,
@@ -148,8 +149,27 @@ describe("事件切段", () => {
     expect(segmentForDay(trip, "2026-10-27")).toBeNull();
   });
 
-  it("结束是次日 00:00 时画满当天", () => {
+  it("24:00 结束按 core 约定（次日 + 00:00）：画满开始日、次日没有幽灵块", () => {
     const night = event({
+      id: "e1",
+      allDay: false,
+      startDate: "2026-10-25",
+      startTime: "23:00",
+      endDate: "2026-10-26",
+      endTime: "00:00"
+    });
+    expect(segmentForDay(night, "2026-10-25")).toMatchObject({
+      startMin: 1380,
+      endMin: 1440,
+      continuesAfter: false
+    });
+    expect(segmentForDay(night, "2026-10-26")).toBeNull();
+    expect(eventCoversDay(night, "2026-10-26")).toBe(false);
+    expect(monthCellEvents([night], "2026-10-26")).toHaveLength(0);
+  });
+
+  it("「当天 + 00:00」是 core 不会产出的倒挂表示：不覆盖当天", () => {
+    const bad = event({
       id: "e1",
       allDay: false,
       startDate: "2026-10-25",
@@ -157,7 +177,7 @@ describe("事件切段", () => {
       endDate: "2026-10-25",
       endTime: "00:00"
     });
-    expect(segmentForDay(night, "2026-10-25")).toMatchObject({ startMin: 1380, endMin: 1440 });
+    expect(segmentForDay(bad, "2026-10-25")).toBeNull();
   });
 
   it("没写结束时刻按一小时", () => {

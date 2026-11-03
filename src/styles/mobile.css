@@ -1077,9 +1077,10 @@
 /* 三级菜单（固定区「添加固定 → 工具箱内的工具」）：移动端只显示最深一层，
    同级的其余项与取消/确认先收起，按「返回」逐级退回。否则三层叠加会把菜单
    撑出屏幕（v0.8.9；根菜单的 sub-open 只处理了第一层）。 */
-.app-shell.mobile .context-menu.sub-deep .nav-fixed-editor > .menu-item:not(.submenu-open),
-.app-shell.mobile .context-menu.sub-deep .nav-fixed-editor > .menu-separator,
-.app-shell.mobile .context-menu.sub-deep .nav-fixed-editor > .nav-fixed-actions {
+.app-shell.mobile .context-menu.sub-deep .nav-fixed-editor:not(.nav-fixed-editor-deep) > .menu-item:not(.submenu-open),
+.app-shell.mobile .context-menu.sub-deep .nav-fixed-editor:not(.nav-fixed-editor-deep) > .nav-fixed-row,
+.app-shell.mobile .context-menu.sub-deep .nav-fixed-editor:not(.nav-fixed-editor-deep) > .menu-separator,
+.app-shell.mobile .context-menu.sub-deep .nav-fixed-editor:not(.nav-fixed-editor-deep) > .nav-fixed-actions {
   display: none;
 }
 
@@ -1131,8 +1132,21 @@
   margin: -6px 0 10px;
 }
 
+/* 「现在」右对齐 + 图标化（v0.9.2）：圆形定位按钮，与地图类应用的「回到当前位置」同观感 */
 .app-shell.mobile .calendar-now-btn {
-  margin-left: 0;
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid rgb(0 0 0 / 12%);
+  border-radius: 50%;
+  background: rgb(255 255 255 / 88%);
+}
+
+.app-shell.mobile .calendar-now-label {
+  display: none;
 }
 
 .app-shell.mobile .calendar-range-step strong {
@@ -1166,6 +1180,9 @@
   padding: 2px 4px;
   border-left-width: 2px;
   font-size: calc(var(--font-control) - 7px);
+  /* 拖动就是拖动（v0.9.2）：触屏在块上直接拖=挪动/改时长，滚动让给空白区与时刻槽；
+     touch-action 不改 none 的话浏览器一接管滚动就 pointercancel，拖不动 */
+  touch-action: none;
 }
 
 /* 窄屏一块事件放不下时间 + 标题：只留标题（时间进 title 悬浮/编辑器） */
@@ -1173,8 +1190,30 @@
   display: none;
 }
 
-.app-shell.mobile .cal-resize {
-  display: none;
+/* 移动端改时长手柄：不隐藏，加高到 14px 的触摸区 + 一道淡 grip 给 affordance */
+.app-shell.mobile .cal-event .cal-resize {
+  height: 14px;
+  touch-action: none;
+}
+
+.app-shell.mobile .cal-event .cal-resize::after {
+  position: absolute;
+  left: 50%;
+  width: 22px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--cal-main, var(--accent));
+  content: "";
+  opacity: 0.4;
+  transform: translateX(-50%);
+}
+
+.app-shell.mobile .cal-event .cal-resize-top::after {
+  top: 3px;
+}
+
+.app-shell.mobile .cal-event .cal-resize-bottom::after {
+  bottom: 3px;
 }
 
 .app-shell.mobile .cal-allday-cell {
@@ -1227,6 +1266,13 @@
 .app-shell.mobile .cal-field {
   grid-template-columns: 4.2em minmax(0, 1fr);
   gap: 3px 9px;
+}
+
+/* 时长括号窄屏收一档：文本省略，绝不顶出右边界（v0.9.2 需求 14） */
+.app-shell.mobile .cal-duration-bracket {
+  max-width: 5em;
+  padding: 0 5px;
+  font-size: calc(var(--font-control) - 5px);
 }
 
 .app-shell.mobile .calendar-details-body {

@@ -3,7 +3,7 @@
   import type { Component } from "svelte";
   import { flip } from "svelte/animate";
   import {
-    CalendarClock, ChevronsDownUp, ChevronsUpDown, FilePlus2, FolderInput, FolderPlus, NotebookPen, Pencil, PinOff, Search, Shapes, Toolbox, Trash2, Upload, Wallet
+    CalendarClock, ChevronsDownUp, ChevronsUpDown, FilePlus2, FolderInput, FolderPlus, NotebookPen, Pencil, Pin, PinOff, Search, Shapes, Toolbox, Trash2, Upload, Wallet
   } from "@lucide/svelte";
   import {
     appState, appSettings, showToast, showSettings,
@@ -804,26 +804,39 @@
         </div>
       </MenuItem>
       <MenuItem icon={FilePlus2} label="添加固定">
+        <!--  pin 态行（v0.9.2）：打勾列表换成「图钉填充 = 已固定」的行按钮——
+             勾选槽在窄屏上显示不全是用户点名的丑处；行按钮整行可点、状态一眼可读。
+             面板自己限高滚动，条目再多也看得全（取消/确认 sticky 在底）。 -->
         <div slot="submenu" class="submenu-list nav-fixed-editor" on:click|stopPropagation>
           {#each NAV_ITEM_IDS as item (item)}
-            <MenuItem
-              checkable
-              active={navFixedDraft.includes(item)}
-              label={navItemLabel(item)}
-              onSelect={() => toggleNavDraft(item)}
-            />
+            {@const on = navFixedDraft.includes(item)}
+            <button
+              type="button"
+              class="menu-action-button nav-fixed-row"
+              class:on
+              aria-pressed={on}
+              on:click|stopPropagation={() => toggleNavDraft(item)}
+            >
+              <Pin size={13} fill={on ? "currentColor" : "none"} />
+              <span class="nav-fixed-row-label">{navItemLabel(item)}</span>
+            </button>
           {/each}
           <MenuSeparator />
           <MenuItem label="工具箱内的工具">
-            <div slot="submenu" class="submenu-list">
+            <div slot="submenu" class="submenu-list nav-fixed-editor nav-fixed-editor-deep">
               {#each TOOL_CATALOG as tool (tool.id)}
                 {@const id = navToolId(tool.id)}
-                <MenuItem
-                  checkable
-                  active={navFixedDraft.includes(id)}
-                  label={tool.name}
-                  onSelect={() => toggleNavDraft(id)}
-                />
+                {@const on = navFixedDraft.includes(id)}
+                <button
+                  type="button"
+                  class="menu-action-button nav-fixed-row"
+                  class:on
+                  aria-pressed={on}
+                  on:click|stopPropagation={() => toggleNavDraft(id)}
+                >
+                  <Pin size={13} fill={on ? "currentColor" : "none"} />
+                  <span class="nav-fixed-row-label">{tool.name}</span>
+                </button>
               {/each}
             </div>
           </MenuItem>

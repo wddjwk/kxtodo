@@ -207,6 +207,10 @@ pub struct PlannedReminder {
     pub task_id: String,
     /// true = 日程事件的提醒（calendar.json），false = 任务提醒（data.json）
     pub calendar: bool,
+    /// 规划时用的那一次出现日（日程）；任务提醒为 None（重检读当前 due_date）。
+    /// 重复日程的发前重检必须用它——用系列开始日解析，除第一次外必然对不上，
+    /// 整条台账会被记 cancelled 永久封死。
+    pub occurrence_date: Option<String>,
     pub at: DateTime<Utc>,
 }
 
@@ -235,6 +239,7 @@ pub fn plan(data: &DataFile) -> Vec<PlannedReminder> {
                 key: receipt_key(&item.id, at),
                 task_id: item.id.clone(),
                 calendar: false,
+                occurrence_date: None,
                 at,
             });
         }
@@ -277,6 +282,7 @@ pub fn plan_calendar(calendar: &crate::model::CalendarFile) -> Vec<PlannedRemind
                     key: receipt_key(&event.id, at),
                     task_id: event.id.clone(),
                     calendar: true,
+                    occurrence_date: Some(date.clone()),
                     at,
                 });
             }
@@ -426,11 +432,31 @@ impl Engine {
                 let current = {
                     let _lock = RepoLock::acquire(&core.repo.layout)?;
                     core.repo.load_calendar()?.events.into_iter().find(|event| {
-                        event.id == planned.task_id
+                        if event.id != planned.task_id {
+                            return false;
+                        }
+                        // 重检必须用**规划时的那一次出现日**：重复日程用系列开始日解析，
+                        // 除第一次外必然对不上 → 记 cancelled → 台账永久封死。
+                        let date = match planned.occurrence_date.as_deref() {
+                            Some(date) => date,
+                            None => event.start_date.as_str(),
+                        };
+                        // 系列被拖动/改规则后该日不再是一次出现 → 取消
+                        let still_an_occurrence = if event.repeat.is_some() {
+                            match crate::recurrence::parse_date(date) {
+                                Some(day) => {
+                                    crate::recurrence::occurrences(event, day, day).contains(&day)
+                                }
+                                None => false,
+                            }
+                        } else {
+                            event.start_date == date
+                        };
+                        still_an_occurrence
                             && event.reminders.iter().any(|rule| {
                                 resolve(
                                     rule,
-                                    Some(event.start_date.as_str()),
+                                    Some(date),
                                     crate::ops_calendar::effective_start_time(event),
                                 )
                                 .ok() == Some(planned.at)

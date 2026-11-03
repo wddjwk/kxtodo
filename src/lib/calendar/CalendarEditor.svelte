@@ -47,11 +47,11 @@
   import MenuSeparator from "../menu/MenuSeparator.svelte";
   import CalendarCategoryPanel from "./CalendarCategoryPanel.svelte";
   import {
-    addDays, buildRepeatPreset, CALENDAR_IMAGE_NODE, calendarToday, dayNumber, durationText,
-    eventColors, matchRepeatPreset, reminderLabel, repeatLabel, REPEAT_PRESET_LABELS,
+    addDays, buildRepeatPreset, CALENDAR_IMAGE_NODE, calendarToday, dayNumber, formatMinutes,
+    eventColors, matchRepeatPreset, MINUTES_PER_DAY, reminderLabel, repeatLabel, REPEAT_PRESET_LABELS,
     weekdayOf, type RepeatPresetId
   } from "../calendar";
-  import { fullDayLabel, relativeDayLabel } from "../diary";
+  import { fullDayLabel } from "../diary";
   import { nowClock } from "../clock";
   import type { CalendarEditorTarget, CalendarRepeat, ReminderRule, RepeatFreq } from "../types";
   import { createBackGuard, isMobile } from "../platform";
@@ -170,7 +170,7 @@
 
   // ---- 浮层（一律挂在 ContextMenu 里） ----
 
-  type PickerKind = "" | "start" | "end" | "repeat" | "reminder" | "category";
+  type PickerKind = "" | "start" | "end" | "duration" | "repeat" | "reminder" | "category";
   let picker: PickerKind = "";
   let pickerAt = { x: 0, y: 0 };
   let pickerAnchor: HTMLElement | null = null;
@@ -215,21 +215,27 @@
   /** 分类色点预览：没选分类（或分类没配色）就跟日程主题色 */
   $: categoryColors = eventColors({ categoryId: "" }, [], category?.color || accent);
   // 依赖一律字面写在表达式里（`today` / `startDate`）：reactive 箭头函数会把依赖藏进闭包
-  $: startText = allDay
-    ? dayLabel(startDate, today)
-    : `${dayLabel(startDate, today)} · ${startTime || "--:--"}`;
-  $: endText = allDay ? dayLabel(endDate, today) : `${dayLabel(endDate, today)} · ${endTime || "--:--"}`;
-  $: duration = durationText({
-    startDate,
-    startTime: allDay ? "" : startTime,
-    endDate,
-    endTime: allDay ? "" : endTime,
-    allDay
-  });
+  $: startLabel = dayLabel(startDate, today);
+  $: endLabel = dayLabel(endDate, today);
+  $: startText = allDay ? startLabel : `${startLabel} · ${startTime || "--:--"}`;
+  $: endText = allDay ? endLabel : `${endLabel} · ${endTime || "--:--"}`;
+  /** 时长（分钟）：core 约定的「次日 + 00:00」在这里正好算成满一天减开始 */
+  $: timedTotal = allDay
+    ? 0
+    : Math.max(
+        0,
+        diffDaysLocal(startDate, endDate) * MINUTES_PER_DAY +
+          minutesFromClock(endTime || "00:00") -
+          minutesFromClock(startTime)
+      );
+  $: allDaySpan = diffDaysLocal(startDate, endDate) + 1;
+  /** 开始/结束右侧括号里的时长串（全天也走这里，独立的全天勾选行已删） */
+  $: bracketText = allDay ? (allDaySpan > 1 ? `${allDaySpan} 天` : "全天") : compactDuration(timedTotal);
   $: repeatText = repeat ? repeatLabel(repeat) : "不重复";
   $: repeatPreset = matchRepeatPreset(repeat, startDate);
   $: linkedTask = taskId ? $appState.tasks.find((task) => task.id === taskId) : undefined;
-  $: rangeError = validateRange();
+  // 依赖当实参传（本仓库第 N 次「$: 里调无参函数藏依赖」：rangeError 会永远停在初值）
+  $: rangeError = validateRange(startDate, endDate, allDay, startTime, endTime);
   // 桌面编辑器尺寸按窗口比例（设置项）；移动端固定铺满不给内联值
   $: editorSizeStyle = $isMobile
     ? ""
@@ -238,14 +244,35 @@
     previewHtml = renderMarkdown(resolveMarkdownImages(text, CALENDAR_IMAGE_NODE, $mdImageCache));
   }
 
-  /** "今天 · 10月27日 周二" / "3 天后 · 10月30日 周五" */
+  /** "今天 · 10月27日 周二" / "明天 · 10月28日 周三" / "10月30日 周五" / "2027年 · 10月30日 周六"。
+   *  日期部分**只出现一次**（v0.9.2 修「11月4日 周三 · 11月4日 周三」的重复显示）。 */
   function dayLabel(date: string, todayDate: string): string {
-    return date === todayDate
-      ? `今天 · ${fullDayLabel(date)}`
-      : `${relativeDayLabel(date, todayDate)} · ${fullDayLabel(date)}`;
+    const full = fullDayLabel(date);
+    if (date === todayDate) return `今天 · ${full}`;
+    if (date === addDays(todayDate, 1)) return `明天 · ${full}`;
+    if (date === addDays(todayDate, 2)) return `后天 · ${full}`;
+    if (date === addDays(todayDate, -1)) return `昨天 · ${full}`;
+    if (date.slice(0, 4) !== todayDate.slice(0, 4)) return `${Number(date.slice(0, 4))}年 · ${full}`;
+    return full;
   }
 
-  function validateRange(): string {
+  /** 时长的紧凑串："45 分钟" / "2 小时" / "1 小时 30 分钟" */
+  function compactDuration(total: number): string {
+    if (total <= 0) return "--";
+    const hours = Math.floor(total / 60);
+    const minutes = total % 60;
+    if (hours === 0) return `${minutes} 分钟`;
+    if (minutes === 0) return `${hours} 小时`;
+    return `${hours} 小时 ${minutes} 分钟`;
+  }
+
+  function validateRange(
+    startDate: string,
+    endDate: string,
+    allDay: boolean,
+    startTime: string,
+    endTime: string
+  ): string {
     if (endDate < startDate) return "结束日期不能早于开始日期";
     if (!allDay && endDate === startDate && endTime !== "" && endTime < startTime) {
       return "结束时间不能早于开始时间";
@@ -293,15 +320,16 @@
 
   // ---- 保存 ----
 
-  /** 落盘（新建或修改）。`implicit` = Esc/遮罩/返回键触发的保存：全空的新建直接放弃。 */
-  async function persist(implicit: boolean): Promise<void> {
+  /** 落盘（新建或修改）。`implicit` = Esc/遮罩/返回键触发的保存：全空的新建直接放弃。
+   *  返回 false = 校验失败没落盘——调用方**不许关**（否则填了一半的草稿直接蒸发）。 */
+  async function persist(implicit: boolean): Promise<boolean> {
     const details = currentText();
     const trimmedTitle = title.trim();
-    if (!editingId && implicit && !trimmedTitle && !details.trim()) return;
-    const error = validateRange();
+    if (!editingId && implicit && !trimmedTitle && !details.trim()) return true;
+    const error = validateRange(startDate, endDate, allDay, startTime, endTime);
     if (error) {
       showToast(error);
-      return;
+      return false;
     }
     if (editingId) {
       const changes: CalendarChanges = {};
@@ -319,9 +347,9 @@
       if (categoryId !== initial.categoryId) changes.categoryId = categoryId;
       if (JSON.stringify(repeat) !== initial.repeat) changes.repeat = repeat;
       if (taskId !== initial.taskId) changes.taskId = taskId;
-      if (Object.keys(changes).length === 0) return;
+      if (Object.keys(changes).length === 0) return true;
       await updateCalendarEvent(editingId, changes);
-      return;
+      return true;
     }
     await addCalendarEvent({
       title: trimmedTitle,
@@ -337,16 +365,20 @@
       repeat,
       taskId
     });
+    return true;
   }
 
   async function saveAndClose(implicit = false): Promise<void> {
     if (saving || closed) return;
     saving = true;
+    let ok = false;
     try {
-      await persist(implicit);
+      ok = await persist(implicit);
     } finally {
       saving = false;
     }
+    // 校验失败（结束早于开始之类）保持打开：Esc = 保存并关闭，保存不了就不能关
+    if (!ok) return;
     closed = true;
     onClose();
   }
@@ -393,18 +425,25 @@
 
   // ---- 时间 ----
 
-  function toggleAllDay(): void {
-    allDay = !allDay;
-    if (allDay) {
+  /** 时长括号的快捷档（v0.9.2）：截止一律由开始时间推算 */
+  const DURATION_PRESETS = [15, 30, 45, 60, 120, 180];
+
+  function applyDuration(minutes: number | "allday"): void {
+    if (minutes === "allday") {
+      allDay = true;
       endTime = "";
+      if (endDate < startDate) endDate = startDate;
+      closePicker();
       return;
     }
-    if (!startTime) startTime = nextFullHour();
-    if (!endTime) {
-      const next = plusOneHour(startDate, startTime);
-      endDate = next.date;
-      endTime = next.time;
+    if (allDay) {
+      allDay = false;
+      if (!startTime) startTime = nextFullHour();
     }
+    const total = minutesFromClock(startTime) + minutes;
+    endDate = addDays(startDate, Math.floor(total / MINUTES_PER_DAY));
+    endTime = formatMinutes(total % MINUTES_PER_DAY);
+    closePicker();
   }
 
   /** 改了开始：结束早于开始就跟着平移（保持时长，业界编辑器同款行为） */
@@ -430,6 +469,14 @@
   function pickStartTime(time: string): void {
     startTime = time;
     bumpEndAfterStartChange();
+  }
+
+  /** 结束时刻选到 00:00 = 用户要的是「当天 24:00」：按 core 约定进位成次日 + 00:00，
+   *  否则「当天 + 00:00」是倒挂区间，保存必被 core 拒（v0.9.2 统一表示法）。 */
+  function normalizeMidnightEnd(): void {
+    if (!allDay && endTime === "00:00" && endDate === startDate) {
+      endDate = addDays(endDate, 1);
+    }
   }
 
   // ---- 重复 ----
@@ -703,51 +750,50 @@
         </div>
       {/if}
 
-      <div class="cal-field">
-        <span class="cal-field-label" id="cal-allday-label">全天</span>
-        <span class="cal-field-control">
-          <label class="toggle-row cal-toggle" title="全天日程不占时间网格，显示在日/周视图顶部的全天栏">
-            <span aria-hidden="true">整天，不指定时刻</span>
-            <input type="checkbox" checked={allDay} on:change={toggleAllDay} aria-labelledby="cal-allday-label" />
-          </label>
-        </span>
-      </div>
+      <!-- 开始/结束两行 + 右侧跨两行的时长括号（v0.9.2）：全天不再是独立勾选行，
+           而是时长菜单里的一档；括号点开出 15min…3h/全天 的快捷档 -->
+      <div class="cal-time-range">
+        <div class="cal-time-range-rows">
+          <div class="cal-field">
+            <span class="cal-field-label">开始</span>
+            <button
+              type="button"
+              class="cal-field-trigger"
+              aria-expanded={picker === "start"}
+              on:click={(event) => togglePicker("start", event.currentTarget)}
+            >
+              <CalendarDays size={15} />
+              <span class="cal-field-value">{startText}</span>
+              <ChevronRight size={15} class="cal-field-chevron" />
+            </button>
+          </div>
 
-      <div class="cal-field">
-        <span class="cal-field-label">开始</span>
-        <button
-          type="button"
-          class="cal-field-trigger"
-          aria-expanded={picker === "start"}
-          on:click={(event) => togglePicker("start", event.currentTarget)}
-        >
-          <CalendarDays size={15} />
-          <span class="cal-field-value">{startText}</span>
-          <ChevronRight size={15} class="cal-field-chevron" />
-        </button>
-      </div>
-
-      <div class="cal-field">
-        <span class="cal-field-label">结束</span>
-        <button
-          type="button"
-          class="cal-field-trigger"
-          class:disabled={allDay && endDate === startDate}
-          aria-expanded={picker === "end"}
-          on:click={(event) => togglePicker("end", event.currentTarget)}
-        >
-          <CalendarDays size={15} />
-          <span class="cal-field-value">{endText}</span>
-          <ChevronRight size={15} class="cal-field-chevron" />
-        </button>
-      </div>
-
-      {#if duration}
-        <div class="cal-field">
-          <span class="cal-field-label">时长</span>
-          <span class="cal-field-static"><span class="calendar-duration">{duration}</span></span>
+          <div class="cal-field">
+            <span class="cal-field-label">结束</span>
+            <button
+              type="button"
+              class="cal-field-trigger"
+              class:disabled={allDay && endDate === startDate}
+              aria-expanded={picker === "end"}
+              on:click={(event) => togglePicker("end", event.currentTarget)}
+            >
+              <CalendarDays size={15} />
+              <span class="cal-field-value">{endText}</span>
+              <ChevronRight size={15} class="cal-field-chevron" />
+            </button>
+          </div>
         </div>
-      {/if}
+        <button
+          type="button"
+          class="cal-duration-bracket"
+          class:on={allDay}
+          title={`时长 ${bracketText}（点击选择）`}
+          aria-expanded={picker === "duration"}
+          on:click={(event) => togglePicker("duration", event.currentTarget)}
+        >
+          <span class="cal-duration-bracket-text">{bracketText}</span>
+        </button>
+      </div>
 
       <div class="cal-field">
         <span class="cal-field-label">重复</span>
@@ -889,12 +935,25 @@
           withTime={!allDay}
           confirmMode
           allowClear={false}
-          on:select={(event) => { if (picker === "start") pickStartDate(event.detail); else endDate = event.detail; }}
-          on:selectTime={(event) => { if (picker === "start") pickStartTime(event.detail); else endTime = event.detail; }}
+          on:select={(event) => { if (picker === "start") pickStartDate(event.detail); else { endDate = event.detail; normalizeMidnightEnd(); } }}
+          on:selectTime={(event) => { if (picker === "start") pickStartTime(event.detail); else { endTime = event.detail; normalizeMidnightEnd(); } }}
           on:clear={() => undefined}
           on:close={closePicker}
         />
       </div>
+    </ContextMenu>
+  {:else if picker === "duration"}
+    <ContextMenu x={pickerAt.x} y={pickerAt.y} xAlign="left" mirrorXOnFlip={false} minWidth={150} anchor={pickerAnchor} onClose={closePicker}>
+      {#each DURATION_PRESETS as minutes (minutes)}
+        <MenuItem
+          checkable
+          active={!allDay && timedTotal === minutes}
+          label={compactDuration(minutes)}
+          onSelect={() => applyDuration(minutes)}
+        />
+      {/each}
+      <MenuSeparator />
+      <MenuItem checkable active={allDay} label="全天" onSelect={() => applyDuration("allday")} />
     </ContextMenu>
   {:else if picker === "repeat"}
     <ContextMenu x={pickerAt.x} y={pickerAt.y} xAlign="left" mirrorXOnFlip={false} minWidth={236} anchor={pickerAnchor} onClose={closePicker}>

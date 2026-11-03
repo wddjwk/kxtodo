@@ -336,6 +336,9 @@ export type Settings = {
       backgroundImage: string;
       backgroundOpacity: number;
     };
+    /** 任务右键菜单的顺序与显隐（v0.9.2，本机偏好）；缺省 = 注册表默认。
+     *  id 白名单与解析在 `taskMenuConfig.ts` */
+    taskMenu?: { order?: string[]; hidden?: string[] };
   };
   lifecycle: {
     closeToTray: boolean;

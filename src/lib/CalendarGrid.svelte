@@ -60,6 +60,12 @@
     for (let day = 1; day <= trailing; day++) {
       out.push({ date: isoOf(viewYear, viewMonth + 1, day), day, current: false });
     }
+    // 一律补足六行（v0.9.2）：五行月份会让面板矮一行——「自定义提醒」的日期/时间
+    // 标签页切换时底部按钮跳一行高（v084 回归 12 是月份依赖的，十一月必现）。
+    // 月视图本来就是恒 42 格，日网格对齐同一观感。
+    for (let day = trailing + 1; out.length < 42; day++) {
+      out.push({ date: isoOf(viewYear, viewMonth + 1, day), day, current: false });
+    }
     return out;
   })();
 

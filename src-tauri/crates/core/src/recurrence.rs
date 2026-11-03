@@ -127,11 +127,13 @@ fn skip_ahead(repeat: &CalendarRepeat, start: NaiveDate, from: NaiveDate, interv
         return 0;
     }
     let days = (from - start).num_days().max(0);
+    // 每步天数的估算必须**高估**（月按 31、年按 366）：估出的步数才会偏少，
+    // 回退 2 步的余量兜得住；按 28/365 估会超前，start 距 from 越远偏得越多（~2 年就漏光）。
     let per_step = match repeat.freq {
         RepeatFreq::Day => interval,
         RepeatFreq::Week => 7 * interval,
-        RepeatFreq::Month => 28 * interval,
-        RepeatFreq::Year => 365 * interval,
+        RepeatFreq::Month => 31 * interval,
+        RepeatFreq::Year => 366 * interval,
     };
     let step = (days / per_step.max(1)).saturating_sub(2).max(0);
     u32::try_from(step).unwrap_or(0)
@@ -507,6 +509,25 @@ mod tests {
         assert_eq!(
             dates(&occurrences(&ev, date("2026-10-01"), date("2027-01-31"))),
             vec!["2026-10-07", "2026-11-07", "2026-12-07", "2027-01-07"]
+        );
+    }
+
+    #[test]
+    fn monthly_skip_ahead_does_not_overshoot_far_ranges() {
+        // start 距 from 超过 2 年：步数估算若超前，整条系列会从所有视图与提醒里消失
+        let ev = event("2023-01-15", repeat(RepeatFreq::Month, 1));
+        assert_eq!(
+            dates(&occurrences(&ev, date("2026-11-01"), date("2026-11-30"))),
+            vec!["2026-11-15"]
+        );
+    }
+
+    #[test]
+    fn yearly_skip_ahead_does_not_overshoot_far_ranges() {
+        let ev = event("2020-06-01", repeat(RepeatFreq::Year, 1));
+        assert_eq!(
+            dates(&occurrences(&ev, date("2026-06-01"), date("2026-06-30"))),
+            vec!["2026-06-01"]
         );
     }
 

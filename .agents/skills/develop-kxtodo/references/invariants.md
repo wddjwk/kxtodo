@@ -362,3 +362,15 @@ v0.8.0 起的几条补充（来龙去脉在 `history/v0.8.md` 批次 1）：
 - 「**AppImage 不删 AppRun 的 `GDK_BACKEND=x11`**（除非 WSLg）：这是 Tauri 的标准稳定路径；v0.8.9 在所有 Wayland 会话里改回原生 Wayland，换来 GNOME 上无响应/卡顿。NVIDIA 专有驱动再关 DMABUF + `__NV_DISABLE_EXPLICIT_SYNC`，其它 GPU 保留快路径」——`src-tauri/src/lib.rs::prepare_linux_webview` + 同上 五
 - 「**统一服务器只做设备发现**：`POST/DELETE /api/v1/clipboard/presence` + `GET /api/v1/clipboard/peers`，按 Bearer token 的账户隔离、TTL 90 秒；表里只有设备名/EndpointId/直连地址，**绝不存剪切板内容**。设备之间仍然直连（iroh）并端到端加密」——`server/src/{api,db}.rs` + `sync/transport.rs` + 同上 二
 - 「**设备显示名统一追加平台**：默认 `kxtodo·平台(deviceId 前 8 位)`，用户填了前缀就是 `前缀·平台`；设置只存前缀」——`clipboard_sync.rs::device_display_name` + 同上 一
+18. **浮层的 z-index 必须高于「一切能打开它的宿主浮层」**（v0.9.2）：取色盘曾住 3600（与菜单同档），而它常从 `editor-overlay`（4000）/ 记账管理器（4200/4600）里打开——「分类表单点自定义颜色，色盘被整层盖住」就是这么来的。现在 `.kx-color-panel` 是 4700。**新浮层先问一句：谁会打开我？我的 z-index 赢不赢它？**
+19. **住在卡片里的 fixed 浮层会被卡片的叠层上下文困住**（v0.9.2 修「日期弹窗透明、被条目挡住」）：v0.9.0 给 `.task-swipe .task-card` 加了 `z-index:1`（压滑动露出层），卡片从此自带 stacking context，里面 `.task-date-popover` 的 fixed + z-index 2200 全被关进去——后面兄弟卡片（84% 半透明底）整块盖上来，透过去看就是「弹窗是透明的还被条目挡」。**修法不是抬弹窗（抬不动，上下文困着），是开弹窗时把整行抬起来**（`.task-swipe.date-pop-open { z-index: 2200 }`）。同族：ledger 的「viewer 必须挂 LedgerView 顶层」（第 9 条）。
+20. **拖动手势必须杀文本选区**（v0.9.2）：拖选建日程时浏览器起选区，「选区 + 按住鼠标」会触发滚动容器**边缘自动滚动**——网格在拖动中途自己滚走、落点整体偏一格（v090 回归 2.1/2.4 实测偏 15 分钟）。`.cal-grid` 一律 `user-select: none`（业界日历网格文本本来也不该被选中）。**任何「pointerdown + move」的手势都要先问：选区起了吗？**
+
+### v0.9.2 新增
+
+- **跳过类优化的步数估算必须往「少估」方向偏**：`recurrence.rs::skip_ahead` 与 `calendar.ts::skipAhead` 用「每步天数」估步数再回退 2 步——每步天数按 28/365 估会**估超前**（28 是一个月的最小天数），回退余量只够 ~2 年，3.5 年前的月度系列从所有视图与提醒里静默消失。改 31/366（高估每步天数 = 低估步数）后方向才安全。**任何「跳到附近再回退」的估算都问一句：偏哪边会漏？**
+- **重检路径与规划路径必须用同一个日期口径**：重复日程提醒规划按「当次出现日」解析 `BeforeDue`，发前重检却用系列开始日 → 除第一次外必然对不上 → 记 cancelled → 台账永久封死（「重复日程提醒只响第一次」）。`PlannedReminder` 带 `occurrence_date`，重检还要验该日**仍是系列的出现**（系列被拖动后该日作废）。
+- **「24:00 结束」全链路只有一种表示法**（core 约定：`endDate` = 次日 + `endTime` "00:00"）：`segmentForDay` 的 `endMin === 0` 是「该天不覆盖」返回 null（旧代码折成 1440，次日渲染出幽灵全天块 + 月视图多一枚芯片）；拖拽写路径写「次日 + 00:00」（旧代码写「当天 + 00:00」，core 拒倒挂）；`absRange` 对「次日 + 00:00」的绝对结束分钟就是次日零点整，**不能再 `|| 1440`**（否则每拖一次系列长一天）。`calendar.spec.ts` 曾把 core 根本不会产出的表示法钉成契约——**单测钉的必须是实际行为**（3.9 的老教训又犯一次）。
+- **`$: x = fn()`（无参）是「藏依赖」族的第四种写法**：`rangeError = validateRange()` 永远停在初值，校验错误根本不显示、Esc 照关丢草稿（v092 探针实测）。前三种：v0.8.4 影子状态、v0.9.0 月格 `{@const}`、v0.9.1 `$: list.map(i => fn(i))`。**修法一律把依赖当实参传**。
+- **`appearance` 加键有六处登记点**：core 四处（`KNOWN_FIELDS`/`get_typed`/`set_value`/`set_default`，见 3.21）之外，前端还有 `defaults.ts::normalizeSettings` 的 appearance 白名单（漏了 = 每次快照刷新把用户的值抹掉，`dueTime` 老教训的同族）与 `types.ts` 的接口（漏了 svelte-check 直接红）。`appearance.taskMenu` 是第一个按这套登记的键。
+- **任务右键菜单是数据驱动的**：id 白名单与默认顺序唯一住在 `src/lib/taskMenuConfig.ts`（含三个默认隐藏的截止快捷项与一等公民分隔线 `sep`）；顺序与隐藏住 `appearance.taskMenu`（本机偏好不进同步共享子集）；`Workspace.svelte` 按 `visibleTaskMenuIds()` 渲染，管理面板 `workspace/TaskMenuManager.svelte` 拖序 + 显隐即落盘。**加菜单项只改注册表 + Workspace 的一个 `{:else if}` 分支**。

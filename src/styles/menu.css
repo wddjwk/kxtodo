@@ -226,10 +226,46 @@
   display: flex;
   gap: 8px;
   padding: 6px 8px 8px;
+  /* 面板限高滚动时（v0.9.2）确认/取消不能被滚走：sticky 在底 */
+  position: sticky;
+  bottom: -6px;
+  background: #ffffff;
 }
 
 .nav-fixed-actions .settings-button {
   flex: 1;
   min-height: 32px;
   justify-content: center;
+}
+
+/* 「添加固定」面板（v0.9.2 重做）：限高 + 自己滚动——条目再多也看得全，
+   不再被菜单钳高裁掉半截（用户点名的「显示得不完全」） */
+.nav-fixed-editor {
+  max-height: min(340px, 52vh);
+  overflow-y: auto;
+}
+
+/* 固定态行：图钉填充 = 已固定（代替打勾槽位） */
+.nav-fixed-row {
+  display: flex;
+  width: 100%;
+  justify-content: flex-start;
+  border-color: transparent;
+  background: transparent;
+}
+
+.nav-fixed-row:hover {
+  background: #f2f4f7;
+}
+
+.nav-fixed-row.on {
+  border-color: #dde1e6;
+  background: #f2f4f7;
+  color: var(--accent, #7c5cbf);
+}
+
+.nav-fixed-row-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

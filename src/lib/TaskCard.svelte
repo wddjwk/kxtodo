@@ -496,7 +496,7 @@
 <!-- 滑动行的外壳（v0.9.0 新特性 3，只在移动端接管手势）：`display: flow-root` 与
      `.virtual-item` 同一条理由——卡片的 margin-bottom 不许逃逸出外壳，否则
      VirtualStack 量出来的行高比实际占位小几像素，越往后累积误差越大。 -->
-<div class="task-swipe" class:swipe-open={swipeOpen} use:swipeRow={{
+<div class="task-swipe" class:swipe-open={swipeOpen} class:date-pop-open={showPicker} use:swipeRow={{
   enabled: () => mobile && !isExpanded,
   open: swipeOpen,
   revealWidth: SWIPE_REVEAL_THRESHOLD_PX,

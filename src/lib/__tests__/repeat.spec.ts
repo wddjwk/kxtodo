@@ -126,6 +126,16 @@ describe("重复日程的展开（与 core recurrence.rs 同一张表）", () =>
     ]);
   });
 
+  it("每月：start 距查询区间超过 2 年仍展得出来（skipAhead 不许估超前）", () => {
+    const ev = event({ id: "r", startDate: "2023-01-15", repeat: repeat({ freq: "month" }) });
+    expect(occurrenceDates(ev, "2026-11-01", "2026-11-30")).toEqual(["2026-11-15"]);
+  });
+
+  it("每年：start 距查询区间超过 2 年仍展得出来", () => {
+    const ev = event({ id: "r", startDate: "2020-06-01", repeat: repeat({ freq: "year" }) });
+    expect(occurrenceDates(ev, "2026-06-01", "2026-06-30")).toEqual(["2026-06-01"]);
+  });
+
   it("每年 2 月 29 日：平年跳过", () => {
     const ev = event({ id: "r", startDate: "2024-02-29", repeat: repeat({ freq: "year" }) });
     expect(occurrenceDates(ev, "2024-01-01", "2032-12-31")).toEqual(["2024-02-29", "2028-02-29", "2032-02-29"]);

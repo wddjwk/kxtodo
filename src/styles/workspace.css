@@ -1433,6 +1433,71 @@ h1 {
   visibility: visible;
 }
 
+/* 日期弹窗开着时把**整行**抬到其它卡片之上（v0.9.2 修「弹窗透明、被条目挡住」）：
+   弹窗住在卡片里，而卡片自 v0.9.0 起带 z-index:1（压滑动露出层）→ 弹窗的 fixed
+   与 z-index 全被关进卡片的叠层上下文，后面兄弟卡片（84% 半透明底）整块盖上来，
+   透过去看就是「弹窗是透明的还被条目挡」。行抬起来后弹窗随整行赢过其它行。 */
+.task-swipe.date-pop-open {
+  z-index: 2200;
+}
+
+/* ---------- 管理菜单项面板（v0.9.2） ---------- */
+
+.task-menu-manager {
+  width: min(360px, calc(100vw - 32px));
+}
+
+.task-menu-manager-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.task-menu-manager-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 70%);
+}
+
+.task-menu-manager-row.dragging {
+  background: rgb(0 0 0 / 6%);
+  box-shadow: 0 4px 14px rgb(31 41 55 / 18%);
+}
+
+.task-menu-manager-row.hidden-row .task-menu-manager-label {
+  color: #9aa3af;
+  text-decoration: line-through;
+}
+
+.task-menu-manager-grip {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 26px;
+  border-radius: 6px;
+  color: #8b929e;
+  cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.task-menu-manager-grip:active {
+  cursor: grabbing;
+}
+
+.task-menu-manager-label {
+  flex: 1;
+  min-width: 0;
+  font-size: calc(var(--font-control) - 2px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .markdown-body h1 {
   color: #24292f;
   font-size: 1.12em;

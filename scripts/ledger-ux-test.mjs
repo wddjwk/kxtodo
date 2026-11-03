@@ -307,6 +307,23 @@ const browser = await chromium.launch({ channel: "msedge", headless: true });
         createdAt: stamp.toISOString()
       });
     }
+    // 月初运行时「过去 70 天」落在当月的笔数不够撑出滚动（11 月 4 日只有 3 笔），
+    // 滚不到底就换不了月——补一批当月条目让断言与日期无关（v0.9.2）
+    const nowStamp = new Date();
+    const monthPrefix = `${nowStamp.getFullYear()}-${String(nowStamp.getMonth() + 1).padStart(2, "0")}`;
+    for (let index = 1; index <= 25; index += 1) {
+      entries.push({
+        id: `ledger-test-cur-${index}`,
+        kind: "expense",
+        amountCents: 500 + index,
+        accountId: account,
+        categoryId: category,
+        date: `${monthPrefix}-${String((index % 28) + 1).padStart(2, "0")}`,
+        time: "",
+        note: `当月 ${index}`,
+        createdAt: new Date(Date.now() - index * 3_600_000).toISOString()
+      });
+    }
     book.entries = entries;
     localStorage.setItem(key, JSON.stringify(book));
   }, LEDGER_KEY);

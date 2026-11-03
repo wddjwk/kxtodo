@@ -236,10 +236,20 @@
           </div>
         </div>
 
-        <label class="calendar-field calendar-field-inline">
-          <span class="calendar-field-label">新建日程时默认用它</span>
-          <input type="checkbox" bind:checked={defaultDraft} />
-        </label>
+        <div class="calendar-field calendar-field-inline">
+          <span class="calendar-field-label">默认分类</span>
+          <button
+            type="button"
+            class="menu-action-button calendar-default-toggle"
+            class:on={defaultDraft}
+            aria-pressed={defaultDraft}
+            title={defaultDraft ? "新建日程默认用它（点一下取消）" : "新建日程时默认用它"}
+            on:click={() => (defaultDraft = !defaultDraft)}
+          >
+            <Star size={14} fill={defaultDraft ? "currentColor" : "none"} />
+            {defaultDraft ? "已是默认" : "设为默认"}
+          </button>
+        </div>
 
         <div class="calendar-field">
           <span class="calendar-field-label">块内效果</span>

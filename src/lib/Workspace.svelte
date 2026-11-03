@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import {
-    Calendar, CalendarClock, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
+    Calendar, CalendarCheck, CalendarClock, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
     ChevronsDown, ChevronsUp, ExternalLink, FolderInput,
-    Lightbulb, MoreHorizontal, PenLine, Pin, PinOff, Plus, RefreshCw, Search, Settings as SettingsIcon, SmilePlus, Star, Sun, Tag, Trash2, X
+    Lightbulb, MoreHorizontal, PenLine, Pin, PinOff, Plus, RefreshCw, Search, Settings as SettingsIcon, Settings2, SmilePlus, Star, Sun, Tag, Trash2, X
   } from "@lucide/svelte";
   import {
     appState, appSettings, showToast,
@@ -45,9 +45,12 @@
   import MenuSeparator from "./menu/MenuSeparator.svelte";
   import MoveTargetTree from "./menu/MoveTargetTree.svelte";
   import ListMenu from "./workspace/ListMenu.svelte";
+  import TaskMenuManager from "./workspace/TaskMenuManager.svelte";
   import TagMenuPanel from "./TagMenuPanel.svelte";
   import { sortTasks } from "./sort";
   import { filterPlannedTasks, plannedGroupOptions, plannedSections, type PlannedGroupKey } from "./plannedGroups";
+  import { addDays } from "./calendar";
+  import { visibleTaskMenuIds } from "./taskMenuConfig";
   import { calendarWeekdayHeaders } from "./diary";
   import { createBackGuard, isMobile, mobileView } from "./platform";
   import { closeSwipeRow, revealedSwipeRow } from "./cardOverlays";
@@ -112,6 +115,7 @@
     writeCompletedOpen(COMPLETED_PLANNED_KEY, plannedShowCompleted);
   }
   let taskMenu: { taskId: string; x: number; y: number } | null = null;
+  let taskMenuManagerOpen = false;
   /** 搜索结果里的日记卡片菜单（与 taskMenu 互斥） */
   let diaryMenu: { id: string; x: number; y: number } | null = null;
   let listMenuAt: { x: number; y: number } | null = null;
@@ -315,6 +319,8 @@
         task
       })))] as TaskRow[];
   $: taskMenuTask = taskMenu ? $appState.tasks.find((task) => task.id === taskMenu?.taskId) : null;
+  /** 右键菜单要画哪些项（顺序与显隐住在 appearance.taskMenu，v0.9.2「管理菜单项」） */
+  $: taskMenuIds = visibleTaskMenuIds($appSettings.appearance.taskMenu);
   $: diaryMenuEntry = diaryMenu ? $diaryEntries.find((entry) => entry.id === diaryMenu?.id) ?? null : null;
   /** 记账搜索结果的 --accent：工作区里拿不到 LedgerView 的内联主题色，从设置算一份 */
   $: ledgerAccentColor = ledgerAccent($appSettings.ledger);
@@ -763,6 +769,19 @@
     taskMenu = { taskId: event.detail.id, x: event.detail.x, y: event.detail.y };
     diaryMenu = null;
     listMenuAt = null;
+  }
+
+  /** 右键菜单的截止快捷项（v0.9.2）：只改日期、保留已有时刻 */
+  function setDueShift(days: number): void {
+    const target = taskMenuTask;
+    if (!target) return;
+    taskMenu = null;
+    void updateTaskAction(target.id, { dueDate: addDays(todayIso(), days) });
+  }
+
+  function openTaskMenuManager(): void {
+    taskMenu = null;
+    taskMenuManagerOpen = true;
   }
 
   // ---- 搜索结果里的日记卡片 ----
@@ -1353,62 +1372,90 @@
   {/if}
 
   {#if taskMenu && taskMenuTask}
+    <!-- 菜单项按 appearance.taskMenu 的顺序与显隐渲染（v0.9.2「管理菜单项」）；
+         分隔线是一等条目（id "sep"），也能拖、能藏 -->
     <ContextMenu x={taskMenu.x} y={taskMenu.y} minWidth={236} onClose={() => (taskMenu = null)}>
-      <MenuItem
-        icon={Sun}
-        label={taskMenuTask.myDay ? "从我的一天中移除" : "添加到我的一天"}
-        onSelect={() => { void updateTaskAction(taskMenuTask.id, { myDay: !taskMenuTask.myDay }); taskMenu = null; }}
-      />
-      <MenuItem icon={CalendarDays} label="日期与提醒">
-        <div slot="submenu" class="task-menu-date">
-          <TaskDateReminderPanel
-            embedded
-            dueDate={taskMenuTask.dueDate?.slice(0, 10) ?? ""}
-            dueTime={taskMenuTask.dueTime ?? ""}
-            reminders={taskMenuTask.reminders ?? []}
-            onSave={(patch) => applyTaskSchedule(taskMenuTask.id, patch)}
-            onClear={() => applyTaskSchedule(taskMenuTask.id, { dueDate: "", dueTime: "", reminders: [] })}
-            onClose={() => (taskMenu = null)}
+      {#each taskMenuIds as id (id)}
+        {#if id === "sep"}
+          <MenuSeparator />
+        {:else if id === "myday"}
+          <MenuItem
+            icon={Sun}
+            label={taskMenuTask.myDay ? "从我的一天中移除" : "添加到我的一天"}
+            onSelect={() => { void updateTaskAction(taskMenuTask.id, { myDay: !taskMenuTask.myDay }); taskMenu = null; }}
           />
-        </div>
-      </MenuItem>
-      <MenuItem
-        icon={CalendarClock}
-        label={$calendarEvents.some((event) => event.taskId === taskMenuTask.id) ? "打开日程" : "添加到日程"}
-        onSelect={() => openTaskCalendar(taskMenuTask)}
-      />
-      <MenuItem
-        icon={Star}
-        label={taskMenuTask.important ? "取消收藏" : "收藏"}
-        onSelect={() => { void updateTaskAction(taskMenuTask.id, { important: !taskMenuTask.important }); taskMenu = null; }}
-      />
-      <MenuItem
-        icon={taskMenuTask.pinned ? PinOff : Pin}
-        label={taskMenuTask.pinned ? "取消置顶" : "置顶"}
-        onSelect={() => { void updateTaskAction(taskMenuTask.id, { pinned: !taskMenuTask.pinned }); taskMenu = null; }}
-      />
-      <MenuItem icon={Tag} label="标签">
-        <div slot="submenu" class="tag-editor-panel" on:click|stopPropagation>
-          <TagMenuPanel onAdd={(tag) => addTagToTask(taskMenuTask.id, tag)} />
-        </div>
-      </MenuItem>
-      <MenuItem icon={SmilePlus} label="添加表情" onSelect={() => openEmojiPickerForTask(taskMenuTask.id)} />
-      <MenuItem icon={FolderInput} label="移动到">
-        <div slot="submenu" class="submenu-list">
-          <MoveTargetTree
-            nodes={$appState.nodes}
-            currentEntryId={taskMenuTask.nodeId}
-            on:move={(event) => moveTaskToNode(taskMenuTask.id, event.detail)}
+        {:else if id === "schedule"}
+          <MenuItem icon={CalendarDays} label="日期与提醒">
+            <div slot="submenu" class="task-menu-date">
+              <TaskDateReminderPanel
+                embedded
+                dueDate={taskMenuTask.dueDate?.slice(0, 10) ?? ""}
+                dueTime={taskMenuTask.dueTime ?? ""}
+                reminders={taskMenuTask.reminders ?? []}
+                onSave={(patch) => applyTaskSchedule(taskMenuTask.id, patch)}
+                onClear={() => applyTaskSchedule(taskMenuTask.id, { dueDate: "", dueTime: "", reminders: [] })}
+                onClose={() => (taskMenu = null)}
+              />
+            </div>
+          </MenuItem>
+        {:else if id === "calendar"}
+          <MenuItem
+            icon={CalendarClock}
+            label={$calendarEvents.some((event) => event.taskId === taskMenuTask.id) ? "打开日程" : "添加到日程"}
+            onSelect={() => openTaskCalendar(taskMenuTask)}
           />
-          {#if !hasTaskMoveTargets}
-            <div class="menu-empty">没有可移动的目标</div>
-          {/if}
-        </div>
-      </MenuItem>
+        {:else if id === "important"}
+          <MenuItem
+            icon={Star}
+            label={taskMenuTask.important ? "取消收藏" : "收藏"}
+            onSelect={() => { void updateTaskAction(taskMenuTask.id, { important: !taskMenuTask.important }); taskMenu = null; }}
+          />
+        {:else if id === "pin"}
+          <MenuItem
+            icon={taskMenuTask.pinned ? PinOff : Pin}
+            label={taskMenuTask.pinned ? "取消置顶" : "置顶"}
+            onSelect={() => { void updateTaskAction(taskMenuTask.id, { pinned: !taskMenuTask.pinned }); taskMenu = null; }}
+          />
+        {:else if id === "tags"}
+          <MenuItem icon={Tag} label="标签">
+            <div slot="submenu" class="tag-editor-panel" on:click|stopPropagation>
+              <TagMenuPanel onAdd={(tag) => addTagToTask(taskMenuTask.id, tag)} />
+            </div>
+          </MenuItem>
+        {:else if id === "emoji"}
+          <MenuItem icon={SmilePlus} label="添加表情" onSelect={() => openEmojiPickerForTask(taskMenuTask.id)} />
+        {:else if id === "move"}
+          <MenuItem icon={FolderInput} label="移动到">
+            <div slot="submenu" class="submenu-list">
+              <MoveTargetTree
+                nodes={$appState.nodes}
+                currentEntryId={taskMenuTask.nodeId}
+                on:move={(event) => moveTaskToNode(taskMenuTask.id, event.detail)}
+              />
+              {#if !hasTaskMoveTargets}
+                <div class="menu-empty">没有可移动的目标</div>
+              {/if}
+            </div>
+          </MenuItem>
+        {:else if id === "edit"}
+          <MenuItem icon={PenLine} label="编辑" onSelect={() => openTaskEditor(taskMenuTask.id)} />
+        {:else if id === "delete"}
+          <MenuItem icon={Trash2} danger label="删除" onSelect={() => deleteTask(taskMenuTask.id)} />
+        {:else if id === "due-today"}
+          <MenuItem icon={CalendarCheck} label="设置今天截止" onSelect={() => setDueShift(0)} />
+        {:else if id === "due-tomorrow"}
+          <MenuItem icon={CalendarCheck} label="设置明天截止" onSelect={() => setDueShift(1)} />
+        {:else if id === "due-dayafter"}
+          <MenuItem icon={CalendarCheck} label="设置后天截止" onSelect={() => setDueShift(2)} />
+        {/if}
+      {/each}
       <MenuSeparator />
-      <MenuItem icon={PenLine} label="编辑" onSelect={() => openTaskEditor(taskMenuTask.id)} />
-      <MenuItem icon={Trash2} danger label="删除" onSelect={() => deleteTask(taskMenuTask.id)} />
+      <MenuItem icon={Settings2} label="管理菜单项" onSelect={openTaskMenuManager} />
     </ContextMenu>
+  {/if}
+
+  {#if taskMenuManagerOpen}
+    <TaskMenuManager onClose={() => (taskMenuManagerOpen = false)} />
   {/if}
 
   {#if !isMyDayHistory}

@@ -100,6 +100,9 @@
 
 .calendar-now-btn {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 5px 14px;
   border: 1px solid rgb(0 0 0 / 10%);
   border-radius: 8px;
@@ -108,6 +111,11 @@
   font-size: calc(var(--font-control) - 3px);
   cursor: pointer;
   transition: border-color 0.12s ease, color 0.12s ease;
+}
+
+.calendar-now-btn svg {
+  flex: 0 0 auto;
+  color: var(--accent);
 }
 
 .calendar-now-btn:hover {
@@ -439,6 +447,36 @@
   align-self: flex-start;
   color: var(--cal-main, var(--accent));
   opacity: 0.9;
+}
+
+/* 地址行（v0.9.2）：单行省略，绝不把块撑开（容器 overflow:hidden 是底线） */
+.cal-event-loc {
+  min-width: 0;
+  color: #6b7280;
+  font-size: calc(var(--font-control) - 7px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cal-event.short .cal-event-loc {
+  display: none;
+}
+
+/* 日程块/芯片/占位块里没有可选文本：长按只许出菜单或拖动，不许选字（v0.9.2） */
+.cal-event,
+.cal-draft,
+.cal-chip {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 整个网格不可选（v0.9.2）：拖选建日程时浏览器会起文本选区，选区+按住鼠标会触发
+   滚动容器边缘自动滚动——网格在拖动中途自己滚走，落点整体偏一格（v090 回归实测）。
+   业界日历的网格文本本来也不该被选中。 */
+.cal-grid {
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .cal-event-time .cal-repeat,
@@ -817,6 +855,57 @@
   border-bottom: 0;
 }
 
+/* 开始/结束两行 + 右侧跨两行的时长括号（v0.9.2）：括号可点，开 15min…3h/全天 快捷档；
+   列宽 auto + 文本省略，窄屏（360px）也不许顶出右边界 */
+.cal-time-range {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0 8px;
+  align-items: stretch;
+  border-bottom: 1px solid rgb(0 0 0 / 4%);
+}
+
+.cal-time-range-rows {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.cal-duration-bracket {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  max-width: 6.5em;
+  padding: 0 8px;
+  border: 1px solid rgb(0 0 0 / 10%);
+  border-left: 0;
+  border-radius: 0 9px 9px 0;
+  background: rgb(255 255 255 / 66%);
+  color: #5c6470;
+  font-size: calc(var(--font-control) - 3px);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+
+.cal-duration-bracket:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.cal-duration-bracket.on {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.cal-duration-bracket-text {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .cal-field-label {
   color: #7b8493;
   font-size: calc(var(--font-control) - 2px);
@@ -943,31 +1032,6 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-}
-
-.calendar-duration {
-  padding: 3px 9px;
-  border-radius: 999px;
-  background: rgb(0 0 0 / 5%);
-  color: #6b7280;
-  font-size: calc(var(--font-control) - 4px);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-/* 全天那一行复用设置页的 .toggle-row，只把它压扁到表单行的密度 */
-
-.cal-toggle {
-  width: 100%;
-  margin-bottom: 0;
-  padding: 6px 10px;
-  background: rgb(0 0 0 / 3%);
-  color: #7b8493;
-  font-size: calc(var(--font-control) - 4px);
-}
-
-.cal-toggle input {
-  accent-color: var(--accent);
 }
 
 .calendar-form-error {
@@ -1322,11 +1386,16 @@
   gap: 12px;
 }
 
-.calendar-field-inline input {
-  width: 18px;
-  height: 18px;
-  accent-color: var(--accent, #7c5cbf);
-  cursor: pointer;
+/* 默认分类开关（v0.9.2）：星形按钮代替裸 checkbox——勾选框在表单里太「原始」，
+   星形也是业界日历（Google/Outlook）对「默认」的通用符号 */
+.calendar-default-toggle {
+  flex: 0 0 auto;
+}
+
+.calendar-default-toggle.on {
+  border-color: var(--accent, #7c5cbf);
+  color: var(--accent, #7c5cbf);
+  background: rgb(0 0 0 / 4%);
 }
 
 .calendar-field-hint {

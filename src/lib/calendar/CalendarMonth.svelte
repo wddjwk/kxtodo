@@ -14,9 +14,11 @@
    * 「读了组件状态的函数」不会随它们变化重算。
    */
   import { createEventDispatcher } from "svelte";
+  import { get } from "svelte/store";
   import { Repeat } from "@lucide/svelte";
   import { calendarWeekdayHeaders, type WeekStart } from "../diary";
   import { eventColors, eventTimeText, monthCellEvents, monthGridDates, monthOf } from "../calendar";
+  import { isMobile } from "../platform";
   import type { CalendarCategory, CalendarEvent } from "../types";
 
   export let anchor = "";
@@ -79,6 +81,8 @@
   }
 
   function context(mouseEvent: MouseEvent, event: CalendarEvent, occurrence: string): void {
+    // 日程界面没有长按逻辑（v0.9.2 需求 11）：触屏长按不弹事件菜单
+    if (get(isMobile)) return;
     dispatch("context", {
       id: event.id,
       x: mouseEvent.clientX,

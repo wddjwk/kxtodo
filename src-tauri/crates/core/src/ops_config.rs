@@ -195,6 +195,12 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         is_map: false,
     },
     FieldMeta {
+        path: "appearance.taskMenu",
+        kind: "object",
+        description: "任务右键菜单的顺序（order）与隐藏项（hidden）；id 白名单在前端 taskMenuConfig.ts",
+        is_map: false,
+    },
+    FieldMeta {
         path: "appearance.themePresets",
         kind: "array<{name,color}>",
         description: "配色盘预设",
@@ -779,6 +785,7 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "appearance.diaryTagPresets" => json!(settings.appearance.diary_tag_presets),
         "appearance.dueColors" => json!(settings.appearance.due_colors),
         "appearance.navLayout" => json!(settings.appearance.nav_layout),
+        "appearance.taskMenu" => json!(settings.appearance.task_menu),
         "appearance.listSortMode" => json!(settings.appearance.list_sort_mode),
         "appearance.themePresets" => json!(settings.appearance.theme_presets),
         "appearance.uiColors" => json!(settings.appearance.ui_colors),
@@ -1148,6 +1155,40 @@ pub(crate) fn expect_tag_presets(path: &str, value: &Value) -> CoreResult<Vec<cr
     Ok(out)
 }
 
+/// 任务右键菜单配置（v0.9.2）：`{ order?: string[], hidden?: string[] }`。
+/// id 白名单住在前端（菜单项是纯界面概念），core 只校验形状与长度——
+/// 认不出的 id 由前端解析时丢弃，core 拦它只会让「加菜单项」变成两端登记。
+fn expect_task_menu(path: &str, value: &Value) -> CoreResult<Map<String, Value>> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| invalid_value(path, "应为 { order?: string[], hidden?: string[] } 对象"))?;
+    let mut out = Map::new();
+    for key in ["order", "hidden"] {
+        let Some(items) = obj.get(key) else { continue };
+        let list = items
+            .as_array()
+            .ok_or_else(|| invalid_value(path, format!("{key} 应为字符串数组")))?;
+        if list.len() > 64 {
+            return Err(invalid_value(path, format!("{key} 至多 64 项")));
+        }
+        let mut cleaned: Vec<String> = Vec::new();
+        for item in list {
+            let raw = item
+                .as_str()
+                .ok_or_else(|| invalid_value(path, format!("{key} 每项应为字符串")))?
+                .to_string();
+            if !cleaned.contains(&raw) {
+                cleaned.push(raw);
+            }
+        }
+        out.insert(
+            key.to_string(),
+            Value::Array(cleaned.into_iter().map(Value::String).collect()),
+        );
+    }
+    Ok(out)
+}
+
 fn expect_nav_items(path: &str, value: &Value) -> CoreResult<Vec<String>> {
     let items = value
         .as_array()
@@ -1311,6 +1352,9 @@ pub fn set_value(
         "appearance.navLayout" => {
             settings.appearance.nav_layout =
                 expect_enum(path, &value, &crate::model::NAV_LAYOUTS)?;
+        }
+        "appearance.taskMenu" => {
+            settings.appearance.task_menu = expect_task_menu(path, &value)?;
         }
         "appearance.listSortMode" => {
             settings.appearance.list_sort_mode = expect_list_sort_mode(&value)?;
@@ -1832,6 +1876,7 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
             target.appearance.nav_items = defaults.appearance.nav_items.clone()
         }
         "appearance.navLayout" => target.appearance.nav_layout = defaults.appearance.nav_layout.clone(),
+        "appearance.taskMenu" => target.appearance.task_menu = Map::new(),
         "appearance.themePresets" => {
             target.appearance.theme_presets = defaults.appearance.theme_presets.clone()
         }

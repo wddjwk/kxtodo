@@ -154,9 +154,18 @@ export function timeLabel(time: string): string {
 // 事件 → 某一天的段
 // ---------------------------------------------------------------------------
 
+/** 事件实际覆盖的最后一天：定时事件以「次日 + 00:00」表示 24:00 结束（core 约定），
+ *  它的最后一天是 endDate 的前一天——否则次日会渲染出幽灵块、月视图多一枚芯片。 */
+export function lastCoveredDate(event: CalendarEvent): string {
+  if (!event.allDay && event.endTime === "00:00" && event.endDate > event.startDate) {
+    return addDays(event.endDate, -1);
+  }
+  return event.endDate;
+}
+
 /** 事件是否覆盖某一天（闭区间；全天事件同样按日期区间判）。 */
 export function eventCoversDay(event: CalendarEvent, date: string): boolean {
-  return event.startDate <= date && date <= event.endDate;
+  return event.startDate <= date && date <= lastCoveredDate(event);
 }
 
 export type DaySegment = {
@@ -180,8 +189,9 @@ export function segmentForDay(event: CalendarEvent, date: string): DaySegment | 
   let endMin: number;
   if (event.endDate === date) {
     endMin = event.endTime === "" ? startMin + 60 : minutesOf(event.endTime);
-    // 结束恰好是次日 00:00（或多日段的午夜边界）→ 画满当天
-    if (endMin === 0) endMin = MINUTES_PER_DAY;
+    // 「当天 + 00:00」是倒挂的坏数据；core 约定的 24:00 结束住前一天（见 lastCoveredDate）。
+    // 两种都不覆盖这一天。
+    if (endMin === 0) return null;
   } else {
     endMin = MINUTES_PER_DAY;
   }
@@ -191,7 +201,7 @@ export function segmentForDay(event: CalendarEvent, date: string): DaySegment | 
     startMin,
     endMin,
     continuesBefore: event.startDate < date,
-    continuesAfter: event.endDate > date
+    continuesAfter: lastCoveredDate(event) > date
   };
 }
 
@@ -369,22 +379,6 @@ export function reminderLabel(rule: ReminderRule): string {
   return `${month}月${day}日 ${hh}:${mm}`;
 }
 
-/** 时长展示串："1 小时 30 分钟" / "45 分钟" / "3 天"（全天跨天）。 */
-export function durationText(times: CalendarTimes): string {
-  if (times.allDay) {
-    const days = diffDays(times.startDate, times.endDate) + 1;
-    return days > 1 ? `${days} 天` : "全天";
-  }
-  const spanDays = diffDays(times.startDate, times.endDate);
-  const total = spanDays * MINUTES_PER_DAY + minutesOf(times.endTime) - minutesOf(times.startTime);
-  if (total <= 0) return "";
-  const hours = Math.floor(total / 60);
-  const minutes = total % 60;
-  if (hours === 0) return `${minutes} 分钟`;
-  if (minutes === 0) return `${hours} 小时`;
-  return `${hours} 小时 ${minutes} 分钟`;
-}
-
 // ---------------------------------------------------------------------------
 // 重复规则的展开（v0.9.1）——与 core `recurrence.rs` 逐条同口径
 // ---------------------------------------------------------------------------
@@ -471,8 +465,10 @@ function stepDates(
 function skipAhead(repeat: CalendarRepeat, startDate: string, from: string, interval: number): number {
   if (from <= startDate) return 0;
   const days = diffDays(startDate, from);
+  // 每步天数的估算必须**高估**（月按 31、年按 366）：估出的步数才会偏少，
+  // 回退 2 步的余量兜得住；按 28/365 估会超前，start 距 from 越远偏得越多（~2 年就漏光）。
   const perStep =
-    repeat.freq === "day" ? interval : repeat.freq === "week" ? interval * 7 : repeat.freq === "month" ? interval * 28 : interval * 365;
+    repeat.freq === "day" ? interval : repeat.freq === "week" ? interval * 7 : repeat.freq === "month" ? interval * 31 : interval * 366;
   return Math.max(0, Math.floor(days / Math.max(1, perStep)) - 2);
 }
 

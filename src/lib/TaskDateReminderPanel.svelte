@@ -217,6 +217,14 @@
     {#if customTab === "date"}
       <CalendarGrid bind:this={customGrid} value={customDate} initial={customDate} on:select={(event) => (customDate = event.detail)} />
     {:else}
+      <!-- 占位导航行（v0.9.2）：日期标签的网格自带年月导航行而轮子没有，两个标签页
+           高度差一行导航 → 切标签时底部 取消/确定 跳位（v084 回归 12）。占位行与真
+           导航行同构同高，visibility:hidden 只留布局。 -->
+      <div class="date-picker-header" aria-hidden="true" style="visibility: hidden">
+        <button type="button" tabindex="-1"><ChevronLeft size={16} /></button>
+        <span class="dp-title">.</span>
+        <span class="dp-head-spacer"></span>
+      </div>
       <div class="dp-time-wheel">
         <TimePicker hour={wheel.hour} minute={wheel.minute} on:change={(event) => (wheel = event.detail)} />
       </div>

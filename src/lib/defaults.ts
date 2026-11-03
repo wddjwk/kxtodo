@@ -42,6 +42,7 @@ import { NAV_ITEM_IDS, normalizeNavItems, normalizeNavLayout } from "./nav";
 import { normalizeReminders } from "./reminders";
 import { DEFAULT_DUE_COLORS } from "./dueHighlight";
 import { normalizeSortMode } from "./sort";
+import { normalizeTaskMenuConfig } from "./taskMenuConfig";
 
 const now = () => new Date().toISOString();
 
@@ -1394,7 +1395,13 @@ export function normalizeSettings(raw: unknown): Settings {
       uiColors: normalizeHexColorMap(source?.appearance?.uiColors),
       navItems: normalizeNavItems(source?.appearance?.navItems),
       navLayout: normalizeNavLayout(source?.appearance?.navLayout),
-      newNodeDefaults: normalizeNewNodeDefaults(source?.appearance?.newNodeDefaults)
+      newNodeDefaults: normalizeNewNodeDefaults(source?.appearance?.newNodeDefaults),
+      // 菜单顺序/显隐（v0.9.2）：undefined = 没配置过（跟注册表默认走，以后加新项自动生效）；
+      // 配置过就按白名单收敛——漏登记这里的症状是「管理完一次快照刷新就复原」
+      taskMenu:
+        source?.appearance?.taskMenu === undefined
+          ? undefined
+          : normalizeTaskMenuConfig(source.appearance.taskMenu)
     },
     lifecycle: {
       closeToTray:

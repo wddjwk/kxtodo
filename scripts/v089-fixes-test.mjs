@@ -222,7 +222,7 @@ for (const mobile of [false, true]) {
   await page.locator('.system-nav .nav-row[title="我的一天"]').click({ button: "right" });
   await page.getByRole("button", { name: "添加固定", exact: true }).click();
   await page.waitForTimeout(250);
-  const diaryItem = page.locator(".submenu-panel .menu-item").filter({ hasText: "日记" }).first();
+  const diaryItem = page.locator(".submenu-panel .nav-fixed-row").filter({ hasText: "日记" }).first();
   await diaryItem.click();
   await page.waitForTimeout(150);
   await page.getByRole("button", { name: "确认", exact: true }).click();
@@ -231,7 +231,7 @@ for (const mobile of [false, true]) {
   await page.locator('.system-nav .nav-row[title="我的一天"]').click({ button: "right" });
   await page.getByRole("button", { name: "添加固定", exact: true }).click();
   await page.waitForTimeout(250);
-  await page.locator(".submenu-panel .menu-item").filter({ hasText: "日记" }).first().click();
+  await page.locator(".submenu-panel .nav-fixed-row").filter({ hasText: "日记" }).first().click();
   await page.getByRole("button", { name: "取消", exact: true }).click();
   await page.waitForTimeout(400);
   check("5 添加固定的取消不落盘", (await page.locator('.system-nav .nav-row[title="日记"]').count()) === 0);
@@ -242,7 +242,7 @@ for (const mobile of [false, true]) {
   await page.waitForTimeout(250);
   await page.getByRole("button", { name: "工具箱内的工具", exact: true }).click();
   await page.waitForTimeout(250);
-  const toolItem = page.locator(".submenu-panel .submenu-panel .menu-item").filter({ hasText: "剪切板同步" }).first();
+  const toolItem = page.locator(".submenu-panel .submenu-panel .nav-fixed-row").filter({ hasText: "剪切板同步" }).first();
   await toolItem.click();
   await page.getByRole("button", { name: "确认", exact: true }).click({ force: true });
   await page.waitForTimeout(600);
@@ -287,7 +287,7 @@ for (const mobile of [false, true]) {
   check("5b 移动端添加固定菜单可见", confirmVisible);
   await page.locator(".submenu-panel .menu-item-button", { hasText: "工具箱内的工具" }).click();
   await page.waitForTimeout(350);
-  const nested = await page.locator(".submenu-panel .submenu-panel .menu-item").count();
+  const nested = await page.locator(".submenu-panel .submenu-panel .nav-fixed-row").count();
   check("5b 移动端工具箱子菜单可展开", nested >= 5, String(nested));
   const box = await page.locator(".context-menu").boundingBox();
   check("5b 移动端菜单不越界", Boolean(box) && box.x >= 0 && box.y >= 0 && box.x + box.width <= 392 && box.y + box.height <= 850, J(box));

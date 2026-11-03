@@ -372,3 +372,56 @@ fn clock_discontinuity_detects_suspend_and_jumps() {
         StdDuration::from_millis(600)
     ));
 }
+
+/// 重复日程的提醒规划（v0.9.2 修）：每一次出现各一条，且**带上自己那一次的出现日**——
+/// 发前重检用它解析规则；用系列开始日解析的话除第一次外必然对不上，整条台账记
+/// cancelled 永久封死（用户报的「重复日程提醒只响第一次」）。
+#[test]
+fn recurring_calendar_plans_carry_their_occurrence_date() {
+    let start = local_date(-40);
+    let event = serde_json::json!({
+        "id": "cal-rep",
+        "title": "站会",
+        "details": "",
+        "startDate": start,
+        "startTime": "09:00",
+        "endDate": start,
+        "endTime": "09:30",
+        "allDay": false,
+        "reminders": [{ "kind": "beforeDue", "minutes": 10 }],
+        "location": "",
+        "categoryId": "",
+        "repeat": {
+            "freq": "day",
+            "interval": 1,
+            "byWeekday": [],
+            "byMonthDay": [],
+            "end": "never",
+            "count": 0,
+            "until": ""
+        },
+        "exceptDates": [],
+        "taskId": "",
+        "createdAt": "2026-01-01T00:00:00.000Z"
+    });
+    let file: kxtodo_core::model::CalendarFile = serde_json::from_value(serde_json::json!({
+        "schemaVersion": 1,
+        "events": [event],
+        "categories": []
+    }))
+    .unwrap();
+    let plans = reminders::plan_calendar(&file);
+    assert!(plans.len() >= 2, "视野内应有多次出现，实际 {}", plans.len());
+    let dates: Vec<&str> = plans
+        .iter()
+        .filter_map(|plan| plan.occurrence_date.as_deref())
+        .collect();
+    assert_eq!(dates.len(), plans.len(), "每条规划都必须带出现日");
+    assert!(
+        dates.windows(2).all(|window| window[0] < window[1]),
+        "出现日应升序：{dates:?}"
+    );
+    assert!(dates.windows(2).all(|window| window[0] != window[1]), "同一次不许规划两遍");
+    let keys: std::collections::HashSet<&String> = plans.iter().map(|plan| &plan.key).collect();
+    assert_eq!(keys.len(), plans.len(), "收据键含 at，各次出现必须互不相同");
+}

@@ -1333,6 +1333,12 @@ pub struct AppearanceSettings {
     /// 系统导航布局（v0.7.3）：`list` 单列（默认）/ `grid` 两列图标+文字 / `icons` 单行纯图标。
     #[serde(rename = "navLayout", default = "default_nav_layout")]
     pub nav_layout: String,
+    /// 任务右键菜单的顺序与显隐（v0.9.2，本机偏好不进同步共享子集）：
+    /// `{ "order": [id…], "hidden": [id…] }`。id 白名单与默认顺序住在前端
+    /// （`src/lib/taskMenuConfig.ts`），core 只校验形状——菜单项是纯界面概念，
+    /// core 不该知道有哪些项，否则加一个菜单项要动两处登记。
+    #[serde(rename = "taskMenu", default)]
+    pub task_menu: Map<String, Value>,
     #[serde(rename = "themePresets", default = "default_theme_presets")]
     pub theme_presets: Vec<ThemePreset>,
     /// 临期高亮配色：`{ 节点id: ["#rrggbb"; 4] }`（已过期/今天/明天/后天，
@@ -1480,6 +1486,7 @@ impl Default for AppearanceSettings {
             ledger_font_size: default_ledger_font_size(),
             diary_font_size: default_diary_font_size(),
             nav_items: default_nav_items(),
+            task_menu: Map::new(),
             tag_presets: Vec::new(),
             diary_tag_presets: Vec::new(),
             due_colors: Map::new(),

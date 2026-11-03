@@ -14,7 +14,7 @@
   import { onMount } from "svelte";
   import {
     Calendar as CalendarIcon, CalendarClock, CalendarDays, CalendarRange, ChevronLeft, ChevronRight,
-    Columns3, MoreHorizontal, Plus
+    Columns3, LocateFixed, MoreHorizontal, Plus
   } from "@lucide/svelte";
   import {
     appSettings, appState, calendarCategories, calendarEditor, calendarEvents, calendarOpen,
@@ -305,7 +305,10 @@
       >{title}</strong>
       <button type="button" aria-label="下一段" on:click|stopPropagation={() => step(1)}><ChevronRight size={18} /></button>
     </span>
-    <button class="calendar-now-btn" type="button" title="回到今天的此刻" on:click|stopPropagation={jumpToNow}>现在</button>
+    <button class="calendar-now-btn" type="button" title="回到今天的此刻" on:click|stopPropagation={jumpToNow}>
+      <LocateFixed size={15} />
+      <span class="calendar-now-label">现在</span>
+    </button>
   </div>
 
   {#if view === "month"}
@@ -323,7 +326,7 @@
   {/if}
 
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <section class="calendar-body" use:swipeX={{ onPrev: () => step(1), onNext: () => step(-1) }}>
+  <section class="calendar-body" use:swipeX={{ onPrev: () => step(-1), onNext: () => step(1) }}>
     {#if view === "month"}
       <CalendarMonth
         anchor={anchorDate}

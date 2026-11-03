@@ -399,8 +399,8 @@ const mobile = await browser.newContext({
     };
   });
   check(
-    "20 折线路径比 dash 基准长（旧代码必断的情形）",
-    line !== null && line.totalLength > (line?.dash ?? 0),
+    "20 折线有几何长度（旧代码 dash 走几何单位必断的情形已归一）",
+    line !== null && line.totalLength > 0 && line.dash === 2400,
     J(line)
   );
   check(
