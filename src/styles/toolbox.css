@@ -1648,3 +1648,538 @@
   width: 100%;
   justify-content: center;
 }
+
+/* ---------- 习惯打卡（v0.9.3）：全部/每日两视图 + 卡片 + 图标圆阵 + 编辑/统计面板 ---------- */
+
+.habit-tool {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  min-width: 0;
+}
+
+.habit-view-switch {
+  align-self: flex-start;
+}
+
+/* 状态页签：计数在上、下划线指示当前（参考业界打卡应用的首屏三计数） */
+.habit-tabs {
+  display: flex;
+  gap: 26px;
+  padding: 2px 4px 0;
+  border-bottom: 1px solid rgb(0 0 0 / 6%);
+}
+
+.habit-tab {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 2px 9px;
+  border: 0;
+  background: transparent;
+  color: #8a93a3;
+  font-size: calc(var(--font-control) - 3px);
+  cursor: pointer;
+}
+
+.habit-tab-count {
+  color: #23272f;
+  font-size: calc(var(--font-control) + 2px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.habit-tab.active {
+  color: var(--accent);
+}
+
+.habit-tab.active .habit-tab-count {
+  color: var(--accent);
+}
+
+.habit-tab.active::after {
+  content: "";
+  position: absolute;
+  right: 20%;
+  bottom: -1px;
+  left: 20%;
+  height: 2.5px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.habit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.habit-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid rgb(0 0 0 / 6%);
+  border-radius: 14px;
+  background: rgb(255 255 255 / 78%);
+  text-align: left;
+  cursor: pointer;
+  transition: box-shadow 0.15s ease;
+}
+
+.habit-card:hover {
+  box-shadow: 0 3px 12px rgb(0 0 0 / 7%);
+}
+
+.habit-card.muted {
+  opacity: 0.62;
+}
+
+.habit-card-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--habit-soft, rgb(0 0 0 / 5%));
+  color: var(--habit-main, var(--accent));
+}
+
+.habit-card-mid {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.habit-card-name {
+  color: #23272f;
+  font-size: calc(var(--font-control) - 1px);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.habit-card-sub {
+  color: #8a93a3;
+  font-size: calc(var(--font-control) - 5px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.habit-card-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+
+.habit-card-stat strong {
+  color: #23272f;
+  font-size: calc(var(--font-control) + 3px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.habit-card-stat span {
+  color: #98a1ae;
+  font-size: calc(var(--font-control) - 6px);
+}
+
+.habit-empty {
+  margin: 0;
+  padding: 34px 12px;
+  color: #98a1ae;
+  font-size: calc(var(--font-control) - 2px);
+  text-align: center;
+}
+
+.habit-day-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.habit-day-title {
+  color: #23272f;
+  font-size: calc(var(--font-control) + 2px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.habit-today-chip {
+  margin-left: 6px;
+  padding: 3px 10px;
+  border: 1px solid rgb(0 0 0 / 10%);
+  border-radius: 999px;
+  background: transparent;
+  color: #5c6470;
+  font-size: calc(var(--font-control) - 5px);
+  cursor: pointer;
+}
+
+.habit-today-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.habit-daily {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* 时段分隔：— 全天 — 居中小标题 */
+.habit-slot-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: #98a1ae;
+  font-size: calc(var(--font-control) - 4px);
+}
+
+.habit-slot-head::before,
+.habit-slot-head::after {
+  content: "";
+  flex: 0 0 26px;
+  height: 1px;
+  background: rgb(0 0 0 / 12%);
+}
+
+.habit-slot-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px 8px;
+  padding: 14px 0 2px;
+}
+
+.habit-dot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.habit-dot-circle {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 4%);
+  color: var(--habit-main, var(--accent));
+  transition: background 0.18s ease, box-shadow 0.18s ease, transform 0.12s ease;
+}
+
+.habit-dot:active .habit-dot-circle {
+  transform: scale(0.94);
+}
+
+.habit-dot.checked .habit-dot-circle {
+  background: var(--habit-soft);
+  box-shadow: inset 0 0 0 2px var(--habit-main);
+  animation: habit-pop 0.28s ease;
+}
+
+.habit-dot-name {
+  max-width: 100%;
+  color: #4b5563;
+  font-size: calc(var(--font-control) - 4px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.habit-dot.checked .habit-dot-name {
+  color: #23272f;
+  font-weight: 600;
+}
+
+@keyframes habit-pop {
+  0% {
+    transform: scale(0.86);
+  }
+  60% {
+    transform: scale(1.06);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* 编辑 / 统计面板（骨架复用 calendar-sheet） */
+
+.habit-sheet {
+  width: min(520px, 92%);
+}
+
+.habit-input {
+  min-width: 0;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: rgb(0 0 0 / 3%);
+  color: #23272f;
+  font-size: calc(var(--font-control) - 2px);
+}
+
+.habit-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: #fff;
+}
+
+.habit-icon-preview {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--habit-soft);
+  color: var(--habit-main);
+}
+
+.habit-reminder-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.habit-reminder-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 5%);
+  color: #4b5563;
+  font-size: calc(var(--font-control) - 5px);
+}
+
+.habit-chip-x {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #98a1ae;
+  cursor: pointer;
+}
+
+.habit-chip-x:hover {
+  color: #c0392b;
+}
+
+.habit-reminder-add {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 5px 10px;
+}
+
+.habit-custom-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.habit-custom-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.habit-custom-row input,
+.habit-custom-col input {
+  padding: 6px 8px;
+  border: 1px solid #d7dbe0;
+  border-radius: 8px;
+  background: #fff;
+  color: #23272f;
+  font-size: calc(var(--font-control) - 3px);
+}
+
+.habit-stats-head {
+  gap: 10px;
+}
+
+.habit-stats-title {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.habit-stats-title strong {
+  color: #23272f;
+  font-size: calc(var(--font-control) - 1px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.habit-stats-title span {
+  color: #8a93a3;
+  font-size: calc(var(--font-control) - 5px);
+}
+
+.habit-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.habit-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 10px 4px;
+  border-radius: 12px;
+  background: rgb(0 0 0 / 3%);
+}
+
+.habit-stat strong {
+  color: #23272f;
+  font-size: calc(var(--font-control) + 4px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.habit-stat strong small {
+  margin-left: 2px;
+  color: #8a93a3;
+  font-size: calc(var(--font-control) - 5px);
+  font-weight: 500;
+}
+
+.habit-stat span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #8a93a3;
+  font-size: calc(var(--font-control) - 6px);
+}
+
+.habit-rate {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.habit-rate-label {
+  flex: 0 0 auto;
+  color: #8a93a3;
+  font-size: calc(var(--font-control) - 5px);
+}
+
+.habit-rate-bar {
+  flex: 1;
+  min-width: 0;
+  height: 6px;
+  border-radius: 3px;
+  background: rgb(0 0 0 / 6%);
+  overflow: hidden;
+}
+
+.habit-rate-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.25s ease;
+}
+
+.habit-rate-num {
+  flex: 0 0 auto;
+  color: #23272f;
+  font-size: calc(var(--font-control) - 3px);
+  font-variant-numeric: tabular-nums;
+}
+
+.habit-heat {
+  margin-top: 14px;
+}
+
+.habit-heat-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.habit-heat-head strong {
+  color: #23272f;
+  font-size: calc(var(--font-control) - 3px);
+}
+
+.habit-heat-week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 6px;
+  color: #98a1ae;
+  font-size: calc(var(--font-control) - 6px);
+  text-align: center;
+}
+
+.habit-heat-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.habit-heat-cell {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  color: #b6bdc9;
+  font-size: calc(var(--font-control) - 6px);
+  font-variant-numeric: tabular-nums;
+}
+
+.habit-heat-cell.due {
+  color: #5c6470;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 10%);
+}
+
+.habit-heat-cell.checked {
+  background: var(--habit-main);
+  color: #fff;
+  font-weight: 600;
+}
+
+.habit-heat-cell.today {
+  box-shadow: inset 0 0 0 1.5px var(--habit-main);
+}
+
+.habit-heat-cell.checked.today {
+  box-shadow: inset 0 0 0 1.5px #fff;
+}
+
+.habit-heat-cell.blank {
+  visibility: hidden;
+}

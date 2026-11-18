@@ -562,7 +562,10 @@ fn run_sync_inner(
     let data_records: Vec<EntityRecord> = records
         .iter()
         .filter(|record| {
-            (record.kind == "node" || record.kind == "task" || record.kind == "scratchpad")
+            (record.kind == "node"
+                || record.kind == "task"
+                || record.kind == "scratchpad"
+                || record.kind == "habit")
                 && scopes.data
         })
         .cloned()
@@ -765,7 +768,7 @@ fn run_sync_inner(
     let schedule_after = repo.load_schedule()?;
     for record in &records {
         let local_ts = match record.kind.as_str() {
-            "node" | "task" | "scratchpad" => data_entity_stamp(&data_after, &record.id),
+            "node" | "task" | "scratchpad" | "habit" => data_entity_stamp(&data_after, &record.id),
             "diary" => diary_entity_stamp(&diary_after, &record.id),
             kind if is_calendar_kind(kind) => {
                 calendar_entity_stamp(&calendar_after, &record.kind, &record.id)
@@ -963,7 +966,7 @@ fn resolve_conflict(
     let state_snapshot = state.clone();
     let mut warnings: Vec<String> = Vec::new();
     match entity.kind.as_str() {
-        "node" | "task" | "scratchpad" => {
+        "node" | "task" | "scratchpad" | "habit" => {
             let records = vec![remote.clone()];
             let _ = repo.write_data(None, None, "sync.conflict", |file| {
                 merge_data_records(file, &records, &state_snapshot, &mut warnings);

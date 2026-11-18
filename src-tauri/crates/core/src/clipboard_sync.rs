@@ -177,6 +177,32 @@ pub fn repair_zero_alpha(rgba: &mut [u8]) {
     }
 }
 
+/// 接收端 PNG 的 alpha 修复（v0.9.3）：解码 → 全 0 alpha 才修 → 重编码。
+/// **发送端不做任何处理**（剪切板原字节原样发，同步对发送方无感）；修复只发生在
+/// 接收端、`apply_remote` 记水位之前——这样写回后的本地读回指纹与水位一致，不会回声。
+/// 正常图（有任何非 0 alpha）原字节返回，不重编码、零损失；解码/编码失败也原样返回
+/// （宁可收到一张透明图，也不能把图弄丢）。
+pub fn repair_png_alpha(bytes: Vec<u8>) -> Vec<u8> {
+    let Ok(decoded) = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png) else {
+        return bytes;
+    };
+    let rgba = decoded.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let mut raw = rgba.into_raw();
+    if raw.iter().skip(3).step_by(4).any(|alpha| *alpha != 0) {
+        return bytes;
+    }
+    repair_zero_alpha(&mut raw);
+    let Some(buffer) = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(width, height, raw) else {
+        return bytes;
+    };
+    let mut out = std::io::Cursor::new(Vec::new());
+    match buffer.write_to(&mut out, image::ImageFormat::Png) {
+        Ok(()) => out.into_inner(),
+        Err(_) => bytes,
+    }
+}
+
 /// RGBA → CF_DIBV5（BITMAPV5HEADER + 自下而上的 BGRA），与 arboard 写入的
 /// 布局一致：BI_BITFIELDS + 四个掩码 + LCS_sRGB + 正高度（Word/WordPad 贴不了
 /// 负高度的图）。写系统剪切板用（多格式一次会话写入时需要自己构造 DIB）。
@@ -2399,7 +2425,9 @@ where
     }
     let image_bytes = read_blob(reader, session, header.image_size, accept_image).await?;
     if let Some(bytes) = image_bytes {
-        content.image = Some(bytes);
+        // 接收端修复全 0 alpha（v0.9.3）：必须在 apply_remote 记水位之前，
+        // 写回后的读回指纹才与水位一致（否则 Linux 无序列号会把修复版回声给发送端）
+        content.image = Some(repair_png_alpha(bytes));
     }
     for file in &header.files {
         let target = if accept_files {

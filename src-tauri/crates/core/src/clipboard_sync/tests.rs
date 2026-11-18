@@ -693,3 +693,33 @@ fn poller_primes_on_empty_clipboard_so_first_copy_sends() {
     }
     inner.cancel.store(true, Ordering::SeqCst);
 }
+
+#[test]
+fn repair_png_alpha_only_touches_all_zero_alpha_and_keeps_normal_bytes() {
+    use image::{ImageBuffer, Rgba};
+    let png_of = |rgba: Vec<u8>| -> Vec<u8> {
+        let buf = ImageBuffer::<Rgba<u8>, _>::from_raw(2, 2, rgba).unwrap();
+        let mut out = std::io::Cursor::new(Vec::new());
+        buf.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    // 正常图（有非 0 alpha）：原字节返回，不重编码（发送/接收都零损失）
+    let normal = png_of(vec![
+        255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 255, 255, 255, 255, 255,
+    ]);
+    assert_eq!(super::repair_png_alpha(normal.clone()), normal);
+    // 全 0 alpha 的坏图：修复后 alpha 全 255、颜色通道不动
+    let broken = png_of(vec![
+        10, 20, 30, 0, 40, 50, 60, 0, 70, 80, 90, 0, 100, 110, 120, 0,
+    ]);
+    let fixed = super::repair_png_alpha(broken.clone());
+    assert_ne!(fixed, broken);
+    let decoded = image::load_from_memory_with_format(&fixed, image::ImageFormat::Png)
+        .unwrap()
+        .to_rgba8();
+    assert!(decoded.pixels().all(|pixel| pixel[3] == 255));
+    assert_eq!(decoded.get_pixel(0, 0)[0], 10);
+    assert_eq!(decoded.get_pixel(1, 1)[2], 120);
+    // 不是 PNG：原样返回（宁可透明也不丢图）
+    assert_eq!(super::repair_png_alpha(vec![1, 2, 3]), vec![1, 2, 3]);
+}

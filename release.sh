@@ -113,6 +113,15 @@ fi
 
 printf '==> 版本：%s\n' "$VERSION"
 
+# AppImage 的 glibc 基底告警：linuxdeploy 把构建机的 libglib/webkit2gtk/javascriptcore 等
+# 原样打包，它们链接构建时的 glibc——在比构建机老的发行版上会报 GLIBC_2.xx not found
+# （v0.9.2 事故：CI ubuntu-latest 漂移）。发布产物一律由 pin 了 ubuntu-22.04 的 CI 出；
+# 本地构建只供本机/更新系统使用，这里照实告警而不是静默产出「看起来能分发」的包。
+build_glibc="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')"
+if [[ -n "$build_glibc" ]] && [[ "$(printf '%s\n2.35\n' "$build_glibc" | sort -V | head -n 1)" != "2.35" ]]; then
+  printf '警告：构建机 glibc %s 高于发布基底 2.35（Ubuntu 22.04），产出的 AppImage 只能在 glibc >= %s 的系统运行；对外分发请走 CI（release.yml 已 pin ubuntu-22.04）\n' "$build_glibc" "$build_glibc" >&2
+fi
+
 # ---------- npm 依赖（与 package.ps1 一致：无条件执行，有 lockfile 时很快） ----------
 if ! npm install; then
   printf '错误：npm install 失败\n' >&2

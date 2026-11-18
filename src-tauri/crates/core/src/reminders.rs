@@ -207,6 +207,8 @@ pub struct PlannedReminder {
     pub task_id: String,
     /// true = 日程事件的提醒（calendar.json），false = 任务提醒（data.json）
     pub calendar: bool,
+    /// true = 习惯打卡的提醒（data.json 的 habits，v0.9.3）；重检走习惯分支
+    pub habit: bool,
     /// 规划时用的那一次出现日（日程）；任务提醒为 None（重检读当前 due_date）。
     /// 重复日程的发前重检必须用它——用系列开始日解析，除第一次外必然对不上，
     /// 整条台账会被记 cancelled 永久封死。
@@ -239,6 +241,7 @@ pub fn plan(data: &DataFile) -> Vec<PlannedReminder> {
                 key: receipt_key(&item.id, at),
                 task_id: item.id.clone(),
                 calendar: false,
+                habit: false,
                 occurrence_date: None,
                 at,
             });
@@ -282,6 +285,7 @@ pub fn plan_calendar(calendar: &crate::model::CalendarFile) -> Vec<PlannedRemind
                     key: receipt_key(&event.id, at),
                     task_id: event.id.clone(),
                     calendar: true,
+                    habit: false,
                     occurrence_date: Some(date.clone()),
                     at,
                 });
@@ -320,6 +324,63 @@ fn planned_dates(event: &crate::model::CalendarEvent, today: Option<chrono::Naiv
         .iter()
         .map(|date| date.format("%Y-%m-%d").to_string())
         .collect()
+}
+
+/// 习惯打卡的提醒清单（v0.9.3）：与任务/日程同一套台账与「不补发」纪律。
+/// 只有 active 习惯参与；视野内每个**计划内日期**各规划一条（收据键含 at，
+/// 不同日期是不同的键，各自只发一次）。BeforeDue 依附计划时刻，全天按 09:00 折算。
+pub fn plan_habits(data: &DataFile) -> Vec<PlannedReminder> {
+    let mut plans = Vec::new();
+    let Some(today) = crate::recurrence::parse_date(&crate::time::today_local()) else {
+        return plans;
+    };
+    for habit in data.habits.iter().filter(|habit| {
+        habit.status == crate::model::HabitStatus::Active && !habit.reminders.is_empty()
+    }) {
+        // 提前量封顶一年：再远的提前量没有现实意义，也不让规划循环被脏数据撑爆
+        let lead_days = habit
+            .reminders
+            .iter()
+            .filter_map(|rule| match rule {
+                crate::model::Reminder::BeforeDue { minutes } => {
+                    Some(i64::from(*minutes) / 1440 + 1)
+                }
+                crate::model::Reminder::Absolute { .. } => None,
+            })
+            .max()
+            .unwrap_or(0)
+            .min(366);
+        let Some(horizon) = today
+            .checked_add_signed(chrono::Duration::days(CALENDAR_PLAN_HORIZON_DAYS + lead_days))
+        else {
+            continue;
+        };
+        let mut seen = HashSet::new();
+        let mut day = today;
+        while day <= horizon {
+            let date = day.format("%Y-%m-%d").to_string();
+            if habit.scheduled_on(&date) {
+                for rule in &habit.reminders {
+                    let Ok(at) = resolve(rule, Some(date.as_str()), habit.effective_time()) else {
+                        continue;
+                    };
+                    if !seen.insert(at.timestamp_millis()) {
+                        continue;
+                    }
+                    plans.push(PlannedReminder {
+                        key: receipt_key(&habit.id, at),
+                        task_id: habit.id.clone(),
+                        calendar: false,
+                        habit: true,
+                        occurrence_date: Some(date.clone()),
+                        at,
+                    });
+                }
+            }
+            day += chrono::Duration::days(1);
+        }
+    }
+    plans
 }
 
 /// 时钟是否发生了跳变（休眠唤醒、用户改系统时间、时区切换）。
@@ -399,7 +460,11 @@ impl Engine {
             let mut pending = HashSet::new();
             let mut due = Vec::new();
             let mut changed = false;
-            for planned in plan(&data).into_iter().chain(plan_calendar(&calendar)) {
+            for planned in plan(&data)
+                .into_iter()
+                .chain(plan_calendar(&calendar))
+                .chain(plan_habits(&data))
+            {
                 if receipts.contains_key(&planned.key) {
                     continue;
                 }
@@ -478,6 +543,37 @@ impl Engine {
                     core.resolve_notification_payload(
                         Some("日程提醒"),
                         message.as_str(),
+                        None,
+                        None,
+                        None,
+                        false,
+                    )
+                    .and_then(|payload| core.show_notification_payload(payload))
+                })
+            } else if planned.habit {
+                // 习惯重检：仍 active、规划日仍在计划内、规则仍解析出同一瞬时
+                let current = {
+                    let _lock = RepoLock::acquire(&core.repo.layout)?;
+                    core.repo.load_data()?.habits.into_iter().find(|habit| {
+                        if habit.id != planned.task_id
+                            || habit.status != crate::model::HabitStatus::Active
+                        {
+                            return false;
+                        }
+                        let Some(date) = planned.occurrence_date.as_deref() else {
+                            return false;
+                        };
+                        habit.scheduled_on(date)
+                            && habit.reminders.iter().any(|rule| {
+                                resolve(rule, Some(date), habit.effective_time()).ok()
+                                    == Some(planned.at)
+                            })
+                    })
+                };
+                current.map(|habit| {
+                    core.resolve_notification_payload(
+                        Some("习惯提醒"),
+                        habit.name.as_str(),
                         None,
                         None,
                         None,

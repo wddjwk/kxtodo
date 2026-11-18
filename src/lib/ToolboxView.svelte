@@ -16,7 +16,7 @@
    */
   import { ArrowLeft, MoreHorizontal, Pin, PinOff, Plus, Radio, RotateCcw, Toolbox } from "@lucide/svelte";
   import MobileBack from "./MobileBack.svelte";
-  import { appSettings, scratchpadNewTab } from "./stores";
+  import { appSettings, habitNew, scratchpadNewTab } from "./stores";
   import { setConfig } from "./actions";
   import { createBackGuard } from "./platform";
   import { setToolPinned } from "./actions";
@@ -284,6 +284,17 @@
             title="新建标签页"
             aria-label="新建标签页"
             on:click={() => scratchpadNewTab.update((count) => count + 1)}
+          >
+            <Plus size={19} />
+          </button>
+        {:else if activeToolId === "habit"}
+          <!-- 习惯打卡专属（v0.9.3）：加号 = 新建习惯（编辑器状态住在 HabitTool 里，经 store 递话） -->
+          <button
+            class="toolbox-icon-button"
+            type="button"
+            title="新建习惯"
+            aria-label="新建习惯"
+            on:click={() => habitNew.update((count) => count + 1)}
           >
             <Plus size={19} />
           </button>

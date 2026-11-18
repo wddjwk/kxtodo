@@ -1,9 +1,9 @@
 import { writable, derived, get } from "svelte/store";
-import type { AppNotification, AppState, AppNode, CalendarCategory, CalendarEditorTarget, CalendarEvent, DiaryEditorTarget, DiaryEntry, EmojiPickerTarget, LedgerBook, LedgerEditorTarget, LedgerSide, NotificationTone, SchedulerState, SearchHit, Settings, Task } from "./types";
-import { cachedAppearance, cachedFeatures, cachedProfile, cachedState, defaultSchedulerRuntimes, defaultSettings, emptyState, normalizeCalendarCategories, normalizeCalendarEvents, normalizeDiaryEntries, normalizeLedger, normalizeState, normalizeSettings, schedulerRuntimeKeys, seedLedgerBook, writeAppearanceCache, writeFeaturesCache, writeProfileCache, writeStateCache } from "./defaults";
+import type { AppNotification, AppState, AppNode, CalendarCategory, CalendarEditorTarget, CalendarEvent, DiaryEditorTarget, DiaryEntry, EmojiPickerTarget, Habit, LedgerBook, LedgerEditorTarget, LedgerSide, NotificationTone, SchedulerState, SearchHit, Settings, Task } from "./types";
+import { cachedAppearance, cachedFeatures, cachedProfile, cachedState, defaultSchedulerRuntimes, defaultSettings, emptyState, normalizeCalendarCategories, normalizeCalendarEvents, normalizeDiaryEntries, normalizeHabits, normalizeLedger, normalizeState, normalizeSettings, schedulerRuntimeKeys, seedLedgerBook, writeAppearanceCache, writeFeaturesCache, writeProfileCache, writeStateCache } from "./defaults";
 import {
   loadState, saveState, loadSettings, saveSettings, loadScheduler, saveScheduler,
-  loadDiary, saveDiary, loadLedger, saveLedger, loadCalendar, saveCalendar,
+  loadDiary, saveDiary, loadLedger, saveLedger, loadCalendar, saveCalendar, loadHabits, saveHabits,
   registerGlobalShortcut, setCloseToTray, setAutostart,
   setWebviewZoom, isTauriRuntime, resolveExecutorPaths, sendNativeNotification,
   hasCoreDispatch, coreSnapshot, getAppVersion
@@ -150,6 +150,11 @@ export const calendarEvents = writable<CalendarEvent[]>([]);
  * 改一个分类的颜色不该让整棵日程树重算。
  */
 export const calendarCategories = writable<CalendarCategory[]>([]);
+/**
+ * 习惯打卡（v0.9.3）：住 data.json 的 habits（kind = habit 逐条 LWW），
+ * 快照随 data 域下发；单独成 store——打一次卡不该惊动整棵任务树。
+ */
+export const habits = writable<Habit[]>([]);
 export const isHydrated = writable(false);
 
 /**
@@ -266,6 +271,12 @@ export const ledgerCategoryDraft = writable<{ side: LedgerSide; parentId: string
  * ledgerCategoryDraft 同一套路）。计数增加 = 请求新建一个标签页。
  */
 export const scratchpadNewTab = writable(0);
+
+/**
+ * 习惯打卡「新建习惯」的请求计数（v0.9.3）：加号在 ToolboxView 子页头部，
+ * 编辑器状态住在 HabitTool 里，靠 store 递话（与 scratchpadNewTab 同一套路）。
+ */
+export const habitNew = writable(0);
 
 // ---------------------------------------------------------------------------
 // Toast
@@ -485,6 +496,7 @@ let schedulerSaveTimer: number | undefined;
 let diarySaveTimer: number | undefined;
 let ledgerSaveTimer: number | undefined;
 let calendarSaveTimer: number | undefined;
+let habitSaveTimer: number | undefined;
 
 export function commit(next: AppState): void {
   appState.set(next);
@@ -528,6 +540,15 @@ export function commitCalendarCategories(next: CalendarCategory[]): void {
   window.clearTimeout(calendarSaveTimer);
   calendarSaveTimer = window.setTimeout(() => {
     saveCalendar(get(calendarEvents), next).catch((error) => showToast(`保存日程分类失败：${String(error)}`));
+  }, 180);
+}
+
+export function commitHabits(next: Habit[]): void {
+  habits.set(next);
+  if (!get(isHydrated)) return;
+  window.clearTimeout(habitSaveTimer);
+  habitSaveTimer = window.setTimeout(() => {
+    saveHabits(next).catch((error) => showToast(`保存习惯失败：${String(error)}`));
   }, 180);
 }
 
@@ -659,6 +680,8 @@ function applySnapshot(snapshot: Awaited<ReturnType<typeof coreSnapshot>>, domai
       scheduler: current.scheduler
     });
     appState.set({ ...normalized, scheduler: current.scheduler });
+    // 习惯住 data 域但单独成 store（v0.9.3）：快照里缺 habits 键 = 老核心，保持现值
+    if (snapshot.data.habits !== undefined) habits.set(normalizeHabits(snapshot.data));
   }
   if ((wantAll || domains?.has("settings")) && snapshot.settings !== undefined && advanced("settings")) {
     appSettings.set(normalizeSettings(snapshot.settings));
@@ -846,18 +869,20 @@ export async function hydrate(): Promise<void> {
   // 浏览器预览路径（移动端已是 core 模式）
   let loadedSettings = clone(defaultSettings);
   try {
-    const [storedState, storedScheduler, storedSettings, storedDiary, storedLedger, storedCalendar, resolvedExecutors] = await Promise.all([
+    const [storedState, storedScheduler, storedSettings, storedDiary, storedLedger, storedCalendar, storedHabits, resolvedExecutors] = await Promise.all([
       loadState(),
       loadScheduler(),
       loadSettings(),
       loadDiary(),
       loadLedger(),
       loadCalendar(),
+      loadHabits(),
       resolveExecutorPaths().catch(() => defaultSchedulerRuntimes)
     ]);
     diaryEntries.set(storedDiary);
     calendarEvents.set(storedCalendar.events);
     calendarCategories.set(storedCalendar.categories);
+    habits.set(storedHabits);
     const storedLedgerBook = normalizeLedger(storedLedger);
     if (storedLedgerBook.accounts.length === 0 && storedLedgerBook.entries.length === 0) {
       // 浏览器预览的首跑也要有种子账户/分类，与 core 的 ensure_initialized 同口径

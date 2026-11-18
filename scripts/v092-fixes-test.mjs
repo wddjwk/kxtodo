@@ -329,7 +329,7 @@ async function section6ColorZOrder(context) {
   await page.waitForSelector(".context-menu", { timeout: 3000 });
   await page.locator(".context-menu .menu-item-button", { hasText: "管理分类" }).click();
   await page.waitForSelector(".calendar-category-panel", { timeout: 3000 });
-  await page.locator(".calendar-category-panel .settings-button.primary", { hasText: "新建分类" }).click();
+  await page.locator(".calendar-category-panel .calendar-cat-add").click(); // v0.9.3：底部添加按钮（旧「新建分类」文案已改）
   await page.waitForTimeout(300);
   await page.locator(".calendar-cat-dot.custom").click();
   await page.waitForSelector(".kx-color-panel", { timeout: 3000 });

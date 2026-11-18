@@ -68,6 +68,8 @@ arboard = "3"
 [target.'cfg(windows)'.dependencies]
 # Windows 的「复制文件」是 CF_HDROP，arboard 不覆盖；只补这一个格式。
 clipboard-win = "5"
+# 通知窗不抢焦点：WS_EX_NOACTIVATE 只能经 Win32 设置（tauri builder 无此开关）。
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tauri-plugin-notification = "2"

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{ArgAction, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::core::{Controls, ExecOutcome, Invocation};
 use crate::error::{CoreError, CoreResult};
@@ -163,6 +163,14 @@ pub enum Commands {
     Calendar {
         #[command(subcommand)]
         action: CalendarAction,
+    },
+    /// 读写习惯打卡（工具箱「习惯打卡」，v0.9.3）
+    #[command(
+        long_about = "习惯打卡住在 data.json 的 habits 里（与草稿纸同谱系：是内容不是配置），\n同步搭「同步数据」范围的车，逐习惯一个 LWW 实体。统计（连续/累计）不落盘，界面现算。\n\n动作：\n  add      新建习惯（--name 名称、--color #rrggbb、--icon lucide 图标名、\n           --freq daily|weekly、--weekdays 0,1,3（0=周日，weekly 必填）、\n           --time HH:MM（空=全天）、--reminder 提醒（可重复，规格同 task））\n  get      按稳定 ID 读取（含 checkins 打卡日期数组）\n  list     列出（--status active|paused|done 过滤）\n  modify   修改（名称/颜色/图标/频率/时刻/提醒/状态/排序；--reminder 整体替换）\n  remove   删除（high-risk-write，打卡记录一并删除）\n  check    打卡（--date 缺省今天；只有 active 且当天在计划内才能打）\n  uncheck  取消某天的打卡\n\n示例：\n  kxtodo-cli habit add --name 刷牙 --time 08:00 --reminder due-0\n  kxtodo-cli habit add --name 周报 --freq weekly --weekdays 0 --time 17:00\n  kxtodo-cli habit check --id habit-xxxx\n  kxtodo-cli habit list --status active"
+    )]
+    Habit {
+        #[command(subcommand)]
+        action: HabitAction,
     },
     /// 记账：收支流水、资金账户、两级分类、统计与 Excel 导入导出
     #[command(
@@ -831,6 +839,130 @@ pub enum CalendarAction {
         long_about = "Risk: high-risk-write\n\n删除分类并写同步墓碑。**用它的日程不会被删**，只是退回「无分类」\n（各视图改用日程主题色）。未带 --yes 返回退出码 10。\n\n示例：kxtodo-cli calendar category-remove --id ccat-xxxx --yes"
     )]
     CategoryRemove(CalendarCategoryRemoveArgs),
+}
+
+#[derive(Debug, Subcommand, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HabitAction {
+    /// 新建习惯（Risk: write）
+    #[command(
+        visible_alias = "create",
+        long_about = "Risk: write\n\n新建一个习惯。--freq weekly 时必须用 --weekdays 选至少一天（0=周日 … 6=周六）。\n--time 空 = 全天（提醒按当天 09:00 折算）；--reminder 规格同 task add\n（due-<分钟> = 计划时刻前 N 分钟，或绝对时刻）。\n\n输出：创建后的完整资源（含系统生成的 ID）。\n\n示例：\n  kxtodo-cli habit add --name 锻炼 --time 19:00 --reminder due-15\n  kxtodo-cli habit add --name 周报 --freq weekly --weekdays 0\n\n建议：Agent 调用使用 --idempotency-key 防重试重复创建。"
+    )]
+    Add(HabitAddArgs),
+    /// 按稳定 ID 获取一个习惯（Risk: read）
+    #[command(long_about = "Risk: read\n\n按 --id 精确读取，输出含 checkins（升序打卡日期数组）。")]
+    Get(HabitIdArgs),
+    /// 列出习惯（Risk: read）
+    #[command(long_about = "Risk: read\n\n按 order 输出全部习惯；--status 过滤 active/paused/done。\ndata.count 是命中条数。")]
+    List(HabitListArgs),
+    /// 修改一个习惯（Risk: write）
+    #[command(
+        long_about = "Risk: write\n\n按 --id 修改。--reminder 给一组就整体替换（给空 = 清空，不给 = 不动）；\n--status active|paused|done 切换生命周期（只有 active 参与打卡与提醒）；\n--freq/--weekdays 的口径与 add 相同。\n\n示例：\n  kxtodo-cli habit modify --id habit-xxxx --time 20:00\n  kxtodo-cli habit modify --id habit-xxxx --status paused"
+    )]
+    Modify(HabitModifyArgs),
+    /// 删除一个习惯（Risk: high-risk-write）
+    #[command(long_about = "Risk: high-risk-write\n\n删除习惯及其全部打卡记录，需 --yes。")]
+    Remove(HabitIdArgs),
+    /// 打卡（Risk: write）
+    #[command(
+        long_about = "Risk: write\n\n给 --id 的习惯在 --date（缺省今天）打卡。已是已打卡态时幂等返回，不写盘。\n只有 active 且当天在计划内（daily 全中 / weekly 看星期）才能打。\n\n示例：\n  kxtodo-cli habit check --id habit-xxxx\n  kxtodo-cli habit check --id habit-xxxx --date 2026-11-18"
+    )]
+    Check(HabitCheckArgs),
+    /// 取消某天的打卡（Risk: write）
+    #[command(long_about = "Risk: write\n\n移除 --date（缺省今天）的打卡记录；没打过时幂等返回。")]
+    Uncheck(HabitCheckArgs),
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HabitIdArgs {
+    /// 稳定 ID
+    #[arg(long, value_name = "id")]
+    pub id: String,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HabitAddArgs {
+    /// 习惯名称
+    #[arg(long, value_name = "text", allow_hyphen_values = true)]
+    pub name: Option<String>,
+    /// 颜色 #rrggbb（空 = 跟工具页主题色）
+    #[arg(long, value_name = "#rrggbb")]
+    pub color: Option<String>,
+    /// lucide 图标名（与记账图标同一份目录）
+    #[arg(long, value_name = "name")]
+    pub icon: Option<String>,
+    /// 频率：daily（缺省）| weekly
+    #[arg(long, value_name = "kind")]
+    pub freq: Option<String>,
+    /// 周几（0=周日 … 6=周六；weekly 必填，逗号分隔）
+    #[arg(long, value_name = "days", value_delimiter = ',')]
+    pub weekdays: Vec<u8>,
+    /// 计划时刻 HH:MM（空 = 全天）
+    #[arg(long, value_name = "HH:MM")]
+    pub time: Option<String>,
+    /// 提醒（可重复）：due-<分钟> 或绝对时刻，规格同 task add
+    #[arg(long = "reminder", value_name = "spec")]
+    pub reminders: Vec<String>,
+    /// 初始状态：active（缺省）| paused | done
+    #[arg(long, value_name = "status")]
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HabitListArgs {
+    /// 只看某个状态：active | paused | done
+    #[arg(long, value_name = "status")]
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HabitModifyArgs {
+    /// 稳定 ID
+    #[arg(long, value_name = "id")]
+    pub id: String,
+    /// 新名称
+    #[arg(long, value_name = "text", allow_hyphen_values = true)]
+    pub name: Option<String>,
+    /// 新颜色 #rrggbb（空串清除）
+    #[arg(long, value_name = "#rrggbb")]
+    pub color: Option<String>,
+    /// 新图标名（空串清除）
+    #[arg(long, value_name = "name")]
+    pub icon: Option<String>,
+    /// 新频率：daily | weekly
+    #[arg(long, value_name = "kind")]
+    pub freq: Option<String>,
+    /// 新周几集合（与 --freq weekly 一起给）
+    #[arg(long, value_name = "days", value_delimiter = ',')]
+    pub weekdays: Vec<u8>,
+    /// 新计划时刻 HH:MM（空串 = 全天）
+    #[arg(long, value_name = "HH:MM")]
+    pub time: Option<String>,
+    /// 整体替换提醒列表（不给 = 不动；只写 --reminder 不带值 = 清空）
+    #[arg(long = "reminder", value_name = "spec", num_args = 0..)]
+    pub reminders: Option<Vec<String>>,
+    /// 新状态：active | paused | done
+    #[arg(long, value_name = "status")]
+    pub status: Option<String>,
+    /// 排序权重（越小越前）
+    #[arg(long, value_name = "n")]
+    pub order: Option<f64>,
+}
+
+#[derive(Debug, Args, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HabitCheckArgs {
+    /// 稳定 ID
+    #[arg(long, value_name = "id")]
+    pub id: String,
+    /// 打卡日期 YYYY-MM-DD（缺省今天）
+    #[arg(long, value_name = "date")]
+    pub date: Option<String>,
 }
 
 #[derive(Debug, Args, Serialize)]
@@ -2171,6 +2303,11 @@ fn supports_idempotency(command: &str) -> bool {
             | "calendar.categoryAdd"
             | "calendar.categoryModify"
             | "calendar.categoryRemove"
+            | "habit.add"
+            | "habit.modify"
+            | "habit.remove"
+            | "habit.check"
+            | "habit.uncheck"
             | "ledger.add"
             | "ledger.transfer"
             | "ledger.modify"
@@ -2354,6 +2491,7 @@ fn build_invocation(cli: &Cli, cwd: &Path) -> CoreResult<Option<(Invocation, Opt
         Commands::Task { action } => build_task_invocation(action)?,
         Commands::Diary { action } => build_diary_invocation(action)?,
         Commands::Calendar { action } => build_calendar_invocation(action)?,
+        Commands::Habit { action } => build_habit_invocation(action)?,
         Commands::Ledger { action } => build_ledger_invocation(action)?,
         Commands::Storage { action } => build_storage_invocation(action)?,
         Commands::Schedule { action } => build_schedule_invocation(action)?,
@@ -2818,6 +2956,67 @@ fn build_calendar_invocation(action: &CalendarAction) -> CoreResult<Invocation> 
         CalendarAction::CategoryAdd(args) => ("calendar.categoryAdd", serialize_args(args)),
         CalendarAction::CategoryModify(args) => ("calendar.categoryModify", serialize_args(args)),
         CalendarAction::CategoryRemove(args) => ("calendar.categoryRemove", serialize_args(args)),
+    };
+    Ok(Invocation::new(name, params))
+}
+
+/// `--freq` / `--weekdays` → core 的 freq 对象 {kind, weekdays}。
+/// 细化键单独给（没有 --freq）当场报错，不静默忽略；add 缺省 daily。
+fn habit_freq_params(params: Value, is_add: bool) -> CoreResult<Value> {
+    let mut map = params.as_object().cloned().unwrap_or_default();
+    let freq = map.remove("freq");
+    let weekdays = map.remove("weekdays");
+    let has_weekdays = weekdays
+        .as_ref()
+        .and_then(Value::as_array)
+        .is_some_and(|list| !list.is_empty());
+    match freq.as_ref().and_then(Value::as_str) {
+        None | Some("") => {
+            if has_weekdays {
+                return Err(CoreError::validation(
+                    "CLI_ARGUMENT_ERROR",
+                    "--weekdays 要和 --freq weekly 一起给",
+                )
+                .with_hint("例：--freq weekly --weekdays 1,3,5"));
+            }
+            if is_add {
+                map.insert("freq".to_string(), json!({ "kind": "daily" }));
+            }
+        }
+        Some("daily") => {
+            if has_weekdays {
+                return Err(CoreError::validation(
+                    "CLI_ARGUMENT_ERROR",
+                    "--weekdays 只对 --freq weekly 有意义",
+                ));
+            }
+            map.insert("freq".to_string(), json!({ "kind": "daily" }));
+        }
+        Some("weekly") => {
+            map.insert(
+                "freq".to_string(),
+                json!({ "kind": "weekly", "weekdays": weekdays.unwrap_or_else(|| json!([])) }),
+            );
+        }
+        Some(other) => {
+            return Err(CoreError::validation(
+                "CLI_ARGUMENT_ERROR",
+                format!("--freq `{other}` 无效，应为 daily 或 weekly"),
+            ))
+        }
+    }
+    Ok(Value::Object(map))
+}
+
+fn build_habit_invocation(action: &HabitAction) -> CoreResult<Invocation> {
+    let (name, params) = match action {
+        HabitAction::Add(args) => ("habit.add", habit_freq_params(serialize_args(args), true)?),
+        HabitAction::Get(args) => ("habit.get", serialize_args(args)),
+        HabitAction::List(args) => ("habit.list", serialize_args(args)),
+        HabitAction::Modify(args) => ("habit.modify", habit_freq_params(serialize_args(args), false)?),
+        HabitAction::Remove(args) => ("habit.remove", serialize_args(args)),
+        HabitAction::Check(args) => ("habit.check", serialize_args(args)),
+        HabitAction::Uncheck(args) => ("habit.uncheck", serialize_args(args)),
     };
     Ok(Invocation::new(name, params))
 }

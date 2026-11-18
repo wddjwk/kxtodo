@@ -593,6 +593,8 @@ fn build_notification_window(
 
     // 隐藏创建，内容首帧渲染后由 notification_ready 命令显示（消除白帧闪烁）；
     // JS 若没跑起来，900ms 兜底 show + duration+4s 看门狗强关，窗口绝不僵死。
+    // focused(false) 只管建窗时刻；Windows 上后续 show() 仍会激活窗口打断用户输入，
+    // 所以建窗后立刻挂 WS_EX_NOACTIVATE（见 below），show 才真正不抢焦点。
     let mut builder = WebviewWindowBuilder::new(app, label.clone(), url)
         .title("KXToDo 通知")
         .inner_size(width, height)
@@ -604,11 +606,16 @@ fn build_notification_window(
         .skip_taskbar(true)
         .transparent(true)
         .shadow(true)
+        .focused(false)
         .visible(false);
     if let Some(position) = position {
         builder = builder.position(position.x, position.y);
     }
-    builder.build().map_err(|error| error.to_string())?;
+    let window = builder.build().map_err(|error| error.to_string())?;
+    #[cfg(windows)]
+    notification_no_activate(&window);
+    #[cfg(not(windows))]
+    let _ = &window;
 
     let app_clone = app.clone();
     let label_clone = label.clone();
@@ -624,6 +631,34 @@ fn build_notification_window(
     });
 
     Ok(label)
+}
+
+/// 通知窗不抢焦点（v0.9.3 需求 1）：Windows 上 tauri 的 show() 走 ShowWindow(SW_SHOW)，
+/// 默认激活窗口——用户正在别的窗口输入时焦点被拽走。WS_EX_NOACTIVATE 让 show 与点击
+/// 都不再激活（鼠标消息照送，窗内关闭按钮仍可用）；改 ex style 后必须 SWP_FRAMECHANGED
+/// 才立即生效。Linux 走系统通知插件、macOS 靠 builder 的 focused(false)，无此问题。
+#[cfg(windows)]
+fn notification_no_activate(window: &tauri::WebviewWindow) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, SWP_FRAMECHANGED,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_EX_NOACTIVATE,
+    };
+    let Ok(raw) = window.hwnd() else { return };
+    // tauri 返回 windows crate 的 HWND 新类型（.0 是裸指针），windows-sys 侧是同布局裸指针
+    let hwnd = raw.0 as windows_sys::Win32::Foundation::HWND;
+    unsafe {
+        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE as isize);
+        SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
+    }
 }
 
 #[cfg(desktop)]

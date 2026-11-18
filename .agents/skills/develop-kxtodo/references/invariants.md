@@ -374,3 +374,13 @@ v0.8.0 起的几条补充（来龙去脉在 `history/v0.8.md` 批次 1）：
 - **`$: x = fn()`（无参）是「藏依赖」族的第四种写法**：`rangeError = validateRange()` 永远停在初值，校验错误根本不显示、Esc 照关丢草稿（v092 探针实测）。前三种：v0.8.4 影子状态、v0.9.0 月格 `{@const}`、v0.9.1 `$: list.map(i => fn(i))`。**修法一律把依赖当实参传**。
 - **`appearance` 加键有六处登记点**：core 四处（`KNOWN_FIELDS`/`get_typed`/`set_value`/`set_default`，见 3.21）之外，前端还有 `defaults.ts::normalizeSettings` 的 appearance 白名单（漏了 = 每次快照刷新把用户的值抹掉，`dueTime` 老教训的同族）与 `types.ts` 的接口（漏了 svelte-check 直接红）。`appearance.taskMenu` 是第一个按这套登记的键。
 - **任务右键菜单是数据驱动的**：id 白名单与默认顺序唯一住在 `src/lib/taskMenuConfig.ts`（含三个默认隐藏的截止快捷项与一等公民分隔线 `sep`）；顺序与隐藏住 `appearance.taskMenu`（本机偏好不进同步共享子集）；`Workspace.svelte` 按 `visibleTaskMenuIds()` 渲染，管理面板 `workspace/TaskMenuManager.svelte` 拖序 + 显隐即落盘。**加菜单项只改注册表 + Workspace 的一个 `{:else if}` 分支**。
+
+## 十、v0.9.3 新增速查
+
+- **桌面自绘通知窗不许抢焦点**：tauri `show()` 在 Windows 默认激活窗口；`.focused(false)` 只管建窗时刻，必须建窗后挂 `WS_EX_NOACTIVATE` + `SWP_FRAMECHANGED`（`lib.rs::notification_no_activate`）。hwnd 是 windows crate 新类型，取 `.0` 再转 windows-sys（直接 as 报 E0605）。
+- **AppImage 发布基底 pin ubuntu-22.04，不许改回 ubuntu-latest**：linuxdeploy 打包构建机系统库（libglib/webkit2gtk/javascriptcore/lcms2/jxl），它们链接构建时 glibc；latest 漂移 = 老用户机器一串 GLIBC_2.4x not found。ci.yml rust-linux 同 pin。release.sh 对高基底本地构建告警。
+- **高亮圆直径与圆内字号必须一起收**：文字溢出圆不被裁，白字出圆落近白底＝「显示不全」；两位粗体宽 ≈1.2em 必须小于圆在字高半处的弦宽。回归用 Range 量文字真实 rect，别只看元素尺寸。
+- **从 overlay 内开的 ContextMenu 挂在 overlay 内、dialog 外**：`.context-menu` z 3600 < `.editor-overlay` 4000，挂外面被遮罩整层盖住（点不到）。日程编辑器是范本，新编辑器照抄位置。
+- **剪切板发送端只读、原字节原样发**：任何内容修复（如全 0 alpha）只允许在接收端 `repair_png_alpha`，且必须在 `apply_remote` 记水位之前——水位要等于写回后读回的指纹，否则 Linux 无序列号会把修复版回声给发送端、覆盖发送方剪切板。正常图原字节返回不重编码。Linux 纯图剪切板的重编码用 `encode_image_cached` 指纹缓存治。
+- **递话计数 store 的 seen 初值取 `get(store)`**：初始化成 0 会让重进组件把上一次的请求再执行一遍（草稿纸 `seenNewTab = get(scratchpadNewTab)` 是范本）。
+- **响应式环的新形态**：`$: a = f(b)` + `$: if (b && !a) b = null` 成环（Svelte 编译期报 reactive_declaration_cycle）；自动收面板的判据直接读源数组，不读派生值。

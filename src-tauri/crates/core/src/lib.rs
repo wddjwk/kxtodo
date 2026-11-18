@@ -24,6 +24,7 @@ pub mod ops_calendar;
 pub mod ops_config;
 pub mod ops_diary;
 pub mod ops_gui;
+pub mod ops_habits;
 pub mod ops_ledger;
 pub mod ops_schedule;
 pub mod ops_storage;

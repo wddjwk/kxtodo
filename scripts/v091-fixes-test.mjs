@@ -383,7 +383,7 @@ async function section5Categories(context) {
   check("5.8 分类面板列出两个分类", rows.join("|") === "工作|个人", J(rows));
 
   // 新建一个分类并设为默认
-  await page.locator(".calendar-category-panel .settings-button.primary", { hasText: "新建分类" }).click();
+  await page.locator(".calendar-category-panel .calendar-cat-add").click(); // v0.9.3：底部添加按钮（旧「新建分类」文案已改）
   await page.waitForSelector(".calendar-category-panel .calendar-field-input", { timeout: 3000 });
   await page.locator(".calendar-category-panel .calendar-field-input").fill("健康");
   await page.locator(".calendar-category-panel .calendar-cat-dot", { has: page.locator("[style*='2f9e6e']") }).first().click().catch(() => {});

@@ -40,3 +40,7 @@ WSL2 有 `/dev/fuse` 可直接跑；无 FUSE 的环境用 `./KXToDo.AppImage --a
 本机 WSLg 实测——任何 X11 客户端（连系统 GTK 探针程序）都看不见鼠标光标，Wayland 原生一切正常；而 AppImage 的 AppRun（linuxdeploy-plugin-gtk 钩子）为绕旧版 WebKitGTK 的 Wayland 崩溃（tauri#8541）强制 `GDK_BACKEND=x11`，正好踩进坏通路（表现：整窗交互正常但光标消失）。
 
 **v0.8.10 修正**：撤销只对 **WSLg** 生效（`WSL_INTEROP` / `WSL_DISTRO_NAME` 存在时），真实 Linux 桌面保持 AppRun 的 x11。v0.8.9 曾在所有 Wayland 会话里撤销，Ubuntu/GNOME 上出现无响应与卡顿——那不是标准 AppImage 路径。NVIDIA 专有驱动另见 `build-and-release.md` 的 AppImage 图形一节。
+
+### 7. AppImage 在老 Ubuntu 报 GLIBC_2.4x not found（v0.9.3）
+
+现象：`kxtodo: /lib/x86_64-linux-gnu/libc.so.6: version GLIBC_2.43 not found (required by /tmp/.mount_.../usr/lib/libwebkit2gtk-4.1.so.0)` 等一串，指向 **AppImage 内部**的打包库。根因不是代码依赖升级，而是 CI runner 镜像漂移 + linuxdeploy 打包构建机系统库（见第 6 条构建基线）。判别：报错路径带 `/tmp/.mount_` = 打包库；不带 = 真的系统库缺失。修：pin 老基底重发，不要试图在用户机器上装新 glibc。

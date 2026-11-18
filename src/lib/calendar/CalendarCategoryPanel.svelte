@@ -1,22 +1,21 @@
 <script lang="ts">
   /**
-   * 日程分类管理（v0.9.1）：新建 / 改名 / 改色 / 设为默认 / 删除。
-   *
-   * 颜色就是各视图里的展示色：事件块**左侧边框用主色、块内铺一层淡色**
-   * （`calendar.ts::eventColors` 按 mixWithWhite(main, 0.14) 算），所以这里给一个
-   * 迷你事件块的实时预览——用户调的是「块会长成什么样」，不是一个孤立的色号。
+   * 日程分类管理（v0.9.3 照业界标准重做：Outlook「管理分类」/ Todoist 标签管理器那一套）：
+   * 列表 = 色点 + 名称 + 星形默认 + 删除，整行可点进编辑；底部一枚「添加分类」。
+   * 编辑表单 = 名称 + 色板（选中打勾）+ 自定义取色 + 默认开关 + 迷你事件块预览。
+   * 不写解释性文案（同步范围 / 删分类后果等一律不进界面）。
    *
    * 骨架照抄日记/日程编辑器的 `editor-overlay + editor-dialog`（返回键、Esc、点遮罩
    * 关闭、移动端安全区都是那一套），取色走全应用唯一的 `openColorPicker` 单例。
    * 删分类**不删日程**：用它的日程退回「无分类」（core 那边同时清引用）。
    */
-  import { Check, Palette, Pencil, Plus, Star, Trash2, X } from "@lucide/svelte";
+  import { ArrowLeft, Check, Palette, Plus, Star, Trash2, X } from "@lucide/svelte";
   import { appSettings, calendarCategories, showToast } from "../stores";
   import { calendarAccent } from "../styles";
   import { addCalendarCategory, deleteCalendarCategory, updateCalendarCategory } from "../actions";
   import { eventColors } from "../calendar";
   import { openColorPicker } from "../colorPickerPanel";
-  import { createBackGuard, isMobile } from "../platform";
+  import { createBackGuard } from "../platform";
   import { imeInset } from "../imeInset";
   import { suppressGhostClick } from "../ghostClick";
   import type { CalendarCategory } from "../types";
@@ -121,7 +120,7 @@
     busy = true;
     try {
       await deleteCalendarCategory(category.id);
-      showToast(`分类「${category.name}」已删除，用它的日程退回无分类`);
+      showToast(`分类「${category.name}」已删除`);
       if (editingId === category.id) editingId = null;
     } finally {
       busy = false;
@@ -180,7 +179,7 @@
     <header class="calendar-sheet-head">
       {#if editingId !== null}
         <button type="button" class="editor-icon-button" title="返回列表" aria-label="返回列表" on:click={closeForm}>
-          <X size={17} />
+          <ArrowLeft size={17} />
         </button>
         <span class="calendar-sheet-title">{editingId === "" ? "新建分类" : "编辑分类"}</span>
       {:else}
@@ -200,7 +199,7 @@
             class="calendar-field-input"
             type="text"
             maxlength="24"
-            placeholder="工作 / 个人 / 体检…"
+            placeholder="分类名称"
             bind:value={nameDraft}
             on:keydown={(event) => {
               if (event.key === "Enter" && !event.isComposing && event.keyCode !== 229) {
@@ -223,7 +222,9 @@
                 title={color}
                 aria-label="使用颜色 {color}"
                 on:click={() => (colorDraft = color)}
-              ></button>
+              >
+                {#if colorDraft.toLowerCase() === color.toLowerCase()}<Check size={13} />{/if}
+              </button>
             {/each}
             <button
               type="button"
@@ -243,21 +244,20 @@
             class="menu-action-button calendar-default-toggle"
             class:on={defaultDraft}
             aria-pressed={defaultDraft}
-            title={defaultDraft ? "新建日程默认用它（点一下取消）" : "新建日程时默认用它"}
+            title={defaultDraft ? "取消默认" : "设为默认"}
             on:click={() => (defaultDraft = !defaultDraft)}
           >
             <Star size={14} fill={defaultDraft ? "currentColor" : "none"} />
-            {defaultDraft ? "已是默认" : "设为默认"}
+            {defaultDraft ? "默认" : "设为默认"}
           </button>
         </div>
 
         <div class="calendar-field">
-          <span class="calendar-field-label">块内效果</span>
+          <span class="calendar-field-label">预览</span>
           <div class="calendar-cat-preview" style={`--cal-main: ${previewColors.main}; --cal-soft: ${previewColors.soft}`}>
             <span class="calendar-cat-preview-time">09:00 – 10:00</span>
             <span class="calendar-cat-preview-title">{nameTrimmed || "日程标题"}</span>
           </div>
-          <p class="calendar-field-hint">左侧边框是主色，块内铺一层淡色——再深的颜色也不会压掉文字。</p>
         </div>
 
         {#if duplicated}
@@ -281,40 +281,49 @@
         ><Check size={15} />保存</button>
       </footer>
     {:else}
-      <div class="calendar-sheet-body">
+      <div class="calendar-sheet-body calendar-cat-list">
         {#if categories.length === 0}
-          <p class="calendar-cat-empty">还没有分类。日程没有分类时用日程主题色（现在这个紫）。</p>
+          <p class="calendar-cat-empty">还没有分类</p>
         {/if}
         {#each categories as category (category.id)}
-          {@const colors = eventColors({ categoryId: "" }, [], category.color || accent)}
-          <div class="calendar-cat-row">
-            <span
-              class="calendar-cat-swatch"
-              style={`--cal-main: ${colors.main}; --cal-soft: ${colors.soft}; --cal-line: ${colors.line}`}
-            ></span>
+          <div
+            class="calendar-cat-row"
+            role="button"
+            tabindex="0"
+            title={`编辑 ${category.name}`}
+            on:click={() => startEdit(category)}
+            on:keydown={(event) => {
+              if (event.target !== event.currentTarget) return;
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                startEdit(category);
+              }
+            }}
+          >
+            <span class="calendar-cat-color" style={`--dot: ${category.color || accent}`}></span>
             <span class="calendar-cat-name">{category.name}</span>
             <button
               type="button"
-              class="calendar-cat-default"
+              class="editor-icon-button calendar-cat-star"
               class:on={category.isDefault}
-              title={category.isDefault ? "新建日程默认用它（点一下取消）" : "设为新建日程的默认分类"}
+              title={category.isDefault ? "取消默认" : "设为默认"}
               aria-pressed={category.isDefault}
-              on:click={() => void toggleDefault(category)}
-            ><Star size={14} />{#if category.isDefault}默认{/if}</button>
-            <button type="button" class="editor-icon-button" title="编辑" aria-label="编辑 {category.name}" on:click={() => startEdit(category)}>
-              <Pencil size={15} />
-            </button>
-            <button type="button" class="editor-icon-button danger" title="删除" aria-label="删除 {category.name}" disabled={busy} on:click={() => void remove(category)}>
-              <Trash2 size={15} />
-            </button>
+              on:click|stopPropagation={() => void toggleDefault(category)}
+            ><Star size={15} fill={category.isDefault ? "currentColor" : "none"} /></button>
+            <button
+              type="button"
+              class="editor-icon-button danger calendar-cat-remove"
+              title="删除"
+              aria-label={`删除 ${category.name}`}
+              disabled={busy}
+              on:click|stopPropagation={() => void remove(category)}
+            ><Trash2 size={15} /></button>
           </div>
         {/each}
       </div>
 
       <footer class="calendar-sheet-foot">
-        <span class="calendar-sheet-hint">{#if $isMobile}分类跟着「日程」一起同步到其它设备{:else}删分类不删日程，用它的日程退回无分类{/if}</span>
-        <span class="calendar-sheet-spacer"></span>
-        <button type="button" class="settings-button primary" on:click={startAdd}><Plus size={15} />新建分类</button>
+        <button type="button" class="settings-button primary calendar-cat-add" on:click={startAdd}><Plus size={15} />添加分类</button>
       </footer>
     {/if}
   </div>

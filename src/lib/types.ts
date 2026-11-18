@@ -176,6 +176,35 @@ export type CalendarCategory = {
   updatedAt?: string;
 };
 
+/** 习惯频率（v0.9.3）：daily 全中；weekly 看 weekdays（0=周日 … 6=周六）。 */
+export type HabitFreq = {
+  kind: "daily" | "weekly";
+  weekdays: number[];
+};
+
+/** 习惯生命周期：只有 active 参与打卡与提醒。 */
+export type HabitStatus = "active" | "paused" | "done";
+
+/** 习惯打卡（v0.9.3，与 core `model::Habit` 同构）：统计由 habits.ts 现算，不落盘。 */
+export type Habit = {
+  id: string;
+  name: string;
+  /** #rrggbb；空 = 跟工具页主题色 */
+  color: string;
+  /** lucide 图标名（与记账同一份白名单）；空 = 默认图标 */
+  icon: string;
+  freq: HabitFreq;
+  /** 计划时刻 HH:MM；空 = 全天 */
+  time: string;
+  reminders: ReminderRule[];
+  status: HabitStatus;
+  order: number;
+  /** 打卡日期 YYYY-MM-DD，升序去重 */
+  checkins: string[];
+  createdAt: string;
+  updatedAt?: string;
+};
+
 /**
  * 日程编辑器的目标：改已有的一条（id），或新建（预置起止/全天/关联任务）。
  * 新建**保存时才落盘**——拖选时间后改主意直接关掉，不留空日程。

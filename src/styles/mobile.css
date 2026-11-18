@@ -1166,9 +1166,13 @@
   padding: 5px 1px;
 }
 
+/* 今天的高亮圆：v0.9.2 只缩圆不缩字号，两位数粗体比圆的弦宽还宽，白字溢出圆外
+   落在近白头部底上＝「数字显示不全」。圆径与字号必须一起收：圆 = 字号变量 + 6，
+   圆内数字 = 字号变量 - 4（两位 tabular 粗体宽 ≈ 1.2em，弦宽余量足够）。 */
 .app-shell.mobile .cal-day-head.today .cal-dom {
-  width: calc(var(--font-control) + 2px);
-  height: calc(var(--font-control) + 2px);
+  width: calc(var(--font-control) + 6px);
+  height: calc(var(--font-control) + 6px);
+  font-size: calc(var(--font-control) - 4px);
 }
 
 .app-shell.mobile .cal-hour-label {
@@ -1268,11 +1272,41 @@
   gap: 3px 9px;
 }
 
-/* 时长括号窄屏收一档：文本省略，绝不顶出右边界（v0.9.2 需求 14） */
+/* 时长括号窄屏改放两行下面一个块（v0.9.3 需求 4）：左右宽度不够，横括号（上边带两臂）
+   罩住居中的时长文字，可换行；不再挤在右列省略 */
+.app-shell.mobile .cal-time-range {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .app-shell.mobile .cal-duration-bracket {
-  max-width: 5em;
-  padding: 0 5px;
-  font-size: calc(var(--font-control) - 5px);
+  grid-column: 1 / -1;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  max-width: none;
+  margin-top: 6px;
+  padding: 6px 10px 7px;
+  border-radius: 9px;
+  background: rgb(0 0 0 / 3%);
+  color: #5c6470;
+  font-size: calc(var(--font-control) - 4px);
+}
+
+.app-shell.mobile .cal-duration-bracket-line {
+  flex: 0 0 5px;
+  border: 1.5px solid currentColor;
+  border-bottom: 0;
+  border-radius: 5px 5px 0 0;
+  opacity: 0.5;
+}
+
+.app-shell.mobile .cal-duration-bracket-text {
+  align-self: center;
+  text-align: center;
+}
+
+.app-shell.mobile .cal-duration-bracket.on {
+  color: var(--accent);
 }
 
 .app-shell.mobile .calendar-details-body {
@@ -1383,4 +1417,38 @@
 /* 到位：红块加深一档，给「松手即删」一个明确的就绪信号 */
 .app-shell.mobile .task-swipe.swipe-ready .swipe-delete {
   background: #bd3535;
+}
+
+/* ---------- 习惯打卡移动端（v0.9.3）：360px 逐元素量过，圆阵三列不溢 ---------- */
+
+.app-shell.mobile .habit-tool {
+  gap: 12px;
+}
+
+.app-shell.mobile .habit-tabs {
+  gap: 18px;
+}
+
+.app-shell.mobile .habit-card {
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+}
+
+.app-shell.mobile .habit-card-icon {
+  width: 40px;
+  height: 40px;
+}
+
+.app-shell.mobile .habit-slot-grid {
+  gap: 16px 4px;
+}
+
+.app-shell.mobile .habit-dot-circle {
+  width: 58px;
+  height: 58px;
+}
+
+.app-shell.mobile .habit-stats-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }

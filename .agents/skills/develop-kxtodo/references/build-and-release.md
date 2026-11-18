@@ -52,6 +52,10 @@ node scripts/v086-fixes-test.mjs   # v0.8.6 回归（68 项）：搜索封顶 20
 node scripts/scheduler-editor-test.mjs # 定时任务三步编辑、参数折叠、移动端裁剪与编辑态持久化；可用 KXTODO_TEST_URL 指定独立端口
 node scripts/v088-fixes-test.mjs   # v0.8.8 定向冒烟：置顶/排序持久化、草稿纸 Tab/撤销、跨月饼图重播、FAB 对齐、移动端 IME 包含块与图钉几何（不截图）
 node scripts/v089-fixes-test.mjs   # v0.8.9 回归（62 项）：同窗口 iframe/移动端预览/编辑器原生选择/定时任务折叠与动作方块/取色盘 1.5 倍窄屏/侧栏所有区域菜单与添加固定/报表统计/剪切板工具页
+node scripts/v090-fixes-test.mjs   # v0.9.0 回归（132 项）：日程四视图/三入口/双向关联/草稿纸标签页/安卓左右滑方向锁
+node scripts/v091-fixes-test.mjs   # v0.9.1 回归（126 项）：表单化编辑器/分类配色/重复规则/一屏12小时缩放/悬浮提示
+node scripts/v092-fixes-test.mjs   # v0.9.2 回归（48 项）：skipAhead 远区间/24:00 约定/红线随缩放/管理菜单项/分类星形/时长括号（v0.9.3 起括号断言由 v093 第 2/3 节接管）
+node scripts/v093-fixes-test.mjs   # v0.9.3 回归（66 项）：今天高亮圆几何（Range 量文字 rect，含 uiFontSize=22 档）/移动端时间行不截尾+括号下移成块/桌面真括号跨两行/分类面板业界化与无解释文案/习惯打卡全链路（建/打/统计/暂停/两步删）/360 逐元素视口扫/剪切板工具页
 node scripts/v087-fixes-test.mjs   # v0.8.7 回归（67 项）：浮层两分支契约与无内部滚动 / 色盘几何（视觉尺寸==布局尺寸、把手指与光标差 < 3px、宿主高度补偿、面板不溢出）/ 确认冲刷 / 同入口重开 / 吸管 / 预设编辑器即输即生效（无保存取消、色盘预览双写、取消还原）/ 系统视图临期色预览与落盘 / 工具箱与工具子页的图标口径、⋯ 菜单锚定（桌面+移动端）、两层颜色互不干扰、relay 三选一（勾选在左、宽度不变、同步未开启时灰掉）/ 时刻双轨定宽与 overscroll（桌面+移动端）
 .\scripts\publish.ps1      # 本地一键发布（离线备用路径，基本不再用——日常发布走 tag 触发云端构建；默认 Windows+Android，all = 三平台）
 git tag vX.Y.Z; git push origin main vX.Y.Z   # 云端发布：触发 GitHub Actions release.yml 构建三平台并发 release（无需本地构建环境）
@@ -92,7 +96,7 @@ kxtodo-server 双平台发布——Linux `kxtodo-server`（release.sh 构建）+
 
 ### release.yml
 
-（push tag `v*`）：三平台并行构建 → release job 汇总七个固定名产物 `gh release create/upload --clobber`（`--generate-notes`）。Windows = `tauri build --no-bundle` + cargo CLI + cargo server；Linux = **直接复用 `release.sh`**（与本地/WSL 同一入口；ubuntu-latest 24.04 与开发机 WSL 一致，AppImage 不打包 glibc，更老发行版需自行评估）；Android = 官方 tauri mobile CI 模式（`nttld/setup-ndk` r29 + `NDK_HOME` + ubuntu 符号链接修复 + temurin 21 配 AGP 8.11/Gradle 8.14；**v0.8.0 起 `targets:` 只有 aarch64-linux-android + armv7-linux-androideabi 两个**，构建命令显式 `--apk --target aarch64 --target armv7`，产物收集分档兜底 universal → arm64-v8a → 最新的那个，理由见「产物：七个固定名」）。某平台失败 → 只发布成功产物并整体标红（与 publish.ps1 告警跳过语义一致）；`workflow_dispatch` 手动触发 = 只构建验证不发布（release job 仅 tag ref 运行）。构建 job 一律 `fetch-depth: 0`（build.rs/release.sh 的版本解析需要 tag 历史）；`Swatinem/rust-cache` 以 `workspaces: src-tauri -> target` 在 CI 与发布间共享缓存（Android 用独立 shared-key）。**产物暂存必须用独立 `staging/`，禁止复用仓库根 `dist/`**（v0.3.3 教训：dist/ 是 vite 输出目录，tauri 的 beforeBuildCommand 会把前端文件灌进去，141 个 js/css 垃圾资产跟着制品上了 release，事后逐个 delete-asset 清理）；release job 另有七固定名白名单硬门控，build job 就算误传别的文件也进不了发布。
+（push tag `v*`）：三平台并行构建 → release job 汇总七个固定名产物 `gh release create/upload --clobber`（`--generate-notes`）。Windows = `tauri build --no-bundle` + cargo CLI + cargo server；Linux = **直接复用 `release.sh`**（与本地/WSL 同一入口；**v0.9.3 起 pin ubuntu-22.04 / glibc 2.35**——linuxdeploy 打包构建机系统库，ubuntu-latest 漂移曾让 v0.9.2 的 AppImage 在老 Ubuntu 报 GLIBC_2.4x not found；ci.yml rust-linux 同 pin，不许改回 latest）；Android = 官方 tauri mobile CI 模式（`nttld/setup-ndk` r29 + `NDK_HOME` + ubuntu 符号链接修复 + temurin 21 配 AGP 8.11/Gradle 8.14；**v0.8.0 起 `targets:` 只有 aarch64-linux-android + armv7-linux-androideabi 两个**，构建命令显式 `--apk --target aarch64 --target armv7`，产物收集分档兜底 universal → arm64-v8a → 最新的那个，理由见「产物：七个固定名」）。某平台失败 → 只发布成功产物并整体标红（与 publish.ps1 告警跳过语义一致）；`workflow_dispatch` 手动触发 = 只构建验证不发布（release job 仅 tag ref 运行）。构建 job 一律 `fetch-depth: 0`（build.rs/release.sh 的版本解析需要 tag 历史）；`Swatinem/rust-cache` 以 `workspaces: src-tauri -> target` 在 CI 与发布间共享缓存（Android 用独立 shared-key）。**产物暂存必须用独立 `staging/`，禁止复用仓库根 `dist/`**（v0.3.3 教训：dist/ 是 vite 输出目录，tauri 的 beforeBuildCommand 会把前端文件灌进去，141 个 js/css 垃圾资产跟着制品上了 release，事后逐个 delete-asset 清理）；release job 另有七固定名白名单硬门控，build job 就算误传别的文件也进不了发布。
 
 ### Android 签名
 

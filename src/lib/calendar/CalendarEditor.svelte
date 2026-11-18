@@ -215,8 +215,8 @@
   /** 分类色点预览：没选分类（或分类没配色）就跟日程主题色 */
   $: categoryColors = eventColors({ categoryId: "" }, [], category?.color || accent);
   // 依赖一律字面写在表达式里（`today` / `startDate`）：reactive 箭头函数会把依赖藏进闭包
-  $: startLabel = dayLabel(startDate, today);
-  $: endLabel = dayLabel(endDate, today);
+  $: startLabel = dayLabel(startDate, today, $isMobile);
+  $: endLabel = dayLabel(endDate, today, $isMobile);
   $: startText = allDay ? startLabel : `${startLabel} · ${startTime || "--:--"}`;
   $: endText = allDay ? endLabel : `${endLabel} · ${endTime || "--:--"}`;
   /** 时长（分钟）：core 约定的「次日 + 00:00」在这里正好算成满一天减开始 */
@@ -244,15 +244,32 @@
     previewHtml = renderMarkdown(resolveMarkdownImages(text, CALENDAR_IMAGE_NODE, $mdImageCache));
   }
 
-  /** "今天 · 10月27日 周二" / "明天 · 10月28日 周三" / "10月30日 周五" / "2027年 · 10月30日 周六"。
-   *  日期部分**只出现一次**（v0.9.2 修「11月4日 周三 · 11月4日 周三」的重复显示）。 */
-  function dayLabel(date: string, todayDate: string): string {
+  /** 桌面："今天 · 10月27日 周二" / "10月30日 周五" / "2027年 · 10月30日 周六"。
+   *  日期部分**只出现一次**（v0.9.2 修「11月4日 周三 · 11月4日 周三」的重复显示）。
+   *  移动端紧凑档（v0.9.3）：相对日前缀 + 短日期（"今天 11/19"），非相对日才带星期
+   *  （"11/19 周三"）——全角长串在 360px 上会把日期截尾，用户看不到完整日期。 */
+  function dayLabel(date: string, todayDate: string, compact: boolean): string {
+    const rel =
+      date === todayDate
+        ? "今天"
+        : date === addDays(todayDate, 1)
+          ? "明天"
+          : date === addDays(todayDate, 2)
+            ? "后天"
+            : date === addDays(todayDate, -1)
+              ? "昨天"
+              : "";
+    const crossYear = date.slice(0, 4) !== todayDate.slice(0, 4);
+    if (compact) {
+      const md = `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}`;
+      const body = crossYear ? `${Number(date.slice(0, 4))}/${md}` : md;
+      if (rel) return `${rel} ${body}`;
+      const weekday = `周${WEEKDAY_LABELS[new Date(`${date}T00:00:00`).getDay()]}`;
+      return `${body} ${weekday}`;
+    }
     const full = fullDayLabel(date);
-    if (date === todayDate) return `今天 · ${full}`;
-    if (date === addDays(todayDate, 1)) return `明天 · ${full}`;
-    if (date === addDays(todayDate, 2)) return `后天 · ${full}`;
-    if (date === addDays(todayDate, -1)) return `昨天 · ${full}`;
-    if (date.slice(0, 4) !== todayDate.slice(0, 4)) return `${Number(date.slice(0, 4))}年 · ${full}`;
+    if (rel) return `${rel} · ${full}`;
+    if (crossYear) return `${Number(date.slice(0, 4))}年 · ${full}`;
     return full;
   }
 
@@ -750,8 +767,8 @@
         </div>
       {/if}
 
-      <!-- 开始/结束两行 + 右侧跨两行的时长括号（v0.9.2）：全天不再是独立勾选行，
-           而是时长菜单里的一档；括号点开出 15min…3h/全天 的快捷档 -->
+      <!-- 开始/结束两行 + 时长括号：桌面是跨两行的真括号（竖线带上下臂）括住两行，
+           移动端宽度不够收进下面一个横括号块；全天是时长菜单里的一档 -->
       <div class="cal-time-range">
         <div class="cal-time-range-rows">
           <div class="cal-field">
@@ -791,6 +808,7 @@
           aria-expanded={picker === "duration"}
           on:click={(event) => togglePicker("duration", event.currentTarget)}
         >
+          <span class="cal-duration-bracket-line" aria-hidden="true"></span>
           <span class="cal-duration-bracket-text">{bracketText}</span>
         </button>
       </div>
@@ -841,7 +859,7 @@
           <input
             type="text"
             maxlength="120"
-            placeholder="会议室 / 地址（可留空）"
+            placeholder="会议室 / 地址"
             bind:value={location}
           />
         </span>

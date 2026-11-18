@@ -73,6 +73,7 @@ kxtodo-cli diary list --from 2026-09-01 --to 2026-09-30 --jq '.data.total'
 | 叙事记录、当天发生了什么、心情、补记某天 | `diary` | 无完成状态，不属于任何条目，按**归属日期**归档 |
 | 花了多少、收入、转账、账户余额、资产、消费结构 | `ledger` | 金额是钱，写操作一律要 `--yes` |
 | 日历上的时间安排：周会、出差、某天的事、到点提醒 | `calendar` | 有起止时间/全天/提醒，可关联一个 todo 条目 |
+| 每天/每周要坚持的事、打卡与连续统计 | `habit` | 只有 active 且当天在计划内才能打卡；统计现算不落盘 |
 | 到点自动跑脚本 / 弹通知 | `schedule` | 定义只能走 JSON spec |
 | 弹一条桌面通知 | `notify` | 需要常驻的 GUI 承担 Host |
 
@@ -217,7 +218,19 @@ ledger stats --from 2026-09-14 --to 2026-09-21 --jq '.data.series'
 
 ---
 
-## 8. schedule 定时任务
+## 8. habit 习惯打卡
+
+- **住哪**：data.json 的 `habits`（与草稿纸同谱系：是内容不是配置），同步搭「同步数据」范围的车，逐习惯一个 LWW 实体；没有独立范围勾选。统计（连续/累计/完成率）**不落盘**，界面现算。
+- **写**：`habit add --name 刷牙 --time 08:00 --reminder due-0`。`--freq daily|weekly`（缺省 daily），weekly 必须 `--weekdays 0,1,3`（0=周日 … 6=周六，至少一天）；`--time` 空 = 全天（提醒按当天 09:00 折算）；`--color "#rrggbb"`、`--icon <lucide 名>`（与记账图标同一份目录）；`--reminder` 规格同 task（`due-<分钟>` = 计划时刻前 N 分钟）。
+- **打卡**：`habit check --id ... [--date YYYY-MM-DD]`（缺省今天）/ `habit uncheck ...`。只有 `active` 且当天在计划内才能打（否则 `HABIT_NOT_ACTIVE` / `HABIT_NOT_SCHEDULED`）；已是目标态时幂等返回不写盘。
+- **读**：`habit list [--status active|paused|done]`（按 order 排序，含 `checkins` 升序日期数组）；`habit get --id ...`。
+- **改**：`habit modify --id ... --name/--color/--icon/--freq/--weekdays/--time/--reminder/--status/--order`；`--reminder` 整体替换（给空 = 清空）；`--status paused|done|active` 切生命周期（只有 active 参与打卡与提醒）。
+- **删**：`habit remove --id ... --yes`（high-risk-write，打卡记录一并删，写同步墓碑）。
+- 重名拒 `HABIT_EXISTS`；名称空拒 `HABIT_NAME_INVALID`；颜色/图标/时刻/频率形状错分别拒 `HABIT_COLOR_INVALID` / `HABIT_ICON_INVALID` / `HABIT_TIME_INVALID` / `HABIT_FREQ_INVALID`。
+
+---
+
+## 9. schedule 定时任务
 
 定义只走 JSON，五步：
 
@@ -236,7 +249,7 @@ kxtodo-cli schedule add --spec @schedule.json --yes --idempotency-key <唯一键
 
 ---
 
-## 9. 其余命令
+## 10. 其余命令
 
 - **`notify`** — 发桌面通知：`notify "构建完成" --title "CI" --tone success --duration 5s`，`--wait` 等窗口关闭。通知由与目标数据目录匹配的常驻 Host 持有；Host 不在会尝试拉起 GUI 同目录的程序，找不到报 `GUI_NOT_FOUND`。
 - **`storage`** — 用户问「占了多少空间 / 清理一下」：先 `storage usage`（只读盘点：总体积 + 插图/背景/头像各自的总量与**无引用量** + **领域文件 / 历史记录 / 运行时 / 同步服务器（含 WAL）/ 服务器日志 / 备份**分项 + 临时残留），报数字给用户并得到同意后再 `storage clean --yes`（删无引用图片与空目录、临时残留、旧日志；**保留最新两份日志且绝不删今天的**）。返回 `freedBytes` 与逐项计数，单个文件删不动只进 `warnings`。
@@ -251,7 +264,7 @@ kxtodo-cli schedule add --spec @schedule.json --yes --idempotency-key <唯一键
 
 ---
 
-## 10. sync 多端同步
+## 11. sync 多端同步
 
 只在用户明确要配同步或排查同步时才用；日常记录数据不需要碰它。
 
@@ -269,7 +282,7 @@ kxtodo-cli schedule add --spec @schedule.json --yes --idempotency-key <唯一键
 
 ---
 
-## 11. 典型流程
+## 12. 典型流程
 
 **「这周 / 这个月 / 今年做了些什么」**
 1. `task tree` 定位相关条目（或 `task find --type entry --query "关键词"`）。
@@ -296,7 +309,7 @@ kxtodo-cli schedule add --spec @schedule.json --yes --idempotency-key <唯一键
 
 ---
 
-## 12. 注意事项
+## 13. 注意事项
 
 - **不要重试写操作**，除非带了同一个 `--idempotency-key`；导入类命令重试会产生重复数据。
 - **不要把范围词当关键词**：「本周」不是 `--query` 的值，用 `--changed-from/--changed-to`。

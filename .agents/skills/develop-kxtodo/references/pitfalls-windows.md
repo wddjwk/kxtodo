@@ -68,6 +68,10 @@ ureq/ring 是共享依赖后，`cargo check --target aarch64-linux-android` 会�
 - ⑤ **PowerShell 5.1 脚本文件本身必须带 UTF-8 BOM** 否则中文按 GBK 解析直接语法错误。
 - ⑥ **`wmi` 版本钉死 0.18.1**（iroh→netwatch→wmi 的版本范围错配，Windows 上必编不过）——也记在 `build-and-release.md`。
 
+### 9. 自绘通知窗抢焦点 + tauri hwnd 是新类型（v0.9.3）
+
+tauri 的 `window.show()` 在 Windows 走 `ShowWindow(SW_SHOW)`，**默认激活窗口**——常驻 Host 弹提醒时把用户正在输入的焦点拽走。builder 的 `.focused(false)` 只管建窗时刻，救不了后续 show。正确做法：建窗后 `GetWindowLongPtrW/SetWindowLongPtrW` 挂 `WS_EX_NOACTIVATE`，再 `SetWindowPos(SWP_FRAMECHANGED|SWP_NOACTIVATE|NOMOVE|NOSIZE|NOZORDER)` 让 ex style 立即生效；此后 show 与点击都不激活（鼠标消息照送，窗内按钮可用）。见 `src-tauri/src/lib.rs::notification_no_activate`。类型坑：`WebviewWindow::hwnd()` 返回 **windows crate 的 HWND 新类型**（不是 isize），`raw as windows_sys::HWND` 报 E0605 non-primitive cast——取 `raw.0` 裸指针再转。windows-sys 选 lock 里已有的 0.59，零新增下载。
+
 ## computer-use 调试经验（WebView2 应用）
 
 KXToDo 的窗口内容是 WebView2 渲染的，**UIA 拿不到 DOM 树**（accessibility 为空），只能用像素截图 + 坐标点击。多轮实战总结：

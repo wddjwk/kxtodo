@@ -28,6 +28,10 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 # rust_xlsxwriter 写 xlsx、calamine 读 xlsx，Android 交叉编译不会多出 C 依赖。
 rust_xlsxwriter = "0.99"
 calamine = "0.36"
+# 剪切板接收端的 PNG alpha 修复（v0.9.3）：只开 png 编解码（纯 Rust）。
+# 修复必须在接收端、apply_remote 记水位之前做——发送端保留剪切板原字节（无感），
+# 而全 0 alpha 的坏位图不修就会在接收端贴出一张全透明图（含安卓桥直写 PNG 的路径）。
+image = { version = "0.25", default-features = false, features = ["png"] }
 # 数据多端同步（v0.4.0）：E2E 加密 + HTTP 客户端，全部纯 Rust（Android 交叉零负担）
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 argon2 = "0.5"

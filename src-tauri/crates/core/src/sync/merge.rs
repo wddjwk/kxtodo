@@ -122,6 +122,14 @@ pub fn data_entity_stamp(data: &DataFile, id: &str) -> Option<String> {
     if id == SCRATCHPAD_ENTITY_ID {
         return scratchpad_entity_stamp(data);
     }
+    if let Some(habit) = data.habits.iter().find(|habit| habit.id == id) {
+        return Some(
+            habit
+                .updated_at
+                .clone()
+                .unwrap_or_else(|| habit.created_at.clone()),
+        );
+    }
     data.meta
         .tombstones
         .iter()
@@ -448,8 +456,23 @@ pub fn extract_entities(
                 seq: 0,
             });
         }
+        // 习惯打卡（v0.9.3）：逐习惯一个 LWW 实体，载荷是整个 Habit（checkins 在内）
+        for habit in &data.habits {
+            out.push(EntityRecord {
+                kind: "habit".to_string(),
+                id: habit.id.clone(),
+                updated_at: habit
+                    .updated_at
+                    .clone()
+                    .unwrap_or_else(|| habit.created_at.clone()),
+                updated_by: device_id.to_string(),
+                deleted: false,
+                data: serde_json::to_value(habit).unwrap_or(Value::Null),
+                seq: 0,
+            });
+        }
         for tomb in &data.meta.tombstones {
-            if tomb.kind == "node" || tomb.kind == "task" {
+            if tomb.kind == "node" || tomb.kind == "task" || tomb.kind == "habit" {
                 out.push(EntityRecord {
                     kind: tomb.kind.clone(),
                     id: tomb.id.clone(),
@@ -1064,6 +1087,11 @@ pub fn apply_data_record(
                 data.meta
                     .record_tombstone(&record.id, "task", &record.updated_at);
             }
+            "habit" => {
+                data.habits.retain(|h| h.id != record.id);
+                data.meta
+                    .record_tombstone(&record.id, "habit", &record.updated_at);
+            }
             other => return Err(format!("未知数据域墓碑类型 `{other}`")),
         }
         return Ok(());
@@ -1071,6 +1099,14 @@ pub fn apply_data_record(
     match record.kind.as_str() {
         "node" => apply_node_record(record, data),
         "task" => apply_task_record(record, data),
+        // 习惯（v0.9.3）：LWW 整条覆盖（checkins 在载荷里，与任务 markdown 整段覆盖同取舍）
+        "habit" => {
+            let habit: crate::model::Habit = serde_json::from_value(record.data.clone())
+                .map_err(|error| format!("习惯载荷无效：{error}"))?;
+            data.habits.retain(|item| item.id != record.id);
+            data.habits.push(habit);
+            Ok(())
+        }
         // 草稿纸：LWW 整份覆盖（载荷里就是全部标签页）
         "scratchpad" => {
             let tabs: Vec<crate::model::ScratchpadTab> =
@@ -1145,6 +1181,7 @@ pub fn normalize_data_orders(data: &mut DataFile) {
             .then_with(|| cmp_f64(ka.1, kb.1))
             .then_with(|| ka.2.cmp(kb.2))
     });
+    crate::ops_habits::sort_habits(&mut data.habits);
 }
 
 /// 日记的规范数组序：日期由近及远，同一天内按写作先后。
@@ -1246,6 +1283,7 @@ mod tests {
             selected_node_id: String::new(),
             backgrounds: Map::new(),
             scratchpad: Default::default(),
+            habits: Vec::new(),
             extra: Map::new(),
         }
     }

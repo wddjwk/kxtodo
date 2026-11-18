@@ -5,15 +5,16 @@
 // ---------------------------------------------------------------------------
 
 import { get, type Writable } from "svelte/store";
-import type { AppNode, AppState, CalendarCategory, CalendarEvent, CalendarRepeat, CardStyle, DiaryEntry, LedgerAccount, LedgerAccountKind, LedgerAccountType, LedgerBook, LedgerCategory, LedgerEntry, LedgerKind, LedgerSide, ListBackground, ReminderRule, ScheduledTask, SchedulerState, ScratchpadTab, Settings, SyncMode, Tag, TagColor, Task } from "./types";
+import type { AppNode, AppState, CalendarCategory, CalendarEvent, CalendarRepeat, CardStyle, DiaryEntry, Habit, HabitFreq, HabitStatus, LedgerAccount, LedgerAccountKind, LedgerAccountType, LedgerBook, LedgerCategory, LedgerEntry, LedgerKind, LedgerSide, ListBackground, ReminderRule, ScheduledTask, SchedulerState, ScratchpadTab, Settings, SyncMode, Tag, TagColor, Task } from "./types";
 import { navToolId, type NavItemId } from "./nav";
 import type { ToolId } from "./tools/catalog";
 import { accountBalance } from "./ledger";
 import { addDays, normalizeCalendarTimes } from "./calendar";
+import { toggledCheckins } from "./habits";
 import { remindersParam } from "./reminders";
 import {
-  appState, appSettings, calendarCategories, commit, commitCalendar, commitCalendarCategories, commitDiary, commitLedger, commitScheduler, commitSettings,
-  coreMode, createDiaryId, createTaskId, calendarEvents, diaryEntries, editBaseUpdatedAt, ledgerData, markEditStart, clearEditBase, rebaseEditBase,
+  appState, appSettings, calendarCategories, commit, commitCalendar, commitCalendarCategories, commitDiary, commitHabits, commitLedger, commitScheduler, commitSettings,
+  coreMode, createDiaryId, createTaskId, calendarEvents, diaryEntries, editBaseUpdatedAt, habits, ledgerData, markEditStart, clearEditBase, rebaseEditBase,
   manualSyncAt, noteEnvelopeRevision, refreshFromCore, scheduleEntries, syncConnection, showToast, todayIso
 } from "./stores";
 import {
@@ -24,7 +25,7 @@ import {
 } from "./backend";
 import {
   createCategoryNode, createEntryNode, defaultBackground, createScheduledTask, DEFAULT_ENTRY_ICON,
-  normalizeCalendarCategories, normalizeCalendarEvents
+  normalizeCalendarCategories, normalizeCalendarEvents, normalizeHabits
 } from "./defaults";
 import { nodeAndDescendantIds } from "./nodes";
 import { clockOf, composeTimestamp } from "./clock";
@@ -2998,4 +2999,163 @@ async function applyImportedSettings(source: Settings): Promise<void> {
   if (failed.length > 0) {
     showToast(`${failed.length} 项设置没能导入：${failed.slice(0, 3).join("、")}${failed.length > 3 ? "…" : ""}`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// 习惯打卡（v0.9.3）：住 data 域（kind = habit），写命令发域事件 → 记信封水位，
+// 乐观更新（打卡）自带回滚。统计不落盘，界面用 habits.ts 现算。
+// ---------------------------------------------------------------------------
+
+export type HabitDraft = {
+  name: string;
+  color?: string;
+  icon?: string;
+  freq?: HabitFreq;
+  time?: string;
+  reminders?: ReminderRule[];
+  status?: HabitStatus;
+};
+
+export type HabitChanges = {
+  name?: string;
+  color?: string;
+  icon?: string;
+  freq?: HabitFreq;
+  time?: string;
+  reminders?: ReminderRule[];
+  status?: HabitStatus;
+  order?: number;
+};
+
+function createHabitId(): string {
+  if (crypto.randomUUID) return `habit-${crypto.randomUUID().replace(/-/g, "")}`;
+  return `habit-${Math.random().toString(16).slice(2, 10)}${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function habitsList(): Habit[] {
+  return get(habits);
+}
+
+export function findHabit(id: string): Habit | undefined {
+  return habitsList().find((habit) => habit.id === id);
+}
+
+function sortHabits(list: Habit[]): Habit[] {
+  return [...list].sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
+}
+
+function habitParams(draft: HabitDraft | HabitChanges): Record<string, unknown> {
+  const params: Record<string, unknown> = {};
+  if (draft.name !== undefined) params.name = draft.name;
+  if (draft.color !== undefined) params.color = draft.color;
+  if (draft.icon !== undefined) params.icon = draft.icon;
+  if (draft.freq !== undefined) params.freq = draft.freq;
+  if (draft.time !== undefined) params.time = draft.time;
+  if (draft.reminders !== undefined) params.reminders = remindersParam(draft.reminders);
+  if (draft.status !== undefined) params.status = draft.status;
+  if ("order" in draft && draft.order !== undefined) params.order = draft.order;
+  return params;
+}
+
+export async function addHabit(draft: HabitDraft): Promise<Habit | null> {
+  const createdAt = new Date().toISOString();
+  if (coreMode) {
+    let created;
+    try {
+      created = await coreDispatch<Record<string, unknown>>("habit.add", habitParams(draft));
+    } catch (error) {
+      return await report(error, "习惯创建失败");
+    }
+    noteEnvelopeRevision(created.meta);
+    const [habit] = normalizeHabits([created.data]);
+    if (!habit) return null;
+    habits.update((list) => sortHabits([...list, habit]));
+    return habit;
+  }
+  const habit: Habit = {
+    id: createHabitId(),
+    name: draft.name.trim().slice(0, 40),
+    color: draft.color ?? "",
+    icon: draft.icon ?? "",
+    freq: draft.freq ?? { kind: "daily", weekdays: [] },
+    time: draft.time ?? "",
+    reminders: draft.reminders ?? [],
+    status: draft.status ?? "active",
+    order: habitsList().reduce((max, item) => Math.max(max, item.order), 0) + 1,
+    checkins: [],
+    createdAt,
+    updatedAt: createdAt
+  };
+  commitHabits(sortHabits([...habitsList(), habit]));
+  return habit;
+}
+
+export async function updateHabit(id: string, changes: HabitChanges): Promise<boolean> {
+  const previous = findHabit(id);
+  if (!previous) return false;
+  if (coreMode) {
+    try {
+      const envelope = await coreDispatch<Record<string, unknown>>("habit.modify", {
+        id,
+        ...habitParams(changes)
+      });
+      noteEnvelopeRevision(envelope.meta);
+      const [normalized] = normalizeHabits([envelope.data]);
+      habits.update((list) =>
+        sortHabits(list.map((habit) => (habit.id === id ? (normalized ?? habit) : habit)))
+      );
+    } catch (error) {
+      await report(error, "习惯保存失败");
+      return false;
+    }
+    return true;
+  }
+  const next: Habit = { ...previous, updatedAt: new Date().toISOString() };
+  if (changes.name !== undefined) next.name = changes.name.trim().slice(0, 40);
+  if (changes.color !== undefined) next.color = changes.color;
+  if (changes.icon !== undefined) next.icon = changes.icon;
+  if (changes.freq !== undefined) next.freq = changes.freq;
+  if (changes.time !== undefined) next.time = changes.time;
+  if (changes.reminders !== undefined) next.reminders = changes.reminders;
+  if (changes.status !== undefined) next.status = changes.status;
+  if (changes.order !== undefined) next.order = changes.order;
+  commitHabits(sortHabits(habitsList().map((habit) => (habit.id === id ? next : habit))));
+  return true;
+}
+
+export async function deleteHabit(id: string): Promise<boolean> {
+  if (coreMode) {
+    try {
+      const envelope = await coreDispatch("habit.remove", { id });
+      noteEnvelopeRevision(envelope.meta);
+    } catch (error) {
+      await report(error, "习惯删除失败");
+      return false;
+    }
+  }
+  commitHabits(habitsList().filter((habit) => habit.id !== id));
+  return true;
+}
+
+/** 打卡 / 取消打卡：乐观更新（圆圈立刻填充），失败回滚——打卡是高频点击，不能等 IPC。 */
+export async function setHabitCheckin(id: string, date: string, checked: boolean): Promise<boolean> {
+  const previous = findHabit(id);
+  if (!previous) return false;
+  const next: Habit = {
+    ...previous,
+    checkins: toggledCheckins(previous, date, checked),
+    updatedAt: new Date().toISOString()
+  };
+  const mutate = (): void => {
+    habits.update((list) => list.map((habit) => (habit.id === id ? next : habit)));
+  };
+  if (coreMode) {
+    return withRollback(habits, checked ? "打卡失败" : "取消打卡失败", mutate, async () => {
+      const envelope = await coreDispatch(checked ? "habit.check" : "habit.uncheck", { id, date });
+      noteEnvelopeRevision(envelope.meta);
+    });
+  }
+  mutate();
+  commitHabits(habitsList());
+  return true;
 }

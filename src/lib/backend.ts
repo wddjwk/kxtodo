@@ -2,9 +2,9 @@ import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { caps } from "./capabilities";
 import { externalLinkUrl, normalizeLinkMeta, type LinkMeta } from "./linkMeta";
-import { defaultSettings, emptySchedulerState, emptyState, normalizeCalendarCategories, normalizeCalendarEvents, normalizeDiaryEntries, normalizeSchedulerState, normalizeSettings, normalizeState } from "./defaults";
+import { defaultSettings, emptySchedulerState, emptyState, normalizeCalendarCategories, normalizeCalendarEvents, normalizeDiaryEntries, normalizeHabits, normalizeSchedulerState, normalizeSettings, normalizeState } from "./defaults";
 import { androidToken } from "./androidBridge";
-import type { AppNotification, AppState, CalendarCategory, CalendarEvent, DiaryEntry, LedgerBook, SchedulerRuntimePaths, SchedulerState, Settings } from "./types";
+import type { AppNotification, AppState, CalendarCategory, CalendarEvent, DiaryEntry, Habit, LedgerBook, SchedulerRuntimePaths, SchedulerState, Settings } from "./types";
 
 const stateKey = "todo-note-state-v3";
 const settingsKey = "todo-note-settings-v3";
@@ -12,6 +12,7 @@ const schedulerKey = "todo-note-scheduler-v8";
 const diaryKey = "todo-note-diary-v1";
 const ledgerKey = "todo-note-ledger-v1";
 const calendarKey = "todo-note-calendar-v1";
+const habitKey = "todo-note-habits-v1";
 
 export const isTauriRuntime = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -82,6 +83,14 @@ export async function loadCalendar(): Promise<{ events: CalendarEvent[]; categor
 
 export async function saveCalendar(events: CalendarEvent[], categories: CalendarCategory[]): Promise<void> {
   localStorage.setItem(calendarKey, JSON.stringify({ events, categories }));
+}
+
+export async function loadHabits(): Promise<Habit[]> {
+  return normalizeHabits(readLocal(habitKey, { habits: [] }));
+}
+
+export async function saveHabits(habits: Habit[]): Promise<void> {
+  localStorage.setItem(habitKey, JSON.stringify({ habits }));
 }
 
 export async function resolveExecutorPaths(): Promise<SchedulerRuntimePaths> {
@@ -759,6 +768,7 @@ export type CoreSnapshot = {
     tasks: AppState["tasks"];
     backgrounds: AppState["backgrounds"];
     selectedNodeId: string;
+    habits?: unknown;
   };
   settings?: unknown;
   schedule?: {

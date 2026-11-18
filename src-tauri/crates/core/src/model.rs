@@ -106,6 +106,10 @@ pub struct DataFile {
     /// 换台设备该带着走（同步走 data 范围，实体 kind = scratchpad）。
     #[serde(default)]
     pub scratchpad: Scratchpad,
+    /// 习惯打卡（v0.9.3）：逐习惯一个 LWW 实体（kind = habit），同步搭 data 范围的车
+    /// （与草稿纸同谱系：它是内容，换台设备该带着走）。
+    #[serde(default)]
+    pub habits: Vec<Habit>,
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
@@ -177,6 +181,118 @@ impl Scratchpad {
         if self.active_tab_id.is_empty() {
             self.active_tab_id = "tab-1".to_string();
         }
+    }
+}
+
+/// 习惯打卡（v0.9.3）：工具箱「习惯打卡」工具的实体，住数据域（kind = habit）。
+///
+/// `checkins` 是升序去重的打卡日期（YYYY-MM-DD）；连续天数 / 累计 / 完成率等统计
+/// **不落盘**，由前端 `habits.ts` 从 checkins + freq 现算（CLI 不产出统计）。
+/// 颜色空 = 跟工具页主题色；图标是 lucide 名字（与记账同一份白名单 ledger_icons）。
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Habit {
+    pub id: String,
+    pub name: String,
+    /// #rrggbb；空 = 跟工具页主题色
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub color: String,
+    /// lucide 图标名（ledger_icons 白名单）；空 = 默认图标
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub icon: String,
+    #[serde(default)]
+    pub freq: HabitFreq,
+    /// 计划时刻 HH:MM；空 = 全天（提醒按当天 09:00 折算，与全天日程同口径）
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub time: String,
+    /// 提醒规则（与任务/日程共用 [`Reminder`]）：BeforeDue = 计划时刻前 N 分钟
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reminders: Vec<Reminder>,
+    #[serde(default)]
+    pub status: HabitStatus,
+    #[serde(default)]
+    pub order: f64,
+    /// 打卡日期 YYYY-MM-DD，升序去重
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checkins: Vec<String>,
+    #[serde(rename = "createdAt", default)]
+    pub created_at: String,
+    #[serde(rename = "updatedAt", skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
+}
+
+impl Habit {
+    /// 这一天是否在计划内（daily 全中；weekly 看星期，0=周日 … 6=周六，与 JS getDay 同口径）。
+    pub fn scheduled_on(&self, date: &str) -> bool {
+        use chrono::Datelike;
+        match self.freq.kind {
+            HabitFreqKind::Daily => true,
+            HabitFreqKind::Weekly => match crate::recurrence::parse_date(date) {
+                Some(day) => self
+                    .freq
+                    .weekdays
+                    .contains(&(day.weekday().num_days_from_sunday() as u8)),
+                None => false,
+            },
+        }
+    }
+
+    /// 提醒折算用的计划时刻：全天按 09:00（与全天日程同口径）。
+    pub fn effective_time(&self) -> &str {
+        if self.time.trim().is_empty() {
+            crate::ops_calendar::ALL_DAY_REMINDER_CLOCK
+        } else {
+            self.time.as_str()
+        }
+    }
+}
+
+/// 习惯的频率：每天 / 每周选定的星期几（不给「工作日」单开变体，它是 weekly 的组合）。
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct HabitFreq {
+    #[serde(default)]
+    pub kind: HabitFreqKind,
+    /// weekly 时非空（core 写入校验）；0=周日 … 6=周六
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub weekdays: Vec<u8>,
+}
+
+impl Default for HabitFreq {
+    fn default() -> Self {
+        Self {
+            kind: HabitFreqKind::Daily,
+            weekdays: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum HabitFreqKind {
+    Daily,
+    Weekly,
+}
+
+impl Default for HabitFreqKind {
+    fn default() -> Self {
+        Self::Daily
+    }
+}
+
+/// 习惯的生命周期：进行中 / 已暂停 / 已完成（归档）。只有 active 参与打卡与提醒。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum HabitStatus {
+    Active,
+    Paused,
+    Done,
+}
+
+impl Default for HabitStatus {
+    fn default() -> Self {
+        Self::Active
     }
 }
 
@@ -1455,7 +1571,7 @@ pub const NAV_ITEM_IDS: [&str; 8] = [
 /// 与前端 `src/lib/tools/catalog.ts` 的 `TOOL_CATALOG` 是同一份清单的两份拷贝
 /// （core 要在 config.set 时挡住拼错的 id，而它不 import 前端）——
 /// 有 `nav_tool_ids_match_frontend_catalog` 测试用 include_str! 钉住两边。
-pub const NAV_TOOL_IDS: [&str; 5] = ["random", "rmb", "scratchpad", "transfer", "clipboard"];
+pub const NAV_TOOL_IDS: [&str; 6] = ["random", "rmb", "scratchpad", "transfer", "clipboard", "habit"];
 
 /// navItems 里工具行的前缀
 pub const NAV_TOOL_PREFIX: &str = "tool:";

@@ -20,6 +20,9 @@ import type {
   LedgerSide,
   LedgerViewMode,
   ListBackground,
+  Habit,
+  HabitFreq,
+  HabitStatus,
   AppNotification,
   NotificationPosition,
   NotificationTone,
@@ -911,6 +914,63 @@ export function normalizeCalendarEvents(raw: unknown): CalendarEvent[] {
   const source = raw as { events?: unknown } | undefined;
   const list = Array.isArray(source?.events) ? source?.events : Array.isArray(raw) ? raw : [];
   return list.map(normalizeCalendarEvent).filter((event): event is CalendarEvent => event !== null);
+}
+
+/** 习惯（v0.9.3）：逐字段白名单，与 core `model::Habit` 同口径；认不出的形状回落默认。 */
+function normalizeHabit(raw: unknown): Habit | null {
+  const source = raw as Partial<Habit> | undefined;
+  if (!source || typeof source !== "object") return null;
+  if (typeof source.id !== "string" || source.id === "") return null;
+  const name = typeof source.name === "string" ? source.name.trim().slice(0, 40) : "";
+  if (name === "") return null;
+  const createdAt = typeof source.createdAt === "string" ? source.createdAt : now();
+  const freq = normalizeHabitFreq(source.freq);
+  const status: HabitStatus =
+    source.status === "paused" || source.status === "done" ? source.status : "active";
+  return {
+    id: source.id,
+    name,
+    color: typeof source.color === "string" && /^#[0-9a-fA-F]{6}$/.test(source.color) ? source.color.toLowerCase() : "",
+    icon: typeof source.icon === "string" ? source.icon : "",
+    freq,
+    time: normalizeHabitTime(source.time),
+    reminders: normalizeReminders(source.reminders),
+    status,
+    order: typeof source.order === "number" && Number.isFinite(source.order) ? source.order : 0,
+    checkins: Array.isArray(source.checkins)
+      ? [...new Set(source.checkins.filter((date): date is string => DIARY_DATE_RE.test(String(date ?? ""))))].sort()
+      : [],
+    createdAt,
+    updatedAt: typeof source.updatedAt === "string" ? source.updatedAt : undefined
+  };
+}
+
+/** HH:MM 且时/分在合法区间（CALENDAR_TIME_RE 只钉形状，25:00 这种要挡掉）。 */
+function normalizeHabitTime(raw: unknown): string {
+  if (typeof raw !== "string" || !CALENDAR_TIME_RE.test(raw)) return "";
+  const hour = Number(raw.slice(0, 2));
+  const minute = Number(raw.slice(3, 5));
+  return hour <= 23 && minute <= 59 ? raw : "";
+}
+
+function normalizeHabitFreq(raw: unknown): HabitFreq {
+  const source = raw as Partial<HabitFreq> | undefined;
+  const kind = source?.kind === "weekly" ? "weekly" : "daily";
+  const weekdays = Array.isArray(source?.weekdays)
+    ? [...new Set(source.weekdays.filter((day): day is number => Number.isInteger(day) && day >= 0 && day <= 6))].sort((a, b) => a - b)
+    : [];
+  // weekly 空集合 = 脏数据：回落 daily（core 写入侧拒绝空集合，这里只兜读路径）
+  if (kind === "weekly" && weekdays.length === 0) return { kind: "daily", weekdays: [] };
+  return { kind, weekdays: kind === "weekly" ? weekdays : [] };
+}
+
+export function normalizeHabits(raw: unknown): Habit[] {
+  const source = raw as { habits?: unknown } | undefined;
+  const list = Array.isArray(source?.habits) ? source?.habits : Array.isArray(raw) ? raw : [];
+  return list
+    .map(normalizeHabit)
+    .filter((habit): habit is Habit => habit !== null)
+    .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
 }
 
 /** 与 core `recurrence::normalize_repeat` 同口径：认不出的形状一律回落「不重复」。 */

@@ -71,6 +71,13 @@
 
 路由与记账同口径：桌面 `stores.toolboxOpen` + `.app-shell.toolbox-open` 藏工作区（搜索态让回）、移动端历史栈 `toolbox` 层；侧栏行与设置「固定分组」勾选由 `caps.toolbox`（恒真）过滤。共享样式在 `toolbox.css`（桌面容器限宽 720px），移动端整页容器覆盖仍在 mobile.css。
 
+### 习惯打卡（v0.9.3，工具箱子页）
+
+数据住 **data.json 的 `habits`**（kind `habit` 逐习惯 LWW，搭「同步数据」范围，与草稿纸同谱系；不开第七个领域文件、不加同步勾选）。统计不落盘：`lib/habits.ts` 现算——**连续按「计划内相邻出现」算**（weekly 的连续是相邻两次计划日，currentStreak 今天没打不算断、从上一个计划日往回；bestStreak 用 nextScheduled 切段），完成率 = 近 30 天计划内打卡占比。
+
+界面（对照时光序）：`tools/HabitTool.svelte` 两视图段控——**全部** = 进行中/已暂停/已完成三计数页签（`.habit-tabs` 下划线指示）+ 卡片（`.habit-card`：soft 底图标圆 + 名称 + 频率·时刻 + 右侧 N天/累计打卡；点卡片进统计、右键/长按开动作菜单）；**每日** = 日期导航（‹ M/D › + 今天 chip）+ —全天/上午/下午/晚上— 分组（`.habit-slot-head` 居中短线标题）+ 三列图标圆阵（`.habit-dot`，点圆 = 打卡/取消，checked = soft 底 + 主色内环 + pop 动画；时段按 time 切：<12 上午 / <18 下午 / 其余晚上，空 = 全天）。统计面板 `tools/habit/HabitStats.svelte`：四格（累计/当前连续/最长连续/本月）+ 完成率条 + 月历热力图（打卡实心/计划内空心/今天描边；周起始跟 `weekStart` 偏好）。编辑器 `HabitEditor.svelte`：名称/图标（懒加载 IconPicker icon 模式）/颜色（12 色板选中打勾 + openColorPicker 自定义）/计划（每天 + 七星期 checkable，选空自动回 daily）/时间（全天 + 预设 + 自定义）/提醒（due 预设 + 自定义时刻，芯片可删）；**行内 ContextMenu 必须挂在 editor-overlay 内**（z 3600 < 4000，挂外面被遮罩盖住）。新建加号在 ToolboxView 子页头部（`button[title='新建习惯']`）经 `habitNew` store 递话（与草稿纸加号同套路）。提醒走 `reminders.rs::plan_habits`：只规划 active、视野内每个计划日各一条、全天按 09:00 折算。样式全在 toolbox.css `.habit-*` 段 + mobile.css 覆盖（360 圆阵三列 58px 圆）。
+
+
 ### 日期与提醒面板（v0.8.3，`TaskDateReminderPanel.svelte`）
 
 **一个组件、三个入口**：右键菜单「日期与提醒」（原「添加日期」）、卡片上点日期或时刻（`.task-date-popover`）、编辑器工具栏的日期按钮（`.editor-meta-pop`）。入口只挂组件并给 `onSave`/`onClear`/`onClose`；`embedded` prop 决定退到顶时是关自己还是交还宿主。

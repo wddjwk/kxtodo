@@ -425,3 +425,72 @@ fn recurring_calendar_plans_carry_their_occurrence_date() {
     let keys: std::collections::HashSet<&String> = plans.iter().map(|plan| &plan.key).collect();
     assert_eq!(keys.len(), plans.len(), "收据键含 at，各次出现必须互不相同");
 }
+
+#[test]
+fn habit_plans_follow_schedule_and_carry_occurrence_date() {
+    use chrono::Datelike;
+    let daily = serde_json::json!({
+        "id": "habit-daily",
+        "name": "刷牙",
+        "freq": { "kind": "daily", "weekdays": [] },
+        "time": "08:00",
+        "reminders": [{ "kind": "beforeDue", "minutes": 10 }],
+        "status": "active",
+        "order": 1,
+        "checkins": [],
+        "createdAt": "2026-01-01T00:00:00.000Z"
+    });
+    let weekly = serde_json::json!({
+        "id": "habit-weekly",
+        "name": "周报",
+        "freq": { "kind": "weekly", "weekdays": [1] },
+        "time": "",
+        "reminders": [{ "kind": "beforeDue", "minutes": 0 }],
+        "status": "active",
+        "order": 2,
+        "checkins": [],
+        "createdAt": "2026-01-01T00:00:00.000Z"
+    });
+    let paused = serde_json::json!({
+        "id": "habit-paused",
+        "name": "暂停的",
+        "freq": { "kind": "daily", "weekdays": [] },
+        "time": "08:00",
+        "reminders": [{ "kind": "beforeDue", "minutes": 0 }],
+        "status": "paused",
+        "order": 3,
+        "checkins": [],
+        "createdAt": "2026-01-01T00:00:00.000Z"
+    });
+    let data: kxtodo_core::model::DataFile = serde_json::from_value(serde_json::json!({
+        "schemaVersion": 6,
+        "habits": [daily, weekly, paused]
+    }))
+    .unwrap();
+    let plans = reminders::plan_habits(&data);
+    assert!(plans.iter().all(|plan| plan.habit && !plan.calendar));
+    assert!(
+        plans.iter().all(|plan| plan.task_id != "habit-paused"),
+        "暂停的习惯不参与提醒规划"
+    );
+    let daily_plans: Vec<_> = plans.iter().filter(|plan| plan.task_id == "habit-daily").collect();
+    assert!(daily_plans.len() >= 2, "每天习惯视野内应有多条：{}", daily_plans.len());
+    let dates: Vec<&str> = daily_plans.iter().filter_map(|plan| plan.occurrence_date.as_deref()).collect();
+    assert_eq!(dates.len(), daily_plans.len());
+    assert!(dates.windows(2).all(|window| window[0] < window[1]), "出现日升序：{dates:?}");
+    let keys: std::collections::HashSet<&String> = plans.iter().map(|plan| &plan.key).collect();
+    assert_eq!(keys.len(), plans.len(), "收据键互不相同");
+    // weekly 只规划周一；全天按 09:00 折算（beforeDue 0 = 计划时刻整）
+    let weekly_plans: Vec<_> = plans.iter().filter(|plan| plan.task_id == "habit-weekly").collect();
+    assert!(!weekly_plans.is_empty());
+    for plan in &weekly_plans {
+        let date = plan.occurrence_date.as_deref().unwrap();
+        let day = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap();
+        assert_eq!(day.weekday().num_days_from_sunday(), 1, "weekly 只选周一：{date}");
+        let local = plan.at.with_timezone(&chrono::Local);
+        assert_eq!(local.format("%H:%M").to_string(), "09:00", "全天习惯按 09:00 折算");
+    }
+    // daily 08:00 提前 10 分钟 = 07:50 本地
+    let local = daily_plans[0].at.with_timezone(&chrono::Local);
+    assert_eq!(local.format("%H:%M").to_string(), "07:50");
+}

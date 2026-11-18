@@ -45,6 +45,33 @@ fn rgba_from_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     Ok((width, height, image.into_raw()))
 }
 
+/// 图片 PNG 编码缓存（v0.9.3）：Linux 无剪切板序列号，纯图剪切板每个轮询 tick
+/// 都会读到同一份 RGBA；不缓存就每 800ms 重编码一次大图（纯烧 CPU）。
+/// 指纹 = 宽 + 高 + 字节数 + 内容哈希；命中直接复用上一份 PNG。
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+static IMAGE_ENCODE_CACHE: std::sync::Mutex<Option<(u32, u32, usize, u64, Vec<u8>)>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn encode_image_cached(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>> {
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    hasher.write(rgba);
+    let hash = hasher.finish();
+    if let Ok(slot) = IMAGE_ENCODE_CACHE.lock() {
+        if let Some((w, h, len, old_hash, png)) = slot.as_ref() {
+            if (*w, *h, *len, *old_hash) == (width, height, rgba.len(), hash) {
+                return Some(png.clone());
+            }
+        }
+    }
+    let png = png_from_rgba(width, height, rgba).ok()?;
+    if let Ok(mut slot) = IMAGE_ENCODE_CACHE.lock() {
+        *slot = Some((width, height, rgba.len(), hash, png.clone()));
+    }
+    Some(png)
+}
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn available() -> bool {
     true
@@ -136,14 +163,12 @@ pub fn read() -> Result<Option<ClipboardContent>, String> {
     // 不再每 800ms 读一次图片（大图重编码 PNG 很贵），图片单独复制时文本为空，照读。
     let read_image = cfg!(windows) || (text.is_empty() && html.is_empty());
     let image = if read_image { read_clipboard_image() } else { None };
+    // 发送端保留剪切板原字节（v0.9.3：同步对发送方无感、不处理内容）：
+    // 全 0 alpha 的修复只在接收端做（clipboard_sync::repair_png_alpha）。
+    // Linux 没有序列号，纯图剪切板否则每 800ms 重编码一次 PNG——按内容指纹
+    // （尺寸 + 哈希）缓存，没变就复用上一份 PNG，编码失败不连累文本/文件。
     let image_png = match image {
-        Some((width, height, mut rgba)) => {
-            // CF_DIBV5 带 alpha 掩码但 alpha 字节全 0 的坏数据（截图工具常见）
-            // 会编出一张全透明的 PNG——粘贴到哪里都看不见。先修复再编码。
-            kxtodo_core::clipboard_sync::repair_zero_alpha(&mut rgba);
-            // 解码/编码失败不该把整条文本也丢掉：图片只是其中一种表示。
-            png_from_rgba(width, height, &rgba).ok()
-        }
+        Some((width, height, rgba)) => encode_image_cached(width, height, &rgba),
         None => None,
     };
     // HTML 当文件处理（v0.9.0 bugfix 4.1）：富文本剪切板折成一个 .html 文件走文件
@@ -255,8 +280,8 @@ pub fn write(content: &ClipboardContent) -> Result<(), String> {
         }
         let mut clipboard = arboard::Clipboard::new().map_err(|error| error.to_string())?;
         if let Some(image) = &content.image {
-            let (width, height, mut rgba) = rgba_from_png(image)?;
-            kxtodo_core::clipboard_sync::repair_zero_alpha(&mut rgba);
+            // alpha 修复已在 core 接收端做过（repair_png_alpha），这里照原字节写回
+            let (width, height, rgba) = rgba_from_png(image)?;
             clipboard
                 .set_image(arboard::ImageData {
                     width: width as usize,
@@ -289,10 +314,8 @@ fn write_windows(content: &ClipboardContent, paths: &[PathBuf]) -> Result<(), St
     // 图片解码失败不连累文本/文件：能写的照写，失败最后一起报出去。
     let rgba = match &content.image {
         Some(png) => match rgba_from_png(png) {
-            Ok((width, height, mut rgba)) => {
-                kxtodo_core::clipboard_sync::repair_zero_alpha(&mut rgba);
-                Some((width, height, rgba))
-            }
+            // alpha 修复已在 core 接收端做过（repair_png_alpha），这里照原字节写回
+            Ok((width, height, rgba)) => Some((width, height, rgba)),
             Err(error) => {
                 failures.push(error);
                 None

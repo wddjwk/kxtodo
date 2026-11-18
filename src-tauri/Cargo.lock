@@ -3298,6 +3298,7 @@ dependencies = [
  "tauri-plugin-window-state",
  "tokio",
  "ureq",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3326,6 +3327,7 @@ dependencies = [
  "hmac",
  "iana-time-zone",
  "if-addrs",
+ "image",
  "interprocess",
  "iroh",
  "iroh-dns",
