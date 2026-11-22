@@ -25,6 +25,7 @@
   import { checkForUpdate } from "./lib/updater";
   import TitleBar from "./lib/TitleBar.svelte";
   import Toast from "./lib/Toast.svelte";
+  import SloganBanner from "./lib/SloganBanner.svelte";
   import Sidebar from "./lib/Sidebar.svelte";
   import Workspace from "./lib/Workspace.svelte";
   import DiaryView from "./lib/DiaryView.svelte";
@@ -247,6 +248,7 @@
   </div>
 
   <Toast />
+  <SloganBanner />
 
   {#if $editorTaskId || $editorDraftNode}
     {#await import("./lib/editor/MarkdownEditorModal.svelte") then module}

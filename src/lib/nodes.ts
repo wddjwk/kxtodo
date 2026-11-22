@@ -274,6 +274,8 @@ export function exportStateForNode(node: AppNode, state: AppState): AppState {
     backgrounds: Object.fromEntries(exportedNodes.map((item) => [item.id, getBackground(item.id, state.backgrounds)])),
     // 草稿纸不属于任何条目（单例），导某一条时原样带着走，免得导出再导入把它清掉
     scratchpad: state.scratchpad,
+    // 标语栏同草稿纸：单例内容，导出原样带着走
+    slogan: state.slogan,
     scheduler: node.id === "scheduled" ? state.scheduler : emptySchedulerState()
   };
 }

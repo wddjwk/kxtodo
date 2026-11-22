@@ -35,6 +35,8 @@ import type {
   SchedulerState,
   ScratchpadTab,
   Settings,
+  SloganItem,
+  SloganState,
   SyncMode,
   Tag,
   TagColor,
@@ -44,7 +46,7 @@ import type {
 import { NAV_ITEM_IDS, normalizeNavItems, normalizeNavLayout } from "./nav";
 import { normalizeReminders } from "./reminders";
 import { DEFAULT_DUE_COLORS } from "./dueHighlight";
-import { normalizeSortMode } from "./sort";
+import { normalizeSortModes } from "./sort";
 import { normalizeTaskMenuConfig } from "./taskMenuConfig";
 
 const now = () => new Date().toISOString();
@@ -106,7 +108,7 @@ export const defaultSettings: Settings = {
   },
   appearance: {
     linkOpenMode: "app",
-    listSortMode: "created-desc",
+    listSortModes: {},
     uiScale: 0.75,
     uiFontSize: 18,
     markdownFontSize: 20,
@@ -377,6 +379,7 @@ export function emptyState(): AppState {
       [inbox.id]: { ...defaultBackground }
     },
     scratchpad: { tabs: [], activeTabId: "", updatedAt: "" },
+    slogan: { items: [], activeIds: [], icon: "", position: "top", enabled: true, updatedAt: "" },
     scheduler: emptySchedulerState()
   };
 }
@@ -803,7 +806,39 @@ export function normalizeState(raw: unknown): AppState {
     backgrounds,
     // 草稿纸（v0.8.4 需求 2；v0.9.0 标签页化）：多页纯文本 + 激活页，跟着数据域同步
     scratchpad: normalizeScratchpad(source?.scratchpad),
+    slogan: normalizeSlogan(source?.slogan),
     scheduler: normalizeSchedulerState(source?.scheduler)
+  };
+}
+
+/** 标语栏（v0.9.4）：逐字段白名单，与 core `model::Slogan` 同口径。 */
+export function normalizeSlogan(raw: unknown): SloganState {
+  const source = raw as Partial<SloganState> | undefined;
+  const items: SloganItem[] = [];
+  const seen = new Set<string>();
+  if (Array.isArray(source?.items)) {
+    for (const entry of source.items) {
+      const item = entry as Partial<SloganItem> | undefined;
+      if (!item || typeof item.id !== "string" || item.id === "" || seen.has(item.id)) continue;
+      const text = typeof item.text === "string" ? item.text.trim().slice(0, 80) : "";
+      if (text === "") continue;
+      seen.add(item.id);
+      items.push({ id: item.id, text, createdAt: typeof item.createdAt === "string" ? item.createdAt : "" });
+      if (items.length >= 50) break;
+    }
+  }
+  const known = new Set(items.map((item) => item.id));
+  const activeIds = Array.isArray(source?.activeIds)
+    ? [...new Set(source.activeIds.filter((id): id is string => typeof id === "string" && known.has(id)))]
+    : [];
+  const icon = typeof source?.icon === "string" ? source.icon : "";
+  return {
+    items,
+    activeIds,
+    icon,
+    position: source?.position === "bottom" ? "bottom" : "top",
+    enabled: source?.enabled !== false,
+    updatedAt: typeof source?.updatedAt === "string" ? source.updatedAt : ""
   };
 }
 
@@ -937,8 +972,13 @@ function normalizeHabit(raw: unknown): Habit | null {
     reminders: normalizeReminders(source.reminders),
     status,
     order: typeof source.order === "number" && Number.isFinite(source.order) ? source.order : 0,
+    targetCount:
+      typeof source.targetCount === "number" && Number.isInteger(source.targetCount)
+        ? Math.min(99, Math.max(1, source.targetCount))
+        : 1,
+    // 允许多重日期（每日多次打卡）：不去重，出现次数 = 当天已打次数
     checkins: Array.isArray(source.checkins)
-      ? [...new Set(source.checkins.filter((date): date is string => DIARY_DATE_RE.test(String(date ?? ""))))].sort()
+      ? source.checkins.filter((date): date is string => DIARY_DATE_RE.test(String(date ?? ""))).sort()
       : [],
     createdAt,
     updatedAt: typeof source.updatedAt === "string" ? source.updatedAt : undefined
@@ -1426,7 +1466,7 @@ export function normalizeSettings(raw: unknown): Settings {
         source?.appearance?.linkOpenMode === "system" || source?.behavior?.linkOpenMode === "system"
           ? "system"
           : defaultSettings.appearance.linkOpenMode,
-      listSortMode: normalizeSortMode(source?.appearance?.listSortMode),
+      listSortModes: normalizeSortModes(source?.appearance?.listSortModes),
       uiScale:
         storedUiScale ?? defaultSettings.appearance.uiScale,
       uiFontSize: normalizeFontSize(source?.appearance?.uiFontSize, defaultSettings.appearance.uiFontSize, 14, 22),

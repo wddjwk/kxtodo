@@ -44,3 +44,13 @@ WSL2 有 `/dev/fuse` 可直接跑；无 FUSE 的环境用 `./KXToDo.AppImage --a
 ### 7. AppImage 在老 Ubuntu 报 GLIBC_2.4x not found（v0.9.3）
 
 现象：`kxtodo: /lib/x86_64-linux-gnu/libc.so.6: version GLIBC_2.43 not found (required by /tmp/.mount_.../usr/lib/libwebkit2gtk-4.1.so.0)` 等一串，指向 **AppImage 内部**的打包库。根因不是代码依赖升级，而是 CI runner 镜像漂移 + linuxdeploy 打包构建机系统库（见第 6 条构建基线）。判别：报错路径带 `/tmp/.mount_` = 打包库；不带 = 真的系统库缺失。修：pin 老基底重发，不要试图在用户机器上装新 glibc。
+
+### 8. AppImage 自带旧 GLib 与系统托盘库符号不匹配 → 启动 panic（v0.9.4）
+
+现象：Ubuntu 24.04 上 `./KXToDo.AppImage` 先刷一串 `/usr/lib/.../libgvfscommon.so: undefined symbol: g_task_set_static_name`、`Failed to load module .../libgvfsdbus.so`、canberra-gtk-module 噪音，随后 `thread 'main' panicked at libappindicator-sys-0.9.0/src/lib.rs:41: Failed to load ayatana-appindicator3 or appindicator3 dynamic library`，exit 101。系统明明装了 libayatana-appindicator3-1。
+
+根因：与第 7 条的 glibc 基底**不是同一层**。linuxdeploy-plugin-gtk 把构建机（22.04）的旧 GLib（2.72）打进包，AppRun 的 `LD_LIBRARY_PATH` 让它优先于系统 GLib 加载；24.04 的系统托盘库 libayatana-ido3 按 GLib 2.80 编译，要 `g_once_init_leave_pointer`/`g_task_set_static_name` 这两个新符号，在旧 GLib 里找不到 → dlopen 失败。gvfs/canberra 的 undefined symbol 是同一旧 GLib 的连带噪音（不致命），真正杀进程的是托盘库。判别：报错里 `undefined symbol: g_*` + 托盘 panic = 自带 GLib 问题；`GLIBC_2.xx not found` = 第 7 条 glibc 基底问题。
+
+修（三件齐）：① release.sh 解包删 GLib 家族五库 + gio/modules、sed 删 AppRun 的 GIO_MODULE_DIR、appimagetool 重打包（GLib 各发行版必装且 ABI 向后兼容，22.04 构建的 webkit 链接的符号在 22.04+ 系统 GLib 都有）；② `setup_tray` 包 `catch_unwind`——dlopen 失败是 **panic 不是 Err**，原有 `if let Err` 降级接不住（release 禁 panic=abort，unwind 可用）；③ `scripts/verify-appimage.sh` 双 Ubuntu 容器真启动冒烟，发布前必跑。**不要**试图在用户机器上装/换 GLib，也不要给托盘 panic 加 `panic=abort`。
+
+**v0.9.4 补充（同条根因的第二个库 + 验证判据）**：剔 GLib 后 22.04 冒烟即过；24.04 还会报 `libcurl-gnutls.so.4: undefined symbol: nghttp2_option_set_no_rfc9113_…` + gio 的 libgiolibproxy/libgiognutls 加载失败——包内旧 **nghttp2** 优先于系统新 nghttp2，同属「自带旧库压系统新库」，release.sh 一并剔 `libnghttp2.so*`。另：解包出的 AppDir 目录带 0700（CI umask），appimagetool 会报几十条 permission problem 并 exit 1 拒包，重打包前必须 `chmod -R a+rX`。**verify-appimage.sh 的致命 grep 只认 `panicked|Failed to load ayatana|undefined symbol: g_`**——宽到任意 `undefined symbol` 会把上述非致命 gio 噪音误判成红（第三轮实测）；DRI3/AT-SPI/dbind 警告属容器噪音不致命。

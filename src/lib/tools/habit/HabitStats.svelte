@@ -7,7 +7,7 @@
   import { CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Flame, Pencil, Pause, Play, Trophy, Trash2, X } from "@lucide/svelte";
   import { showToast, todayIso, weekStart } from "../../stores";
   import { deleteHabit, updateHabit } from "../../actions";
-  import { freqLabel, HABIT_WEEKDAY_LABELS, isChecked, monthGrid, scheduledOn, habitStats, timeLabel } from "../../habits";
+  import { freqLabel, HABIT_WEEKDAY_LABELS, checkinCount, checkinProgress, isComplete, monthGrid, scheduledOn, habitStats, timeLabel } from "../../habits";
   import { ledgerIcon, softColor } from "../../ledgerIcons";
   import { createBackGuard } from "../../platform";
   import { imeInset } from "../../imeInset";
@@ -96,7 +96,7 @@
   >
     <header class="calendar-sheet-head habit-stats-head">
       <span class="habit-card-icon" style={`--habit-main: ${main}; --habit-soft: ${soft}`}>
-        <svelte:component this={ledgerIcon(habit.icon, "CalendarCheck")} size={20} />
+        <svelte:component this={ledgerIcon(habit.icon, "CalendarDays")} size={20} />
       </span>
       <span class="habit-stats-title">
         <strong>{habit.name}</strong>
@@ -111,7 +111,7 @@
     <div class="calendar-sheet-body">
       <div class="habit-stats-grid">
         <div class="habit-stat">
-          <strong>{stats.total}<small>天</small></strong>
+          <strong>{stats.total}<small>次</small></strong>
           <span><CheckCircle2 size={12} />累计打卡</span>
         </div>
         <div class="habit-stat">
@@ -123,7 +123,7 @@
           <span><Trophy size={12} />最长连续</span>
         </div>
         <div class="habit-stat">
-          <strong>{stats.month}<small>天</small></strong>
+          <strong>{stats.month}<small>次</small></strong>
           <span><CalendarDays size={12} />本月打卡</span>
         </div>
       </div>
@@ -154,10 +154,12 @@
             {#if date}
               <span
                 class="habit-heat-cell"
-                class:checked={isChecked(habit, date)}
+                class:checked={isComplete(habit, date)}
+                class:partial={checkinCount(habit, date) > 0 && !isComplete(habit, date)}
                 class:due={scheduledOn(habit, date)}
                 class:today={date === today}
-                title={isChecked(habit, date) ? `${date} 已打卡` : scheduledOn(habit, date) ? `${date} 未打卡` : date}
+                style={`--habit-fill: ${checkinProgress(habit, date).ratio * 360}deg`}
+                title={checkinCount(habit, date) > 0 ? `${date} 已打卡 ${checkinCount(habit, date)}/${checkinProgress(habit, date).target}` : scheduledOn(habit, date) ? `${date} 未打卡` : date}
               >{Number(date.slice(8, 10))}</span>
             {:else}
               <span class="habit-heat-cell blank"></span>

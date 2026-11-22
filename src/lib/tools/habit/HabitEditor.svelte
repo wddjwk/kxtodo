@@ -19,6 +19,7 @@
   import ContextMenu from "../../menu/ContextMenu.svelte";
   import MenuItem from "../../menu/MenuItem.svelte";
   import MenuSeparator from "../../menu/MenuSeparator.svelte";
+  import NumberField from "../../NumberField.svelte";
   import type { HabitFreq, ReminderRule } from "../../types";
 
   export let target: { id?: string } = {};
@@ -34,8 +35,9 @@
   const editing = target.id ? findHabit(target.id) : undefined;
   let name = editing?.name ?? "";
   let color = editing?.color ?? PALETTE[0];
-  let icon = editing?.icon ?? "CalendarCheck";
+  let icon = editing?.icon ?? "CalendarDays";
   let freq: HabitFreq = editing?.freq ?? { kind: "daily", weekdays: [] };
+  let targetCount = editing?.targetCount ?? 1;
   let time = editing?.time ?? "";
   let reminders: ReminderRule[] = editing?.reminders ?? [];
   let busy = false;
@@ -129,7 +131,8 @@
         icon,
         freq,
         time,
-        reminders
+        reminders,
+        targetCount
       };
       if (editing) {
         const ok = await updateHabit(editing.id, draft);
@@ -221,7 +224,7 @@
         <span class="cal-field-label">图标</span>
         <button type="button" class="cal-field-trigger" on:click={() => (iconPickerOpen = true)}>
           <span class="habit-icon-preview" style={`--habit-main: ${color || "var(--accent)"}; --habit-soft: ${previewSoft}`}>
-            <svelte:component this={ledgerIcon(icon, "CalendarCheck")} size={16} />
+            <svelte:component this={ledgerIcon(icon, "CalendarDays")} size={16} />
           </span>
           <span class="cal-field-value">{icon || "默认图标"}</span>
           <ChevronRight size={15} class="cal-field-chevron" />
@@ -267,6 +270,14 @@
           <span class="cal-field-value">{freqText}</span>
           <ChevronRight size={15} class="cal-field-chevron" />
         </button>
+      </div>
+
+      <div class="cal-field">
+        <span class="cal-field-label">每日次数</span>
+        <span class="habit-target-control">
+          <NumberField value={targetCount} min={1} max={99} suffix="次" ariaLabel="每日目标打卡次数" onCommit={(value) => (targetCount = value)} />
+          <span class="habit-target-hint">{targetCount > 1 ? `每天打满 ${targetCount} 次才算完成` : "每天打一次卡"}</span>
+        </span>
       </div>
 
       <div class="cal-field">

@@ -6,7 +6,7 @@
  * 所有工具的 chunk 拉进首屏链——目录这一层就是为了解耦而存在的。
  */
 
-export type ToolId = "random" | "rmb" | "scratchpad" | "transfer" | "clipboard" | "habit";
+export type ToolId = "random" | "rmb" | "scratchpad" | "transfer" | "clipboard" | "habit" | "slogan";
 
 export type ToolCatalogEntry = {
   id: ToolId;
@@ -44,6 +44,11 @@ export const TOOL_CATALOG: readonly ToolCatalogEntry[] = [
     id: "habit",
     name: "习惯打卡",
     desc: "每天/每周的习惯养成：打卡、连续天数与累计统计"
+  },
+  {
+    id: "slogan",
+    name: "标语栏",
+    desc: "写几句提醒自己的话，悬浮在所有页面角落，多条轮播"
   }
 ];
 

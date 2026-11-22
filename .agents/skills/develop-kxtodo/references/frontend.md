@@ -148,7 +148,7 @@ v9 ScheduleEntry（spec/state/ui 三段）↔ UI 编辑模型双向适配，patc
 - 定时任务编辑用本地草稿、显式保存，`scheduleAdapter.ts::uiToPatch` 比较原始投影而非整份替换，保留未修改的精确时刻、时区与超时。`scheduleEditor.ts` 提供日历表达式、预览和校验；legacy 编辑态必须写 scheduler 独立存储。
 
 - `popover.ts::popoverFrame` 测量 `.app-shell` 的真实包含块；锚点减去 shell 的 left/top 后再除缩放比，宽高也来自 shell。输入法收矮/平移时不能混用 window.innerHeight，否则按钮会落进键盘。三处消费端是取色盘、ContextMenu、TaskCard 日期浮层，并监听 visualViewport 的 resize/scroll。
-- `appearance.listSortMode` 保存七种排序，Workspace 直接从设置派生；`normalizeSettings`、配置枚举与同步收发三处清单保持一致。
+- `appearance.listSortModes`（v0.9.4 起**按页各记一份**，`{页面id: SortMode}` 整份对象，取代旧全局单值 `listSortMode`）：`sort.ts` 的 `DEFAULT_SORT_MODE`/`normalizeSortModes`/`sortModeForPage`；Workspace 唯一读点 `$: sortMode = sortModeForPage($appSettings.appearance.listSortModes, $selectedNode?.id)`，写点 onSortMode 整份 spread 覆盖当前页键。`normalizeSettings`、`ops_config` 四处（`expect_list_sort_modes`）、merge 共享子集与 `is_shared_settings_path` 清单保持一致。页面 id = 节点 id 或系统视图 id（my-day/planned/important），没配置回落 created-desc。
 - `Task.pinned` 是同步内容，`features.pinnedIcon` / `pinnedSection` 是独立外观开关。置顶组先按当前排序排序，再放到普通分区前；图标占标题网格独立列，展开隐藏，plain 卡与移动端分别裁掉勾选/编辑列。不要插进 markdown DOM，否则测宽与渲染会互相覆盖。
 - 草稿纸无修饰 Tab 用 `execCommand("insertText")` 输入制表符；不要手工拼接 value，否则原生撤销栈会断。
 

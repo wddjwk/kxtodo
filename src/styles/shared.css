@@ -184,3 +184,163 @@
   opacity: 1;
   transform: none;
 }
+
+/* ---------------------------------------------------------------------------
+ * 主题化开关（v0.9.4）：ToggleSwitch 组件——替代裸 checkbox 的拨动开关。
+ * 悬浮是柔和的光晕/加深，不是矩形高亮。标语栏与定时任务共用。
+ * --------------------------------------------------------------------------- */
+
+.toggle-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 21px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 14%);
+  cursor: pointer;
+  transition: background 0.16s ease;
+}
+
+.toggle-switch:hover {
+  background: rgb(0 0 0 / 20%);
+}
+
+.toggle-switch.on {
+  background: var(--accent);
+}
+
+.toggle-switch.on:hover {
+  filter: brightness(1.07);
+}
+
+.toggle-switch:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.toggle-switch-knob {
+  position: absolute;
+  top: 2.5px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 25%);
+  transition: transform 0.16s ease;
+}
+
+.toggle-switch.on .toggle-switch-knob {
+  transform: translateX(14px);
+}
+
+/* ---------------------------------------------------------------------------
+ * 标语栏全局悬浮层（v0.9.4）：右对齐胶囊，悬浮在页面角落不挤占排版。
+ * z 45：页面内容（20-40）之上、Toast（50）与一切菜单/模态（3600+）之下。
+ * 挂在缩放壳内，top 由 SloganBanner 按布局像素算；right 恒定 20px。
+ * --------------------------------------------------------------------------- */
+
+.slogan-banner {
+  position: fixed;
+  right: 20px;
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(420px, 60%);
+  padding: 5px 8px 5px 12px;
+  border: 1px solid rgb(0 0 0 / 8%);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 94%);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 8%);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.slogan-banner-body {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--accent);
+  animation: slogan-in 0.32s ease;
+}
+
+.slogan-banner-text {
+  color: #4b5563;
+  font-size: calc(var(--font-control) - 4px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slogan-banner-x {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #98a1ae;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.slogan-banner-x:hover {
+  background: rgb(0 0 0 / 6%);
+  color: #4b5563;
+}
+
+/* 轮播进度条：走满一轮 = 一帧；悬停暂停 */
+.slogan-banner-progress {
+  position: absolute;
+  right: 12px;
+  bottom: 2px;
+  left: 12px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  opacity: 0.35;
+  transform-origin: left;
+  animation: slogan-progress linear forwards;
+}
+
+.slogan-banner-progress.paused {
+  animation-play-state: paused;
+}
+
+@keyframes slogan-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes slogan-progress {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+/* 工具页里的静态预览（不定位、不轮播） */
+.slogan-banner.static {
+  position: static;
+  max-width: 100%;
+  cursor: default;
+}
+
+.slogan-banner.static .slogan-banner-body {
+  animation: none;
+}

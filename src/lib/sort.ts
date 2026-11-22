@@ -3,6 +3,8 @@ import type { Task } from "./types";
 
 export type SortMode = "created-desc" | "created-asc" | "alpha-asc" | "alpha-desc" | "due-asc" | "due-desc" | "importance";
 
+export const DEFAULT_SORT_MODE: SortMode = "created-desc";
+
 export const sortLabels: Record<SortMode, string> = {
   "created-desc": "创建时间 ↓ 最新",
   "created-asc": "创建时间 ↑ 最早",
@@ -39,7 +41,21 @@ function compareDue(a: Task, b: Task, direction: 1 | -1): number {
 }
 
 export function normalizeSortMode(value: unknown): SortMode {
-  return typeof value === "string" && Object.hasOwn(sortLabels, value) ? value as SortMode : "created-desc";
+  return typeof value === "string" && Object.hasOwn(sortLabels, value) ? value as SortMode : DEFAULT_SORT_MODE;
+}
+
+/** 排序方式按页面各记一份（v0.9.4）：`{ 页面id: 排序方式 }`，键是节点 id 或系统视图 id。 */
+export function normalizeSortModes(value: unknown): Record<string, SortMode> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const out: Record<string, SortMode> = {};
+  for (const [key, mode] of Object.entries(value)) {
+    if (key) out[key] = normalizeSortMode(mode);
+  }
+  return out;
+}
+
+export function sortModeForPage(modes: Record<string, SortMode>, pageId: string | undefined): SortMode {
+  return (pageId && modes[pageId]) || DEFAULT_SORT_MODE;
 }
 
 export function sortTasks(tasks: Task[], mode: SortMode): Task[] {

@@ -265,14 +265,16 @@ describe("seedLedgerBook（浏览器预览首跑的种子账本）", () => {
 describe("normalizeSettings（字号与缩放的夹取）", () => {
   it("排序及两个置顶样式在快照往返中保留，旧值补默认", () => {
     const normalized = normalizeSettings({
-      appearance: { listSortMode: "alpha-asc" },
+      appearance: { listSortModes: { "entry-a": "alpha-asc", planned: "due-desc" } },
       features: { pinnedIcon: false, pinnedSection: true }
     });
     const restored = normalizeSettings(JSON.parse(JSON.stringify(normalized)));
-    expect(restored.appearance.listSortMode).toBe("alpha-asc");
+    expect(restored.appearance.listSortModes).toEqual({ "entry-a": "alpha-asc", planned: "due-desc" });
     expect(restored.features.pinnedIcon).toBe(false);
     expect(restored.features.pinnedSection).toBe(true);
-    expect(normalizeSettings({ appearance: { listSortMode: "unknown" } }).appearance.listSortMode).toBe("created-desc");
+    expect(normalizeSettings({ appearance: { listSortModes: { "entry-a": "unknown" } } }).appearance.listSortModes)
+      .toEqual({ "entry-a": "created-desc" });
+    expect(normalizeSettings({ appearance: { listSortModes: "bad" } }).appearance.listSortModes).toEqual({});
     expect(normalizeSettings({}).features).toMatchObject({ pinnedIcon: true, pinnedSection: false });
     expect(normalizeSettings({ features: { pinnedIcon: true, pinnedSection: true } }).features)
       .toMatchObject({ pinnedIcon: true, pinnedSection: true });

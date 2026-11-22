@@ -171,6 +171,65 @@ if [[ "$appimage_name" != *"$VERSION"* ]]; then
   exit 1
 fi
 
+# ---------- AppImage 瘦身：剔除自带的 GLib 家族，重打包 ----------
+# v0.9.3 事故：linuxdeploy-plugin-gtk 把构建机（22.04）的旧 GLib（2.72）打进包里，
+# AppRun 的 LD_LIBRARY_PATH 让它优先于系统 GLib 加载；Ubuntu 24.04 的系统托盘库
+# libayatana-ido3 按 GLib 2.80 编译，找 g_once_init_leave_pointer / g_task_set_static_name
+# 找不到 → libappindicator dlopen 失败 → 整进程 panic（gvfs/canberra 的 undefined symbol
+# 噪音同根因）。GLib 是各发行版必装的基础库且 ABI 向后兼容：构建机 22.04 的 webkit/gtk
+# 链接的符号在 22.04+ 的系统 GLib 里都有，剔除自带副本让全进程统一用系统 GLib 即可。
+# 同理由剔 libnghttp2：24.04 系统 libcurl-gnutls 要新 nghttp2 符号，包内旧 nghttp2 优先
+# 会让 gio 的 libproxy/gnutls 模块加载失败（非致命，但属同类「自带旧库压系统新库」）。
+# tauri bundler 没有排除库的配置口，标准做法是解包 → 删库 → chmod -R a+rX → appimagetool 重打包。
+printf '==> AppImage 瘦身（剔除自带 GLib 家族，改用系统 GLib）...\n'
+appimage_workdir="$(mktemp -d)"
+trap 'rm -rf "$appimage_workdir"' EXIT
+if ! (cd "$appimage_workdir" && "$appimage_src" --appimage-extract >/dev/null); then
+  printf '错误：AppImage 解包失败\n' >&2
+  exit 1
+fi
+appdir="$appimage_workdir/squashfs-root"
+removed_libs="$(find "$appdir" \( -name 'libglib-2.0.so*' -o -name 'libgobject-2.0.so*' \
+  -o -name 'libgio-2.0.so*' -o -name 'libgmodule-2.0.so*' -o -name 'libgthread-2.0.so*' \
+  -o -name 'libnghttp2.so*' \) -print -delete)"
+if [[ -z "$removed_libs" ]]; then
+  printf '错误：AppDir 里找不到自带的 GLib 家族库——打包链可能变了，拒绝产出未瘦身的包\n' >&2
+  exit 1
+fi
+printf '%s\n' "$removed_libs" | sed "s|$appdir/|  剔除 |"
+# 自带的 gio/modules（gvfs 等）是按旧 GLib 编译的，一并剔除；AppRun 里指向它们的
+# GIO_MODULE_DIR 导出删掉，回落系统默认模块目录（系统 gio 与系统模块版本天然匹配）。
+find "$appdir" -type d -path '*gio/modules' -prune -exec rm -rf {} + 2>/dev/null || true
+if [[ -f "$appdir/AppRun" ]]; then
+  sed -i '/GIO_MODULE_DIR/d' "$appdir/AppRun"
+fi
+# 解包出来的目录可能带 0700（CI umask），appimagetool 会因「别的用户读/执行不了」拒包；
+# 按它自己的建议统一补读与目录执行位（a+rX 不给普通文件加执行位，AppRun 原有 +x 保留）。
+chmod -R a+rX "$appdir"
+
+# appimagetool 缓存复用；GitHub 直连失败回落 ghfast.top 镜像（与 server 自升级同策略）。
+appimagetool_cache="${XDG_CACHE_HOME:-$HOME/.cache}/kxtodo-build"
+mkdir -p "$appimagetool_cache"
+appimagetool="$appimagetool_cache/appimagetool-x86_64.AppImage"
+if [[ ! -x "$appimagetool" ]]; then
+  appimagetool_url="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+  if ! curl -fL --retry 2 --connect-timeout 20 -o "$appimagetool" "$appimagetool_url"; then
+    printf '警告：GitHub 直连下载 appimagetool 失败，尝试 ghfast.top 镜像\n' >&2
+    if ! curl -fL --retry 2 --connect-timeout 20 -o "$appimagetool" "https://ghfast.top/$appimagetool_url"; then
+      printf '错误：appimagetool 下载失败（重打包必需）\n' >&2
+      exit 1
+    fi
+  fi
+  chmod +x "$appimagetool"
+fi
+if ! ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$appimagetool" "$appdir" "$appimage_workdir/repacked.AppImage" >/dev/null; then
+  printf '错误：appimagetool 重打包失败\n' >&2
+  exit 1
+fi
+cp -f "$appimage_workdir/repacked.AppImage" "$appimage_src"
+chmod +x "$appimage_src"
+printf '==> 瘦身完成：%s（%s 字节）\n' "$appimage_name" "$(stat -c %s "$appimage_src")"
+
 # ---------- CLI：裸二进制 ----------
 # workspace default-members 不含 cli，必须显式 -p。
 printf '==> 构建 Linux CLI（kxtodo-cli）...\n'
@@ -195,6 +254,19 @@ cp -f "$appimage_src" "$appimage_out"
 cp -f "$CARGO_TARGET_DIR/release/kxtodo-cli" "$cli_out"
 cp -f "$CARGO_TARGET_DIR/release/kxtodo-server" "$server_out"
 chmod +x "$appimage_out" "$cli_out" "$server_out"
+
+# ---------- 双 Ubuntu 运行验证（有 docker 就跑，CI runner 自带 docker） ----------
+# 打包成功 ≠ 跑得起来：v0.9.2/v0.9.3 两版都是构建全绿、用户机器上 panic。
+# 在 ubuntu:22.04 与 ubuntu:24.04 容器里真实启动 AppImage（xvfb + dbus），
+# 断言进程活过冒烟窗口且无 panic / 托盘库加载失败 / undefined symbol。
+if command -v docker >/dev/null 2>&1; then
+  if ! bash "$SCRIPT_DIR/scripts/verify-appimage.sh" "$appimage_out"; then
+    printf '错误：AppImage 运行验证失败，拒绝发布\n' >&2
+    exit 1
+  fi
+else
+  printf '警告：未找到 docker，跳过 AppImage 双 Ubuntu 运行验证（CI 的 release.sh 会自动执行该步骤）\n' >&2
+fi
 
 printf '==> 构建完成（版本 %s）：\n' "$VERSION"
 printf '  %s/%s（%s 字节）\n' "$SCRIPT_DIR" "$appimage_out" "$(stat -c %s "$appimage_out")"

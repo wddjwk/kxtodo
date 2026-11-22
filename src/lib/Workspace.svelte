@@ -47,7 +47,7 @@
   import ListMenu from "./workspace/ListMenu.svelte";
   import TaskMenuManager from "./workspace/TaskMenuManager.svelte";
   import TagMenuPanel from "./TagMenuPanel.svelte";
-  import { sortTasks } from "./sort";
+  import { sortTasks, sortModeForPage } from "./sort";
   import { filterPlannedTasks, plannedGroupOptions, plannedSections, type PlannedGroupKey } from "./plannedGroups";
   import { addDays } from "./calendar";
   import { visibleTaskMenuIds } from "./taskMenuConfig";
@@ -89,7 +89,7 @@
   let showCompleted = false;
   let showSuggestions = false;
   let showCalendar = false;
-  $: sortMode = $appSettings.appearance.listSortMode;
+  $: sortMode = sortModeForPage($appSettings.appearance.listSortModes, $selectedNode?.id);
   // 计划内视图：日期分组过滤 + 已完成显隐（默认隐藏，且不渲染折叠的已完成区）
   let plannedGroup: PlannedGroupKey = "all";
   let plannedShowCompleted = readCompletedOpen(COMPLETED_PLANNED_KEY);
@@ -1136,7 +1136,12 @@
       showCompleted={plannedShowCompleted}
       onToggleShowCompleted={togglePlannedCompleted}
       {sortMode}
-      onSortMode={(mode) => void setConfigAction("appearance.listSortMode", mode)}
+      onSortMode={(mode) => {
+        const pageId = $selectedNode?.id;
+        if (pageId) {
+          void setConfigAction("appearance.listSortModes", { ...$appSettings.appearance.listSortModes, [pageId]: mode });
+        }
+      }}
       onRenameRequest={beginHeaderRename}
       onClose={() => (listMenuAt = null)}
     />

@@ -122,6 +122,9 @@ pub fn data_entity_stamp(data: &DataFile, id: &str) -> Option<String> {
     if id == SCRATCHPAD_ENTITY_ID {
         return scratchpad_entity_stamp(data);
     }
+    if id == SLOGAN_ENTITY_ID {
+        return slogan_entity_stamp(data);
+    }
     if let Some(habit) = data.habits.iter().find(|habit| habit.id == id) {
         return Some(
             habit
@@ -143,6 +146,19 @@ pub const SCRATCHPAD_ENTITY_ID: &str = "scratchpad";
 /// 草稿纸的版本戳（没写过就是空串 = 还没有实体可推）。
 pub fn scratchpad_entity_stamp(data: &DataFile) -> Option<String> {
     let stamp = data.scratchpad.updated_at.trim();
+    if stamp.is_empty() {
+        None
+    } else {
+        Some(stamp.to_string())
+    }
+}
+
+/// 标语栏是**单例实体**（v0.9.4，与草稿纸同谱系）：固定 id，整份 LWW 覆盖。
+pub const SLOGAN_ENTITY_ID: &str = "slogan";
+
+/// 标语栏的版本戳（没写过就是空串 = 还没有实体可推）。
+pub fn slogan_entity_stamp(data: &DataFile) -> Option<String> {
+    let stamp = data.slogan.updated_at.trim();
     if stamp.is_empty() {
         None
     } else {
@@ -342,7 +358,7 @@ pub fn settings_payload(settings: &SettingsFile) -> Value {
         },
         "appearance": {
             "linkOpenMode": settings.appearance.link_open_mode,
-            "listSortMode": settings.appearance.list_sort_mode,
+            "listSortModes": settings.appearance.list_sort_modes,
             "themePresets": settings.appearance.theme_presets,
             "uiColors": settings.appearance.ui_colors,
             "newNodeDefaults": settings.appearance.new_node_defaults,
@@ -468,6 +484,24 @@ pub fn extract_entities(
                 updated_by: device_id.to_string(),
                 deleted: false,
                 data: serde_json::to_value(habit).unwrap_or(Value::Null),
+                seq: 0,
+            });
+        }
+        // 标语栏（v0.9.4）：单例实体，写过才有（与草稿纸同一套取舍）
+        if let Some(stamp) = slogan_entity_stamp(data) {
+            out.push(EntityRecord {
+                kind: "slogan".to_string(),
+                id: SLOGAN_ENTITY_ID.to_string(),
+                updated_at: stamp,
+                updated_by: device_id.to_string(),
+                deleted: false,
+                data: json!({
+                    "items": data.slogan.items,
+                    "activeIds": data.slogan.active_ids,
+                    "icon": data.slogan.icon,
+                    "position": data.slogan.position,
+                    "enabled": data.slogan.enabled,
+                }),
                 seq: 0,
             });
         }
@@ -904,9 +938,9 @@ fn apply_settings_record(record: &EntityRecord, settings: &mut SettingsFile) -> 
                     settings.appearance.link_open_mode = parsed;
                 }
             }
-            if let Some(mode) = map.get("listSortMode") {
-                if let Ok(parsed) = crate::ops_config::expect_list_sort_mode(mode) {
-                    settings.appearance.list_sort_mode = parsed;
+            if let Some(modes) = map.get("listSortModes") {
+                if let Ok(parsed) = crate::ops_config::expect_list_sort_modes("appearance.listSortModes", modes) {
+                    settings.appearance.list_sort_modes = parsed;
                 }
             }
             if let Some(presets) = map.get("themePresets") {
@@ -1144,6 +1178,37 @@ pub fn apply_data_record(
             data.scratchpad = next;
             Ok(())
         }
+        // 标语栏：LWW 整份覆盖（载荷里就是全部标语 + 展示配置）
+        "slogan" => {
+            let items: Vec<crate::model::SloganItem> =
+                serde_json::from_value(record.data.get("items").cloned().unwrap_or(Value::Null))
+                    .unwrap_or_default();
+            let known: std::collections::HashSet<&str> =
+                items.iter().map(|item| item.id.as_str()).collect();
+            let active_ids: Vec<String> = record
+                .data
+                .get("activeIds")
+                .and_then(Value::as_array)
+                .map(|list| {
+                    list.iter()
+                        .filter_map(Value::as_str)
+                        .filter(|id| known.contains(id))
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let position = record.data.get("position").and_then(Value::as_str).unwrap_or("top");
+            data.slogan = crate::model::Slogan {
+                items,
+                active_ids,
+                icon: record.data.get("icon").and_then(Value::as_str).unwrap_or_default().to_string(),
+                position: if position == "bottom" { "bottom".to_string() } else { "top".to_string() },
+                enabled: record.data.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+                updated_at: record.updated_at.clone(),
+                extra: Map::new(),
+            };
+            Ok(())
+        }
         other => Err(format!("未知数据域实体类型 `{other}`")),
     }
 }
@@ -1284,6 +1349,7 @@ mod tests {
             backgrounds: Map::new(),
             scratchpad: Default::default(),
             habits: Vec::new(),
+            slogan: Default::default(),
             extra: Map::new(),
         }
     }
@@ -1586,11 +1652,12 @@ mod tests {
         for mode in crate::model::LIST_SORT_MODES {
             for (icon, section) in [(true, true), (false, false), (true, false), (false, true)] {
                 let mut source = SettingsFile::default();
-                source.appearance.list_sort_mode = mode.to_string();
+                source.appearance.list_sort_modes =
+                    json!({ "entry-a": mode }).as_object().unwrap().clone();
                 source.features.pinned_icon = icon;
                 source.features.pinned_section = section;
                 let payload = settings_payload(&source);
-                assert_eq!(payload["appearance"]["listSortMode"], mode);
+                assert_eq!(payload["appearance"]["listSortModes"]["entry-a"], mode);
                 assert_eq!(payload["features"]["pinnedIcon"], icon);
                 assert_eq!(payload["features"]["pinnedSection"], section);
                 let mut target = SettingsFile::default();
@@ -1600,7 +1667,7 @@ mod tests {
                 target.features.mobile_back = true;
                 target.features.sync = false;
                 apply_settings_record(&settings_record(payload, 1), &mut target).unwrap();
-                assert_eq!(target.appearance.list_sort_mode, mode);
+                assert_eq!(target.appearance.list_sort_modes["entry-a"], mode);
                 assert_eq!(target.features.pinned_icon, icon);
                 assert_eq!(target.features.pinned_section, section);
                 assert_eq!(target.appearance.ui_scale, 1.25);
@@ -1614,18 +1681,19 @@ mod tests {
     #[test]
     fn shared_sort_and_pin_settings_ignore_absent_or_invalid_fields() {
         let mut target = SettingsFile::default();
-        target.appearance.list_sort_mode = "alpha-desc".to_string();
+        target.appearance.list_sort_modes =
+            json!({ "entry-a": "alpha-desc" }).as_object().unwrap().clone();
         target.features.pinned_icon = false;
         target.features.pinned_section = true;
         for payload in [
             json!({ "appearance": {}, "features": {} }),
-            json!({ "appearance": { "listSortMode": "manual" },
+            json!({ "appearance": { "listSortModes": { "entry-a": "manual" } },
                 "features": { "pinnedIcon": "true", "pinnedSection": 0 } }),
-            json!({ "appearance": { "listSortMode": false },
+            json!({ "appearance": { "listSortModes": false },
                 "features": { "pinnedIcon": null, "pinnedSection": [] } }),
         ] {
             apply_settings_record(&settings_record(payload, 1), &mut target).unwrap();
-            assert_eq!(target.appearance.list_sort_mode, "alpha-desc");
+            assert_eq!(target.appearance.list_sort_modes["entry-a"], "alpha-desc");
             assert!(!target.features.pinned_icon);
             assert!(target.features.pinned_section);
         }
@@ -1642,7 +1710,7 @@ mod tests {
         ).unwrap();
         assert!(target.features.pinned_icon);
         assert!(!target.features.pinned_section);
-        assert_eq!(target.appearance.list_sort_mode, "alpha-desc");
+        assert_eq!(target.appearance.list_sort_modes["entry-a"], "alpha-desc");
     }
 
     fn settings_record(data: Value, seq: u64) -> EntityRecord {

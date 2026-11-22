@@ -79,6 +79,9 @@
 .app-shell.mobile .scheduler-footer-actions { flex: 1; justify-content: stretch; gap: 6px; }
 .app-shell.mobile .scheduler-footer-actions .settings-button { flex: 1 1 0; min-width: 0; }
 .app-shell.mobile .scheduler-history-run > summary { flex-wrap: wrap; }
+.app-shell.mobile .scheduler-step-number { width: 22px; height: 22px; border-radius: 7px; }
+.app-shell.mobile .scheduler-stop-options.segmented button { flex: 1 1 auto; min-height: 36px; padding: 6px 8px; }
+.app-shell.mobile .scheduler-toggle-row { min-height: 38px; }
 .app-shell.mobile .scheduler-panel .scheduler-floating-add { bottom: calc(6px + env(safe-area-inset-bottom, 0px) * var(--safe-inv, 1)); }
 
 /* 移动端一律不画滚动条：触屏本来就是覆盖式滚动条，露出来只是噪音
@@ -1451,4 +1454,21 @@
 
 .app-shell.mobile .habit-stats-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* 标语栏工具页（v0.9.4）：移动端只维护内容，不展示悬浮层（SloganBanner 自己判掉） */
+.app-shell.mobile .slogan-panel {
+  padding: 10px 12px;
+}
+
+.app-shell.mobile .slogan-setting-row {
+  flex-wrap: wrap;
+}
+
+.app-shell.mobile .slogan-add {
+  flex-wrap: wrap;
+}
+
+.app-shell.mobile .slogan-add-input {
+  flex: 1 1 100%;
 }

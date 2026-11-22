@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   bestStreak,
+  checkinCount,
+  checkinProgress,
   completionRate,
   currentStreak,
   dailyGroups,
   freqLabel,
   habitStats,
-  isChecked,
+  habitTarget,
+  isComplete,
   monthCount,
   monthGrid,
   nextScheduled,
@@ -14,7 +17,7 @@ import {
   scheduledOn,
   shiftDate,
   slotOf,
-  toggledCheckins,
+  tappedCheckins,
   weekdayOf
 } from "../habits";
 import { normalizeHabits } from "../defaults";
@@ -31,6 +34,7 @@ function habit(partial: Partial<Habit> = {}): Habit {
     reminders: [],
     status: "active",
     order: 1,
+    targetCount: 1,
     checkins: [],
     createdAt: "2026-01-01T00:00:00Z",
     ...partial
@@ -167,31 +171,75 @@ describe("月历与打卡切换", () => {
     expect(monday.filter((cell) => cell !== null)).toHaveLength(30);
   });
 
-  it("toggledCheckins 升序去重、取消移除", () => {
+  it("tappedCheckins：没打满 +1（升序允许多重），打满清空当天", () => {
     const h = habit({ checkins: ["2026-11-18"] });
-    expect(toggledCheckins(h, "2026-11-19", true)).toEqual(["2026-11-18", "2026-11-19"]);
-    expect(toggledCheckins(h, "2026-11-18", true)).toEqual(["2026-11-18"]);
-    expect(toggledCheckins(h, "2026-11-18", false)).toEqual([]);
-    expect(isChecked(h, "2026-11-18")).toBe(true);
+    expect(tappedCheckins(h, "2026-11-19")).toEqual(["2026-11-18", "2026-11-19"]);
+    expect(tappedCheckins(h, "2026-11-18")).toEqual([]); // target=1 已打满 → 清空
+    expect(isComplete(h, "2026-11-18")).toBe(true);
+    const multi = habit({ targetCount: 3, checkins: ["2026-11-18", "2026-11-18"] });
+    expect(tappedCheckins(multi, "2026-11-18")).toEqual(["2026-11-18", "2026-11-18", "2026-11-18"]);
+    expect(isComplete(multi, "2026-11-18")).toBe(false);
+    const full = habit({ targetCount: 3, checkins: ["2026-11-18", "2026-11-18", "2026-11-18"] });
+    expect(tappedCheckins(full, "2026-11-18")).toEqual([]);
+    expect(isComplete(full, "2026-11-18")).toBe(true);
+  });
+});
+
+describe("每日多次打卡（v0.9.4）", () => {
+  it("checkinCount / checkinProgress / habitTarget", () => {
+    const h = habit({ targetCount: 4, checkins: ["2026-11-19", "2026-11-19", "2026-11-18"] });
+    expect(checkinCount(h, "2026-11-19")).toBe(2);
+    expect(checkinCount(h, "2026-11-18")).toBe(1);
+    expect(checkinCount(h, "2026-11-17")).toBe(0);
+    expect(checkinProgress(h, "2026-11-19")).toEqual({ count: 2, target: 4, ratio: 0.5 });
+    expect(checkinProgress(h, "2026-11-17").ratio).toBe(0);
+    expect(habitTarget(h)).toBe(4);
+    expect(habitTarget(habit({ targetCount: 0 }))).toBe(1); // 脏数据兜底
+  });
+
+  it("部分完成不算连续、不算完成率；打满才算", () => {
+    const h = habit({
+      targetCount: 2,
+      checkins: ["2026-11-17", "2026-11-17", "2026-11-18", "2026-11-19", "2026-11-19"]
+    });
+    // 11-18 只打了一次（部分）→ 连续断在那里
+    expect(currentStreak(h, "2026-11-19")).toBe(1);
+    expect(bestStreak(h)).toBe(1);
+    expect(completionRate(h, "2026-11-19")).toBeCloseTo(2 / 30, 5);
+    expect(monthCount(h, "2026-11")).toBe(5); // 累计按次数
+    expect(habitStats(h, "2026-11-19").total).toBe(5);
+    const full = habit({
+      targetCount: 2,
+      checkins: ["2026-11-17", "2026-11-17", "2026-11-18", "2026-11-18", "2026-11-19", "2026-11-19"]
+    });
+    expect(currentStreak(full, "2026-11-19")).toBe(3);
+    expect(bestStreak(full)).toBe(3);
   });
 });
 
 describe("normalizeHabits 白名单", () => {
-  it("脏形状回落默认、checkins 去重排序、weekly 空集合回落 daily", () => {
+  it("脏形状回落默认、checkins 排序保留多重、weekly 空集合回落 daily", () => {
     const list = normalizeHabits({
       habits: [
-        { id: "h1", name: " 刷牙 ", checkins: ["2026-11-19", "2026-11-18", "2026-11-19", "bad"], freq: { kind: "weekly", weekdays: [] }, time: "25:00", status: "weird", order: 2 },
+        { id: "h1", name: " 刷牙 ", checkins: ["2026-11-19", "2026-11-18", "2026-11-19", "bad"], freq: { kind: "weekly", weekdays: [] }, time: "25:00", status: "weird", order: 2, targetCount: 3 },
         { id: "h2", name: "阅读", order: 1 },
         { id: "", name: "无 id" },
-        { id: "h3", name: "   " }
+        { id: "h3", name: "   " },
+        { id: "h4", name: "越界目标", targetCount: 500 },
+        { id: "h5", name: "零目标", targetCount: 0 }
       ]
     });
-    expect(list.map((item) => item.id)).toEqual(["h2", "h1"]); // order 排序
-    expect(list[1].name).toBe("刷牙");
-    expect(list[1].checkins).toEqual(["2026-11-18", "2026-11-19"]);
-    expect(list[1].freq).toEqual({ kind: "daily", weekdays: [] });
-    expect(list[1].time).toBe("");
-    expect(list[1].status).toBe("active");
+    expect(list.map((item) => item.id)).toEqual(["h4", "h5", "h2", "h1"]); // order 排序（缺省 0 的排前，同 order 按 id）
+    expect(list[3].name).toBe("刷牙");
+    // 多重日期保留（每日多次打卡）：出现次数 = 当天已打次数
+    expect(list[3].checkins).toEqual(["2026-11-18", "2026-11-19", "2026-11-19"]);
+    expect(list[3].targetCount).toBe(3);
+    expect(list[3].freq).toEqual({ kind: "daily", weekdays: [] });
+    expect(list[3].time).toBe("");
+    expect(list[3].status).toBe("active");
+    expect(list[2].targetCount).toBe(1); // 缺省
+    expect(list[0].targetCount).toBe(99); // 夹取上限
+    expect(list[1].targetCount).toBe(1); // 夹取下限
   });
 
   it("数组直给也认（快照/本地两种形状）", () => {

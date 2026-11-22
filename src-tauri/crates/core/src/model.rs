@@ -110,6 +110,9 @@ pub struct DataFile {
     /// （与草稿纸同谱系：它是内容，换台设备该带着走）。
     #[serde(default)]
     pub habits: Vec<Habit>,
+    /// 标语栏（v0.9.4）：单例 LWW 实体（kind = slogan），与草稿纸同谱系搭 data 范围的车。
+    #[serde(default)]
+    pub slogan: Slogan,
     #[serde(flatten)]
     #[schemars(skip)]
     pub extra: Map<String, Value>,
@@ -184,9 +187,71 @@ impl Scratchpad {
     }
 }
 
+/// 标语栏（v0.9.4）：工具箱「标语栏」工具的单例实体（kind = slogan，与草稿纸同谱系）。
+/// 用户攒的一组提醒标语 + 展示配置，整体一个 LWW 版本戳，搭 data 同步范围的车。
+/// 展示本身是桌面端的全局悬浮层；移动端只维护内容不展示。
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Slogan {
+    #[serde(default)]
+    pub items: Vec<SloganItem>,
+    /// 选中展示的标语 id（按展示顺序）；空 = 不展示。多条时轮播。
+    #[serde(rename = "activeIds", default)]
+    pub active_ids: Vec<String>,
+    /// 展示图标：空 = 默认喇叭（Megaphone）；"none" = 不加图标；其余是 lucide 白名单名。
+    #[serde(default)]
+    pub icon: String,
+    /// 悬浮位置：top = 页面标题上方；bottom = 输入框下方。都右对齐。
+    #[serde(default = "default_slogan_position")]
+    pub position: String,
+    /// 总开关：悬浮层上的关闭按钮把它拨 false（内容保留，随时可再开）。
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(rename = "updatedAt", default)]
+    pub updated_at: String,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
+}
+
+impl Default for Slogan {
+    fn default() -> Self {
+        Self {
+            items: Vec::new(),
+            active_ids: Vec::new(),
+            icon: String::new(),
+            position: default_slogan_position(),
+            enabled: true,
+            updated_at: String::new(),
+            extra: Map::new(),
+        }
+    }
+}
+
+fn default_slogan_position() -> String {
+    "top".to_string()
+}
+
+/// 单条标语。text 上限 [`SLOGAN_TEXT_MAX`]（悬浮层单行省略，太长没有意义）。
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SloganItem {
+    pub id: String,
+    pub text: String,
+    #[serde(rename = "createdAt", default)]
+    pub created_at: String,
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub extra: Map<String, Value>,
+}
+
+pub const SLOGAN_TEXT_MAX: usize = 80;
+pub const SLOGAN_ITEMS_MAX: usize = 50;
+pub const SLOGAN_ICON_NONE: &str = "none";
+pub const SLOGAN_ICON_DEFAULT: &str = "Megaphone";
+
 /// 习惯打卡（v0.9.3）：工具箱「习惯打卡」工具的实体，住数据域（kind = habit）。
 ///
-/// `checkins` 是升序去重的打卡日期（YYYY-MM-DD）；连续天数 / 累计 / 完成率等统计
+/// `checkins` 是升序的打卡日期（YYYY-MM-DD，v0.9.4 起同一日期可出现多次 = 每日多次打卡）；
+/// 连续天数 / 累计 / 完成率等统计
 /// **不落盘**，由前端 `habits.ts` 从 checkins + freq 现算（CLI 不产出统计）。
 /// 颜色空 = 跟工具页主题色；图标是 lucide 名字（与记账同一份白名单 ledger_icons）。
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -211,7 +276,12 @@ pub struct Habit {
     pub status: HabitStatus,
     #[serde(default)]
     pub order: f64,
-    /// 打卡日期 YYYY-MM-DD，升序去重
+    /// 每日目标打卡次数（v0.9.4）：1 = 普通的打一次卡；>1 时每天可打多次，
+    /// 打满才算完成（连续/完成率按完成日算）。上限 [`HABIT_TARGET_MAX`]。
+    #[serde(rename = "targetCount", default = "default_habit_target")]
+    pub target_count: u32,
+    /// 打卡记录 YYYY-MM-DD，升序；**同一日期可出现多次**（v0.9.4 每日多次打卡），
+    /// 出现次数 = 当天已打卡次数。旧数据每天最多一条，天然就是「打了一次」。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub checkins: Vec<String>,
     #[serde(rename = "createdAt", default)]
@@ -247,6 +317,24 @@ impl Habit {
             self.time.as_str()
         }
     }
+
+    /// 当天已打卡次数（checkins 里该日期的出现次数）。
+    pub fn checkin_count(&self, date: &str) -> u32 {
+        self.checkins.iter().filter(|item| *item == date).count() as u32
+    }
+
+    /// 当天是否打满目标次数（连续/完成率/热力图实心都按这个口径）。
+    pub fn is_complete(&self, date: &str) -> bool {
+        self.checkin_count(date) >= self.target_count.max(1)
+    }
+}
+
+/// 每日目标打卡次数上限：打卡是「一眼扫到、点一下就用」的动作，
+/// 三位数的目标没有意义，界面上步进器也摆不下。
+pub const HABIT_TARGET_MAX: u32 = 99;
+
+fn default_habit_target() -> u32 {
+    1
 }
 
 /// 习惯的频率：每天 / 每周选定的星期几（不给「工作日」单开变体，它是 weekly 的组合）。
@@ -1419,9 +1507,11 @@ pub fn default_theme_presets() -> Vec<ThemePreset> {
 pub struct AppearanceSettings {
     #[serde(rename = "linkOpenMode", default = "default_link_open_mode")]
     pub link_open_mode: LinkOpenMode,
-    /// 列表排序方式（跨设备共享）；合法值与前端 sort.ts 的 SortMode 一致。
-    #[serde(rename = "listSortMode", default = "default_list_sort_mode")]
-    pub list_sort_mode: String,
+    /// 列表排序方式（跨设备共享）：`{ 页面id: 排序方式 }`，**每个页面各记一份**
+    /// （v0.9.4 起不再全局一个值）。键是节点 id 或系统视图 id（my-day/planned/important），
+    /// 合法值与前端 sort.ts 的 SortMode 一致；没配置的页面回落 created-desc。
+    #[serde(rename = "listSortModes", default)]
+    pub list_sort_modes: Map<String, Value>,
     #[serde(rename = "uiScale", default = "default_ui_scale")]
     pub ui_scale: f64,
     #[serde(rename = "uiFontSize", default = "default_ui_font_size")]
@@ -1527,10 +1617,6 @@ pub const LIST_SORT_MODES: [&str; 7] = [
     "created-desc", "created-asc", "alpha-asc", "alpha-desc", "due-asc", "due-desc", "importance",
 ];
 
-fn default_list_sort_mode() -> String {
-    "created-desc".to_string()
-}
-
 fn default_ui_scale() -> f64 {
     0.75
 }
@@ -1571,7 +1657,7 @@ pub const NAV_ITEM_IDS: [&str; 8] = [
 /// 与前端 `src/lib/tools/catalog.ts` 的 `TOOL_CATALOG` 是同一份清单的两份拷贝
 /// （core 要在 config.set 时挡住拼错的 id，而它不 import 前端）——
 /// 有 `nav_tool_ids_match_frontend_catalog` 测试用 include_str! 钉住两边。
-pub const NAV_TOOL_IDS: [&str; 6] = ["random", "rmb", "scratchpad", "transfer", "clipboard", "habit"];
+pub const NAV_TOOL_IDS: [&str; 7] = ["random", "rmb", "scratchpad", "transfer", "clipboard", "habit", "slogan"];
 
 /// navItems 里工具行的前缀
 pub const NAV_TOOL_PREFIX: &str = "tool:";
@@ -1591,7 +1677,7 @@ impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
             link_open_mode: default_link_open_mode(),
-            list_sort_mode: default_list_sort_mode(),
+            list_sort_modes: Map::new(),
             ui_scale: default_ui_scale(),
             ui_font_size: default_ui_font_size(),
             markdown_font_size: default_markdown_font_size(),

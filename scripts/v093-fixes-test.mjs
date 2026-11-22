@@ -89,9 +89,9 @@ function calendarEvent(id, overrides = {}) {
 
 function habitSeed(id, name, overrides = {}) {
   return {
-    id, name, color: "#2f9e6e", icon: "CalendarCheck",
+    id, name, color: "#2f9e6e", icon: "CalendarDays",
     freq: { kind: "daily", weekdays: [] }, time: "", reminders: [],
-    status: "active", order: 1, checkins: [],
+    status: "active", order: 1, targetCount: 1, checkins: [],
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), ...overrides
   };
 }
@@ -374,7 +374,7 @@ async function section5HabitDesktop(context) {
   check("5.2 提醒芯片出现", (await page.locator(".habit-reminder-chip").count()) === 1);
   await page.locator(".habit-sheet .calendar-sheet-foot .settings-button.primary").click();
   await page.waitForTimeout(500);
-  check("5.3 卡片出现且累计 0 天", (await page.locator(".habit-card").count()) === 1 && (await page.locator(".habit-card-stat strong").innerText()) === "0天");
+  check("5.3 卡片出现且累计 0 次", (await page.locator(".habit-card").count()) === 1 && (await page.locator(".habit-card-stat strong").innerText()) === "0次");
   check("5.4 卡片副标题含频率与时刻", (await page.locator(".habit-card-sub").innerText()).includes("每天") && (await page.locator(".habit-card-sub").innerText()).includes("08:00"));
   // 每日视图打卡
   await page.locator(".habit-view-switch button", { hasText: "每日" }).click();
@@ -389,7 +389,7 @@ async function section5HabitDesktop(context) {
   // 统计面板
   await page.locator(".habit-view-switch button", { hasText: "全部" }).click();
   await page.waitForTimeout(300);
-  check("5.8 累计变 1 天", (await page.locator(".habit-card-stat strong").innerText()) === "1天");
+  check("5.8 累计变 1 次", (await page.locator(".habit-card-stat strong").innerText()) === "1次");
   await page.locator(".habit-card").first().click();
   await page.waitForSelector(".habit-stats-grid", { timeout: 4000 });
   const statsText = await page.locator(".habit-stats-grid").innerText();

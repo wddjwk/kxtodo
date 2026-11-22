@@ -54,15 +54,17 @@ fn list_sort_modes_match_frontend() {
     let sort_ts = include_str!("../../../../src/lib/sort.ts");
     let modes = quoted(between(sort_ts, "export type SortMode =", ";"));
     assert_eq!(modes, kxtodo_core::model::LIST_SORT_MODES);
+    let default_mode = between(sort_ts, "export const DEFAULT_SORT_MODE: SortMode = \"", "\"");
+    assert!(modes.contains(&default_mode.to_string()));
     let defaults = kxtodo_core::model::AppearanceSettings::default();
-    assert_eq!(defaults.list_sort_mode, "created-desc");
-    assert!(modes.contains(&defaults.list_sort_mode));
+    assert!(defaults.list_sort_modes.is_empty());
 
     let field = kxtodo_core::ops_config::KNOWN_FIELDS
         .iter()
-        .find(|field| field.path == "appearance.listSortMode")
+        .find(|field| field.path == "appearance.listSortModes")
         .unwrap();
-    assert_eq!(field.kind, format!("enum({})", modes.join("|")));
+    assert_eq!(field.kind, "object");
+    assert!(!field.is_map);
 }
 
 #[test]

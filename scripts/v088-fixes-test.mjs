@@ -38,7 +38,7 @@ async function fresh(mobile = false, plain = false) {
       }))
     }));
     localStorage.setItem("todo-note-settings-v3", JSON.stringify({
-      appearance: { uiScale: 0.75, listSortMode: "alpha-asc" },
+      appearance: { uiScale: 0.75, listSortModes: { "entry-a": "alpha-asc" } },
       features: { sync: false, pinnedIcon: true, pinnedSection: false, linkRender: "off" },
       updates: { autoCheck: false }
     }));
@@ -91,7 +91,7 @@ try {
   await listMenu(page);
   await page.getByRole("button", { name: "排序方式" }).click();
   await page.getByRole("button", { name: "字母顺序 Z → A" }).click();
-  await page.waitForFunction(() => JSON.parse(localStorage.getItem("todo-note-settings-v3")).appearance.listSortMode === "alpha-desc");
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem("todo-note-settings-v3")).appearance.listSortModes["entry-a"] === "alpha-desc");
   await page.reload({ waitUntil: "networkidle" });
   assert.deepEqual((await titles(page)).map(s => s.trim()), ["C 任务", "A 任务", "B 任务"]);
   console.log("PASS pinned menu, section/icon combinations, sorting and reload persistence");

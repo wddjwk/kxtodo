@@ -275,8 +275,8 @@ const context = await browser.newContext({ viewport: { width: 1440, height: 900 
   );
   check("桌面工具箱卡片两列", columns === 2, `${columns} 列`);
   const cards = await page.$$eval(".toolbox-card strong", (nodes) => nodes.map((n) => n.textContent.trim()));
-  // v0.8.3 加了「草稿纸」「文件传输助手」；v0.8.9 加「剪切板同步」，目录五件
-  check("目录里有五件工具", cards.length === 5 && cards.some((name) => name.includes("剪切板")), cards.join(" / "));
+  // v0.8.3 加「草稿纸」「文件传输助手」；v0.8.9 加「剪切板同步」；v0.9.3 加「习惯打卡」；v0.9.4 加「标语栏」，目录七件
+  check("目录里有七件工具", cards.length === 7 && cards.some((name) => name.includes("剪切板")) && cards.some((name) => name.includes("习惯打卡")) && cards.some((name) => name.includes("标语栏")), cards.join(" / "));
 
   await page.click(".toolbox-card:has-text('人民币')");
   await page.waitForSelector(".toolbox-text-input", { timeout: 8000 });
@@ -300,12 +300,15 @@ const context = await browser.newContext({ viewport: { width: 1440, height: 900 
     const countRow = rows[rows.length - 1];
     return {
       justify: getComputedStyle(actions).justifyContent,
+      // 右对齐用几何判（actions 右缘 ≈ 满宽字段行右缘），不依赖 justify-content 的
+      // 序列化字符串（新版 Chromium 把 flex-end 序列化成 flow-end，旧断言字符串匹配会误红）
+      rightDelta: Math.abs(actions.getBoundingClientRect().right - countRow.getBoundingClientRect().right),
       belowCount: actions.getBoundingClientRect().top - countRow.getBoundingClientRect().bottom
     };
   });
   check(
     "生成按钮在「数量」下一行、右对齐（v0.8.2 调整）",
-    align.justify === "flex-end" && align.belowCount >= -2 && align.belowCount < 60,
+    align.rightDelta <= 2 && align.belowCount >= -2 && align.belowCount < 60,
     JSON.stringify(align)
   );
   await page.close();

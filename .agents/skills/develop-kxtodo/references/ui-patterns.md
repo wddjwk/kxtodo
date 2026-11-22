@@ -63,6 +63,8 @@
 
 **v0.8.3 起移动端也有这一页**（`caps.scheduler` 在移动端翻真，侧栏「定时任务」行随之出现）：移动端只允许 `Action::Notification`、不允许 `Trigger::Condition`（`ops_schedule.rs::ensure_action_supported`），因为脚本/可执行文件在 Android 上没有可执行的落点。**任务提醒不是定时任务**：它不建 `ScheduleEntry`、不进 `tasks.json`，只是借调度线程那 500ms 的节拍跑 `reminders::Engine::poll`（详见 `history/v0.8.3.md` 一）。
 
+**v0.9.4 去原始控件化**（功能与配置逻辑不变）：① 去矩形 hover——settings.css 后加载的 `.settings-button:hover`(0,2,0) 会赢过 workspace 同特异性的 transparent 覆盖，标题行/步骤头/图标按钮一 hover 就是灰矩形；修一律 `.scheduler-panel …:hover`(0,3,0)，标题行/步骤头只变色（标题/序号/雪佛龙染 accent）、图标按钮/触发方块/星期芯片圆角柔底。② 裸 checkbox 换共享 `ToggleSwitch.svelte`（role=switch，`.scheduler-toggle-row` 左文案右开关）；cooldown 双 radio 换段控。**但 notification-followups 里两个 checkbox 保留原生 input**（scheduler-editor-test 要 `.check()`），用 `appearance:none`+径向渐变圆钮画成拨动开关，只限定 `.scheduler-panel` 作用域（剪切板工具同名 `.checkbox-line` 不受影响）。③ details/summary 主题化：柔底圆角行+尾部旋转雪佛龙（隐藏 `::-webkit-details-marker`），历史行同待遇。④ 输入框统一透明边+3% 底、focus accent 边白底；步骤序号改 accent 方块芯片（active 实心白字）。
+
 ### 工具箱（v0.7.5 起两端都有，注册表架构；v0.8.3 拆目录 + 可固定）
 
 **目录与注册表分开（v0.8.3）**：`tools/catalog.ts` 只有 `id/name/desc`（`TOOL_CATALOG` + `isToolId` + `toolCatalogEntry`），`tools/registry.ts` 才是「图标 + `available()` + `load()` 动态 import」的注册点。拆开的理由很具体：侧栏的固定行也要认得工具 id，让 `nav.ts` 直接 import registry 会把 lucide 图标与所有工具的 chunk 拉进首屏链。`tools/navigation.ts` 管 `tool:<id>` ↔ 固定行。
@@ -73,10 +75,18 @@
 
 ### 习惯打卡（v0.9.3，工具箱子页）
 
-数据住 **data.json 的 `habits`**（kind `habit` 逐习惯 LWW，搭「同步数据」范围，与草稿纸同谱系；不开第七个领域文件、不加同步勾选）。统计不落盘：`lib/habits.ts` 现算——**连续按「计划内相邻出现」算**（weekly 的连续是相邻两次计划日，currentStreak 今天没打不算断、从上一个计划日往回；bestStreak 用 nextScheduled 切段），完成率 = 近 30 天计划内打卡占比。
+数据住 **data.json 的 `habits`**（kind `habit` 逐习惯 LWW，搭「同步数据」范围，与草稿纸同谱系；不开第七个领域文件、不加同步勾选）。统计不落盘：`lib/habits.ts` 现算——**连续按「计划内相邻出现」算**（weekly 的连续是相邻两次计划日，currentStreak 今天没打不算断、从上一个计划日往回；bestStreak 用 nextScheduled 切段），完成率 = 近 30 天计划内**打满**占比。
+
+**v0.9.4 每日多次打卡**：`checkins` 保持 `string[]` 但**允许多重日期**（出现次数=当天已打次数），新增 `targetCount`(1-99)。为什么不改 `{date:count}` 对象：`load_data` 反序列化失败是 DATA_CORRUPTED 硬错误会带走整个 data.json，多重数组让旧数据天然可读（每天一条=打了一次）、零迁移。`isComplete`(打满)/`checkinCount`/`checkinProgress`/`habitTarget`/`tappedCheckins`(没打满+1/打满清空)；连续/完成率按打满算、累计/本月按次数算（单位「次」）。每日圆阵部分完成 = 淡底+外圈 conic-gradient 进度环（`--habit-fill` 角度，radial mask 画环，图标留淡底不压字）+圆内 count/target 徽标，`{#key checkinCount}` 重挂圆圈让 pop 每次+1 重放。月历热力图三态（实心=打满/主色描边淡底=部分/灰描边=计划内），圆收紧凑 `width:min(100%,30px)` 居中。默认图标 **CalendarDays**（CalendarCheck 不在白名单的老 bug）。编辑器加「每日次数」NumberField 行。
 
 界面（对照时光序）：`tools/HabitTool.svelte` 两视图段控——**全部** = 进行中/已暂停/已完成三计数页签（`.habit-tabs` 下划线指示）+ 卡片（`.habit-card`：soft 底图标圆 + 名称 + 频率·时刻 + 右侧 N天/累计打卡；点卡片进统计、右键/长按开动作菜单）；**每日** = 日期导航（‹ M/D › + 今天 chip）+ —全天/上午/下午/晚上— 分组（`.habit-slot-head` 居中短线标题）+ 三列图标圆阵（`.habit-dot`，点圆 = 打卡/取消，checked = soft 底 + 主色内环 + pop 动画；时段按 time 切：<12 上午 / <18 下午 / 其余晚上，空 = 全天）。统计面板 `tools/habit/HabitStats.svelte`：四格（累计/当前连续/最长连续/本月）+ 完成率条 + 月历热力图（打卡实心/计划内空心/今天描边；周起始跟 `weekStart` 偏好）。编辑器 `HabitEditor.svelte`：名称/图标（懒加载 IconPicker icon 模式）/颜色（12 色板选中打勾 + openColorPicker 自定义）/计划（每天 + 七星期 checkable，选空自动回 daily）/时间（全天 + 预设 + 自定义）/提醒（due 预设 + 自定义时刻，芯片可删）；**行内 ContextMenu 必须挂在 editor-overlay 内**（z 3600 < 4000，挂外面被遮罩盖住）。新建加号在 ToolboxView 子页头部（`button[title='新建习惯']`）经 `habitNew` store 递话（与草稿纸加号同套路）。提醒走 `reminders.rs::plan_habits`：只规划 active、视野内每个计划日各一条、全天按 09:00 折算。样式全在 toolbox.css `.habit-*` 段 + mobile.css 覆盖（360 圆阵三列 58px 圆）。
 
+
+### 标语栏（v0.9.4，工具箱子页 + 全局悬浮层）
+
+数据是 **data.json 单例 `Slogan{items,activeIds,icon,position,enabled,updatedAt}`**（kind=slogan，与草稿纸同谱系搭 data 范围；`gui.set-slogan` 整份校验覆盖）。展示与配置分离：**悬浮层 `SloganBanner.svelte` 挂 App 壳（Toast 同级），不改任何页面**——fixed 右对齐 20px，top 由锚点算（top 模式贴可见 `.list-header` 上缘再上一条、bottom 模式贴 `.add-task-bar` 下缘），坐标布局像素（rect 差 ÷ uiScale），MutationObserver(shell class/style/childList)+resize 重算、不跟内容滚动；z 45（内容之上、Toast/菜单/模态之下）。多条 8s 轮播（`{#key index}` 淡入+底部进度条，悬停暂停）；X = enabled false（内容保留）；点本体直达标语栏工具页。**移动端不渲染悬浮层**（工具页仍可维护）。图标三态：""=默认 Megaphone、"none"=不加、其余白名单名（`slogan.ts::sloganIconName`）。
+
+工具页 `tools/SloganTool.svelte`：总开关（共享 `ToggleSwitch.svelte`）/位置段控/图标菜单（默认喇叭/不加/IconPicker）/预览/列表勾选+行内编辑+两步删除/底部添加（新标语自动选中）。纯逻辑 `lib/slogan.ts`（activeSlogans/nextRotation/withNewItem/sloganIconName）。登记点照习惯单例那套 + `nodes.ts` 导出带单例。
 
 ### 日期与提醒面板（v0.8.3，`TaskDateReminderPanel.svelte`）
 

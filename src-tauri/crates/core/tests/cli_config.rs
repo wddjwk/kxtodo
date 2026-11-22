@@ -7,21 +7,36 @@ use common::TestEnv;
 use serde_json::json;
 
 #[test]
-fn list_sort_mode_validates_all_modes_and_resets() {
+fn list_sort_modes_validate_per_page_and_reset() {
     let env = TestEnv::fresh();
-    let path = "appearance.listSortMode";
+    let path = "appearance.listSortModes";
     let got = env.ok(&["config", "get", path]);
-    assert_eq!(got["value"], "created-desc");
+    assert_eq!(got["value"], json!({}));
     assert_eq!(got["source"], "default");
     assert!(kxtodo_core::ops_config::is_shared_settings_path(path));
 
     for mode in kxtodo_core::model::LIST_SORT_MODES {
-        assert_eq!(env.ok(&["config", "set", path, mode])["value"], mode);
-        assert_eq!(env.ok(&["config", "get", path])["value"], mode);
-        assert_eq!(env.read_file("settings.json")["appearance"]["listSortMode"], mode);
+        let value = json!({ "entry-a": mode }).to_string();
+        assert_eq!(env.ok(&["config", "set", path, &value])["value"]["entry-a"], mode);
+        assert_eq!(env.ok(&["config", "get", path])["value"]["entry-a"], mode);
+        assert_eq!(env.read_file("settings.json")["appearance"]["listSortModes"]["entry-a"], mode);
     }
     assert!(env.read_file("settings.json")["syncUpdatedAt"].is_string());
-    for invalid in ["manual", "createdAt", "CREATED-DESC", "", "null", "true", "1", "[]"] {
+    // 按页独立：一次整份写入两个页面，各记各的
+    env.ok(&["config", "set", path, r#"{"entry-a":"alpha-asc","planned":"due-desc"}"#]);
+    let got = env.ok(&["config", "get", path])["value"].clone();
+    assert_eq!(got["entry-a"], "alpha-asc");
+    assert_eq!(got["planned"], "due-desc");
+    for invalid in [
+        r#"{"entry-a":"manual"}"#,
+        r#"{"entry-a":"CREATED-DESC"}"#,
+        r#"{"":"alpha-asc"}"#,
+        r#"{"entry-a":null}"#,
+        r#"{"entry-a":[]}"#,
+        "[]",
+        "true",
+        "null",
+    ] {
         let before = env.read_file("settings.json");
         let error = env.err(&["config", "set", path, invalid], 2);
         assert_eq!(error["code"], "INVALID_CONFIG_VALUE");
@@ -29,10 +44,10 @@ fn list_sort_mode_validates_all_modes_and_resets() {
     }
     let listed = env.ok(&["config", "list", "--prefix", path]);
     assert_eq!(listed["items"][0]["path"], path);
-    assert_eq!(listed["items"][0]["value"], "importance");
+    assert_eq!(listed["items"][0]["value"]["entry-a"], "alpha-asc");
     env.ok(&["config", "reset", path, "--yes"]);
-    assert_eq!(env.ok(&["config", "get", path])["value"], "created-desc");
-    assert_eq!(env.read_file("settings.json")["appearance"]["listSortMode"], "created-desc");
+    assert_eq!(env.ok(&["config", "get", path])["value"], json!({}));
+    assert_eq!(env.read_file("settings.json")["appearance"]["listSortModes"], json!({}));
 }
 
 #[test]
@@ -42,7 +57,7 @@ fn shared_sort_and_pin_setting_changes_and_resets_bump_lww() {
 
     let old_stamp = "2020-01-01T00:00:00.000Z";
     for (path, value) in [
-        ("appearance.listSortMode", json!("due-desc")),
+        ("appearance.listSortModes", json!({ "entry-a": "due-desc" })),
         ("features.pinnedIcon", json!(false)),
         ("features.pinnedSection", json!(true)),
     ] {

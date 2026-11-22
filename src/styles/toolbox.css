@@ -1874,8 +1874,12 @@
 }
 
 .habit-dot-circle {
-  display: grid;
-  place-items: center;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
   width: 64px;
   height: 64px;
   border-radius: 50%;
@@ -1888,10 +1892,35 @@
   transform: scale(0.94);
 }
 
+/* 部分完成（每日多次打卡）：淡底 + 外圈按打卡比例扫过的进度环。
+   环用 conic-gradient + radial mask 画，图标始终留在淡底上——比例再高也不压字。 */
+.habit-dot.partial .habit-dot-circle {
+  background: var(--habit-soft);
+  animation: habit-pop 0.28s ease;
+}
+
+.habit-dot.partial .habit-dot-circle::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  background: conic-gradient(var(--habit-main) var(--habit-fill, 0deg), rgb(0 0 0 / 8%) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+}
+
 .habit-dot.checked .habit-dot-circle {
   background: var(--habit-soft);
   box-shadow: inset 0 0 0 2px var(--habit-main);
   animation: habit-pop 0.28s ease;
+}
+
+.habit-dot-count {
+  color: var(--habit-main, var(--accent));
+  font-size: calc(var(--font-control) - 7px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 
 .habit-dot-name {
@@ -1941,6 +1970,18 @@
   outline: none;
   border-color: var(--accent);
   background: #fff;
+}
+
+.habit-target-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.habit-target-hint {
+  color: #98a1ae;
+  font-size: calc(var(--font-control) - 5px);
 }
 
 .habit-icon-preview {
@@ -2144,17 +2185,21 @@
   text-align: center;
 }
 
+/* 月历热力图：圆圈收紧凑（v0.9.4）——格子列宽随面板宽，圆不再撑满整列，
+   定宽 30px 居中，行距留出呼吸，一屏月历不拥挤。 */
 .habit-heat-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 4px;
-  margin-top: 4px;
+  gap: 6px 4px;
+  margin-top: 6px;
 }
 
 .habit-heat-cell {
   display: grid;
   place-items: center;
+  width: min(100%, 30px);
   aspect-ratio: 1;
+  justify-self: center;
   border-radius: 50%;
   color: #b6bdc9;
   font-size: calc(var(--font-control) - 6px);
@@ -2164,6 +2209,14 @@
 .habit-heat-cell.due {
   color: #5c6470;
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / 10%);
+}
+
+/* 部分完成：淡底 + 主色描边 + 主色字（与「实心 = 打满」一眼可分） */
+.habit-heat-cell.partial {
+  background: var(--habit-soft);
+  box-shadow: inset 0 0 0 1.5px var(--habit-main);
+  color: var(--habit-main);
+  font-weight: 600;
 }
 
 .habit-heat-cell.checked {
@@ -2182,4 +2235,229 @@
 
 .habit-heat-cell.blank {
   visibility: hidden;
+}
+
+/* ---------------------------------------------------------------------------
+ * 标语栏工具页（v0.9.4）：展示配置面板 + 标语列表 + 底部添加。
+ * 悬浮展示本体住 shared.css 的 .slogan-banner（全局层），这里只管工具页。
+ * --------------------------------------------------------------------------- */
+
+.slogan-tool {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.slogan-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  padding: 12px 14px;
+  border: 1px solid rgb(0 0 0 / 6%);
+  border-radius: 14px;
+  background: rgb(255 255 255 / 78%);
+}
+
+.slogan-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.slogan-setting-label {
+  color: #4b5563;
+  font-size: calc(var(--font-control) - 2px);
+}
+
+.slogan-position-switch {
+  flex: 0 0 auto;
+}
+
+.slogan-icon-trigger {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px;
+  border: 1px solid rgb(0 0 0 / 8%);
+  border-radius: 9px;
+  background: rgb(0 0 0 / 3%);
+  color: #4b5563;
+  font-size: calc(var(--font-control) - 3px);
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.slogan-icon-trigger:hover {
+  border-color: var(--accent);
+  background: #fff;
+}
+
+.slogan-icon-trigger svg {
+  color: var(--accent);
+}
+
+.slogan-icon-trigger .slogan-icon-none {
+  opacity: 0.4;
+}
+
+.slogan-note {
+  margin: 0;
+  color: #98a1ae;
+  font-size: calc(var(--font-control) - 5px);
+  line-height: 1.5;
+}
+
+.slogan-preview-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.slogan-preview-label {
+  flex: 0 0 auto;
+  color: #98a1ae;
+  font-size: calc(var(--font-control) - 5px);
+}
+
+.slogan-list-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  color: #23272f;
+  font-size: calc(var(--font-control) - 2px);
+  font-weight: 600;
+}
+
+.slogan-list-count {
+  color: #98a1ae;
+  font-size: calc(var(--font-control) - 5px);
+  font-weight: 400;
+}
+
+.slogan-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.slogan-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 1px solid rgb(0 0 0 / 6%);
+  border-radius: 11px;
+  background: rgb(255 255 255 / 78%);
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.slogan-row.active {
+  border-color: var(--accent);
+  background: #fff;
+}
+
+.slogan-check {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1.5px solid rgb(0 0 0 / 18%);
+  border-radius: 6px;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.slogan-check:hover {
+  border-color: var(--accent);
+}
+
+.slogan-check.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.slogan-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: #23272f;
+  font-size: calc(var(--font-control) - 3px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slogan-edit-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: #fff;
+  color: #23272f;
+  font-size: calc(var(--font-control) - 3px);
+  outline: none;
+}
+
+.slogan-row-btn {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #98a1ae;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.slogan-row-btn:hover {
+  background: rgb(0 0 0 / 5%);
+  color: #4b5563;
+}
+
+.slogan-row-btn.danger:hover {
+  background: rgb(217 48 37 / 8%);
+  color: #d93025;
+}
+
+.slogan-empty {
+  margin: 0;
+  padding: 22px 12px;
+  color: #98a1ae;
+  font-size: calc(var(--font-control) - 2px);
+  text-align: center;
+}
+
+.slogan-add {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.slogan-add-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: rgb(0 0 0 / 3%);
+  color: #23272f;
+  font-size: calc(var(--font-control) - 2px);
+}
+
+.slogan-add-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: #fff;
 }

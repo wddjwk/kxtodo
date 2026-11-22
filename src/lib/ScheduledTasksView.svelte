@@ -9,6 +9,7 @@
   import { pickExecutableFile } from "./backend";
   import { caps } from "./capabilities";
   import Dropdown from "./Dropdown.svelte";
+  import ToggleSwitch from "./ToggleSwitch.svelte";
   import SchedulerActionEditor from "./SchedulerActionEditor.svelte";
   import { actionSentence, calendarCron, nextRunPreview, readCalendar, scheduleDirty, scheduleWeekdays, stopSentence, validateScheduleDraft, whenSentence, type CalendarRule } from "./scheduleEditor";
   import type { ScheduledTask, ScheduledTaskAction, ScheduledTaskTrigger, SchedulerCondition, SchedulerGate, SchedulerRuntimeKey, ScheduleHistoryRun } from "./types";
@@ -113,7 +114,6 @@
     return key ? $appState.scheduler.runtimes[key] || "使用 PATH 中的执行器" : "自定义执行器路径";
   }
   function text(event: Event): string { return (event.currentTarget as HTMLInputElement).value; }
-  function checked(event: Event): boolean { return (event.currentTarget as HTMLInputElement).checked; }
   function formatTime(raw?: string): string { return raw ? new Date(raw).toLocaleString() : "—"; }
 </script>
 
@@ -205,7 +205,7 @@
                         {#if task.trigger.type !== "condition"}
                           <details class="scheduler-disclosure" open={Boolean(task.gate)}>
                             <summary>仅在这些条件下执行</summary>
-                            <label class="checkbox-line"><input type="checkbox" checked={Boolean(task.gate)} on:change={(e) => update(task.id, { gate: checked(e) ? { windows: [{ start: "09:00", end: "18:00" }] } : undefined })} />启用执行门控</label>
+                            <div class="scheduler-toggle-row"><span>启用执行门控</span><ToggleSwitch checked={Boolean(task.gate)} label="启用执行门控" onChange={(value) => update(task.id, { gate: value ? { windows: [{ start: "09:00", end: "18:00" }] } : undefined })} /></div>
                             {#if task.gate}
                               <small>到点时检查；不满足则跳过本次，不计入运行次数。跨午夜的窗口归属开始当天。</small>
                               {#each task.gate.windows as window, i}
@@ -217,7 +217,7 @@
                               {/each}
                               <button class="settings-button" type="button" on:click={() => gate(task.id, { windows: [...task.gate!.windows, { start: "09:00", end: "18:00" }] })}>添加时间窗口</button>
                               {#if caps.desktop}
-                                <label class="checkbox-line"><input type="checkbox" checked={Boolean(task.gate.probeAction)} on:change={(e) => gate(task.id, checked(e) ? { probeAction: { ...defaultScheduledTaskAction(), timeout: "30s" }, condition: { ...defaultSchedulerCondition(true), pattern: "READY" } } : { probeAction: undefined, condition: undefined })} />同时检查探针输出</label>
+                                <div class="scheduler-toggle-row"><span>同时检查探针输出</span><ToggleSwitch checked={Boolean(task.gate.probeAction)} label="同时检查探针输出" onChange={(value) => gate(task.id, value ? { probeAction: { ...defaultScheduledTaskAction(), timeout: "30s" }, condition: { ...defaultSchedulerCondition(true), pattern: "READY" } } : { probeAction: undefined, condition: undefined })} /></div>
                                 {#if task.gate.probeAction && task.gate.condition}
                                   <div class="condition-match-row"><Dropdown value={task.gate.condition.mode} options={matchOptions} ariaLabel="门控匹配方式" on:change={(e) => gate(task.id, { condition: { ...task.gate!.condition!, mode: e.detail as SchedulerCondition["mode"] } })} /><input aria-label="门控匹配文本" value={task.gate.condition.pattern} on:input={(e) => gate(task.id, { condition: { ...task.gate!.condition!, pattern: text(e) } })} /></div>
                                   <Dropdown value={task.gate.condition.stream ?? "stdout"} options={streamOptions} ariaLabel="门控输出流" on:change={(e) => gate(task.id, { condition: { ...task.gate!.condition!, stream: e.detail as SchedulerCondition["stream"] } })} />
@@ -232,15 +232,15 @@
                       {:else}
                         {#if task.trigger.type === "interval"}
                           <label><span>执行次数（0 = 不限）</span><input type="number" min="0" step="1" value={task.trigger.repeatCount} on:input={(e) => trigger(task.id, { repeatCount: Number(text(e)) })} /></label>
-                          <label class="checkbox-line"><input type="checkbox" checked={task.trigger.stopCondition.enabled} on:change={(e) => condition(task.id, "stopCondition", { enabled: checked(e) })} />输出满足条件时停止</label>
+                          <div class="scheduler-toggle-row"><span>输出满足条件时停止</span><ToggleSwitch checked={task.trigger.stopCondition.enabled} label="输出满足条件时停止" onChange={(value) => condition(task.id, "stopCondition", { enabled: value })} /></div>
                           {#if task.trigger.stopCondition.enabled}
                             <div class="condition-match-row"><Dropdown value={task.trigger.stopCondition.mode} options={matchOptions} ariaLabel="停止匹配方式" on:change={(e) => condition(task.id, "stopCondition", { mode: e.detail as SchedulerCondition["mode"] })} /><input aria-label="停止匹配文本" value={task.trigger.stopCondition.pattern} on:input={(e) => condition(task.id, "stopCondition", { pattern: text(e) })} /></div>
                             <Dropdown value={task.trigger.stopCondition.stream ?? "stdout"} options={streamOptions} ariaLabel="停止条件输出流" on:change={(e) => condition(task.id, "stopCondition", { stream: e.detail as SchedulerCondition["stream"] })} />
                           {/if}
                         {:else if task.trigger.type === "condition"}
-                          <div class="scheduler-stop-options">
-                            <label class="checkbox-line"><input type="radio" name={`stop-${task.id}`} checked={task.trigger.cooldown === undefined} on:change={() => trigger(task.id, { cooldown: undefined })} />匹配并执行后结束</label>
-                            <label class="checkbox-line"><input type="radio" name={`stop-${task.id}`} checked={task.trigger.cooldown !== undefined} on:change={() => trigger(task.id, { cooldown: "5m" })} />冷却后继续检测</label>
+                          <div class="scheduler-stop-options segmented" role="radiogroup" aria-label="命中后的结束方式">
+                            <button type="button" role="radio" aria-checked={task.trigger.cooldown === undefined} class:active={task.trigger.cooldown === undefined} on:click={() => trigger(task.id, { cooldown: undefined })}>匹配并执行后结束</button>
+                            <button type="button" role="radio" aria-checked={task.trigger.cooldown !== undefined} class:active={task.trigger.cooldown !== undefined} on:click={() => trigger(task.id, { cooldown: "5m" })}>冷却后继续检测</button>
                           </div>
                           {#if task.trigger.cooldown !== undefined}<label><span>冷却时长</span><input value={task.trigger.cooldown} placeholder="例如 5m、1h" on:input={(e) => trigger(task.id, { cooldown: text(e) })} /><small>下次检测距本次执行至少为「检查间隔」与「冷却时长」中的较大值。</small></label>{/if}
                         {:else}<p class="scheduler-step-note">{task.trigger.type === "once" ? "执行一次后自动结束。试运行不会消耗这一次机会。" : "按日历持续执行，直到手动停用或到达截止日期。"}</p>{/if}
@@ -252,7 +252,7 @@
               {/each}
               <footer class="scheduler-editor-footer">
                 <label class="scheduler-footer-name"><span>任务名称</span><input required value={task.name} on:input={(e) => update(task.id, { name: text(e) })} /></label>
-                <label class="checkbox-line"><input type="checkbox" checked={task.enabled} on:change={(e) => update(task.id, { enabled: checked(e) })} />启用</label>
+                <div class="scheduler-toggle-row scheduler-footer-enabled"><span>启用</span><ToggleSwitch checked={task.enabled} label="启用定时任务" onChange={(value) => update(task.id, { enabled: value })} /></div>
                 <div class="scheduler-footer-actions">
                   <button class="settings-button" type="button" disabled={dirty || saved.lastStatus === "running"} title={dirty ? "请先保存，再试运行" : "执行已保存的任务，不改变调度计划"} on:click={() => void trial(task.id)}><Play size={14} />试运行</button>
                   <button class="settings-button" type="button" on:click={() => discard(task.id)}>取消</button>

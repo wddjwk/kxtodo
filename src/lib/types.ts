@@ -199,7 +199,9 @@ export type Habit = {
   reminders: ReminderRule[];
   status: HabitStatus;
   order: number;
-  /** 打卡日期 YYYY-MM-DD，升序去重 */
+  /** 每日目标打卡次数（1-99）；>1 时每天可打多次，打满才算完成 */
+  targetCount: number;
+  /** 打卡记录 YYYY-MM-DD，升序；同一日期可出现多次，出现次数 = 当天已打次数 */
   checkins: string[];
   createdAt: string;
   updatedAt?: string;
@@ -331,7 +333,7 @@ export type Settings = {
   profile: ProfileSettings;
   appearance: {
     linkOpenMode: "app" | "system";
-    listSortMode: import("./sort").SortMode;
+    listSortModes: Record<string, import("./sort").SortMode>;
     uiScale: number;
     /** UI 字号：分组分类与页面标题（我的一天那些）吃它 */
     uiFontSize: number;
@@ -649,5 +651,25 @@ export type AppState = {
   backgrounds: Record<string, ListBackground>;
   /** 工具箱草稿纸（v0.8.4；v0.9.0 标签页化）：多页纯文本 + 激活页，跟着数据域同步（LWW 整份覆盖） */
   scratchpad: { tabs: ScratchpadTab[]; activeTabId: string; updatedAt: string };
+  /** 标语栏（v0.9.4）：标语列表 + 展示配置，单例 LWW 跟着数据域同步 */
+  slogan: SloganState;
   scheduler: SchedulerState;
+};
+
+export type SloganItem = {
+  id: string;
+  text: string;
+  createdAt: string;
+};
+
+export type SloganState = {
+  items: SloganItem[];
+  /** 选中展示的标语 id（按展示顺序）；空 = 不展示；多条轮播 */
+  activeIds: string[];
+  /** 展示图标："" = 默认喇叭 Megaphone；"none" = 不加图标；其余 lucide 白名单名 */
+  icon: string;
+  /** top = 页面标题上方；bottom = 输入框下方（都右对齐悬浮） */
+  position: "top" | "bottom";
+  enabled: boolean;
+  updatedAt: string;
 };

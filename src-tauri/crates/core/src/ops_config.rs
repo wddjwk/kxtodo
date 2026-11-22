@@ -18,7 +18,7 @@ pub fn is_shared_settings_path(path: &str) -> bool {
             | "profile.email"
             | "profile.avatar"
             | "appearance.linkOpenMode"
-            | "appearance.listSortMode"
+            | "appearance.listSortModes"
             | "appearance.themePresets"
             | "appearance.uiColors"
             // 新建分组/条目的默认外观同 uiColors 一个待遇：换台设备建出来的条目不该变脸
@@ -101,9 +101,9 @@ pub const KNOWN_FIELDS: &[FieldMeta] = &[
         is_map: false,
     },
     FieldMeta {
-        path: "appearance.listSortMode",
-        kind: "enum(created-desc|created-asc|alpha-asc|alpha-desc|due-asc|due-desc|importance)",
-        description: "列表排序方式（默认 created-desc，最新创建优先）",
+        path: "appearance.listSortModes",
+        kind: "object",
+        description: "列表排序方式：{ 页面id: created-desc|created-asc|alpha-asc|alpha-desc|due-asc|due-desc|importance }，每个页面各记一份，没配置的页面默认 created-desc",
         is_map: false,
     },
     FieldMeta {
@@ -786,7 +786,7 @@ fn get_typed(settings: &SettingsFile, path: &str) -> CoreResult<Value> {
         "appearance.dueColors" => json!(settings.appearance.due_colors),
         "appearance.navLayout" => json!(settings.appearance.nav_layout),
         "appearance.taskMenu" => json!(settings.appearance.task_menu),
-        "appearance.listSortMode" => json!(settings.appearance.list_sort_mode),
+        "appearance.listSortModes" => json!(settings.appearance.list_sort_modes),
         "appearance.themePresets" => json!(settings.appearance.theme_presets),
         "appearance.uiColors" => json!(settings.appearance.ui_colors),
         "appearance.newNodeDefaults.accent" => json!(settings.appearance.new_node_defaults.accent),
@@ -1046,8 +1046,24 @@ fn expect_enum(path: &str, value: &Value, allowed: &[&str]) -> CoreResult<String
     }
 }
 
-pub(crate) fn expect_list_sort_mode(value: &Value) -> CoreResult<String> {
-    expect_enum("appearance.listSortMode", value, &crate::model::LIST_SORT_MODES)
+/// 排序方式按页面各记一份（v0.9.4）：`{ 页面id: 排序方式 }` 整份对象写入。
+/// 键非空即可（节点 id 是随机 hex，系统视图是 my-day/planned/important，core 不认识
+/// 全部节点 id，不做存在性校验）；值必须是七种排序之一。
+/// `pub(crate)`：同步合并（merge.rs）用同一套校验口径。
+pub(crate) fn expect_list_sort_modes(path: &str, value: &Value) -> CoreResult<Map<String, Value>> {
+    let map = value
+        .as_object()
+        .ok_or_else(|| invalid_value(path, "应为 { 页面id: 排序方式 } 的整份对象"))?;
+    let mut out = Map::new();
+    for (key, raw) in map {
+        let page = key.trim();
+        if page.is_empty() {
+            return Err(invalid_value(path, "页面 id 不能为空"));
+        }
+        let mode = expect_enum(path, raw, &crate::model::LIST_SORT_MODES)?;
+        out.insert(page.to_string(), json!(mode));
+    }
+    Ok(out)
 }
 
 fn expect_color(path: &str, value: &Value) -> CoreResult<String> {
@@ -1356,8 +1372,8 @@ pub fn set_value(
         "appearance.taskMenu" => {
             settings.appearance.task_menu = expect_task_menu(path, &value)?;
         }
-        "appearance.listSortMode" => {
-            settings.appearance.list_sort_mode = expect_list_sort_mode(&value)?;
+        "appearance.listSortModes" => {
+            settings.appearance.list_sort_modes = expect_list_sort_modes(path, &value)?;
         }
         "appearance.themePresets" => {
             settings.appearance.theme_presets = expect_theme_presets(path, &value)?;
@@ -1837,9 +1853,7 @@ fn set_default(target: &mut SettingsFile, defaults: &SettingsFile, path: &str) -
         "appearance.linkOpenMode" => {
             target.appearance.link_open_mode = defaults.appearance.link_open_mode
         }
-        "appearance.listSortMode" => {
-            target.appearance.list_sort_mode = defaults.appearance.list_sort_mode.clone()
-        }
+        "appearance.listSortModes" => target.appearance.list_sort_modes = Map::new(),
         "appearance.uiScale" => target.appearance.ui_scale = defaults.appearance.ui_scale,
         "appearance.uiFontSize" => {
             target.appearance.ui_font_size = defaults.appearance.ui_font_size

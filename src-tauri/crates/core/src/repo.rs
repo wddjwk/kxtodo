@@ -1458,6 +1458,7 @@ pub fn default_data_file() -> DataFile {
         backgrounds,
         scratchpad: Default::default(),
         habits: Vec::new(),
+        slogan: Default::default(),
         extra: Map::new(),
     }
 }

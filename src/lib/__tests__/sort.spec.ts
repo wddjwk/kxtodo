@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeSortMode, sortLabels, sortTasks, type SortMode } from "../sort";
+import { normalizeSortMode, normalizeSortModes, sortLabels, sortModeForPage, sortTasks, type SortMode } from "../sort";
 import type { Task } from "../types";
 
 /** 本地今天的 YYYY-MM-DD（断言时区无关：只比较相对顺序，不比较绝对值） */
@@ -102,5 +102,26 @@ describe("截止排序（需求 7：时刻要参与比较）", () => {
     const a = task("甲", today, "09:00");
     const b = task("乙", today, "09:00");
     expect(names(sortTasks([a, b], "due-asc"))).toEqual(["甲", "乙"]);
+  });
+});
+
+describe("排序方式按页面各记一份（v0.9.4）", () => {
+  it("normalizeSortModes 逐页收敛非法值，非对象回空", () => {
+    expect(normalizeSortModes({ "entry-a": "alpha-asc", planned: "due-desc" }))
+      .toEqual({ "entry-a": "alpha-asc", planned: "due-desc" });
+    expect(normalizeSortModes({ "entry-a": "manual", "": "alpha-asc", planned: 3 }))
+      .toEqual({ "entry-a": "created-desc", planned: "created-desc" });
+    for (const value of [null, undefined, "alpha-asc", [], 3]) {
+      expect(normalizeSortModes(value)).toEqual({});
+    }
+  });
+
+  it("sortModeForPage 各页互不影响，没配置的页面回默认", () => {
+    const modes = normalizeSortModes({ "entry-a": "alpha-desc", planned: "due-asc" });
+    expect(sortModeForPage(modes, "entry-a")).toBe("alpha-desc");
+    expect(sortModeForPage(modes, "planned")).toBe("due-asc");
+    expect(sortModeForPage(modes, "entry-b")).toBe("created-desc");
+    expect(sortModeForPage(modes, undefined)).toBe("created-desc");
+    expect(sortModeForPage({}, "my-day")).toBe("created-desc");
   });
 });

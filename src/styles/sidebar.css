@@ -653,11 +653,15 @@
 }
 
 /* 图标格子多（两百多个）：固定五行高、自己滚（滚动条藏起来），
-   与下面的 emoji 区等高——图标再多也不把选择器撑长。桌面与移动端同一套。 */
+   与下面的 emoji 区等高——图标再多也不把选择器撑长。桌面与移动端同一套。
+   align-content:start + 定死行高：选具体分类只剩两三行时，默认 stretch 会把
+   隐式行轨均分拉伸填满 238px，行与行之间出现巨大空隙（v0.9.4 修）。 */
 .icon-grid {
   height: 238px;
   overflow-y: auto;
   padding: 2px;
+  align-content: start;
+  grid-auto-rows: 42px;
   scrollbar-width: none;
 }
 

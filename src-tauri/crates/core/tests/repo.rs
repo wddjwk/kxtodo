@@ -50,11 +50,11 @@ fn sort_and_pin_settings_serde_defaults_and_persistence() {
 
     for raw in [json!({}), json!({ "appearance": {}, "features": {} })] {
         let settings: SettingsFile = serde_json::from_value(raw).unwrap();
-        assert_eq!(settings.appearance.list_sort_mode, "created-desc");
+        assert!(settings.appearance.list_sort_modes.is_empty());
         assert!(settings.features.pinned_icon);
         assert!(!settings.features.pinned_section);
         let encoded = serde_json::to_value(settings).unwrap();
-        assert_eq!(encoded["appearance"]["listSortMode"], "created-desc");
+        assert_eq!(encoded["appearance"]["listSortModes"], json!({}));
         assert_eq!(encoded["features"]["pinnedIcon"], true);
         assert_eq!(encoded["features"]["pinnedSection"], false);
     }
@@ -63,20 +63,21 @@ fn sort_and_pin_settings_serde_defaults_and_persistence() {
     let repo = Repository::open(env.path()).unwrap();
     for (icon, section) in [(false, false), (true, true), (false, true), (true, false)] {
         repo.write_settings(None, None, "test.pin-settings-persistence", |settings| {
-            settings.appearance.list_sort_mode = "due-asc".to_string();
+            settings.appearance.list_sort_modes =
+                json!({ "entry-a": "due-asc" }).as_object().unwrap().clone();
             settings.features.pinned_icon = icon;
             settings.features.pinned_section = section;
             Ok(json!({}))
         }).unwrap();
         let saved = env.read_file("settings.json");
-        assert_eq!(saved["appearance"]["listSortMode"], "due-asc");
+        assert_eq!(saved["appearance"]["listSortModes"]["entry-a"], "due-asc");
         assert_eq!(saved["features"]["pinnedIcon"], icon);
         assert_eq!(saved["features"]["pinnedSection"], section);
         let reloaded = repo.load_settings().unwrap();
-        assert_eq!(reloaded.appearance.list_sort_mode, "due-asc");
+        assert_eq!(reloaded.appearance.list_sort_modes["entry-a"], "due-asc");
         assert_eq!(reloaded.features.pinned_icon, icon);
         assert_eq!(reloaded.features.pinned_section, section);
-        assert!(!reloaded.appearance.extra.contains_key("listSortMode"));
+        assert!(!reloaded.appearance.extra.contains_key("listSortModes"));
         assert!(!reloaded.features.extra.contains_key("pinnedIcon"));
         assert!(!reloaded.features.extra.contains_key("pinnedSection"));
     }

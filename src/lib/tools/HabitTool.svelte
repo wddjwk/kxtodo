@@ -9,8 +9,8 @@
   import { CalendarCheck, ChevronLeft, ChevronRight, Pencil, Pause, Play, CheckCircle2, Trash2 } from "@lucide/svelte";
   import { get } from "svelte/store";
   import { habits, habitNew, showToast, todayIso } from "../stores";
-  import { deleteHabit, setHabitCheckin, updateHabit } from "../actions";
-  import { dailyGroups, freqLabel, isChecked, timeLabel } from "../habits";
+  import { deleteHabit, tapHabitCheckin, updateHabit } from "../actions";
+  import { checkinCount, dailyGroups, freqLabel, habitTarget, isComplete, timeLabel } from "../habits";
   import { ledgerIcon, softColor } from "../ledgerIcons";
   import { longpress } from "../longpress";
   import ContextMenu from "../menu/ContextMenu.svelte";
@@ -61,6 +61,13 @@
     return `--habit-main: ${main}; --habit-soft: ${soft}`;
   }
 
+  /** 每日圆阵的比例高亮：--habit-fill 是 conic-gradient 的已打卡角度。 */
+  function dotVars(habit: Habit, date: string): string {
+    const target = habitTarget(habit);
+    const ratio = Math.min(1, checkinCount(habit, date) / target);
+    return `${habitVars(habit)}; --habit-fill: ${ratio * 360}deg`;
+  }
+
   function openMenu(event: MouseEvent | { x: number; y: number }, habit: Habit): void {
     const mouse = event as MouseEvent;
     menu = {
@@ -78,9 +85,18 @@
     openMenu(event, habit);
   }
 
-  async function toggleCheck(habit: Habit, date: string): Promise<void> {
-    const ok = await setHabitCheckin(habit.id, date, !isChecked(habit, date));
-    if (ok && !isChecked(habit, date)) showToast(`「${habit.name}」已打卡`, 1600);
+  async function tapCheck(habit: Habit, date: string): Promise<void> {
+    const before = checkinCount(habit, date);
+    const target = habitTarget(habit);
+    const ok = await tapHabitCheckin(habit.id, date);
+    if (!ok || before >= target) return;
+    const after = before + 1;
+    showToast(
+      target > 1
+        ? (after >= target ? `「${habit.name}」今日 ${after}/${target} 达成` : `「${habit.name}」已打卡 ${after}/${target}`)
+        : `「${habit.name}」已打卡`,
+      1600
+    );
   }
 
   async function setStatus(habit: Habit, status: HabitStatus): Promise<void> {
@@ -155,14 +171,14 @@
           use:longpress={(pos) => openMenu(pos, habit)}
         >
           <span class="habit-card-icon">
-            <svelte:component this={ledgerIcon(habit.icon, "CalendarCheck")} size={22} />
+            <svelte:component this={ledgerIcon(habit.icon, "CalendarDays")} size={22} />
           </span>
           <span class="habit-card-mid">
             <span class="habit-card-name">{habit.name}</span>
-            <span class="habit-card-sub">{freqLabel(habit.freq)} · {timeLabel(habit.time)}</span>
+            <span class="habit-card-sub">{freqLabel(habit.freq)} · {timeLabel(habit.time)}{#if habit.targetCount > 1 && habit.status === "active"} · 今天 {checkinCount(habit, today)}/{habitTarget(habit)}{/if}</span>
           </span>
           <span class="habit-card-stat">
-            <strong>{habit.checkins.length}天</strong>
+            <strong>{habit.checkins.length}次</strong>
             <span>累计打卡</span>
           </span>
         </button>
@@ -194,17 +210,24 @@
               <button
                 type="button"
                 class="habit-dot"
-                class:checked={isChecked(habit, day)}
-                style={habitVars(habit)}
-                title={isChecked(habit, day) ? `取消 ${dayTitle(day)} 的打卡` : `打卡 ${dayTitle(day)}`}
-                aria-pressed={isChecked(habit, day)}
-                on:click={() => void toggleCheck(habit, day)}
+                class:checked={isComplete(habit, day)}
+                class:partial={checkinCount(habit, day) > 0 && !isComplete(habit, day)}
+                style={dotVars(habit, day)}
+                title={isComplete(habit, day) ? `清空 ${dayTitle(day)} 的打卡` : `打卡 ${dayTitle(day)}（${checkinCount(habit, day)}/${habitTarget(habit)}）`}
+                aria-pressed={isComplete(habit, day)}
+                on:click={() => void tapCheck(habit, day)}
                 on:contextmenu={(event) => openCardMenu(event, habit)}
                 use:longpress={(pos) => openMenu(pos, habit)}
               >
-                <span class="habit-dot-circle">
-                  <svelte:component this={ledgerIcon(habit.icon, "CalendarCheck")} size={26} />
-                </span>
+                <!-- key 带打卡次数：每次 +1 都重挂圆圈重放 pop 动效（部分完成也有反馈） -->
+                {#key checkinCount(habit, day)}
+                  <span class="habit-dot-circle">
+                    <svelte:component this={ledgerIcon(habit.icon, "CalendarDays")} size={habit.targetCount > 1 ? 22 : 26} />
+                    {#if habit.targetCount > 1}
+                      <span class="habit-dot-count">{checkinCount(habit, day)}/{habitTarget(habit)}</span>
+                    {/if}
+                  </span>
+                {/key}
                 <span class="habit-dot-name">{habit.name}</span>
               </button>
             {/each}
@@ -224,11 +247,11 @@
       {#if menu.habit.status === "active"}
         <MenuItem
           icon={CheckCircle2}
-          label={isChecked(menu.habit, today) ? "取消今天的打卡" : "打卡今天"}
+          label={isComplete(menu.habit, today) ? "清空今天的打卡" : "打卡今天"}
           onSelect={() => {
             const habit = menu?.habit;
             menu = null;
-            if (habit) void toggleCheck(habit, today);
+            if (habit) void tapCheck(habit, today);
           }}
         />
         <MenuSeparator />

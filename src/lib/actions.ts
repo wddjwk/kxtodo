@@ -5,12 +5,12 @@
 // ---------------------------------------------------------------------------
 
 import { get, type Writable } from "svelte/store";
-import type { AppNode, AppState, CalendarCategory, CalendarEvent, CalendarRepeat, CardStyle, DiaryEntry, Habit, HabitFreq, HabitStatus, LedgerAccount, LedgerAccountKind, LedgerAccountType, LedgerBook, LedgerCategory, LedgerEntry, LedgerKind, LedgerSide, ListBackground, ReminderRule, ScheduledTask, SchedulerState, ScratchpadTab, Settings, SyncMode, Tag, TagColor, Task } from "./types";
+import type { AppNode, AppState, CalendarCategory, CalendarEvent, CalendarRepeat, CardStyle, DiaryEntry, Habit, HabitFreq, HabitStatus, LedgerAccount, LedgerAccountKind, LedgerAccountType, LedgerBook, LedgerCategory, LedgerEntry, LedgerKind, LedgerSide, ListBackground, ReminderRule, ScheduledTask, SchedulerState, ScratchpadTab, Settings, SloganState, SyncMode, Tag, TagColor, Task } from "./types";
 import { navToolId, type NavItemId } from "./nav";
 import type { ToolId } from "./tools/catalog";
 import { accountBalance } from "./ledger";
 import { addDays, normalizeCalendarTimes } from "./calendar";
-import { toggledCheckins } from "./habits";
+import { checkinCount, habitTarget, tappedCheckins } from "./habits";
 import { remindersParam } from "./reminders";
 import {
   appState, appSettings, calendarCategories, commit, commitCalendar, commitCalendarCategories, commitDiary, commitHabits, commitLedger, commitScheduler, commitSettings,
@@ -795,6 +795,33 @@ export async function setScratchpadTabs(tabs: ScratchpadTab[], activeTabId: stri
     return withRollback(appState, "草稿纸保存失败", mutate, () =>
       coreDispatch("gui.set-scratchpad", payload)
     );
+  }
+  mutate();
+  commit(state());
+  return true;
+}
+
+/**
+ * 标语栏（v0.9.4）：与草稿纸同谱系的单例整份覆盖写（gui.set-slogan）。
+ * 内容是用户攒的提醒标语，跟数据域一起同步；乐观更新 + 失败回滚，
+ * 信封 revision 记水位挡住紧随其后的快照回弹。
+ */
+export async function setSlogan(next: SloganState): Promise<boolean> {
+  const payload = {
+    items: next.items.map((item) => ({ id: item.id, text: item.text, createdAt: item.createdAt })),
+    activeIds: next.activeIds,
+    icon: next.icon,
+    position: next.position,
+    enabled: next.enabled
+  };
+  const mutate = (): void => {
+    appState.update((s) => ({ ...s, slogan: { ...next, updatedAt: new Date().toISOString() } }));
+  };
+  if (coreMode) {
+    return withRollback(appState, "标语栏保存失败", mutate, async () => {
+      const envelope = await coreDispatch("gui.set-slogan", payload);
+      noteEnvelopeRevision(envelope.meta);
+    });
   }
   mutate();
   commit(state());
@@ -3014,6 +3041,7 @@ export type HabitDraft = {
   time?: string;
   reminders?: ReminderRule[];
   status?: HabitStatus;
+  targetCount?: number;
 };
 
 export type HabitChanges = {
@@ -3025,6 +3053,7 @@ export type HabitChanges = {
   reminders?: ReminderRule[];
   status?: HabitStatus;
   order?: number;
+  targetCount?: number;
 };
 
 function createHabitId(): string {
@@ -3053,6 +3082,7 @@ function habitParams(draft: HabitDraft | HabitChanges): Record<string, unknown> 
   if (draft.time !== undefined) params.time = draft.time;
   if (draft.reminders !== undefined) params.reminders = remindersParam(draft.reminders);
   if (draft.status !== undefined) params.status = draft.status;
+  if (draft.targetCount !== undefined) params.targetCount = draft.targetCount;
   if ("order" in draft && draft.order !== undefined) params.order = draft.order;
   return params;
 }
@@ -3082,6 +3112,7 @@ export async function addHabit(draft: HabitDraft): Promise<Habit | null> {
     reminders: draft.reminders ?? [],
     status: draft.status ?? "active",
     order: habitsList().reduce((max, item) => Math.max(max, item.order), 0) + 1,
+    targetCount: draft.targetCount ?? 1,
     checkins: [],
     createdAt,
     updatedAt: createdAt
@@ -3119,6 +3150,7 @@ export async function updateHabit(id: string, changes: HabitChanges): Promise<bo
   if (changes.reminders !== undefined) next.reminders = changes.reminders;
   if (changes.status !== undefined) next.status = changes.status;
   if (changes.order !== undefined) next.order = changes.order;
+  if (changes.targetCount !== undefined) next.targetCount = changes.targetCount;
   commitHabits(sortHabits(habitsList().map((habit) => (habit.id === id ? next : habit))));
   return true;
 }
@@ -3137,21 +3169,23 @@ export async function deleteHabit(id: string): Promise<boolean> {
   return true;
 }
 
-/** 打卡 / 取消打卡：乐观更新（圆圈立刻填充），失败回滚——打卡是高频点击，不能等 IPC。 */
-export async function setHabitCheckin(id: string, date: string, checked: boolean): Promise<boolean> {
+/** 点一下打卡圆：没打满 +1，打满了清空当天（乐观更新，圆圈立刻按比例填充，失败回滚）。
+ *  打卡是高频点击，不能等 IPC。core 侧 check +1 / uncheck 清空与 tappedCheckins 同口径。 */
+export async function tapHabitCheckin(id: string, date: string): Promise<boolean> {
   const previous = findHabit(id);
   if (!previous) return false;
+  const clearing = checkinCount(previous, date) >= habitTarget(previous);
   const next: Habit = {
     ...previous,
-    checkins: toggledCheckins(previous, date, checked),
+    checkins: tappedCheckins(previous, date),
     updatedAt: new Date().toISOString()
   };
   const mutate = (): void => {
     habits.update((list) => list.map((habit) => (habit.id === id ? next : habit)));
   };
   if (coreMode) {
-    return withRollback(habits, checked ? "打卡失败" : "取消打卡失败", mutate, async () => {
-      const envelope = await coreDispatch(checked ? "habit.check" : "habit.uncheck", { id, date });
+    return withRollback(habits, clearing ? "取消打卡失败" : "打卡失败", mutate, async () => {
+      const envelope = await coreDispatch(clearing ? "habit.uncheck" : "habit.check", { id, date });
       noteEnvelopeRevision(envelope.meta);
     });
   }

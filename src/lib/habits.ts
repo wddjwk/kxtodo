@@ -2,11 +2,14 @@
  * 习惯打卡的纯逻辑（v0.9.3）：计划判定 / 频率与时刻文案 / 每日视图分组 / 统计。
  * 不 import 任何 store 与组件，node 单测可直接跑（断言一律时区无关：日期字符串运算）。
  *
+ * v0.9.4 起每日可打多次：checkins 是**允许多重日期**的升序数组，某天的出现次数 =
+ * 当天已打次数；targetCount = 每日目标，打满才算完成。
+ *
  * 统计口径（与业界打卡应用一致）：
- * - 累计打卡 = checkins 条数；
- * - 当前连续 = 从「今天或昨天」往回数**计划内且已打卡**的连续天数（今天还没打不算断）；
- * - 最长连续 = 历史上最长的连续计划内打卡段；
- * - 完成率 = 近 30 天里计划内日期的打卡占比。
+ * - 累计打卡 = checkins 条数（次数，不是天数）；
+ * - 当前连续 = 从「今天或昨天」往回数**计划内且打满目标**的连续天数（今天还没打满不算断）；
+ * - 最长连续 = 历史上最长的连续计划内完成段；
+ * - 完成率 = 近 30 天里计划内日期的完成占比。
  */
 import type { Habit, HabitFreq } from "./types";
 
@@ -80,8 +83,30 @@ export function dailyGroups(
   })).filter((group) => group.habits.length > 0);
 }
 
-export function isChecked(habit: Habit, date: string): boolean {
-  return habit.checkins.includes(date);
+/** 每日目标次数（脏数据兜底：至少 1）。 */
+export function habitTarget(habit: Habit): number {
+  return Math.max(1, Math.floor(habit.targetCount) || 1);
+}
+
+/** 当天已打卡次数（checkins 里该日期的出现次数）。 */
+export function checkinCount(habit: Habit, date: string): number {
+  let count = 0;
+  for (const item of habit.checkins) {
+    if (item === date) count += 1;
+  }
+  return count;
+}
+
+/** 当天是否打满目标（连续 / 完成率 / 热力图实心都按这个口径）。 */
+export function isComplete(habit: Habit, date: string): boolean {
+  return checkinCount(habit, date) >= habitTarget(habit);
+}
+
+/** 打卡进度（圆圈比例高亮用）：count/target 与 0-1 的比例。 */
+export function checkinProgress(habit: Habit, date: string): { count: number; target: number; ratio: number } {
+  const target = habitTarget(habit);
+  const count = checkinCount(habit, date);
+  return { count, target, ratio: Math.min(1, count / target) };
 }
 
 /** 上一个计划内日期（weekly 跳过没选的日子；daily 就是前一天）。 */
@@ -104,25 +129,25 @@ export function nextScheduled(habit: Habit, date: string): string {
   return "";
 }
 
-/** 当前连续：今天已打从今天往回数，今天没打（或今天不在计划内）从上一个计划日往回数。 */
+/** 当前连续：今天已打满从今天往回数，今天没打满（或今天不在计划内）从上一个计划日往回数。 */
 export function currentStreak(habit: Habit, today: string): number {
-  let day = scheduledOn(habit, today) && isChecked(habit, today) ? today : previousScheduled(habit, today);
+  let day = scheduledOn(habit, today) && isComplete(habit, today) ? today : previousScheduled(habit, today);
   let streak = 0;
-  // 保险丝：连续段不可能比打卡总数长，再多就是脏数据
-  while (day && streak <= habit.checkins.length && isChecked(habit, day)) {
+  // 保险丝：连续段不可能比打卡总次数长，再多就是脏数据
+  while (day && streak <= habit.checkins.length && isComplete(habit, day)) {
     streak += 1;
     day = previousScheduled(habit, day);
   }
   return streak;
 }
 
-/** 最长连续：把 checkins 按「计划内相邻出现」切段取最长。 */
+/** 最长连续：把**打满目标**的日期按「计划内相邻出现」切段取最长。 */
 export function bestStreak(habit: Habit): number {
   let best = 0;
   let run = 0;
   let previous = "";
-  for (const date of habit.checkins) {
-    if (!scheduledOn(habit, date)) continue;
+  for (const date of [...new Set(habit.checkins)].sort()) {
+    if (!scheduledOn(habit, date) || !isComplete(habit, date)) continue;
     if (previous && nextScheduled(habit, previous) === date) {
       run += 1;
     } else {
@@ -134,12 +159,12 @@ export function bestStreak(habit: Habit): number {
   return best;
 }
 
-/** 某月（YYYY-MM）的打卡天数。 */
+/** 某月（YYYY-MM）的打卡次数。 */
 export function monthCount(habit: Habit, month: string): number {
   return habit.checkins.filter((date) => date.slice(0, 7) === month).length;
 }
 
-/** 近 30 天（含今天）计划内日期的打卡占比，0-1；没有计划日返回 0。 */
+/** 近 30 天（含今天）计划内日期的完成占比，0-1；没有计划日返回 0。 */
 export function completionRate(habit: Habit, today: string): number {
   let due = 0;
   let done = 0;
@@ -147,7 +172,7 @@ export function completionRate(habit: Habit, today: string): number {
     const date = shiftDate(today, -offset);
     if (!scheduledOn(habit, date)) continue;
     due += 1;
-    if (isChecked(habit, date)) done += 1;
+    if (isComplete(habit, date)) done += 1;
   }
   return due === 0 ? 0 : done / due;
 }
@@ -185,10 +210,11 @@ export function monthGrid(month: string, weekStart: number): Array<string | null
   return cells;
 }
 
-/** 打卡切换后的新 checkins（升序去重）；纯函数，写路径交给 actions。 */
-export function toggledCheckins(habit: Habit, date: string, checked: boolean): string[] {
-  const set = new Set(habit.checkins);
-  if (checked) set.add(date);
-  else set.delete(date);
-  return [...set].sort();
+/** 点一下打卡圆后的新 checkins（升序，允许多重日期）：没打满 +1，打满了清空当天。
+ *  纯函数，写路径交给 actions（core 侧 check +1 / uncheck 清空与此同口径）。 */
+export function tappedCheckins(habit: Habit, date: string): string[] {
+  const target = habitTarget(habit);
+  const count = checkinCount(habit, date);
+  if (count >= target) return habit.checkins.filter((item) => item !== date);
+  return [...habit.checkins, date].sort();
 }

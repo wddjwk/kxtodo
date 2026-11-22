@@ -15,7 +15,7 @@
  *
  * 子视图是纯组件内部状态，不占历史栈层级（移动端返回键由壳所在的整页层承担）。
  */
-import { ArrowLeftRight, Banknote, CalendarCheck, ClipboardCopy, Dice5 } from "@lucide/svelte";
+import { ArrowLeftRight, Banknote, CalendarCheck, ClipboardCopy, Dice5, Megaphone } from "@lucide/svelte";
 import type { Component } from "svelte";
 import { TOOL_CATALOG, type ToolId } from "./catalog";
 import ScratchpadIcon from "./ScratchpadIcon.svelte";
@@ -57,6 +57,10 @@ const implementations: Partial<
   habit: {
     icon: CalendarCheck,
     load: () => import("./HabitTool.svelte")
+  },
+  slogan: {
+    icon: Megaphone,
+    load: () => import("./SloganTool.svelte")
   }
 };
 

@@ -866,11 +866,11 @@ pub enum HabitAction {
     Remove(HabitIdArgs),
     /// 打卡（Risk: write）
     #[command(
-        long_about = "Risk: write\n\n给 --id 的习惯在 --date（缺省今天）打卡。已是已打卡态时幂等返回，不写盘。\n只有 active 且当天在计划内（daily 全中 / weekly 看星期）才能打。\n\n示例：\n  kxtodo-cli habit check --id habit-xxxx\n  kxtodo-cli habit check --id habit-xxxx --date 2026-11-18"
+        long_about = "Risk: write\n\n给 --id 的习惯在 --date（缺省今天）打卡一次。每日目标次数（--target-count）>1 时\n可连打多次，打满后再 check 幂等返回不写盘；--count 设为绝对次数（0..=每日目标，0=清空当天）。\n只有 active 且当天在计划内（daily 全中 / weekly 看星期）才能打。\n\n示例：\n  kxtodo-cli habit check --id habit-xxxx\n  kxtodo-cli habit check --id habit-xxxx --date 2026-11-18 --count 2"
     )]
     Check(HabitCheckArgs),
-    /// 取消某天的打卡（Risk: write）
-    #[command(long_about = "Risk: write\n\n移除 --date（缺省今天）的打卡记录；没打过时幂等返回。")]
+    /// 取消某天的全部打卡（Risk: write）
+    #[command(long_about = "Risk: write\n\n清空 --date（缺省今天）的打卡记录（多次打卡一并清除）；没打过时幂等返回。")]
     Uncheck(HabitCheckArgs),
 }
 
@@ -909,6 +909,9 @@ pub struct HabitAddArgs {
     /// 初始状态：active（缺省）| paused | done
     #[arg(long, value_name = "status")]
     pub status: Option<String>,
+    /// 每日目标打卡次数（1-99，缺省 1；>1 时每天可打多次，打满才算完成）
+    #[arg(long, value_name = "n")]
+    pub target_count: Option<u32>,
 }
 
 #[derive(Debug, Args, Serialize)]
@@ -952,6 +955,9 @@ pub struct HabitModifyArgs {
     /// 排序权重（越小越前）
     #[arg(long, value_name = "n")]
     pub order: Option<f64>,
+    /// 新每日目标打卡次数（1-99）
+    #[arg(long, value_name = "n")]
+    pub target_count: Option<u32>,
 }
 
 #[derive(Debug, Args, Serialize)]
@@ -963,6 +969,9 @@ pub struct HabitCheckArgs {
     /// 打卡日期 YYYY-MM-DD（缺省今天）
     #[arg(long, value_name = "date")]
     pub date: Option<String>,
+    /// 绝对打卡次数（0..=每日目标；0 = 清空当天；不给 = 在现有次数上 +1；uncheck 忽略此参数）
+    #[arg(long, value_name = "n")]
+    pub count: Option<u32>,
 }
 
 #[derive(Debug, Args, Serialize)]

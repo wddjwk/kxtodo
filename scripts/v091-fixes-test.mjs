@@ -323,7 +323,7 @@ async function section5Categories(context) {
   await seedState(page, {
     nodes: [entryNode("entry-a", "记事")],
     calendar: {
-      events: [calendarEvent("cal-1", { title: "带分类", startTime: "09:00", endTime: "11:00", categoryId: "ccat-1" })],
+      events: [calendarEvent("cal-1", { title: "带分类", startTime: "00:00", endTime: "23:59", categoryId: "ccat-1" })],
       categories: [calendarCategory("ccat-1", "工作", "#1f6feb"), calendarCategory("ccat-2", "个人", "#d97706")]
     }
   });

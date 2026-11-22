@@ -2522,7 +2522,24 @@ fn run_desktop_app(mode: AppMode, host_data_dir: PathBuf) {
             if default_host {
                 // 托盘建不起来（Linux 缺 appindicator 动态库是最常见的原因）不能拖垮整个
                 // 程序：记一条日志、标记不可用，关闭按钮回落成「退出程序」，应用照常跑。
-                if let Err(error) = setup_tray(app) {
+                // libappindicator-sys 的 dlopen 失败是 panic 而不是 Err（v0.9.3 AppImage
+                // 自带旧 GLib 与系统 tray 库符号不匹配时整进程 exit 101），必须 catch_unwind
+                // 接住——release profile 刻意不开 panic=abort，unwind 可用。
+                let tray_result =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| setup_tray(app)));
+                let tray_error = match tray_result {
+                    Ok(Ok(())) => None,
+                    Ok(Err(error)) => Some(error.to_string()),
+                    Err(panic) => {
+                        let message = panic
+                            .downcast_ref::<String>()
+                            .map(String::as_str)
+                            .or_else(|| panic.downcast_ref::<&str>().copied())
+                            .unwrap_or("未知 panic");
+                        Some(format!("托盘初始化 panic：{message}"))
+                    }
+                };
+                if let Some(error) = tray_error {
                     let hint = if cfg!(target_os = "linux") {
                         "（Linux 需要 ayatana-appindicator3 或 appindicator3 动态库；\
                          缺库时以无托盘模式运行，关闭按钮直接退出）"

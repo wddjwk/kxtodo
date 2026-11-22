@@ -640,36 +640,33 @@ h1 {
 
 .runtime-settings input,
 .scheduler-editor input,
-.scheduler-editor select,
 .scheduler-editor textarea,
 .action-editor input,
-.action-editor select,
 .action-editor textarea {
   min-width: 0;
-  border: 1px solid #d9dfe7;
-  border-radius: 8px;
+  border: 1px solid transparent;
+  border-radius: 9px;
   outline: none;
-  background: #fbfdff;
+  background: rgb(0 0 0 / 3%);
   color: #24292f;
   padding: 9px 10px;
   font-size: calc(var(--font-control) - 4px);
+  transition: border-color 0.12s ease, background 0.12s ease;
 }
 
-.scheduler-editor select,
-.action-editor select,
-.condition-row select {
-  appearance: none;
-  background:
-    linear-gradient(45deg, transparent 50%, #79808a 50%) calc(100% - 16px) 50% / 6px 6px no-repeat,
-    linear-gradient(135deg, #79808a 50%, transparent 50%) calc(100% - 12px) 50% / 6px 6px no-repeat,
-    #f8f8fa;
-  cursor: pointer;
+.runtime-settings input:hover,
+.scheduler-editor input:hover,
+.action-editor input:hover {
+  background: rgb(0 0 0 / 5%);
 }
 
-.scheduler-editor select:hover,
-.action-editor select:hover,
-.condition-row select:hover {
-  background-color: #eeeef2;
+.runtime-settings input:focus,
+.scheduler-editor input:focus,
+.scheduler-editor textarea:focus,
+.action-editor input:focus,
+.action-editor textarea:focus {
+  border-color: var(--accent);
+  background: #fff;
 }
 
 .scheduler-editor .dropdown,
@@ -1070,6 +1067,49 @@ h1 {
   accent-color: var(--accent);
 }
 
+/* 定时任务里的勾选行主题化（v0.9.4）：原生 input 保留（回归脚本要 .check()），
+   但 appearance:none 画成拨动开关——轨道 + 径向渐变画的圆钮，:checked 拨到右边。
+   只限定 scheduler 作用域：剪切板工具的同名行不受影响。 */
+.scheduler-panel .checkbox-line input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 21px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 14%) radial-gradient(8px circle at 11px 50%, #fff 98%, transparent 100%) no-repeat;
+  cursor: pointer;
+  transition: background-color 0.16s ease;
+}
+
+.scheduler-panel .checkbox-line input[type="checkbox"]:hover {
+  background-color: rgb(0 0 0 / 20%);
+}
+
+.scheduler-panel .checkbox-line input[type="checkbox"]:checked {
+  background: var(--accent) radial-gradient(8px circle at 25px 50%, #fff 98%, transparent 100%) no-repeat;
+}
+
+/* 开关行（ToggleSwitch 组件版）：左文案右开关，与 checkbox-line 同一视觉节奏 */
+.scheduler-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  min-width: 0;
+  color: rgb(0 0 0 / 62%);
+  font-size: calc(var(--font-control) - 5px);
+  font-weight: 700;
+}
+
+.scheduler-footer-enabled {
+  min-height: 38px;
+}
+
 .action-editor {
   border: 1px solid #e8edf2;
   border-radius: 10px;
@@ -1229,12 +1269,19 @@ h1 {
   font-size: calc(var(--font-control) - 3px);
 }
 .scheduler-step-number {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 8px;
+  background: rgb(0 0 0 / 4%);
   color: #949aa3;
   font-variant-numeric: tabular-nums;
   font-size: calc(var(--font-control) - 5px);
   letter-spacing: 0.05em;
+  transition: background 0.12s ease, color 0.12s ease;
 }
-.scheduler-step-active .scheduler-step-number { color: var(--accent); }
+.scheduler-step-active .scheduler-step-number { background: var(--accent); color: #fff; }
 .scheduler-step-heading strong { color: #313740; font-weight: 650; }
 .scheduler-step-summary {
   overflow: hidden;
@@ -1275,11 +1322,52 @@ h1 {
 }
 .scheduler-disclosure {
   min-width: 0;
-  border-top: 1px solid #e8ebef;
   color: #636d79;
   font-size: calc(var(--font-control) - 4px);
 }
-.scheduler-disclosure > summary { padding: 13px 0; cursor: pointer; font-size: calc(var(--font-control) - 5px); }
+
+/* 折叠块主题化（v0.9.4）：summary 是一行柔底圆角行 + 尾部旋转雪佛龙，
+   不再是裸 details 三角 + 一条生硬的分隔线。悬浮是整行柔底加深，不是矩形高亮。 */
+.scheduler-disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgb(0 0 0 / 3%);
+  cursor: pointer;
+  font-size: calc(var(--font-control) - 5px);
+  font-weight: 600;
+  list-style: none;
+  transition: background 0.12s ease;
+}
+
+.scheduler-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.scheduler-disclosure > summary::after {
+  content: "";
+  margin-left: auto;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid #98a1ae;
+  border-bottom: 1.5px solid #98a1ae;
+  transform: rotate(45deg);
+  transition: transform 0.15s ease;
+}
+
+.scheduler-disclosure[open] > summary::after {
+  transform: rotate(225deg);
+}
+
+.scheduler-disclosure > summary:hover {
+  background: rgb(0 0 0 / 5%);
+}
+
+.scheduler-disclosure[open] > summary {
+  margin-bottom: 12px;
+}
 .scheduler-disclosure > label,
 .scheduler-disclosure > .scheduler-form-grid,
 .scheduler-disclosure > .condition-match-row,
@@ -1309,8 +1397,20 @@ h1 {
 .scheduler-error { color: #b3261e; font-size: calc(var(--font-control) - 4px); margin: 0; }
 .scheduler-history { margin-top: 16px; }
 .scheduler-history p { font-size: calc(var(--font-control) - 5px); color: #737b85; }
-.scheduler-history-run { padding: 9px 0; border-top: 1px solid #eef0f3; }
-.scheduler-history-run > summary { display: flex; gap: 12px; cursor: pointer; font-size: calc(var(--font-control) - 5px); }
+.scheduler-history-run { padding: 4px 0; border-top: 1px solid #eef0f3; }
+.scheduler-history-run > summary {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: calc(var(--font-control) - 5px);
+  list-style: none;
+  transition: background 0.12s ease;
+}
+.scheduler-history-run > summary::-webkit-details-marker { display: none; }
+.scheduler-history-run > summary:hover { background: rgb(0 0 0 / 4%); }
 .scheduler-history-run time { flex: 1; font-variant-numeric: tabular-nums; }
 .scheduler-panel .scheduler-editor input:focus-visible,
 .scheduler-panel .scheduler-editor textarea:focus-visible,
@@ -1319,6 +1419,86 @@ h1 {
 .scheduler-panel .action-editor { background: transparent; border: 0; padding: 0; }
 .scheduler-panel .notification-fields { background: #fafbfc; }
 .scheduler-panel .scheduler-output pre { overflow-wrap: anywhere; }
+
+/* ---------------------------------------------------------------------------
+ * 定时任务美化（v0.9.4）：悬浮反馈去矩形化。
+ * settings.css 的 .settings-button:hover（0,2,0）后加载会赢过 workspace 的同特异性
+ * 规则——标题行/步骤头/图标按钮上一 hover 就是一块灰矩形。这里一律 0,3,0 压回去：
+ * 标题行与步骤头 hover 只变色（标题/序号/雪佛龙染主题色），图标按钮与方块 hover
+ * 是圆角柔底，不再是直角灰块。
+ * --------------------------------------------------------------------------- */
+
+.scheduler-panel .scheduled-title-row:hover {
+  background: transparent;
+  border-color: transparent;
+}
+
+.scheduler-panel .scheduled-title-row:hover strong {
+  color: var(--accent);
+}
+
+.scheduler-panel .scheduler-step-heading:hover {
+  background: transparent;
+  border-color: transparent;
+}
+
+.scheduler-panel .scheduler-step-heading:hover strong,
+.scheduler-panel .scheduler-step-heading:hover .scheduler-step-number {
+  color: var(--accent);
+}
+
+.scheduler-panel .scheduler-step-heading:hover svg {
+  color: var(--accent);
+}
+
+.scheduler-panel .scheduler-step-active .scheduler-step-heading:hover .scheduler-step-number {
+  color: #fff;
+}
+
+.scheduler-panel .scheduler-power,
+.scheduler-panel .scheduler-config-button,
+.scheduler-panel .scheduler-delete {
+  border-radius: 10px;
+}
+
+.scheduler-panel .scheduler-power:hover,
+.scheduler-panel .scheduler-config-button:hover {
+  background: color-mix(in srgb, var(--accent) 8%, white);
+  color: var(--accent);
+}
+
+.scheduler-panel .scheduler-delete:hover {
+  background: #fff0ed;
+  color: #b3261e;
+}
+
+.scheduler-panel .scheduler-trigger-tile:hover {
+  border-color: color-mix(in srgb, var(--accent) 30%, #e6e9ed);
+  background: #fff;
+}
+
+.scheduler-panel .scheduler-tile-selected:hover {
+  background: color-mix(in srgb, var(--accent) 7%, white);
+}
+
+.scheduler-panel .scheduler-weekdays button {
+  border-radius: 9px;
+}
+
+.scheduler-panel .scheduler-weekdays button:hover {
+  background: color-mix(in srgb, var(--accent) 6%, white);
+  border-color: color-mix(in srgb, var(--accent) 25%, white);
+  color: var(--accent);
+}
+
+.scheduler-stop-options {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.scheduler-stop-options.segmented button {
+  min-height: 38px;
+}
 
 .task-body {
   grid-column: 2;

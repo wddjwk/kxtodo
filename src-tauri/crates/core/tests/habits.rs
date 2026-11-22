@@ -54,6 +54,10 @@ fn validation_rejects_bad_shapes() {
     assert_eq!(error["code"], "HABIT_TIME_INVALID");
     let error = env.err(&["habit", "add", "--name", "   "], 2);
     assert_eq!(error["code"], "HABIT_NAME_INVALID");
+    let error = env.err(&["habit", "add", "--name", "x", "--target-count", "0"], 2);
+    assert_eq!(error["code"], "HABIT_TARGET_INVALID");
+    let error = env.err(&["habit", "add", "--name", "x", "--target-count", "100"], 2);
+    assert_eq!(error["code"], "HABIT_TARGET_INVALID");
     add(&env, &["--name", "刷牙"]);
     let error = env.err(&["habit", "add", "--name", "刷牙"], 2);
     assert_eq!(error["code"], "HABIT_EXISTS");
@@ -99,6 +103,47 @@ fn check_uncheck_are_idempotent_and_respect_schedule() {
     env.ok(&["habit", "modify", "--id", id, "--status", "paused"]);
     let error = env.err(&["habit", "check", "--id", id], 2);
     assert_eq!(error["code"], "HABIT_NOT_ACTIVE");
+}
+
+#[test]
+fn multi_target_checkins_accumulate_and_cap() {
+    let env = TestEnv::fresh();
+    let water = add(&env, &["--name", "喝水", "--target-count", "3"]);
+    assert_eq!(water["targetCount"], 3);
+    let id = water["id"].as_str().unwrap();
+    let day = today();
+
+    // 连打两次：同一天两条记录（次数 = 出现次数）
+    env.ok(&["habit", "check", "--id", id]);
+    let twice = env.ok(&["habit", "check", "--id", id]);
+    assert_eq!(twice["checkins"], serde_json::json!([day.clone(), day.clone()]));
+    // 打满第三次
+    let full = env.ok(&["habit", "check", "--id", id]);
+    assert_eq!(full["checkins"].as_array().unwrap().len(), 3);
+    // 打满后再 check：幂等不写盘
+    let revision = env.read_file("data.json")["_meta"]["revision"].as_u64().unwrap();
+    env.ok(&["habit", "check", "--id", id]);
+    assert_eq!(env.read_file("data.json")["_meta"]["revision"].as_u64().unwrap(), revision);
+    // --count 绝对设值：2 = 部分完成；超过目标拒绝
+    let partial = env.ok(&["habit", "check", "--id", id, "--count", "2"]);
+    assert_eq!(partial["checkins"].as_array().unwrap().len(), 2);
+    let error = env.err(&["habit", "check", "--id", id, "--count", "4"], 2);
+    assert_eq!(error["code"], "HABIT_COUNT_INVALID");
+    // --count 0 清空当天；uncheck 也清空（空 checkins 被 skip_serializing_if 省略，按缺省 0 断言）
+    env.ok(&["habit", "check", "--id", id, "--count", "0"]);
+    assert_eq!(env.ok(&["habit", "get", "--id", id])["checkins"].as_array().map(Vec::len).unwrap_or(0), 0);
+    env.ok(&["habit", "check", "--id", id]);
+    env.ok(&["habit", "check", "--id", id]);
+    let cleared = env.ok(&["habit", "uncheck", "--id", id]);
+    assert_eq!(cleared["checkins"].as_array().map(Vec::len).unwrap_or(0), 0);
+    // 改目标次数：modify 生效，旧记录不受影响
+    env.ok(&["habit", "check", "--id", id]);
+    let modified = env.ok(&["habit", "modify", "--id", id, "--target-count", "1"]);
+    assert_eq!(modified["targetCount"], 1);
+    assert_eq!(modified["checkins"].as_array().unwrap().len(), 1);
+    // 缺省目标 = 1
+    let plain = add(&env, &["--name", "刷牙"]);
+    assert_eq!(plain["targetCount"], 1);
 }
 
 #[test]

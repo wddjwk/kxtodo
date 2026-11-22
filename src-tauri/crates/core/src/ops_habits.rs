@@ -103,6 +103,26 @@ fn validate_time(raw: &str) -> CoreResult<String> {
     })
 }
 
+/// 每日目标次数：缺省 None（add 回落 1，modify 不动）；给了必须是 1..=HABIT_TARGET_MAX。
+fn validate_target(value: Option<&Value>) -> CoreResult<Option<u32>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let Some(raw) = value.as_u64() else {
+        return Err(CoreError::validation(
+            "HABIT_TARGET_INVALID",
+            "每日目标次数应为整数",
+        ));
+    };
+    if raw < 1 || raw > u64::from(crate::model::HABIT_TARGET_MAX) {
+        return Err(CoreError::validation(
+            "HABIT_TARGET_INVALID",
+            format!("每日目标次数应在 1-{} 之间", crate::model::HABIT_TARGET_MAX),
+        ));
+    }
+    Ok(Some(raw as u32))
+}
+
 /// freq 载荷：{kind: daily|weekly, weekdays: [0-6]}；weekly 必须选至少一天。
 fn parse_freq(value: Option<&Value>) -> CoreResult<HabitFreq> {
     let Some(value) = value else {
@@ -201,6 +221,7 @@ fn habit_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult
     let time = validate_time(&param_str(params, "time").unwrap_or_default())?;
     let reminders = parse_rules_opt(params.get("reminders"))?.unwrap_or_default();
     let status = parse_status(params.get("status"))?.unwrap_or(HabitStatus::Active);
+    let target_count = validate_target(params.get("targetCount"))?.unwrap_or(1);
     let mut created = Value::Null;
     let (_file, outcome) = ctx.repo.write_data(
         inv.controls.if_revision,
@@ -225,6 +246,7 @@ fn habit_add(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreResult
                 reminders: reminders.clone(),
                 status,
                 order,
+                target_count,
                 checkins: Vec::new(),
                 created_at: now.clone(),
                 updated_at: Some(now),
@@ -293,6 +315,7 @@ fn habit_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRes
     let reminders = parse_rules_opt(params.get("reminders"))?;
     let status = parse_status(params.get("status"))?;
     let order = params.get("order").and_then(Value::as_f64);
+    let target_count = validate_target(params.get("targetCount"))?;
     let mut updated = Value::Null;
     let (_file, outcome) = ctx.repo.write_data(
         inv.controls.if_revision,
@@ -335,6 +358,9 @@ fn habit_modify(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRes
             }
             if let Some(order) = order {
                 habit.order = order;
+            }
+            if let Some(target_count) = target_count {
+                habit.target_count = target_count;
             }
             validate_reminders(&habit.reminders, habit)?;
             habit.updated_at = Some(now_iso());
@@ -383,6 +409,8 @@ fn habit_remove(inv: &Invocation, ctx: &ExecContext, meta: &mut Meta) -> CoreRes
 }
 
 /// check / uncheck：打卡日期默认今天；只有 active 且当天在计划内才能打卡。
+/// v0.9.4 起每日可打多次：check 不带 count 时 +1（打满目标后再 check 幂等不写盘）；
+/// 带 count 时设为绝对次数（0..=targetCount，0 = 清空当天）；uncheck 清空当天。
 fn habit_check(
     inv: &Invocation,
     ctx: &ExecContext,
@@ -414,8 +442,31 @@ fn habit_check(
             format!("{date} 不在习惯「{}」的计划内", habit.name),
         ));
     }
-    let had = habit.checkins.iter().any(|item| item == &date);
-    if had == checked {
+    let target = habit.target_count.max(1);
+    let current = habit.checkin_count(&date);
+    let next_count: u32 = if checked {
+        match params.get("count") {
+            Some(value) => {
+                let Some(raw) = value.as_u64() else {
+                    return Err(CoreError::validation(
+                        "HABIT_COUNT_INVALID",
+                        "打卡次数应为整数",
+                    ));
+                };
+                if raw > u64::from(target) {
+                    return Err(CoreError::validation(
+                        "HABIT_COUNT_INVALID",
+                        format!("打卡次数应在 0-{target} 之间（该习惯的每日目标）"),
+                    ));
+                }
+                raw as u32
+            }
+            None => (current + 1).min(target),
+        }
+    } else {
+        0
+    };
+    if next_count == current {
         set_read_revision(meta, Domain::Data, existing.meta.revision);
         return Ok(habit_view(habit));
     }
@@ -430,13 +481,11 @@ fn habit_check(
                 .iter_mut()
                 .find(|item| item.id == id)
                 .ok_or_else(|| not_found(&id))?;
-            if checked {
-                habit.checkins.push(date.clone());
-                habit.checkins.sort();
-                habit.checkins.dedup();
-            } else {
-                habit.checkins.retain(|item| item != &date);
-            }
+            habit.checkins.retain(|item| item != &date);
+            habit
+                .checkins
+                .extend(std::iter::repeat(date.clone()).take(next_count as usize));
+            habit.checkins.sort();
             habit.updated_at = Some(now_iso());
             let view = habit_view(habit);
             updated = view.clone();

@@ -221,10 +221,10 @@ ledger stats --from 2026-09-14 --to 2026-09-21 --jq '.data.series'
 ## 8. habit 习惯打卡
 
 - **住哪**：data.json 的 `habits`（与草稿纸同谱系：是内容不是配置），同步搭「同步数据」范围的车，逐习惯一个 LWW 实体；没有独立范围勾选。统计（连续/累计/完成率）**不落盘**，界面现算。
-- **写**：`habit add --name 刷牙 --time 08:00 --reminder due-0`。`--freq daily|weekly`（缺省 daily），weekly 必须 `--weekdays 0,1,3`（0=周日 … 6=周六，至少一天）；`--time` 空 = 全天（提醒按当天 09:00 折算）；`--color "#rrggbb"`、`--icon <lucide 名>`（与记账图标同一份目录）；`--reminder` 规格同 task（`due-<分钟>` = 计划时刻前 N 分钟）。
-- **打卡**：`habit check --id ... [--date YYYY-MM-DD]`（缺省今天）/ `habit uncheck ...`。只有 `active` 且当天在计划内才能打（否则 `HABIT_NOT_ACTIVE` / `HABIT_NOT_SCHEDULED`）；已是目标态时幂等返回不写盘。
-- **读**：`habit list [--status active|paused|done]`（按 order 排序，含 `checkins` 升序日期数组）；`habit get --id ...`。
-- **改**：`habit modify --id ... --name/--color/--icon/--freq/--weekdays/--time/--reminder/--status/--order`；`--reminder` 整体替换（给空 = 清空）；`--status paused|done|active` 切生命周期（只有 active 参与打卡与提醒）。
+- **写**：`habit add --name 刷牙 --time 08:00 --reminder due-0`。`--freq daily|weekly`（缺省 daily），weekly 必须 `--weekdays 0,1,3`（0=周日 … 6=周六，至少一天）；`--time` 空 = 全天（提醒按当天 09:00 折算）；`--color "#rrggbb"`、`--icon <lucide 名>`（与记账图标同一份目录）；`--reminder` 规格同 task（`due-<分钟>` = 计划时刻前 N 分钟）；`--target-count <1-99>` 每日目标次数（缺省 1，>1 时每天可打多次、打满才算完成）。
+- **打卡**：`habit check --id ... [--date YYYY-MM-DD] [--count <n>]`（缺省今天）/ `habit uncheck ...`。只有 `active` 且当天在计划内才能打（否则 `HABIT_NOT_ACTIVE` / `HABIT_NOT_SCHEDULED`）。不带 `--count` 时在现有次数上 +1（打满目标后再 check 幂等不写盘）；`--count` 设绝对次数（0..=每日目标，0=清空当天，超目标拒 `HABIT_COUNT_INVALID`）；uncheck 清空当天全部次数。`checkins` 是升序日期数组、**同一日期可出现多次**（出现次数=当天已打次数）。
+- **读**：`habit list [--status active|paused|done]`（按 order 排序，含 `checkins` 升序日期数组与 `targetCount`）；`habit get --id ...`。
+- **改**：`habit modify --id ... --name/--color/--icon/--freq/--weekdays/--time/--reminder/--status/--order/--target-count`；`--reminder` 整体替换（给空 = 清空）；`--status paused|done|active` 切生命周期（只有 active 参与打卡与提醒）。
 - **删**：`habit remove --id ... --yes`（high-risk-write，打卡记录一并删，写同步墓碑）。
 - 重名拒 `HABIT_EXISTS`；名称空拒 `HABIT_NAME_INVALID`；颜色/图标/时刻/频率形状错分别拒 `HABIT_COLOR_INVALID` / `HABIT_ICON_INVALID` / `HABIT_TIME_INVALID` / `HABIT_FREQ_INVALID`。
 
@@ -255,7 +255,7 @@ kxtodo-cli schedule add --spec @schedule.json --yes --idempotency-key <唯一键
 - **`storage`** — 用户问「占了多少空间 / 清理一下」：先 `storage usage`（只读盘点：总体积 + 插图/背景/头像各自的总量与**无引用量** + **领域文件 / 历史记录 / 运行时 / 同步服务器（含 WAL）/ 服务器日志 / 备份**分项 + 临时残留），报数字给用户并得到同意后再 `storage clean --yes`（删无引用图片与空目录、临时残留、旧日志；**保留最新两份日志且绝不删今天的**）。返回 `freedBytes` 与逐项计数，单个文件删不动只进 `warnings`。
   **它永远不碰**：五个领域 JSON（数据本体）、`runtime/`（同步状态）、`history/`、`backups/`、服务器数据库与账户令牌。删除不可恢复。
 - **`config`** — 读写设置：`config get appearance.uiScale`、`config list --prefix appearance`、`config set <路径> <值>`、`config unset`、`config reset`（高风险，先 `--dry-run`）、`config path`、`config validate`。动态 map（如 `appearance.uiColors`）必须带 `--map-key <entry-id>`。
-  常用：字号 `appearance.uiFontSize`(14-22) / `markdownFontSize` / `ledgerFontSize` / `diaryFontSize`(14-26)；固定导航 `appearance.navItems`（字符串数组，可选 `my-day`/`planned`/`important`/`calendar`/`diary`/`ledger`/`scheduled`/`toolbox`，顺序即显示顺序）与 `appearance.navLayout`（`list|grid|icons`）；一周起始 `features.weekStart`（`monday`（默认）|`sunday`）、超链接渲染样式 `features.linkRender`（`off|title|card`，默认 `card`）、临期高亮 `features.dueHighlight`（`off|solid|gradient`，默认 `off`）；安卓后台常驻 `features.androidKeepAlive`（默认关）与常驻通知标语 `features.keepAliveNotice`（两者**本机不同步**）；预置标签 `appearance.tagPresets`（标签数组，跟设置一起同步），数组用 `config set appearance.navItems --json-value '["diary","my-day"]'`。
+  常用：字号 `appearance.uiFontSize`(14-22) / `markdownFontSize` / `ledgerFontSize` / `diaryFontSize`(14-26)；列表排序 `appearance.listSortModes`（**按页各记一份**的整份对象 `{页面id: 排序方式}`，页面 id 是节点 id 或 `my-day`/`planned`/`important`，值七选一 `created-desc|created-asc|alpha-asc|alpha-desc|due-asc|due-desc|importance`，没配置的页面默认 created-desc）；固定导航 `appearance.navItems`（字符串数组，可选 `my-day`/`planned`/`important`/`calendar`/`diary`/`ledger`/`scheduled`/`toolbox`，顺序即显示顺序）与 `appearance.navLayout`（`list|grid|icons`）；一周起始 `features.weekStart`（`monday`（默认）|`sunday`）、超链接渲染样式 `features.linkRender`（`off|title|card`，默认 `card`）、临期高亮 `features.dueHighlight`（`off|solid|gradient`，默认 `off`）；安卓后台常驻 `features.androidKeepAlive`（默认关）与常驻通知标语 `features.keepAliveNotice`（两者**本机不同步**）；预置标签 `appearance.tagPresets`（标签数组，跟设置一起同步），数组用 `config set appearance.navItems --json-value '["diary","my-day"]'`。
   **视图偏好是本机状态不跨设备同步**（`diary.view` / `ledger.view`），**外观是同步的**（日记与记账的主题色与背景）。
 - **`doctor`** — 体检：数据目录、五个领域文件的完整性与 schema 版本、常驻 Host、脚本环境。排查「数据好像不对」先跑它。
 - **`schema`** — 机读的命令与结构定义：`schema task.add`、`schema schedule.spec [--example <名>]`、`schema jq`、`schema notification`、`schema match`。**要字段清单就查它，别猜**。
@@ -318,4 +318,4 @@ kxtodo-cli schedule add --spec @schedule.json --yes --idempotency-key <唯一键
 - **不要把 `--dry-run` 的结果当成已执行**：它只校验并展示影响。
 - 汇总统计一律带 `--all`（task 默认每页 50）。
 - 界面显示相关的设置（视图选择、字号、导航布局）多是**本机偏好、不跨设备同步**，改它不会影响别的设备，也不影响任何命令的输出。
-- **这些能力只在 GUI 里，CLI 没有对应命令**（用户要就引导他到界面，别去找不存在的子命令）：工具箱里的「文件传输助手」（两台设备凭同一句 ≥8 位的口令互传文件与文件夹，打洞直连）与「草稿纸」、把工具固定进侧栏与拖动排序、临期高亮的四档配色、提醒的可视化编辑（CLI 这一侧只有 `task add/modify --reminder`）。
+- **这些能力只在 GUI 里，CLI 没有对应命令**（用户要就引导他到界面，别去找不存在的子命令）：工具箱里的「文件传输助手」（两台设备凭同一句 ≥8 位的口令互传文件与文件夹，打洞直连）、「草稿纸」与「标语栏」（写几句提醒自己的话悬浮在桌面端页面角落，多条轮播；内容跟数据域同步，移动端只维护不展示）、把工具固定进侧栏与拖动排序、临期高亮的四档配色、提醒的可视化编辑（CLI 这一侧只有 `task add/modify --reminder`）。

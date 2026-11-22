@@ -302,6 +302,99 @@ pub fn gui_dispatch(
             meta.revision = Some(outcome.revision);
             Ok(json!({ "tabs": tabs.len(), "activeTabId": active_tab_id, "updatedAt": stamp }))
         }
+        "set-slogan" => {
+            // 标语栏（v0.9.4）：与草稿纸同谱系的单例整份覆盖。校验做底线：
+            // id 非空去重、文本截断、activeIds 必须指向存在的标语、图标在白名单内。
+            let raw_items = inv
+                .params
+                .get("items")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let mut items: Vec<crate::model::SloganItem> = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            for raw in raw_items {
+                let Some(id) = raw.get("id").and_then(Value::as_str) else {
+                    continue;
+                };
+                let id = id.trim().to_string();
+                if id.is_empty() || !seen.insert(id.clone()) {
+                    continue;
+                }
+                let text: String = raw
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .chars()
+                    .take(crate::model::SLOGAN_TEXT_MAX)
+                    .collect();
+                if text.is_empty() {
+                    continue;
+                }
+                let created_at = raw
+                    .get("createdAt")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                items.push(crate::model::SloganItem {
+                    id,
+                    text,
+                    created_at: if created_at.is_empty() { crate::time::now_iso() } else { created_at },
+                    extra: Map::new(),
+                });
+                if items.len() >= crate::model::SLOGAN_ITEMS_MAX {
+                    break;
+                }
+            }
+            let known: std::collections::HashSet<&str> =
+                items.iter().map(|item| item.id.as_str()).collect();
+            let mut active_ids: Vec<String> = Vec::new();
+            if let Some(raw) = inv.params.get("activeIds").and_then(Value::as_array) {
+                for value in raw {
+                    if let Some(id) = value.as_str() {
+                        if known.contains(id) && !active_ids.iter().any(|item| item == id) {
+                            active_ids.push(id.to_string());
+                        }
+                    }
+                }
+            }
+            let icon = inv.params.get("icon").and_then(Value::as_str).unwrap_or_default().trim();
+            let icon = if icon.is_empty() || icon == crate::model::SLOGAN_ICON_NONE {
+                icon.to_string()
+            } else if crate::ledger_icons::is_known_icon(icon) {
+                icon.to_string()
+            } else {
+                return Err(CoreError::validation(
+                    "SLOGAN_ICON_INVALID",
+                    format!("图标 `{icon}` 不在图标目录里"),
+                ));
+            };
+            let position = inv.params.get("position").and_then(Value::as_str).unwrap_or("top");
+            if position != "top" && position != "bottom" {
+                return Err(CoreError::validation(
+                    "SLOGAN_POSITION_INVALID",
+                    format!("位置 `{position}` 无效，应为 top 或 bottom"),
+                ));
+            }
+            let enabled = inv.params.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+            let stamp = crate::time::now_iso();
+            let (_file, outcome) = ctx.repo.write_data(None, None, &inv.command, |file| {
+                file.slogan = crate::model::Slogan {
+                    items: items.clone(),
+                    active_ids: active_ids.clone(),
+                    icon: icon.clone(),
+                    position: position.to_string(),
+                    enabled,
+                    updated_at: stamp.clone(),
+                    extra: Map::new(),
+                };
+                Ok(json!({ "updatedAt": stamp, "items": items.len() }))
+            })?;
+            meta.revision_domain = Some(Domain::Data);
+            meta.revision = Some(outcome.revision);
+            Ok(json!({ "items": items.len(), "activeIds": active_ids.len(), "updatedAt": stamp }))
+        }
         "apply-tree-order" => {
             let ordered_ids: Vec<String> = inv
                 .params
