@@ -3,7 +3,7 @@
   import {
     Calendar, CalendarCheck, CalendarClock, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
     ChevronsDown, ChevronsUp, ExternalLink, FolderInput,
-    Lightbulb, MoreHorizontal, PenLine, Pin, PinOff, Plus, RefreshCw, Search, Settings as SettingsIcon, Settings2, SmilePlus, Star, Sun, Tag, Trash2, X
+    Lightbulb, Megaphone, MoreHorizontal, PenLine, Pin, PinOff, Plus, RefreshCw, Search, Settings as SettingsIcon, Settings2, SmilePlus, Star, Sun, Tag, Trash2, X
   } from "@lucide/svelte";
   import {
     appState, appSettings, showToast,
@@ -20,10 +20,12 @@
     setItemsUi as setItemsUiAction, replaceTaskTags as replaceTaskTagsAction,
     replaceTaskEmojis as replaceTaskEmojisAction,
     setDiaryUi as setDiaryUiAction,
-    renameNode as renameNodeAction, syncNow as syncNowAction, setConfig as setConfigAction
+    renameNode as renameNodeAction, syncNow as syncNowAction, setConfig as setConfigAction,
+    setSlogan as setSloganAction
   } from "./actions";
   import { pullToRefresh } from "./pullrefresh";
   import { taskMoveTargets } from "./nodes";
+  import { sloganTextFromMarkdown } from "./slogan";
   import { buildMainStyle, ledgerAccent, PAGE_HEADER_ICON_SIZE } from "./styles";
   import { accentWithPreview, backgroundWithPreview, colorPreview } from "./colorPreview";
   import { hasMultipleMarkdownLines } from "./markdown";
@@ -912,6 +914,34 @@
     taskMenu = null;
   }
 
+  /** 任务右键「设置为标语」（v0.9.5）：取第一行文字，用标语栏的默认图标，一键入列并选中。 */
+  function saveTaskAsSlogan(markdown: string): void {
+    taskMenu = null;
+    const text = sloganTextFromMarkdown(markdown);
+    if (!text) {
+      showToast("这条内容没有可用的文字");
+      return;
+    }
+    const slogan = $appState.slogan;
+    if (slogan.items.some((item) => item.text === text)) {
+      showToast("这句已经在标语里了");
+      return;
+    }
+    if (slogan.items.length >= 50) {
+      showToast("标语最多 50 条");
+      return;
+    }
+    const id = crypto.randomUUID
+      ? `slogan-${crypto.randomUUID().replace(/-/g, "")}`
+      : `slogan-${Math.random().toString(16).slice(2, 10)}${Math.random().toString(16).slice(2, 10)}`;
+    void setSloganAction({
+      ...slogan,
+      items: [...slogan.items, { id, text, icon: slogan.defaultIcon, createdAt: new Date().toISOString() }],
+      activeIds: [...slogan.activeIds, id]
+    });
+    showToast("已添加为标语", 1600);
+  }
+
   function openEmojiPickerAt(taskId: string, index: number): void {
     taskEmojiPicker.set({ taskId, index });
   }
@@ -1429,6 +1459,8 @@
           </MenuItem>
         {:else if id === "emoji"}
           <MenuItem icon={SmilePlus} label="添加表情" onSelect={() => openEmojiPickerForTask(taskMenuTask.id)} />
+        {:else if id === "saveSlogan"}
+          <MenuItem icon={Megaphone} label="设置为标语" onSelect={() => saveTaskAsSlogan(taskMenuTask.markdown)} />
         {:else if id === "move"}
           <MenuItem icon={FolderInput} label="移动到">
             <div slot="submenu" class="submenu-list">

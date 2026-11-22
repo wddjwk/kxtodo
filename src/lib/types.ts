@@ -659,17 +659,37 @@ export type AppState = {
 export type SloganItem = {
   id: string;
   text: string;
+  /** 本条图标："" = 默认喇叭 Megaphone；"none" = 不加图标；其余 lucide 白名单名 */
+  icon: string;
   createdAt: string;
 };
+
+export type SloganPosition =
+  | "top-left"
+  | "top-center"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-center"
+  | "bottom-right";
 
 export type SloganState = {
   items: SloganItem[];
   /** 选中展示的标语 id（按展示顺序）；空 = 不展示；多条轮播 */
   activeIds: string[];
-  /** 展示图标："" = 默认喇叭 Megaphone；"none" = 不加图标；其余 lucide 白名单名 */
-  icon: string;
-  /** top = 页面标题上方；bottom = 输入框下方（都右对齐悬浮） */
-  position: "top" | "bottom";
+  /** 左右边界对齐基准："field" = 跟输入框/卡片区对齐（默认）；"app" = 跟程序内容区对齐 */
+  bounds: "field" | "app";
+  /** 新标语默认图标："" = 喇叭；"none"；lucide 白名单名或 emoji */
+  defaultIcon: string;
+  /** 胶囊主题色（图标与描边同用它）："" = 跟应用主题色；否则 #rrggbb */
+  accent: string;
+  /** 字体颜色："" = 默认深灰；否则 #rrggbb */
+  textColor: string;
+  /** 胶囊背景透明度 0.3–1.0 */
+  opacity: number;
+  /** 多条轮播的换帧间隔（秒）2–120 */
+  intervalSeconds: number;
+  /** 顶部/底部对齐内容区，左/右/居中水平对齐（不锚定输入框） */
+  position: SloganPosition;
   enabled: boolean;
   updatedAt: string;
 };

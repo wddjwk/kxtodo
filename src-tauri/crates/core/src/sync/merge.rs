@@ -498,7 +498,12 @@ pub fn extract_entities(
                 data: json!({
                     "items": data.slogan.items,
                     "activeIds": data.slogan.active_ids,
-                    "icon": data.slogan.icon,
+                    "bounds": data.slogan.bounds,
+                    "defaultIcon": data.slogan.default_icon,
+                    "accent": data.slogan.accent,
+                    "textColor": data.slogan.text_color,
+                    "opacity": data.slogan.opacity,
+                    "intervalSeconds": data.slogan.interval_seconds,
                     "position": data.slogan.position,
                     "enabled": data.slogan.enabled,
                 }),
@@ -1197,12 +1202,50 @@ pub fn apply_data_record(
                         .collect()
                 })
                 .unwrap_or_default();
-            let position = record.data.get("position").and_then(Value::as_str).unwrap_or("top");
+            let position = record.data.get("position").and_then(Value::as_str).unwrap_or("top-right");
             data.slogan = crate::model::Slogan {
                 items,
                 active_ids,
-                icon: record.data.get("icon").and_then(Value::as_str).unwrap_or_default().to_string(),
-                position: if position == "bottom" { "bottom".to_string() } else { "top".to_string() },
+                bounds: record
+                    .data
+                    .get("bounds")
+                    .and_then(Value::as_str)
+                    .filter(|value| crate::model::SLOGAN_BOUNDS.contains(value))
+                    .unwrap_or("field")
+                    .to_string(),
+                default_icon: record
+                    .data
+                    .get("defaultIcon")
+                    .and_then(Value::as_str)
+                    .filter(|value| crate::model::is_slogan_icon_value(value))
+                    .unwrap_or_default()
+                    .to_string(),
+                accent: record.data.get("accent").and_then(Value::as_str).unwrap_or_default().to_string(),
+                text_color: record.data.get("textColor").and_then(Value::as_str).unwrap_or_default().to_string(),
+                opacity: record
+                    .data
+                    .get("opacity")
+                    .and_then(Value::as_f64)
+                    .filter(|value| {
+                        (crate::model::SLOGAN_OPACITY_MIN..=crate::model::SLOGAN_OPACITY_MAX)
+                            .contains(value)
+                    })
+                    .unwrap_or_else(|| crate::model::Slogan::default().opacity),
+                interval_seconds: record
+                    .data
+                    .get("intervalSeconds")
+                    .and_then(Value::as_u64)
+                    .map(|value| value as u32)
+                    .filter(|value| {
+                        (crate::model::SLOGAN_INTERVAL_MIN..=crate::model::SLOGAN_INTERVAL_MAX)
+                            .contains(value)
+                    })
+                    .unwrap_or_else(|| crate::model::Slogan::default().interval_seconds),
+                position: if crate::model::SLOGAN_POSITIONS.contains(&position) {
+                    position.to_string()
+                } else {
+                    "top-right".to_string()
+                },
                 enabled: record.data.get("enabled").and_then(Value::as_bool).unwrap_or(true),
                 updated_at: record.updated_at.clone(),
                 extra: Map::new(),

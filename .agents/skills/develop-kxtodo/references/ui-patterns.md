@@ -82,11 +82,28 @@
 界面（对照时光序）：`tools/HabitTool.svelte` 两视图段控——**全部** = 进行中/已暂停/已完成三计数页签（`.habit-tabs` 下划线指示）+ 卡片（`.habit-card`：soft 底图标圆 + 名称 + 频率·时刻 + 右侧 N天/累计打卡；点卡片进统计、右键/长按开动作菜单）；**每日** = 日期导航（‹ M/D › + 今天 chip）+ —全天/上午/下午/晚上— 分组（`.habit-slot-head` 居中短线标题）+ 三列图标圆阵（`.habit-dot`，点圆 = 打卡/取消，checked = soft 底 + 主色内环 + pop 动画；时段按 time 切：<12 上午 / <18 下午 / 其余晚上，空 = 全天）。统计面板 `tools/habit/HabitStats.svelte`：四格（累计/当前连续/最长连续/本月）+ 完成率条 + 月历热力图（打卡实心/计划内空心/今天描边；周起始跟 `weekStart` 偏好）。编辑器 `HabitEditor.svelte`：名称/图标（懒加载 IconPicker icon 模式）/颜色（12 色板选中打勾 + openColorPicker 自定义）/计划（每天 + 七星期 checkable，选空自动回 daily）/时间（全天 + 预设 + 自定义）/提醒（due 预设 + 自定义时刻，芯片可删）；**行内 ContextMenu 必须挂在 editor-overlay 内**（z 3600 < 4000，挂外面被遮罩盖住）。新建加号在 ToolboxView 子页头部（`button[title='新建习惯']`）经 `habitNew` store 递话（与草稿纸加号同套路）。提醒走 `reminders.rs::plan_habits`：只规划 active、视野内每个计划日各一条、全天按 09:00 折算。样式全在 toolbox.css `.habit-*` 段 + mobile.css 覆盖（360 圆阵三列 58px 圆）。
 
 
-### 标语栏（v0.9.4，工具箱子页 + 全局悬浮层）
+### 标语栏（v0.9.4；v0.9.5 重做，工具箱子页 + 全局悬浮层）
 
-数据是 **data.json 单例 `Slogan{items,activeIds,icon,position,enabled,updatedAt}`**（kind=slogan，与草稿纸同谱系搭 data 范围；`gui.set-slogan` 整份校验覆盖）。展示与配置分离：**悬浮层 `SloganBanner.svelte` 挂 App 壳（Toast 同级），不改任何页面**——fixed 右对齐 20px，top 由锚点算（top 模式贴可见 `.list-header` 上缘再上一条、bottom 模式贴 `.add-task-bar` 下缘），坐标布局像素（rect 差 ÷ uiScale），MutationObserver(shell class/style/childList)+resize 重算、不跟内容滚动；z 45（内容之上、Toast/菜单/模态之下）。多条 8s 轮播（`{#key index}` 淡入+底部进度条，悬停暂停）；X = enabled false（内容保留）；点本体直达标语栏工具页。**移动端不渲染悬浮层**（工具页仍可维护）。图标三态：""=默认 Megaphone、"none"=不加、其余白名单名（`slogan.ts::sloganIconName`）。
+数据是 **data.json 单例 `Slogan`**（kind=slogan，与草稿纸同谱系搭 data 范围；`gui.set-slogan` 整份校验覆盖）：
+`items[]`（id/text/**icon**/createdAt）、`activeIds`、`position`（六值 top/bottom × left/center/right）、
+`bounds`（field 默认 / app）、`defaultIcon`、`accent`/`textColor`/`opacity`/`intervalSeconds`、`enabled`。
+条目图标四态：空 = 默认喇叭 Megaphone、`none` = 不加、lucide 白名单名、**emoji**（非 ASCII 无空白 ≤12 码点，
+core `is_slogan_icon_value` / 前端 `sloganIconKind` 同口径；渲染统一 `SloganIcon.svelte`）。
 
-工具页 `tools/SloganTool.svelte`：总开关（共享 `ToggleSwitch.svelte`）/位置段控/图标菜单（默认喇叭/不加/IconPicker）/预览/列表勾选+行内编辑+两步删除/底部添加（新标语自动选中）。纯逻辑 `lib/slogan.ts`（activeSlogans/nextRotation/withNewItem/sloganIconName）。登记点照习惯单例那套 + `nodes.ts` 导出带单例。
+展示与配置分离：**悬浮层 `SloganBanner.svelte` 挂 App 壳（Toast 同级），不改任何页面**。外层
+`.slogan-layer`（fixed、`pointer-events:none`）按布局像素定位，胶囊 pos-left/center/right margin 对齐；
+`bounds=field` 时左右边界取输入框→任务列表→页头（跟卡片区对齐），`bounds=app` 取可见页根容器（程序右半区）；
+顶部贴 `.list-header` 上缘再上一条，底部贴内容区底部（**不锚定输入框**，无输入框页面也正常），
+有浮动加号时抬到加号上方。胶囊主题色（图标与描边 `--slogan-accent`）/字色/背景透明度（白色层 alpha 变量）
+可配；**无进度条**、按 `intervalSeconds`（2–120 秒）换帧、悬停暂停；**无 X 关闭**——点胶囊进工具页；
+`title`（悬浮全文）只在超 30 字需要滚动时挂；超长走 `.slogan-banner-text.marquee` 横向来回滚动（rAF 量
+scrollWidth−clientWidth，`--marquee-shift/--marquee-duration`）。**移动端不渲染悬浮层**（工具页仍可维护）。
+
+工具页 `tools/SloganTool.svelte`：总开关（共享 `ToggleSwitch`）/六位置按钮网格/边界二选一/主题色与字体颜色
+（openColorPicker 单例，onPreview 只写本地草稿）/透明度/轮播间隔 NumberField/新标语默认图标（含 emoji）/
+预览/卡片列表（勾选 + 每项图标菜单「默认喇叭/不加/选择图标/选择 Emoji」+ 点文字行内编辑保存 + 两步删除）/
+底部添加（自动选中，用 defaultIcon）。任务右键「**设置为标语**」（taskMenuConfig 的 `saveSlogan`）把任务
+第一行文字按 `sloganTextFromMarkdown` 去标记后一键入列并自动选中；重复内容提示不重复加。
 
 ### 日期与提醒面板（v0.8.3，`TaskDateReminderPanel.svelte`）
 

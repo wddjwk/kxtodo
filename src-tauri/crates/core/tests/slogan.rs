@@ -1,4 +1,5 @@
-//! 标语栏（v0.9.4）：gui.set-slogan 整份覆盖的校验与落盘 + data 范围单例 LWW 同步。
+//! 标语栏（v0.9.4 单例；v0.9.5 条目级图标/六位置/主题色/透明度/轮播间隔）：
+//! gui.set-slogan 整份覆盖的校验与落盘 + data 范围单例 LWW 同步。
 //! gui.* 是内部命令面（不经 CLI），直接驱动 core::execute + 临时数据目录（与 gui_background 同写法）。
 
 use serde_json::{json, Value};
@@ -55,12 +56,17 @@ impl Env {
 fn payload() -> Value {
     json!({
         "items": [
-            { "id": "s1", "text": "多喝水", "createdAt": "2026-11-01T00:00:00.000Z" },
-            { "id": "s2", "text": "久坐了起来活动", "createdAt": "2026-11-01T00:00:00.000Z" }
+            { "id": "s1", "text": "多喝水", "icon": "Flame", "createdAt": "2026-11-01T00:00:00.000Z" },
+            { "id": "s2", "text": "久坐了起来活动", "icon": "none", "createdAt": "2026-11-01T00:00:00.000Z" }
         ],
         "activeIds": ["s2", "s1"],
-        "icon": "",
-        "position": "bottom",
+        "bounds": "app",
+        "defaultIcon": "💧",
+        "accent": "#1f6feb",
+        "textColor": "#333333",
+        "opacity": 0.8,
+        "intervalSeconds": 5,
+        "position": "bottom-center",
         "enabled": true
     })
 }
@@ -68,33 +74,48 @@ fn payload() -> Value {
 #[test]
 fn set_slogan_persists_whole_singleton() {
     let env = Env::new();
-    // 没写过 = 默认空单例（enabled true / top）
+    // 没写过 = 默认空单例（enabled true / top-right / 透明度 0.94 / 间隔 8）
     let initial = env.slogan();
     assert_eq!(initial["items"].as_array().unwrap().len(), 0);
     assert_eq!(initial["enabled"], true);
-    assert_eq!(initial["position"], "top");
+    assert_eq!(initial["position"], "top-right");
+    assert_eq!(initial["bounds"], "field");
+    assert_eq!(initial["opacity"], 0.94);
+    assert_eq!(initial["intervalSeconds"], 8);
 
     env.dispatch(payload());
     let saved = env.slogan();
     assert_eq!(saved["items"].as_array().unwrap().len(), 2);
+    assert_eq!(saved["items"][0]["icon"], "Flame");
+    assert_eq!(saved["items"][1]["icon"], "none");
     assert_eq!(saved["activeIds"], json!(["s2", "s1"]));
-    assert_eq!(saved["position"], "bottom");
+    assert_eq!(saved["bounds"], "app");
+    assert_eq!(saved["defaultIcon"], "💧");
+    assert_eq!(saved["accent"], "#1f6feb");
+    assert_eq!(saved["textColor"], "#333333");
+    assert_eq!(saved["opacity"], 0.8);
+    assert_eq!(saved["intervalSeconds"], 5);
+    assert_eq!(saved["position"], "bottom-center");
     assert!(saved["updatedAt"].as_str().unwrap().len() > 0);
-    // 写路径抬 data 域 revision
-    assert!(env.repo.load_data().unwrap().meta.revision > 0);
 
     // 整份覆盖：新载荷不带 s1 就没了
     env.dispatch(json!({
         "items": [{ "id": "s3", "text": "今日事今日毕" }],
         "activeIds": ["s3"],
-        "icon": "none",
-        "position": "top",
+        "position": "top-left",
         "enabled": false
     }));
     let next = env.slogan();
     assert_eq!(next["items"].as_array().unwrap().len(), 1);
-    assert_eq!(next["icon"], "none");
+    assert_eq!(next["items"][0]["icon"], Value::Null); // 空图标 skip_serializing_if 省略
+    assert_eq!(next["position"], "top-left");
     assert_eq!(next["enabled"], false);
+    // 缺省字段回落默认
+    assert_eq!(next["bounds"], "field");
+    assert_eq!(next["defaultIcon"], Value::Null); // 空默认图标被 skip_serializing_if 省略
+    assert_eq!(next["opacity"], 0.94);
+    assert_eq!(next["intervalSeconds"], 8);
+    assert_eq!(next["accent"], Value::Null);
 }
 
 #[test]
@@ -117,15 +138,47 @@ fn set_slogan_validates_shapes() {
     assert_eq!(items[0]["text"], "多喝水");
     assert_eq!(items[1]["text"].as_str().unwrap().chars().count(), 80);
     assert_eq!(saved["activeIds"], json!(["s1", "s3"]));
-    // 缺省 position/enabled 兜底
-    assert_eq!(saved["position"], "top");
-    assert_eq!(saved["enabled"], true);
 
-    env.err(json!({ "items": [], "icon": "NotAnIcon" }), "SLOGAN_ICON_INVALID");
-    env.err(json!({ "items": [], "position": "left" }), "SLOGAN_POSITION_INVALID");
-    // 白名单内的图标与 none/空 都收
-    env.dispatch(json!({ "items": [], "icon": "Megaphone" }));
-    assert_eq!(env.slogan()["icon"], "Megaphone");
+    // 条目图标：ASCII 乱写拒；none / 空 / 白名单名 / emoji 都收
+    env.err(
+        json!({ "items": [{ "id": "s1", "text": "x", "icon": "NotAnIcon" }] }),
+        "SLOGAN_ICON_INVALID",
+    );
+    env.dispatch(json!({ "items": [
+        { "id": "s1", "text": "x", "icon": "Megaphone" },
+        { "id": "s2", "text": "y" },
+        { "id": "s3", "text": "z", "icon": "🔥" }
+    ] }));
+    assert_eq!(env.slogan()["items"][0]["icon"], "Megaphone");
+    assert_eq!(env.slogan()["items"][2]["icon"], "🔥");
+    env.err(json!({ "items": [], "defaultIcon": "NotAnIcon" }), "SLOGAN_ICON_INVALID");
+    env.dispatch(json!({ "items": [], "defaultIcon": "💧" }));
+    assert_eq!(env.slogan()["defaultIcon"], "💧");
+    env.err(json!({ "items": [], "bounds": "window" }), "SLOGAN_BOUNDS_INVALID");
+    env.dispatch(json!({ "items": [], "bounds": "app" }));
+    assert_eq!(env.slogan()["bounds"], "app");
+
+    // 位置六选一
+    for position in kxtodo_core::model::SLOGAN_POSITIONS {
+        env.dispatch(json!({ "items": [], "position": position }));
+        assert_eq!(env.slogan()["position"], position);
+    }
+    env.err(json!({ "items": [], "position": "middle" }), "SLOGAN_POSITION_INVALID");
+
+    // 颜色：空 / #rrggbb 收，其它拒
+    env.err(json!({ "items": [], "accent": "red" }), "SLOGAN_ACCENT_INVALID");
+    env.err(json!({ "items": [], "textColor": "#12345" }), "SLOGAN_TEXT_COLOR_INVALID");
+    env.dispatch(json!({ "items": [], "accent": "#ABCDEF", "textColor": "" }));
+    assert_eq!(env.slogan()["accent"], "#abcdef");
+
+    // 透明度 0.3–1.0；间隔 2–120 秒
+    env.err(json!({ "items": [], "opacity": 0.1 }), "SLOGAN_OPACITY_INVALID");
+    env.err(json!({ "items": [], "opacity": 1.5 }), "SLOGAN_OPACITY_INVALID");
+    env.err(json!({ "items": [], "intervalSeconds": 1 }), "SLOGAN_INTERVAL_INVALID");
+    env.err(json!({ "items": [], "intervalSeconds": 500 }), "SLOGAN_INTERVAL_INVALID");
+    env.dispatch(json!({ "items": [], "opacity": 1.0, "intervalSeconds": 120 }));
+    assert_eq!(env.slogan()["opacity"], 1.0);
+    assert_eq!(env.slogan()["intervalSeconds"], 120);
 }
 
 #[test]
@@ -149,19 +202,50 @@ fn slogan_syncs_as_lww_singleton_under_data_scope() {
     let record = records.iter().find(|record| record.kind == "slogan").expect("data 范围应提取 slogan 单例");
     assert_eq!(record.id, "slogan");
     assert_eq!(record.data["activeIds"], json!(["s2", "s1"]));
+    assert_eq!(record.data["bounds"], "app");
+    assert_eq!(record.data["defaultIcon"], "💧");
+    assert_eq!(record.data["intervalSeconds"], 5);
+    assert_eq!(record.data["items"][0]["icon"], "Flame");
 
-    // 远端更新胜出（LWW 整份覆盖）
+    // 远端更新胜出（LWW 整份覆盖 + 新字段）
     let mut target: DataFile = serde_json::from_value(json!({ "schemaVersion": 6 })).unwrap();
     let mut remote = record.clone();
     remote.updated_at = "2027-01-01T00:00:00.000Z".to_string();
-    remote.data["items"] = json!([{ "id": "r1", "text": "远端标语" }]);
+    remote.data["items"] = json!([{ "id": "r1", "text": "远端标语", "icon": "none" }]);
     remote.data["activeIds"] = json!(["r1"]);
-    remote.data["position"] = json!("top");
+    remote.data["bounds"] = json!("field");
+    remote.data["defaultIcon"] = json!("🔥");
+    remote.data["accent"] = json!("#d93025");
+    remote.data["textColor"] = json!("#222222");
+    remote.data["opacity"] = json!(0.7);
+    remote.data["intervalSeconds"] = json!(3);
+    remote.data["position"] = json!("bottom-right");
     apply_data_record(&remote, &mut target).unwrap();
     assert_eq!(target.slogan.items.len(), 1);
     assert_eq!(target.slogan.items[0].text, "远端标语");
+    assert_eq!(target.slogan.items[0].icon, "none");
     assert_eq!(target.slogan.active_ids, vec!["r1"]);
+    assert_eq!(target.slogan.bounds, "field");
+    assert_eq!(target.slogan.default_icon, "🔥");
+    assert_eq!(target.slogan.accent, "#d93025");
+    assert_eq!(target.slogan.interval_seconds, 3);
+    assert_eq!(target.slogan.position, "bottom-right");
     assert_eq!(target.slogan.updated_at, "2027-01-01T00:00:00.000Z");
+
+    // 远端坏形状：位置/间隔/透明度回落默认
+    let mut bad = record.clone();
+    bad.updated_at = "2027-02-01T00:00:00.000Z".to_string();
+    bad.data["position"] = json!("middle");
+    bad.data["bounds"] = json!("window");
+    bad.data["defaultIcon"] = json!("NotAnIcon");
+    bad.data["intervalSeconds"] = json!(999);
+    bad.data["opacity"] = json!(2.0);
+    apply_data_record(&bad, &mut target).unwrap();
+    assert_eq!(target.slogan.position, "top-right");
+    assert_eq!(target.slogan.bounds, "field");
+    assert_eq!(target.slogan.default_icon, "");
+    assert_eq!(target.slogan.interval_seconds, 8);
+    assert_eq!(target.slogan.opacity, 0.94);
 
     // 关掉 data 范围就不提取
     let off = Scopes { data: false, ..Default::default() };

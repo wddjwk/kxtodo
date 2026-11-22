@@ -36,6 +36,7 @@ import type {
   ScratchpadTab,
   Settings,
   SloganItem,
+  SloganPosition,
   SloganState,
   SyncMode,
   Tag,
@@ -47,6 +48,7 @@ import { NAV_ITEM_IDS, normalizeNavItems, normalizeNavLayout } from "./nav";
 import { normalizeReminders } from "./reminders";
 import { DEFAULT_DUE_COLORS } from "./dueHighlight";
 import { normalizeSortModes } from "./sort";
+import { SLOGAN_POSITIONS } from "./slogan";
 import { normalizeTaskMenuConfig } from "./taskMenuConfig";
 
 const now = () => new Date().toISOString();
@@ -379,7 +381,7 @@ export function emptyState(): AppState {
       [inbox.id]: { ...defaultBackground }
     },
     scratchpad: { tabs: [], activeTabId: "", updatedAt: "" },
-    slogan: { items: [], activeIds: [], icon: "", position: "top", enabled: true, updatedAt: "" },
+    slogan: { items: [], activeIds: [], bounds: "field", defaultIcon: "", accent: "", textColor: "", opacity: 0.94, intervalSeconds: 8, position: "top-right", enabled: true, updatedAt: "" },
     scheduler: emptySchedulerState()
   };
 }
@@ -811,7 +813,7 @@ export function normalizeState(raw: unknown): AppState {
   };
 }
 
-/** 标语栏（v0.9.4）：逐字段白名单，与 core `model::Slogan` 同口径。 */
+/** 标语栏（v0.9.4 单例；v0.9.5 条目级图标/六位置/主题色/透明度/轮播间隔）：逐字段白名单。 */
 export function normalizeSlogan(raw: unknown): SloganState {
   const source = raw as Partial<SloganState> | undefined;
   const items: SloganItem[] = [];
@@ -823,7 +825,12 @@ export function normalizeSlogan(raw: unknown): SloganState {
       const text = typeof item.text === "string" ? item.text.trim().slice(0, 80) : "";
       if (text === "") continue;
       seen.add(item.id);
-      items.push({ id: item.id, text, createdAt: typeof item.createdAt === "string" ? item.createdAt : "" });
+      items.push({
+        id: item.id,
+        text,
+        icon: typeof item.icon === "string" ? item.icon : "",
+        createdAt: typeof item.createdAt === "string" ? item.createdAt : ""
+      });
       if (items.length >= 50) break;
     }
   }
@@ -831,12 +838,28 @@ export function normalizeSlogan(raw: unknown): SloganState {
   const activeIds = Array.isArray(source?.activeIds)
     ? [...new Set(source.activeIds.filter((id): id is string => typeof id === "string" && known.has(id)))]
     : [];
-  const icon = typeof source?.icon === "string" ? source.icon : "";
+  const hexOrEmpty = (value: unknown): string =>
+    typeof value === "string" && (value === "" || /^#[0-9a-fA-F]{6}$/.test(value)) ? value.toLowerCase() : "";
+  const opacity = typeof source?.opacity === "number" && Number.isFinite(source.opacity)
+    ? Math.min(1, Math.max(0.3, source.opacity))
+    : 0.94;
+  const intervalSeconds = typeof source?.intervalSeconds === "number" && Number.isFinite(source.intervalSeconds)
+    ? Math.min(120, Math.max(2, Math.round(source.intervalSeconds)))
+    : 8;
+  const bounds = source?.bounds === "app" ? "app" : "field";
+  const defaultIcon = typeof source?.defaultIcon === "string" ? source.defaultIcon : "";
   return {
     items,
     activeIds,
-    icon,
-    position: source?.position === "bottom" ? "bottom" : "top",
+    bounds,
+    defaultIcon,
+    accent: hexOrEmpty(source?.accent),
+    textColor: hexOrEmpty(source?.textColor),
+    opacity,
+    intervalSeconds,
+    position: SLOGAN_POSITIONS.includes(source?.position as SloganPosition)
+      ? (source?.position as SloganPosition)
+      : "top-right",
     enabled: source?.enabled !== false,
     updatedAt: typeof source?.updatedAt === "string" ? source.updatedAt : ""
   };

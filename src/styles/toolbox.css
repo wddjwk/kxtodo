@@ -2271,42 +2271,105 @@
   font-size: calc(var(--font-control) - 2px);
 }
 
-.slogan-position-switch {
-  flex: 0 0 auto;
+.slogan-setting-label small {
+  margin-left: 6px;
+  color: #98a1ae;
+  font-size: calc(var(--font-control) - 6px);
+  font-weight: 400;
 }
 
-.slogan-icon-trigger {
+/* 位置：两列 × 三行的小按钮网格（左上/右上、左下/右下、顶部居中/底部居中） */
+.slogan-setting-block {
   display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 5px 10px;
-  border: 1px solid rgb(0 0 0 / 8%);
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.slogan-position-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.slogan-position-btn {
+  min-width: 0;
+  padding: 7px 6px;
+  border: 1px solid rgb(0 0 0 / 7%);
   border-radius: 9px;
   background: rgb(0 0 0 / 3%);
-  color: #4b5563;
-  font-size: calc(var(--font-control) - 3px);
+  color: #5c6470;
+  font-size: calc(var(--font-control) - 4px);
   cursor: pointer;
-  transition: border-color 0.12s ease, background 0.12s ease;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 
-.slogan-icon-trigger:hover {
-  border-color: var(--accent);
+.slogan-position-btn:hover {
   background: #fff;
+  border-color: rgb(0 0 0 / 14%);
 }
 
-.slogan-icon-trigger svg {
+.slogan-position-btn.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, white);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* 主题色 / 字体颜色：色点（点开取色器）+ 当前值 + 恢复默认 */
+.slogan-color-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.slogan-color-dot {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgb(0 0 0 / 10%);
+  border-radius: 9px;
+  background: var(--dot);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 30%);
+  transition: transform 0.12s ease;
+}
+
+.slogan-color-dot:hover {
+  transform: scale(1.06);
+}
+
+.slogan-color-value {
+  color: #8a93a3;
+  font-size: calc(var(--font-control) - 5px);
+  font-variant-numeric: tabular-nums;
+}
+
+.slogan-color-reset {
+  padding: 3px 8px;
+  border: 1px solid rgb(0 0 0 / 8%);
+  border-radius: 7px;
+  background: transparent;
+  color: #5c6470;
+  font-size: calc(var(--font-control) - 5px);
+  cursor: pointer;
+}
+
+.slogan-color-reset:hover {
+  border-color: var(--accent);
   color: var(--accent);
 }
 
-.slogan-icon-trigger .slogan-icon-none {
-  opacity: 0.4;
-}
-
-.slogan-note {
-  margin: 0;
-  color: #98a1ae;
-  font-size: calc(var(--font-control) - 5px);
-  line-height: 1.5;
+.slogan-param-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .slogan-preview-wrap {
@@ -2394,6 +2457,60 @@
   white-space: nowrap;
 }
 
+/* 点文字直接进编辑态：按钮外观压平成文本（悬浮才给提示底） */
+.slogan-text-btn {
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  text-align: left;
+  cursor: text;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.slogan-text-btn:hover {
+  border-color: rgb(0 0 0 / 8%);
+  background: rgb(0 0 0 / 3%);
+}
+
+/* 每条卡片自己的图标按钮 */
+.slogan-item-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgb(0 0 0 / 8%);
+  border-radius: 8px;
+  background: rgb(0 0 0 / 3%);
+  color: var(--accent);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.slogan-item-icon:hover {
+  border-color: var(--accent);
+  background: #fff;
+}
+
+.slogan-item-icon.none {
+  color: #b6bdc9;
+}
+
+.slogan-item-icon.none svg {
+  opacity: 0.5;
+}
+
+.slogan-row-btn.save {
+  color: var(--accent);
+}
+
+.slogan-row-btn.save:hover {
+  background: color-mix(in srgb, var(--accent) 8%, white);
+  color: var(--accent);
+}
+
 .slogan-edit-input {
   flex: 1 1 auto;
   min-width: 0;
@@ -2460,4 +2577,41 @@
   outline: none;
   border-color: var(--accent);
   background: #fff;
+}
+
+/* 边界基准选择（v0.9.5）：两个并排小按钮，复用位置按钮的皮肤 */
+.slogan-bounds-switch {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+/* 默认图标触发器（v0.9.5）：内嵌一个静态的图标圆片 + 名称 */
+.slogan-icon-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 4px 4px;
+  border: 1px solid rgb(0 0 0 / 8%);
+  border-radius: 9px;
+  background: rgb(0 0 0 / 3%);
+  color: #4b5563;
+  font-size: calc(var(--font-control) - 4px);
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.slogan-icon-trigger:hover {
+  border-color: var(--accent);
+  background: #fff;
+}
+
+.slogan-icon-trigger .slogan-default-icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: rgb(0 0 0 / 4%);
+  color: var(--accent);
 }

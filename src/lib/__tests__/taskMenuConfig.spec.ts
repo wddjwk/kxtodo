@@ -19,6 +19,7 @@ describe("任务右键菜单配置（v0.9.2）", () => {
       "pin",
       "tags",
       "emoji",
+      "saveSlogan",
       "move",
       "sep",
       "edit",

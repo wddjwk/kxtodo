@@ -93,12 +93,15 @@ function habitSeed(id, name, overrides = {}) {
 function sloganSeed(overrides = {}) {
   return {
     items: [
-      { id: "sl-1", text: "多喝水，少久坐", createdAt: new Date().toISOString() },
-      { id: "sl-2", text: "今日事今日毕", createdAt: new Date().toISOString() }
+      { id: "sl-1", text: "多喝水，少久坐", icon: "", createdAt: new Date().toISOString() },
+      { id: "sl-2", text: "今日事今日毕", icon: "", createdAt: new Date().toISOString() }
     ],
     activeIds: ["sl-1", "sl-2"],
-    icon: "",
-    position: "top",
+    accent: "",
+    textColor: "",
+    opacity: 0.94,
+    intervalSeconds: 8,
+    position: "top-right",
     enabled: true,
     updatedAt: new Date().toISOString(),
     ...overrides
@@ -288,23 +291,30 @@ async function section4SloganDesktop(context) {
   await page.locator(".task-card").first().waitFor({ state: "visible" });
   await page.waitForSelector(".slogan-banner", { timeout: 4000 });
   const geo = await page.evaluate(() => {
-    const shell = document.querySelector(".app-shell").getBoundingClientRect();
     const banner = document.querySelector(".slogan-banner").getBoundingClientRect();
     const header = document.querySelector(".workspace .list-header").getBoundingClientRect();
-    const scale = shell.width / document.querySelector(".app-shell").offsetWidth;
-    return { right: (shell.right - banner.right) / scale, above: banner.bottom <= header.top + 1, text: document.querySelector(".slogan-banner-text").textContent };
+    const shell = document.querySelector(".app-shell");
+    const shellRect = shell.getBoundingClientRect();
+    const scale = shellRect.width / shell.offsetWidth;
+    return {
+      rightDelta: Math.abs(banner.right - header.right) / scale,
+      above: banner.bottom <= header.top + 1,
+      text: document.querySelector(".slogan-banner-text").textContent
+    };
   });
-  check("4.1 右对齐（距壳右缘 20 布局像素）", Math.abs(geo.right - 20) <= 2, J(geo.right));
+  // v0.9.5：左右边界跟卡片区对齐（不再固定距壳右缘）
+  check("4.1 右边缘与内容区对齐（≤2px）", geo.rightDelta <= 2, J(geo.rightDelta));
   check("4.2 悬浮在标题上方（不挤占排版）", geo.above, J(geo));
   check("4.3 展示第一条选中标语", geo.text === "多喝水，少久坐", geo.text);
-  check("4.4 多条轮播有进度条", (await page.locator(".slogan-banner-progress").count()) === 1);
+  // v0.9.5：多条轮播不再显示进度条
+  check("4.4 轮播无进度条", (await page.locator(".slogan-banner-progress").count()) === 0 && (await page.locator(".slogan-layer").count()) === 1);
   // 轮播：8s 后换第二条
   await page.waitForTimeout(8600);
   const text2 = await page.locator(".slogan-banner-text").innerText();
   check("4.5 轮播切换到第二条", text2 === "今日事今日毕", text2);
-  // 位置切到输入框下方
+  // 位置切到「底部居中」（v0.9.5 六位置网格）
   await openSloganTool(page);
-  await page.locator(".slogan-position-switch button", { hasText: "输入框下方" }).click();
+  await page.locator(".slogan-position-grid button", { hasText: "底部居中" }).click();
   await page.waitForTimeout(500);
   await page.locator(".tree-row", { hasText: "记事" }).click();
   await page.waitForTimeout(600);
@@ -314,27 +324,31 @@ async function section4SloganDesktop(context) {
     if (!banner || !bar) return null;
     return banner.getBoundingClientRect().top >= bar.getBoundingClientRect().bottom - 1;
   });
-  check("4.6 下方位置悬浮在输入框之下", geo2 === true, J(geo2));
-  // 关闭按钮 = enabled false，内容保留
-  await page.locator(".slogan-banner-x").click();
-  await page.waitForTimeout(400);
-  check("4.7 X 关闭后悬浮层消失", (await page.locator(".slogan-banner").count()) === 0);
-  const stored = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)), STATE_KEY);
-  check("4.8 关闭落盘 enabled=false 且内容保留", stored.slogan.enabled === false && stored.slogan.items.length === 2, J(stored.slogan));
+  check("4.6 底部位置悬浮在内容区底部（输入框之下）", geo2 === true, J(geo2));
+  // v0.9.5：胶囊上不再有 X；点横幅本体直接进工具页
+  check("4.7 不再显示关闭叉号", (await page.locator(".slogan-banner-x").count()) === 0);
+  await page.locator(".slogan-banner").click();
+  await page.waitForSelector(".slogan-tool", { timeout: 5000 });
+  check("4.8 点横幅跳转标语工具页", (await page.locator(".slogan-tool").count()) === 1);
   // 工具页：列表 / 添加 / 勾选
-  await openSloganTool(page);
   check("4.9 工具页两条标语", (await page.locator(".slogan-row").count()) === 2);
   await page.locator(".slogan-add-input").fill("第三条标语");
   await page.locator(".slogan-add .settings-button.primary").click();
   await page.waitForTimeout(400);
   check("4.10 添加后三条且自动选中", (await page.locator(".slogan-row").count()) === 3 && (await page.locator(".slogan-row.active").count()) === 3);
-  // 重新打开总开关 → 悬浮层回来
+  // 工具页总开关关闭 → 回工作区横幅消失；再开回来
   await page.locator(".slogan-panel .toggle-switch").click();
   await page.waitForTimeout(400);
   await page.locator(".tree-row", { hasText: "记事" }).click();
   await page.waitForTimeout(600);
-  check("4.11 总开关重开悬浮层回归", (await page.locator(".slogan-banner").count()) === 1);
-  check("4.12 无页面错误", errors.length === 0, J(errors));
+  check("4.11 总开关关闭后悬浮层消失", (await page.locator(".slogan-banner").count()) === 0);
+  await openSloganTool(page);
+  await page.locator(".slogan-panel .toggle-switch").click();
+  await page.waitForTimeout(400);
+  await page.locator(".tree-row", { hasText: "记事" }).click();
+  await page.waitForTimeout(600);
+  check("4.12 总开关重开悬浮层回归", (await page.locator(".slogan-banner").count()) === 1);
+  check("4.13 无页面错误", errors.length === 0, J(errors));
   await page.close();
 }
 

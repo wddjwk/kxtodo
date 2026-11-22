@@ -364,7 +364,7 @@ async function section7MenuManager(context) {
   await page.locator(".context-menu .menu-item-button", { hasText: "管理菜单项" }).click();
   await page.waitForSelector(".task-menu-manager", { timeout: 3000 });
   const rows = await page.locator(".task-menu-manager-row").count();
-  check("7.3 管理面板列出全部条目（含分隔线与隐藏项）", rows === 14, `rows=${rows}`);
+  check("7.3 管理面板列出全部条目（含分隔线与隐藏项）", rows === 15, `rows=${rows}`);
 
   // 隐藏「编辑」
   await page.locator(".task-menu-manager-row", { hasText: "编辑" }).locator(".editor-icon-button").click();

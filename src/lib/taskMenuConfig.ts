@@ -17,6 +17,7 @@ export type TaskMenuItemId =
   | "pin"
   | "tags"
   | "emoji"
+  | "saveSlogan"
   | "move"
   | "sep"
   | "edit"
@@ -43,6 +44,7 @@ export const TASK_MENU_ITEMS: TaskMenuItemDef[] = [
   { id: "pin", label: "置顶" },
   { id: "tags", label: "标签" },
   { id: "emoji", label: "添加表情" },
+  { id: "saveSlogan", label: "设置为标语" },
   { id: "move", label: "移动到" },
   { id: "sep", label: "分隔线", separator: true },
   { id: "edit", label: "编辑" },

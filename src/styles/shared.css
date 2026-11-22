@@ -237,26 +237,50 @@
 }
 
 /* ---------------------------------------------------------------------------
- * 标语栏全局悬浮层（v0.9.4）：右对齐胶囊，悬浮在页面角落不挤占排版。
+ * 标语栏全局悬浮层（v0.9.4；v0.9.5 重做）：六位置、左右跟卡片区对齐、
+ * 主题色/字色/透明度、30 字宽 + 跑马灯、无进度条的间隔轮播。
  * z 45：页面内容（20-40）之上、Toast（50）与一切菜单/模态（3600+）之下。
- * 挂在缩放壳内，top 由 SloganBanner 按布局像素算；right 恒定 20px。
+ * 外层 .slogan-layer 由 SloganBanner 按布局像素定位（壳内 fixed）；层本身
+ * pointer-events:none，只有胶囊可点——否则整条区域会挡住页面点击。
  * --------------------------------------------------------------------------- */
 
-.slogan-banner {
+.slogan-layer {
   position: fixed;
-  right: 20px;
   z-index: 45;
+  display: flex;
+  align-items: flex-start;
+  pointer-events: none;
+}
+
+.slogan-banner {
   display: flex;
   align-items: center;
   gap: 6px;
-  max-width: min(420px, 60%);
+  max-width: min(100%, calc(30em + 4.5em));
   padding: 5px 8px 5px 12px;
   border: 1px solid rgb(0 0 0 / 8%);
+  border-color: color-mix(in srgb, var(--slogan-accent, var(--accent)) 26%, transparent);
   border-radius: 999px;
-  background: rgb(255 255 255 / 94%);
+  background: rgb(255 255 255 / var(--slogan-bg-alpha, 0.94));
   box-shadow: 0 4px 14px rgb(0 0 0 / 8%);
+  color: var(--slogan-text, #4b5563);
+  font-size: calc(var(--font-control) - 4px);
   cursor: pointer;
   overflow: hidden;
+  pointer-events: auto;
+  animation: slogan-in 0.32s ease;
+}
+
+.slogan-banner.pos-left {
+  margin-right: auto;
+}
+
+.slogan-banner.pos-center {
+  margin: 0 auto;
+}
+
+.slogan-banner.pos-right {
+  margin-left: auto;
 }
 
 .slogan-banner-body {
@@ -264,16 +288,35 @@
   align-items: center;
   gap: 7px;
   min-width: 0;
-  color: var(--accent);
-  animation: slogan-in 0.32s ease;
+  color: var(--slogan-accent, var(--accent));
+}
+
+.slogan-banner-text-wrap {
+  min-width: 0;
+  max-width: 30em;
+  overflow: hidden;
 }
 
 .slogan-banner-text {
-  color: #4b5563;
-  font-size: calc(var(--font-control) - 4px);
-  overflow: hidden;
-  text-overflow: ellipsis;
+  display: inline-block;
+  color: var(--slogan-text, #4b5563);
   white-space: nowrap;
+}
+
+/* 超过 30 字宽：横向来回滚动（播放即可，不打断） */
+.slogan-banner-text.marquee {
+  animation: slogan-marquee var(--marquee-duration, 8s) ease-in-out infinite alternate;
+}
+
+@keyframes slogan-marquee {
+  0%,
+  10% {
+    transform: translateX(0);
+  }
+  90%,
+  100% {
+    transform: translateX(var(--marquee-shift, 0px));
+  }
 }
 
 .slogan-banner-x {
@@ -296,24 +339,6 @@
   color: #4b5563;
 }
 
-/* 轮播进度条：走满一轮 = 一帧；悬停暂停 */
-.slogan-banner-progress {
-  position: absolute;
-  right: 12px;
-  bottom: 2px;
-  left: 12px;
-  height: 2px;
-  border-radius: 1px;
-  background: var(--accent);
-  opacity: 0.35;
-  transform-origin: left;
-  animation: slogan-progress linear forwards;
-}
-
-.slogan-banner-progress.paused {
-  animation-play-state: paused;
-}
-
 @keyframes slogan-in {
   from {
     opacity: 0;
@@ -325,22 +350,17 @@
   }
 }
 
-@keyframes slogan-progress {
-  from {
-    transform: scaleX(0);
-  }
-  to {
-    transform: scaleX(1);
-  }
-}
-
 /* 工具页里的静态预览（不定位、不轮播） */
 .slogan-banner.static {
-  position: static;
+  margin: 0;
   max-width: 100%;
   cursor: default;
+  animation: none;
 }
 
-.slogan-banner.static .slogan-banner-body {
-  animation: none;
+/* 标语图标里的 emoji 字形：跟父级字号缩放（banner 内 14px 档、卡片内 15px 档） */
+.slogan-emoji {
+  font-size: 1.1em;
+  line-height: 1;
+  font-style: normal;
 }

@@ -303,8 +303,22 @@ pub fn gui_dispatch(
             Ok(json!({ "tabs": tabs.len(), "activeTabId": active_tab_id, "updatedAt": stamp }))
         }
         "set-slogan" => {
-            // 标语栏（v0.9.4）：与草稿纸同谱系的单例整份覆盖。校验做底线：
-            // id 非空去重、文本截断、activeIds 必须指向存在的标语、图标在白名单内。
+            // 标语栏（v0.9.4 单例；v0.9.5 条目级图标 + 六位置 + 主题/字色/透明度/轮播间隔）。
+            // 校验做底线：id 非空去重、文本截断、activeIds 必须指向存在的标语、图标在白名单内、
+            // 颜色形态、透明度/间隔区间、位置枚举。
+            fn slogan_color(path: &str, value: Option<&Value>) -> crate::error::CoreResult<String> {
+                let raw = value.and_then(Value::as_str).unwrap_or_default().trim();
+                if raw.is_empty() {
+                    return Ok(String::new());
+                }
+                if !crate::ops_config::is_hex_color(raw) {
+                    return Err(CoreError::validation(
+                        path,
+                        format!("颜色 `{raw}` 无效，应为 #rrggbb"),
+                    ));
+                }
+                Ok(raw.to_ascii_lowercase())
+            }
             let raw_items = inv
                 .params
                 .get("items")
@@ -332,6 +346,15 @@ pub fn gui_dispatch(
                 if text.is_empty() {
                     continue;
                 }
+                let icon = raw.get("icon").and_then(Value::as_str).unwrap_or_default().trim();
+                let icon = if crate::model::is_slogan_icon_value(icon) {
+                    icon.to_string()
+                } else {
+                    return Err(CoreError::validation(
+                        "SLOGAN_ICON_INVALID",
+                        format!("图标 `{icon}` 不是已知图标或 emoji"),
+                    ));
+                };
                 let created_at = raw
                     .get("createdAt")
                     .and_then(Value::as_str)
@@ -340,6 +363,7 @@ pub fn gui_dispatch(
                 items.push(crate::model::SloganItem {
                     id,
                     text,
+                    icon,
                     created_at: if created_at.is_empty() { crate::time::now_iso() } else { created_at },
                     extra: Map::new(),
                 });
@@ -359,22 +383,86 @@ pub fn gui_dispatch(
                     }
                 }
             }
-            let icon = inv.params.get("icon").and_then(Value::as_str).unwrap_or_default().trim();
-            let icon = if icon.is_empty() || icon == crate::model::SLOGAN_ICON_NONE {
-                icon.to_string()
-            } else if crate::ledger_icons::is_known_icon(icon) {
-                icon.to_string()
+            let accent = slogan_color("SLOGAN_ACCENT_INVALID", inv.params.get("accent"))?;
+            let text_color = slogan_color("SLOGAN_TEXT_COLOR_INVALID", inv.params.get("textColor"))?;
+            let default_icon = inv
+                .params
+                .get("defaultIcon")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            let default_icon = if crate::model::is_slogan_icon_value(default_icon) {
+                default_icon.to_string()
             } else {
                 return Err(CoreError::validation(
                     "SLOGAN_ICON_INVALID",
-                    format!("图标 `{icon}` 不在图标目录里"),
+                    format!("默认图标 `{default_icon}` 不是已知图标或 emoji"),
                 ));
             };
-            let position = inv.params.get("position").and_then(Value::as_str).unwrap_or("top");
-            if position != "top" && position != "bottom" {
+            let bounds = inv.params.get("bounds").and_then(Value::as_str).unwrap_or("field");
+            if !crate::model::SLOGAN_BOUNDS.contains(&bounds) {
+                return Err(CoreError::validation(
+                    "SLOGAN_BOUNDS_INVALID",
+                    format!("边界基准 `{bounds}` 无效，应为 field 或 app"),
+                ));
+            }
+            let opacity = match inv.params.get("opacity") {
+                None => crate::model::Slogan::default().opacity,
+                Some(value) => {
+                    let raw = value.as_f64().unwrap_or(f64::NAN);
+                    if !raw.is_finite()
+                        || !(crate::model::SLOGAN_OPACITY_MIN..=crate::model::SLOGAN_OPACITY_MAX)
+                            .contains(&raw)
+                    {
+                        return Err(CoreError::validation(
+                            "SLOGAN_OPACITY_INVALID",
+                            format!(
+                                "透明度应在 {}–{} 之间",
+                                crate::model::SLOGAN_OPACITY_MIN,
+                                crate::model::SLOGAN_OPACITY_MAX
+                            ),
+                        ));
+                    }
+                    raw
+                }
+            };
+            let interval_seconds = match inv.params.get("intervalSeconds") {
+                None => crate::model::Slogan::default().interval_seconds,
+                Some(value) => {
+                    let Some(raw) = value.as_u64() else {
+                        return Err(CoreError::validation(
+                            "SLOGAN_INTERVAL_INVALID",
+                            "轮播间隔应为整数秒",
+                        ));
+                    };
+                    if !(u64::from(crate::model::SLOGAN_INTERVAL_MIN)
+                        ..=u64::from(crate::model::SLOGAN_INTERVAL_MAX))
+                        .contains(&raw)
+                    {
+                        return Err(CoreError::validation(
+                            "SLOGAN_INTERVAL_INVALID",
+                            format!(
+                                "轮播间隔应在 {}–{} 秒之间",
+                                crate::model::SLOGAN_INTERVAL_MIN,
+                                crate::model::SLOGAN_INTERVAL_MAX
+                            ),
+                        ));
+                    }
+                    raw as u32
+                }
+            };
+            let position = inv
+                .params
+                .get("position")
+                .and_then(Value::as_str)
+                .unwrap_or("top-right");
+            if !crate::model::SLOGAN_POSITIONS.contains(&position) {
                 return Err(CoreError::validation(
                     "SLOGAN_POSITION_INVALID",
-                    format!("位置 `{position}` 无效，应为 top 或 bottom"),
+                    format!(
+                        "位置 `{position}` 无效，应为 {} 之一",
+                        crate::model::SLOGAN_POSITIONS.join("/")
+                    ),
                 ));
             }
             let enabled = inv.params.get("enabled").and_then(Value::as_bool).unwrap_or(true);
@@ -383,7 +471,12 @@ pub fn gui_dispatch(
                 file.slogan = crate::model::Slogan {
                     items: items.clone(),
                     active_ids: active_ids.clone(),
-                    icon: icon.clone(),
+                    bounds: bounds.to_string(),
+                    default_icon: default_icon.clone(),
+                    accent: accent.clone(),
+                    text_color: text_color.clone(),
+                    opacity,
+                    interval_seconds,
                     position: position.to_string(),
                     enabled,
                     updated_at: stamp.clone(),

@@ -808,9 +808,14 @@ export async function setScratchpadTabs(tabs: ScratchpadTab[], activeTabId: stri
  */
 export async function setSlogan(next: SloganState): Promise<boolean> {
   const payload = {
-    items: next.items.map((item) => ({ id: item.id, text: item.text, createdAt: item.createdAt })),
+    items: next.items.map((item) => ({ id: item.id, text: item.text, icon: item.icon, createdAt: item.createdAt })),
     activeIds: next.activeIds,
-    icon: next.icon,
+    bounds: next.bounds,
+    defaultIcon: next.defaultIcon,
+    accent: next.accent,
+    textColor: next.textColor,
+    opacity: next.opacity,
+    intervalSeconds: next.intervalSeconds,
     position: next.position,
     enabled: next.enabled
   };

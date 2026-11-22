@@ -197,10 +197,28 @@ pub struct Slogan {
     /// 选中展示的标语 id（按展示顺序）；空 = 不展示。多条时轮播。
     #[serde(rename = "activeIds", default)]
     pub active_ids: Vec<String>,
-    /// 展示图标：空 = 默认喇叭（Megaphone）；"none" = 不加图标；其余是 lucide 白名单名。
-    #[serde(default)]
-    pub icon: String,
-    /// 悬浮位置：top = 页面标题上方；bottom = 输入框下方。都右对齐。
+    /// 左右边界的对齐基准（v0.9.5）：`field` = 跟输入框/卡片区边界对齐（默认）；
+    /// `app` = 跟程序内容区（右半区）边界对齐。见 [`SLOGAN_BOUNDS`]。
+    #[serde(default = "default_slogan_bounds")]
+    pub bounds: String,
+    /// 新标语的默认图标（v0.9.5）：空 = 默认喇叭；"none" = 不加；lucide 白名单名或 emoji。
+    /// 工具页「添加」与任务右键「设置为标语」都用它。
+    #[serde(rename = "defaultIcon", default, skip_serializing_if = "String::is_empty")]
+    pub default_icon: String,
+    /// 胶囊主题色（图标与描边同用它）：空 = 跟应用主题色；否则 #rrggbb。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub accent: String,
+    /// 字体颜色：空 = 默认深灰；否则 #rrggbb。
+    #[serde(rename = "textColor", default, skip_serializing_if = "String::is_empty")]
+    pub text_color: String,
+    /// 胶囊背景透明度 0.3–1.0（默认 0.94）。
+    #[serde(default = "default_slogan_opacity")]
+    pub opacity: f64,
+    /// 多条轮播的换帧间隔（秒）2–120（默认 8）。
+    #[serde(rename = "intervalSeconds", default = "default_slogan_interval")]
+    pub interval_seconds: u32,
+    /// 悬浮位置（第六选一，见 [`SLOGAN_POSITIONS`]）：顶部/底部对齐内容区，
+    /// 左/右/居中水平对齐。不再锚定输入框。
     #[serde(default = "default_slogan_position")]
     pub position: String,
     /// 总开关：悬浮层上的关闭按钮把它拨 false（内容保留，随时可再开）。
@@ -218,7 +236,12 @@ impl Default for Slogan {
         Self {
             items: Vec::new(),
             active_ids: Vec::new(),
-            icon: String::new(),
+            bounds: default_slogan_bounds(),
+            default_icon: String::new(),
+            accent: String::new(),
+            text_color: String::new(),
+            opacity: default_slogan_opacity(),
+            interval_seconds: default_slogan_interval(),
             position: default_slogan_position(),
             enabled: true,
             updated_at: String::new(),
@@ -227,15 +250,48 @@ impl Default for Slogan {
     }
 }
 
-fn default_slogan_position() -> String {
-    "top".to_string()
+/// 标语悬浮位置：顶部/底部对齐内容区，左/右/居中水平对齐（不锚定输入框）。
+pub const SLOGAN_POSITIONS: [&str; 6] = [
+    "top-left",
+    "top-center",
+    "top-right",
+    "bottom-left",
+    "bottom-center",
+    "bottom-right",
+];
+
+pub const SLOGAN_OPACITY_MIN: f64 = 0.3;
+pub const SLOGAN_OPACITY_MAX: f64 = 1.0;
+pub const SLOGAN_INTERVAL_MIN: u32 = 2;
+pub const SLOGAN_INTERVAL_MAX: u32 = 120;
+
+/// 左右边界对齐基准：field = 输入框/卡片区（默认）；app = 程序内容区（右半区）。
+pub const SLOGAN_BOUNDS: [&str; 2] = ["field", "app"];
+
+fn default_slogan_bounds() -> String {
+    "field".to_string()
 }
 
-/// 单条标语。text 上限 [`SLOGAN_TEXT_MAX`]（悬浮层单行省略，太长没有意义）。
+fn default_slogan_position() -> String {
+    "top-right".to_string()
+}
+
+fn default_slogan_opacity() -> f64 {
+    0.94
+}
+
+fn default_slogan_interval() -> u32 {
+    8
+}
+
+/// 单条标语。text 上限 [`SLOGAN_TEXT_MAX`]（悬浮层最多展示 30 字，超出横向滚动）。
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SloganItem {
     pub id: String,
     pub text: String,
+    /// 本条图标：空 = 默认喇叭（Megaphone）；"none" = 不加图标；其余是 lucide 白名单名。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub icon: String,
     #[serde(rename = "createdAt", default)]
     pub created_at: String,
     #[serde(flatten)]
@@ -244,9 +300,28 @@ pub struct SloganItem {
 }
 
 pub const SLOGAN_TEXT_MAX: usize = 80;
+/// 悬浮层最多展示的字数；超出走横向滚动（30 个全角字符宽度）。
+pub const SLOGAN_DISPLAY_CHARS: usize = 30;
 pub const SLOGAN_ITEMS_MAX: usize = 50;
 pub const SLOGAN_ICON_NONE: &str = "none";
 pub const SLOGAN_ICON_DEFAULT: &str = "Megaphone";
+
+/// 标语图标值是否合法（v0.9.5 起支持 emoji）：
+/// 空（默认喇叭）/ "none" / lucide 白名单名 / 一段 emoji 文本（非 ASCII、无空白、≤12 个码点）。
+pub fn is_slogan_icon_value(icon: &str) -> bool {
+    if icon.is_empty() || icon == SLOGAN_ICON_NONE {
+        return true;
+    }
+    crate::ledger_icons::is_known_icon(icon) || is_slogan_emoji(icon)
+}
+
+pub fn is_slogan_emoji(value: &str) -> bool {
+    let chars: Vec<char> = value.chars().collect();
+    !chars.is_empty()
+        && chars.len() <= 12
+        && chars.iter().any(|ch| !ch.is_ascii())
+        && !chars.iter().any(|ch| ch.is_whitespace())
+}
 
 /// 习惯打卡（v0.9.3）：工具箱「习惯打卡」工具的实体，住数据域（kind = habit）。
 ///
